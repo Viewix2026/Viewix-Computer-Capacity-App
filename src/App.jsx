@@ -16,6 +16,99 @@ function onFB(cb){if(fbReady)cb();else fbCbs.push(cb);}
 function fbSet(p,v){if(db)db.ref(p).set(v);}
 function fbListen(p,cb){if(!db)return()=>{};const r=db.ref(p);r.on("value",s=>cb(s.val()));return()=>r.off("value");}
 
+// ─── Monday.com ───
+const MONDAY_API="https://api.monday.com/v2";
+const MONDAY_TOKEN="eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjM5NzQ3MTI3OSwiYWFpIjoxMSwidWlkIjo2MjY3NDg4NSwiaWFkIjoiMjAyNC0wOC0xNVQwNjo0MjoxMC4wMDBaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MjQxMzg2NTksInJnbiI6ImFwc2UyIn0.-YhtvI8VFze2Tv971jezS8BAaABF3nQG7vjBS0xXq_E";
+const MONDAY_BOARD_ID="1884080816";
+const MONDAY_IN_PROGRESS_GROUP="new_group__1";
+const MONDAY_EDITORS=[
+  {id:"66265733",name:"Angus Roche"},
+  {id:"96885430",name:"Billy White"},
+  {id:"68480795",name:"David Esdaile"},
+  {id:"94902565",name:"Felipe Fuhr"},
+  {id:"97138079",name:"Jude Palmer Rowlands"},
+  {id:"100235454",name:"Luke Genovese-Kollar"},
+  {id:"97345986",name:"Matt Healey"},
+  {id:"85363605",name:"Mia Wolczak"},
+  {id:"90227304",name:"Vish Peiris"},
+  {id:"99188387",name:"Farah"},
+];
+
+async function mondayQuery(q){
+  try{
+    console.log("Monday API query:",q);
+    const r=await fetch(MONDAY_API,{method:"POST",headers:{"Content-Type":"application/json","Authorization":MONDAY_TOKEN},body:JSON.stringify({query:q})});
+    const data=await r.json();
+    if(data.errors)console.error("Monday API errors:",data.errors);
+    return data;
+  }catch(e){console.error("Monday API error:",e);return null;}
+}
+
+async function fetchEditorTasks(editorName){
+  // Get all items with subitems from the board
+  const q=`query { boards(ids: ${MONDAY_BOARD_ID}) { items_page(limit: 200) { items { id name group { id title } subitems { id name column_values(ids: ["people","status8","stage","timeline","due_date","numeric_mkyg3qb1"]) { id text } } } } } }`;
+  const res=await mondayQuery(q);
+  console.log("Monday API response:",res);
+  if(!res?.data?.boards?.[0]?.items_page?.items)return[];
+  const items=res.data.boards[0].items_page.items;
+  // Filter to In Progress group only
+  const inProgress=items.filter(it=>it.group?.id===MONDAY_IN_PROGRESS_GROUP);
+  console.log("In Progress items:",inProgress.length,"Total items:",items.length);
+  console.log("Looking for editor:",editorName);
+  const today=todayKey();
+  const tasks=[];
+  inProgress.forEach(parent=>{
+    (parent.subitems||[]).forEach(sub=>{
+      const peopleCol=sub.column_values?.find(v=>v.id==="people");
+      const people=peopleCol?.text||"";
+      if(!people.toLowerCase().includes(editorName.toLowerCase()))return;
+      const getCol=(id)=>sub.column_values?.find(v=>v.id===id)?.text||"";
+      const timeline=getCol("timeline");
+      const status=getCol("status8");
+      // Check if today falls within timeline range
+      let showTask=false;
+      if(timeline){
+        const parts=timeline.split(" - ");
+        if(parts.length===2){
+          const start=parts[0].trim();
+          const end=parts[1].trim();
+          showTask=(today>=start&&today<=end);
+        } else if(parts.length===1){
+          // Single date
+          showTask=(parts[0].trim()===today);
+        }
+      }
+      // Also show tasks with no timeline that are IN PROGRESS, STUCK, or SCHEDULED
+      if(!timeline&&(status==="IN PROGRESS"||status==="STUCK"||status==="SCHEDULED"))showTask=true;
+      // Also show overdue tasks (end date passed but not DONE)
+      if(timeline&&!showTask&&status!=="DONE"){
+        const parts=timeline.split(" - ");
+        const endDate=parts.length===2?parts[1].trim():parts[0]?.trim();
+        if(endDate&&endDate<today)showTask=true;
+      }
+      if(!showTask)return;
+      tasks.push({
+        id:sub.id,
+        name:sub.name,
+        parentName:parent.name,
+        status:status,
+        stage:getCol("stage"),
+        timeline:timeline,
+        dueDate:getCol("due_date"),
+        people:people,
+        estimatedHours:getCol("numeric_mkyg3qb1"),
+        overdue:timeline?(timeline.split(" - ").pop()?.trim()||"")<today:false,
+      });
+    });
+  });
+  console.log("Found tasks for",editorName,":",tasks.length,tasks);
+  return tasks;
+}
+
+function todayKey(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function fmtSecs(s){const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);const sec=s%60;return`${h>0?h+"h ":""}${m>0?m+"m ":""}${sec}s`;}
+function fmtSecsShort(s){const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);if(h>0)return`${h}h ${m}m`;if(m>0)return`${m}m`;return`${s}s`;}
+
 // ─── Constants ───
 const DK=["mon","tue","wed","thu","fri"],DL=["Mon","Tue","Wed","Thu","Fri"];
 const QT=[{util:0.5,wait:"1x"},{util:0.7,wait:"2.3x"},{util:0.75,wait:"3x"},{util:0.8,wait:"4x"},{util:0.85,wait:"5.7x"},{util:0.9,wait:"9x"},{util:0.95,wait:"19x"},{util:0.99,wait:"99x"}];
@@ -457,6 +550,215 @@ function QuoteCalc({quote,onUpdate,onBack,rateCards}){
 }
 
 
+// ─── Editor Dashboard ───
+function EditorDashboard({embedded,onLogout}){
+  const[editorId,setEditorId]=useState(null);
+  const[tasks,setTasks]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[timers,setTimers]=useState({}); // {taskId: {running:bool, elapsed:secs, startedAt:timestamp}}
+  const[timeLogs,setTimeLogs]=useState({}); // {taskId: totalSecs} from Firebase
+  const intervalRef=useRef(null);
+  const today=todayKey();
+
+  // Init Firebase
+  useEffect(()=>{initFB();},[]);
+
+  // Load tasks when editor selected
+  useEffect(()=>{
+    if(!editorId)return;
+    setLoading(true);
+    const ed=MONDAY_EDITORS.find(e=>e.id===editorId);
+    if(!ed){setLoading(false);return;}
+    fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));
+  },[editorId]);
+
+  // Listen to Firebase time logs for this editor + today
+  useEffect(()=>{
+    if(!editorId)return;
+    const path=`/timeLogs/${editorId}/${today}`;
+    let unsub=()=>{};
+    onFB(()=>{unsub=fbListen(path,(data)=>{if(data)setTimeLogs(data);else setTimeLogs({});});});
+    return()=>unsub();
+  },[editorId,today]);
+
+  // Timer tick
+  useEffect(()=>{
+    intervalRef.current=setInterval(()=>{
+      setTimers(prev=>{
+        const next={...prev};
+        let changed=false;
+        Object.keys(next).forEach(tid=>{
+          if(next[tid].running){
+            const elapsed=Math.floor((Date.now()-next[tid].startedAt)/1000);
+            if(elapsed!==next[tid].elapsed){next[tid]={...next[tid],elapsed};changed=true;}
+          }
+        });
+        return changed?next:prev;
+      });
+    },1000);
+    return()=>clearInterval(intervalRef.current);
+  },[]);
+
+  const startTimer=(taskId)=>{
+    setTimers(prev=>({...prev,[taskId]:{running:true,elapsed:0,startedAt:Date.now()}}));
+  };
+
+  const stopTimer=(taskId)=>{
+    const t=timers[taskId];
+    if(!t||!t.running)return;
+    const elapsed=Math.floor((Date.now()-t.startedAt)/1000);
+    setTimers(prev=>({...prev,[taskId]:{running:false,elapsed:0,startedAt:null}}));
+    // Save to Firebase
+    const prev=timeLogs[taskId]||0;
+    const newTotal=prev+elapsed;
+    const path=`/timeLogs/${editorId}/${today}/${taskId}`;
+    fbSet(path,newTotal);
+    setTimeLogs(p=>({...p,[taskId]:newTotal}));
+  };
+
+  const resetTimer=(taskId)=>{
+    const path=`/timeLogs/${editorId}/${today}/${taskId}`;
+    fbSet(path,0);
+    setTimeLogs(p=>({...p,[taskId]:0}));
+    setTimers(prev=>({...prev,[taskId]:{running:false,elapsed:0,startedAt:null}}));
+  };
+
+  const isRunning=(taskId)=>timers[taskId]?.running;
+  const currentElapsed=(taskId)=>timers[taskId]?.elapsed||0;
+  const loggedTime=(taskId)=>timeLogs[taskId]||0;
+  const totalToday=Object.values(timeLogs).reduce((a,b)=>a+b,0);
+
+  const editorName=MONDAY_EDITORS.find(e=>e.id===editorId)?.name||"";
+
+  if(!editorId){
+    return(<div style={{minHeight:embedded?"auto":"100vh",display:"flex",alignItems:embedded?"flex-start":"center",justifyContent:"center",background:embedded?"transparent":"var(--bg)",fontFamily:"'DM Sans',-apple-system,sans-serif",padding:embedded?"24px 28px":0}}>
+      <div style={{width:420,padding:"48px 40px",background:"var(--card)",borderRadius:16,border:"1px solid var(--border)",textAlign:"center"}}>
+        {!embedded&&<div style={{marginBottom:32,display:"flex",justifyContent:"center"}}><Logo h={36}/></div>}
+        <div style={{fontSize:18,fontWeight:700,color:"var(--fg)",marginBottom:6}}>Editor Dashboard</div>
+        <div style={{fontSize:13,color:"var(--muted)",marginBottom:28}}>Select your name to see today's tasks</div>
+        <div style={{display:"grid",gap:10}}>
+          {MONDAY_EDITORS.map(ed=>(
+            <button key={ed.id} onClick={()=>setEditorId(ed.id)}
+              style={{padding:"14px 20px",borderRadius:10,border:"1px solid var(--border)",background:"var(--bg)",color:"var(--fg)",fontSize:15,fontWeight:600,cursor:"pointer",transition:"all 0.15s",textAlign:"left",display:"flex",alignItems:"center",gap:12}}>
+              <span style={{width:36,height:36,borderRadius:"50%",background:"var(--accent-soft)",color:"var(--accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800}}>{ed.name.split(" ").map(n=>n[0]).join("")}</span>
+              {ed.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>);
+  }
+
+  return(<div style={{fontFamily:"'DM Sans',-apple-system,sans-serif",background:embedded?"transparent":"var(--bg)",color:"var(--fg)",minHeight:embedded?"auto":"100vh"}}>
+    {/* Header */}
+    <div style={{padding:"16px 28px",borderBottom:"1px solid var(--border)",background:"var(--card)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <div style={{display:"flex",alignItems:"center",gap:16}}>
+        {!embedded&&<Logo h={22}/>}
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Editor Dashboard</div>
+          <div style={{fontSize:12,color:"var(--muted)"}}>{editorName}</div>
+        </div>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:16}}>
+        <div style={{padding:"8px 16px",borderRadius:8,background:totalToday>0?"rgba(16,185,129,0.12)":"var(--bg)",border:"1px solid var(--border)"}}>
+          <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em"}}>Today's Total </span>
+          <span style={{fontSize:18,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:totalToday>0?"#10B981":"var(--fg)",marginLeft:8}}>{fmtSecsShort(totalToday)}</span>
+        </div>
+        <button onClick={()=>{setLoading(true);const ed=MONDAY_EDITORS.find(e=>e.id===editorId);if(ed)fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
+        <button onClick={()=>setEditorId(null)} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Switch Editor</button>
+      </div>
+    </div>
+
+    {/* Task List */}
+    <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
+      <div style={{fontSize:11,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:16}}>
+        {new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+      </div>
+
+      {loading?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}>Loading tasks from Monday.com...</div>)
+      :tasks.length===0?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}><div style={{fontSize:40,marginBottom:12}}>🎬</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No tasks assigned</div><div style={{fontSize:13}}>No "In Progress" tasks found for {editorName} on Monday.com</div></div>)
+      :(<div style={{display:"grid",gap:12}}>
+        {tasks.map(task=>{
+          const running=isRunning(task.id);
+          const elapsed=currentElapsed(task.id);
+          const logged=loggedTime(task.id);
+          const stageColors={"Edit":"#0082FA","Shoot":"#F87700","Pre Production":"#8B5CF6","Revisions":"#EF4444","Delivery":"#10B981"};
+          const stageCol=stageColors[task.stage]||"var(--accent)";
+
+          return(<div key={task.id} style={{background:"var(--card)",border:`1px solid ${running?"var(--accent)":"var(--border)"}`,borderRadius:12,padding:"20px 24px",transition:"all 0.2s",boxShadow:running?"0 0 30px rgba(0,130,250,0.1)":"none"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,fontWeight:700,color:"var(--muted)",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>{task.parentName}</div>
+                <div style={{fontSize:15,fontWeight:700,color:"var(--fg)",marginBottom:8,lineHeight:1.3}}>{task.name}</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {task.stage&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:`${stageCol}20`,color:stageCol,textTransform:"uppercase",letterSpacing:"0.04em"}}>{task.stage}</span>}
+                  {task.status&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:task.status==="IN PROGRESS"?"rgba(16,185,129,0.12)":task.status==="STUCK"?"rgba(239,68,68,0.12)":"var(--accent-soft)",color:task.status==="IN PROGRESS"?"#10B981":task.status==="STUCK"?"#EF4444":"var(--accent)",textTransform:"uppercase",letterSpacing:"0.04em"}}>{task.status}</span>}
+                  {task.timeline&&<span style={{fontSize:10,fontWeight:600,padding:"3px 10px",borderRadius:4,background:"var(--bg)",color:"var(--muted)"}}>{task.timeline}</span>}
+                  {task.overdue&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:"rgba(239,68,68,0.12)",color:"#EF4444",textTransform:"uppercase",letterSpacing:"0.04em"}}>Overdue</span>}
+                </div>
+              </div>
+
+              {/* Timer */}
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8,minWidth:180}}>
+                {/* Current timer */}
+                {running&&(
+                  <div style={{fontSize:28,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:"var(--accent)",lineHeight:1}}>
+                    {fmtSecs(elapsed)}
+                  </div>
+                )}
+                {/* Logged today */}
+                {logged>0&&(
+                  <div style={{fontSize:12,color:"var(--muted)"}}>
+                    Logged today: <span style={{fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#10B981"}}>{fmtSecsShort(logged)}</span>
+                  </div>
+                )}
+                {/* Buttons */}
+                <div style={{display:"flex",gap:6}}>
+                  {!running?(
+                    <button onClick={()=>startTimer(task.id)}
+                      style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#10B981",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+                      ▶ Start
+                    </button>
+                  ):(
+                    <button onClick={()=>stopTimer(task.id)}
+                      style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#EF4444",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+                      ■ Stop
+                    </button>
+                  )}
+                  {logged>0&&!running&&(
+                    <button onClick={()=>resetTimer(task.id)}
+                      style={{padding:"10px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>);
+        })}
+      </div>)}
+
+      {/* Daily Summary */}
+      {totalToday>0&&(<div style={{marginTop:24,background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"20px 24px"}}>
+        <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Today's Summary</div>
+        <div style={{display:"grid",gap:6}}>
+          {tasks.filter(t=>loggedTime(t.id)>0).map(t=>(
+            <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:"var(--bg)",borderRadius:8}}>
+              <div><span style={{fontSize:11,color:"var(--muted)"}}>{t.parentName}</span><br/><span style={{fontSize:13,color:"var(--fg)",fontWeight:500}}>{t.name}</span></div>
+              <span style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#10B981"}}>{fmtSecsShort(loggedTime(t.id))}</span>
+            </div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",borderTop:"2px solid var(--border)",marginTop:4}}>
+            <span style={{fontSize:13,fontWeight:700,color:"var(--fg)"}}>Total</span>
+            <span style={{fontSize:18,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:"#10B981"}}>{fmtSecsShort(totalToday)}</span>
+          </div>
+        </div>
+      </div>)}
+    </div>
+  </div>);
+}
+
+
 // ─── Login ───
 function Login({onLogin}){
   const[pw,setPw]=useState("");const[err,setErr]=useState(false);const[shake,setShake]=useState(false);
@@ -550,7 +852,7 @@ export default function App(){
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
 
-  const login=pw=>{if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");setTool("quoting");return true;}return false;};
+  const login=pw=>{if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");setTool("quoting");return true;}if(pw==="Letsgo"){setRole("editor");return true;}return false;};
   const logout=()=>{setRole(null);};
 
   // Capacity helpers
@@ -579,6 +881,7 @@ export default function App(){
   const activeQuote=quotes.find(q=>q.id===activeQuoteId);
 
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
+  if(role==="editor")return(<><style>{CSS}</style><EditorDashboard/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
 
   const isFounder=role==="founder";
@@ -590,6 +893,7 @@ export default function App(){
       <div style={{marginBottom:12}}><Logo h={20}/></div>
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       <SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>
+      {isFounder&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
@@ -774,6 +1078,9 @@ export default function App(){
 
       </div>
     </>)}
+
+    {/* ═══ EDITOR DASHBOARD ═══ */}
+    {tool==="editors"&&isFounder&&(<EditorDashboard embedded/>)}
 
     </div>
   </div>);
