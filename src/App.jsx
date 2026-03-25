@@ -46,18 +46,29 @@ async function mondayQuery(q){
 
 async function fetchEditorTasks(editorName){
   // Get all items with subitems from the board
-  const q=`query { boards(ids: ${MONDAY_BOARD_ID}) { items_page(limit: 200) { items { id name group { id title } subitems { id name column_values(ids: ["people","status8","stage","timeline","due_date","numeric_mkyg3qb1"]) { id text } } } } } }`;
+  const q=`query { boards(ids: ${MONDAY_BOARD_ID}) { items_page(limit: 200) { items { id name group { id title } column_values(ids: ["text9","date","date8","project_status","status_18","text1","email","dropdown","long_text"]) { id text } subitems { id name column_values(ids: ["people","status8","stage","timeline","due_date","numeric_mkyg3qb1"]) { id text } } } } } }`;
   const res=await mondayQuery(q);
   console.log("Monday API response:",res);
   if(!res?.data?.boards?.[0]?.items_page?.items)return[];
   const items=res.data.boards[0].items_page.items;
-  // Filter to In Progress group only
   const inProgress=items.filter(it=>it.group?.id===MONDAY_IN_PROGRESS_GROUP);
-  console.log("In Progress items:",inProgress.length,"Total items:",items.length);
-  console.log("Looking for editor:",editorName);
-  const today=todayKey();
+  console.log("In Progress items:",inProgress.length);
   const tasks=[];
   inProgress.forEach(parent=>{
+    // Extract parent info
+    const parentCol=(id)=>parent.column_values?.find(v=>v.id===id)?.text||"";
+    const parentInfo={
+      id:parent.id,
+      taskContent:parentCol("text9"),
+      dueDate:parentCol("date"),
+      projectDueDate:parentCol("date8"),
+      status:parentCol("project_status"),
+      stage:parentCol("status_18"),
+      clientName:parentCol("text1"),
+      clientEmail:parentCol("email"),
+      type:parentCol("dropdown"),
+      estimatedEditTime:parentCol("long_text"),
+    };
     (parent.subitems||[]).forEach(sub=>{
       const peopleCol=sub.column_values?.find(v=>v.id==="people");
       const people=peopleCol?.text||"";
@@ -65,45 +76,50 @@ async function fetchEditorTasks(editorName){
       const getCol=(id)=>sub.column_values?.find(v=>v.id===id)?.text||"";
       const timeline=getCol("timeline");
       const status=getCol("status8");
-      // Check if today falls within timeline range
-      let showTask=false;
+      let startDate=null,endDate=null;
       if(timeline){
         const parts=timeline.split(" - ");
-        if(parts.length===2){
-          const start=parts[0].trim();
-          const end=parts[1].trim();
-          showTask=(today>=start&&today<=end);
-        } else if(parts.length===1){
-          // Single date
-          showTask=(parts[0].trim()===today);
-        }
+        if(parts.length===2){startDate=parts[0].trim();endDate=parts[1].trim();}
+        else if(parts.length===1){startDate=parts[0].trim();endDate=parts[0].trim();}
       }
-      // Also show tasks with no timeline that are IN PROGRESS, STUCK, or SCHEDULED
-      if(!timeline&&(status==="IN PROGRESS"||status==="STUCK"||status==="SCHEDULED"))showTask=true;
-      // Also show overdue tasks (end date passed but not DONE)
-      if(timeline&&!showTask&&status!=="DONE"){
-        const parts=timeline.split(" - ");
-        const endDate=parts.length===2?parts[1].trim():parts[0]?.trim();
-        if(endDate&&endDate<today)showTask=true;
-      }
-      if(!showTask)return;
+      if(status==="DONE")return;
       tasks.push({
         id:sub.id,
         name:sub.name,
         parentName:parent.name,
+        parentInfo:parentInfo,
         status:status,
         stage:getCol("stage"),
         timeline:timeline,
-        dueDate:getCol("due_date"),
+        startDate:startDate,
+        endDate:endDate,
         people:people,
         estimatedHours:getCol("numeric_mkyg3qb1"),
-        overdue:timeline?(timeline.split(" - ").pop()?.trim()||"")<today:false,
       });
     });
   });
-  console.log("Found tasks for",editorName,":",tasks.length,tasks);
+  console.log("Found tasks for",editorName,":",tasks.length);
   return tasks;
 }
+
+async function fetchItemUpdates(itemId){
+  const q=`query { items(ids: ${itemId}) { updates(limit: 10) { id body text_body created_at creator { name } } } }`;
+  const res=await mondayQuery(q);
+  return res?.data?.items?.[0]?.updates||[];
+}
+
+function tomorrowKey(){const d=new Date();d.setDate(d.getDate()+1);return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+
+function categorizeContent(parentName,type){
+  const name=(parentName||"").toLowerCase();
+  const t=(type||"").toLowerCase();
+  if(name.includes("meta ad")||t.includes("meta ad")||t.includes("meta"))return"Meta Ad";
+  if(name.includes("social media")||t.includes("social media")||t.includes("retainer"))return"Social Media";
+  if(t.includes("live action")||t.includes("corporate"))return"Corporate Video";
+  return"Other";
+}
+const CONTENT_CATEGORIES=["Meta Ad","Social Media","Corporate Video","Other"];
+const CAT_COLORS={"Meta Ad":"#8B5CF6","Social Media":"#0082FA","Corporate Video":"#F87700","Other":"#5A6B85"};
 
 function todayKey(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function fmtSecs(s){const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);const sec=s%60;return`${h>0?h+"h ":""}${m>0?m+"m ":""}${sec}s`;}
@@ -557,6 +573,9 @@ function EditorDashboard({embedded,onLogout}){
   const[loading,setLoading]=useState(false);
   const[timers,setTimers]=useState({}); // {taskId: {running:bool, elapsed:secs, startedAt:timestamp}}
   const[timeLogs,setTimeLogs]=useState({}); // {taskId: totalSecs} from Firebase
+  const[expanded,setExpanded]=useState({}); // {parentId: true/false}
+  const[updates,setUpdates]=useState({}); // {parentId: [...updates]}
+  const[loadingUpdates,setLoadingUpdates]=useState({});
   const intervalRef=useRef(null);
   const today=todayKey();
 
@@ -608,27 +627,52 @@ function EditorDashboard({embedded,onLogout}){
     if(!t||!t.running)return;
     const elapsed=Math.floor((Date.now()-t.startedAt)/1000);
     setTimers(prev=>({...prev,[taskId]:{running:false,elapsed:0,startedAt:null}}));
-    // Save to Firebase
-    const prev=timeLogs[taskId]||0;
-    const newTotal=prev+elapsed;
+    // Save to Firebase with task metadata
+    const prevLog=timeLogs[taskId]||{};
+    const prevSecs=typeof prevLog==="number"?prevLog:(prevLog.secs||0);
+    const newTotal=prevSecs+elapsed;
+    const task=tasks.find(t2=>t2.id===taskId);
+    const category=categorizeContent(task?.parentName,task?.parentInfo?.type);
+    const logData={secs:newTotal,name:task?.name||"",parentName:task?.parentName||"",stage:task?.stage||"",type:task?.parentInfo?.type||"",category:category};
     const path=`/timeLogs/${editorId}/${today}/${taskId}`;
-    fbSet(path,newTotal);
-    setTimeLogs(p=>({...p,[taskId]:newTotal}));
+    fbSet(path,logData);
+    setTimeLogs(p=>({...p,[taskId]:logData}));
   };
 
   const resetTimer=(taskId)=>{
     const path=`/timeLogs/${editorId}/${today}/${taskId}`;
-    fbSet(path,0);
-    setTimeLogs(p=>({...p,[taskId]:0}));
+    fbSet(path,null);
+    setTimeLogs(p=>{const n={...p};delete n[taskId];return n;});
     setTimers(prev=>({...prev,[taskId]:{running:false,elapsed:0,startedAt:null}}));
   };
 
   const isRunning=(taskId)=>timers[taskId]?.running;
   const currentElapsed=(taskId)=>timers[taskId]?.elapsed||0;
-  const loggedTime=(taskId)=>timeLogs[taskId]||0;
-  const totalToday=Object.values(timeLogs).reduce((a,b)=>a+b,0);
+  const loggedTime=(taskId)=>{const v=timeLogs[taskId];if(!v)return 0;if(typeof v==="number")return v;return v.secs||0;};
+  const totalToday=Object.values(timeLogs).reduce((a,v)=>{const s=typeof v==="number"?v:(v?.secs||0);return a+s;},0);
 
   const editorName=MONDAY_EDITORS.find(e=>e.id===editorId)?.name||"";
+
+  const toggleExpand=async(parentId)=>{
+    if(expanded[parentId]){setExpanded(p=>({...p,[parentId]:false}));return;}
+    setExpanded(p=>({...p,[parentId]:true}));
+    if(!updates[parentId]){
+      setLoadingUpdates(p=>({...p,[parentId]:true}));
+      const u=await fetchItemUpdates(parentId);
+      setUpdates(p=>({...p,[parentId]:u}));
+      setLoadingUpdates(p=>({...p,[parentId]:false}));
+    }
+  };
+
+  // Filter tasks into today and tomorrow
+  const tomorrow=tomorrowKey();
+  const isOnDay=(task,day)=>{
+    if(task.startDate&&task.endDate)return day>=task.startDate&&day<=task.endDate;
+    if(!task.startDate&&!task.endDate)return false;
+    return false;
+  };
+  const todayTasks=tasks.filter(t=>isOnDay(t,today)||((!t.startDate&&!t.endDate)&&(t.status==="IN PROGRESS"||t.status==="STUCK")));
+  const tomorrowTasks=tasks.filter(t=>isOnDay(t,tomorrow)&&!isOnDay(t,today));
 
   if(!editorId){
     return(<div style={{minHeight:embedded?"auto":"100vh",display:"flex",alignItems:embedded?"flex-start":"center",justifyContent:"center",background:embedded?"transparent":"var(--bg)",fontFamily:"'DM Sans',-apple-system,sans-serif",padding:embedded?"24px 28px":0}}>
@@ -676,9 +720,13 @@ function EditorDashboard({embedded,onLogout}){
       </div>
 
       {loading?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}>Loading tasks from Monday.com...</div>)
-      :tasks.length===0?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}><div style={{fontSize:40,marginBottom:12}}>🎬</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No tasks assigned</div><div style={{fontSize:13}}>No "In Progress" tasks found for {editorName} on Monday.com</div></div>)
-      :(<div style={{display:"grid",gap:12}}>
-        {tasks.map(task=>{
+      :todayTasks.length===0&&tomorrowTasks.length===0?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}><div style={{fontSize:40,marginBottom:12}}>🎬</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No tasks assigned</div><div style={{fontSize:13}}>No tasks found for {editorName} today or tomorrow</div></div>)
+      :(<>
+        {/* Today's tasks */}
+        {todayTasks.length>0&&(<div style={{marginBottom:24}}>
+          <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Today</div>
+          <div style={{display:"grid",gap:12}}>
+        {todayTasks.map(task=>{
           const running=isRunning(task.id);
           const elapsed=currentElapsed(task.id);
           const logged=loggedTime(task.id);
@@ -694,55 +742,92 @@ function EditorDashboard({embedded,onLogout}){
                   {task.stage&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:`${stageCol}20`,color:stageCol,textTransform:"uppercase",letterSpacing:"0.04em"}}>{task.stage}</span>}
                   {task.status&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:task.status==="IN PROGRESS"?"rgba(16,185,129,0.12)":task.status==="STUCK"?"rgba(239,68,68,0.12)":"var(--accent-soft)",color:task.status==="IN PROGRESS"?"#10B981":task.status==="STUCK"?"#EF4444":"var(--accent)",textTransform:"uppercase",letterSpacing:"0.04em"}}>{task.status}</span>}
                   {task.timeline&&<span style={{fontSize:10,fontWeight:600,padding:"3px 10px",borderRadius:4,background:"var(--bg)",color:"var(--muted)"}}>{task.timeline}</span>}
-                  {task.overdue&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:"rgba(239,68,68,0.12)",color:"#EF4444",textTransform:"uppercase",letterSpacing:"0.04em"}}>Overdue</span>}
                 </div>
               </div>
 
               {/* Timer */}
               <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8,minWidth:180}}>
-                {/* Current timer */}
-                {running&&(
-                  <div style={{fontSize:28,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:"var(--accent)",lineHeight:1}}>
-                    {fmtSecs(elapsed)}
-                  </div>
-                )}
-                {/* Logged today */}
-                {logged>0&&(
-                  <div style={{fontSize:12,color:"var(--muted)"}}>
-                    Logged today: <span style={{fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#10B981"}}>{fmtSecsShort(logged)}</span>
-                  </div>
-                )}
-                {/* Buttons */}
+                {running&&(<div style={{fontSize:28,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:"var(--accent)",lineHeight:1}}>{fmtSecs(elapsed)}</div>)}
+                {logged>0&&(<div style={{fontSize:12,color:"var(--muted)"}}>Logged today: <span style={{fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#10B981"}}>{fmtSecsShort(logged)}</span></div>)}
                 <div style={{display:"flex",gap:6}}>
-                  {!running?(
-                    <button onClick={()=>startTimer(task.id)}
-                      style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#10B981",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
-                      ▶ Start
-                    </button>
-                  ):(
-                    <button onClick={()=>stopTimer(task.id)}
-                      style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#EF4444",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
-                      ■ Stop
-                    </button>
-                  )}
-                  {logged>0&&!running&&(
-                    <button onClick={()=>resetTimer(task.id)}
-                      style={{padding:"10px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                      Reset
-                    </button>
-                  )}
+                  {!running?(<button onClick={()=>startTimer(task.id)} style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#10B981",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>▶ Start</button>)
+                  :(<button onClick={()=>stopTimer(task.id)} style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#EF4444",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>■ Stop</button>)}
+                  {logged>0&&!running&&(<button onClick={()=>resetTimer(task.id)} style={{padding:"10px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>Reset</button>)}
                 </div>
               </div>
             </div>
+            {/* More Info button */}
+            <div style={{marginTop:12,borderTop:"1px solid var(--border)",paddingTop:10,display:"flex",justifyContent:"flex-start"}}>
+              <button onClick={()=>toggleExpand(task.parentInfo.id)} style={{fontSize:11,fontWeight:600,color:"var(--accent)",background:"transparent",border:"none",cursor:"pointer",padding:"4px 0",display:"flex",alignItems:"center",gap:4}}>
+                {expanded[task.parentInfo.id]?"▾ Hide Info":"▸ More Info"}
+              </button>
+            </div>
+            {/* Expanded info */}
+            {expanded[task.parentInfo.id]&&(<div style={{marginTop:8,padding:"16px",background:"var(--bg)",borderRadius:8,fontSize:12}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                {task.parentInfo.status&&<div><span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Project Status</span><div style={{color:"var(--fg)",fontWeight:600,marginTop:2}}>{task.parentInfo.status}</div></div>}
+                {task.parentInfo.stage&&<div><span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Project Stage</span><div style={{color:"var(--fg)",fontWeight:600,marginTop:2}}>{task.parentInfo.stage}</div></div>}
+                {task.parentInfo.projectDueDate&&<div><span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Project Due Date</span><div style={{color:"var(--fg)",fontWeight:600,marginTop:2}}>{task.parentInfo.projectDueDate}</div></div>}
+                {task.parentInfo.type&&<div><span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Type</span><div style={{color:"var(--fg)",fontWeight:600,marginTop:2}}>{task.parentInfo.type}</div></div>}
+              </div>
+              {task.parentInfo.taskContent&&(<div style={{marginBottom:16}}>
+                <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Task Content</span>
+                <div style={{color:"var(--fg)",marginTop:4,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{task.parentInfo.taskContent}</div>
+              </div>)}
+              {/* Comments/Updates */}
+              <div>
+                <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Comments</span>
+                {loadingUpdates[task.parentInfo.id]?(<div style={{color:"var(--muted)",marginTop:8}}>Loading comments...</div>)
+                :updates[task.parentInfo.id]?.length>0?(<div style={{marginTop:8,display:"grid",gap:8}}>
+                  {updates[task.parentInfo.id].map(u=>(
+                    <div key={u.id} style={{padding:"10px 12px",background:"var(--card)",borderRadius:6,border:"1px solid var(--border)"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                        <span style={{fontSize:11,fontWeight:700,color:"var(--accent)"}}>{u.creator?.name||"Unknown"}</span>
+                        <span style={{fontSize:10,color:"var(--muted)"}}>{new Date(u.created_at).toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
+                      </div>
+                      <div style={{fontSize:12,color:"var(--fg)",lineHeight:1.4,whiteSpace:"pre-wrap"}}>{u.text_body||""}</div>
+                    </div>
+                  ))}
+                </div>)
+                :(<div style={{color:"var(--muted)",marginTop:8,fontSize:11}}>No comments on this project</div>)}
+              </div>
+            </div>)}
           </div>);
         })}
-      </div>)}
+          </div>
+        </div>)}
+
+        {todayTasks.length===0&&(<div style={{marginBottom:24,padding:"32px 20px",textAlign:"center",color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:13,fontWeight:600}}>No tasks scheduled for today</div></div>)}
+
+        {/* Tomorrow's tasks */}
+        {tomorrowTasks.length>0&&(<div style={{marginBottom:24}}>
+          <div style={{fontSize:13,fontWeight:700,color:"var(--muted)",marginBottom:12}}>Tomorrow</div>
+          <div style={{display:"grid",gap:8}}>
+            {tomorrowTasks.map(task=>{
+              const stageColors={"Edit":"#0082FA","Shoot":"#F87700","Pre Production":"#8B5CF6","Revisions":"#EF4444","Delivery":"#10B981"};
+              const stageCol=stageColors[task.stage]||"var(--accent)";
+              return(<div key={task.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"14px 20px",opacity:0.7}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",marginBottom:2,textTransform:"uppercase",letterSpacing:"0.04em"}}>{task.parentName}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:"var(--fg)"}}>{task.name}</div>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    {task.stage&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:`${stageCol}20`,color:stageCol,textTransform:"uppercase"}}>{task.stage}</span>}
+                    {task.status&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:"var(--bg)",color:"var(--muted)",textTransform:"uppercase"}}>{task.status}</span>}
+                  </div>
+                </div>
+              </div>);
+            })}
+          </div>
+        </div>)}
+      </>)}
 
       {/* Daily Summary */}
       {totalToday>0&&(<div style={{marginTop:24,background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"20px 24px"}}>
         <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Today's Summary</div>
         <div style={{display:"grid",gap:6}}>
-          {tasks.filter(t=>loggedTime(t.id)>0).map(t=>(
+          {todayTasks.filter(t=>loggedTime(t.id)>0).map(t=>(
             <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:"var(--bg)",borderRadius:8}}>
               <div><span style={{fontSize:11,color:"var(--muted)"}}>{t.parentName}</span><br/><span style={{fontSize:13,color:"var(--fg)",fontWeight:500}}>{t.name}</span></div>
               <span style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#10B981"}}>{fmtSecsShort(loggedTime(t.id))}</span>
@@ -808,6 +893,11 @@ export default function App(){
   const[rcShowArchive,setRcShowArchive]=useState(false);
   const rcAddRef=useRef(null);
 
+  // Time logs state
+  const[allTimeLogs,setAllTimeLogs]=useState({});
+  const[timeLogDate,setTimeLogDate]=useState(todayKey());
+  const[timeLogLoading,setTimeLogLoading]=useState(false);
+
   // Merge default + custom rate cards, filtering out hidden defaults
   const rcArr=Array.isArray(clientRateCards)?clientRateCards:[];
   const hiddenIds=rcArr.filter(c=>c&&c.deleted).map(c=>c.id.replace("del-",""));
@@ -851,6 +941,20 @@ export default function App(){
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
+
+  // Time logs listener
+  useEffect(()=>{
+    if(capTab!=="timelogs")return;
+    setTimeLogLoading(true);
+    let unsub=()=>{};
+    onFB(()=>{
+      unsub=fbListen("/timeLogs",(data)=>{
+        setAllTimeLogs(data||{});
+        setTimeLogLoading(false);
+      });
+    });
+    return()=>unsub();
+  },[capTab]);
 
   const login=pw=>{if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");setTool("quoting");return true;}if(pw==="Letsgo"){setRole("editor");return true;}return false;};
   const logout=()=>{setRole(null);};
@@ -906,7 +1010,7 @@ export default function App(){
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
         <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Capacity Planner</span>
         <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3}}>
-          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
+          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
         </div>
       </div>
 
@@ -930,6 +1034,166 @@ export default function App(){
       </div>)}
 
       {capTab==="forecast"&&(<><div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"20px 24px",marginBottom:20}}><div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:4}}>12-Week Workload Forecast</div><div style={{fontSize:12,color:"var(--muted)",marginBottom:16}}>{ai.newProjectsPerWeek} new/week, {ai.avgProjectDuration}-week duration, {ai.avgEditHoursPerProject}h avg edit</div><FChart forecast={c.forecast}/></div><div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"20px 24px",overflowX:"auto"}}><div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Forecast Detail</div><table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:12}}><thead><tr>{["Week","Projects","Workload","Real Util","Filled Util","Suites","Status"].map(h=>(<th key={h} style={{...TH,textAlign:h==="Week"?"left":"center"}}>{h}</th>))}</tr></thead><tbody>{c.forecast.map(f=>(<tr key={f.week}><td style={{...TD,fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>W{f.week}{f.week===0?" (now)":""}</td><td style={{...TD,textAlign:"center",fontFamily:"'JetBrains Mono',monospace"}}>{f.projects}</td><td style={{...TD,textAlign:"center",fontFamily:"'JetBrains Mono',monospace"}}>{f.workload}h</td><td style={{...TD,textAlign:"center"}}><div style={{display:"flex",alignItems:"center",gap:8,justifyContent:"center"}}><div style={{width:60}}><UBar value={f.realUtil} height={8}/></div><span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:11,color:f.realUtil>=0.95?"#EF4444":"var(--fg)"}}>{pct(f.realUtil)}</span></div></td><td style={{...TD,textAlign:"center",fontFamily:"'JetBrains Mono',monospace"}}>{pct(f.filledUtil)}</td><td style={{...TD,textAlign:"center",fontFamily:"'JetBrains Mono',monospace",fontWeight:700}}>{f.suitesNeeded}</td><td style={{...TD,textAlign:"center"}}><Badge util={f.realUtil}/></td></tr>))}</tbody></table></div></>)}
+
+      {capTab==="timelogs"&&(()=>{
+        const fmtHM=(secs)=>{const h=Math.floor(secs/3600);const m=Math.floor((secs%3600)/60);if(h>0&&m>0)return`${h}h ${m}m`;if(h>0)return`${h}h`;if(m>0)return`${m}m`;if(secs>0)return`${secs}s`;return"0m";};
+        const editorMap={};
+        MONDAY_EDITORS.forEach(ed=>{editorMap[ed.id]=ed.name;});
+        // Build data for selected date
+        const dateData={};
+        Object.entries(allTimeLogs).forEach(([edId,dates])=>{
+          if(!dates||typeof dates!=="object")return;
+          const dayData=dates[timeLogDate];
+          if(!dayData||typeof dayData!=="object")return;
+          const edName=editorMap[edId]||`Editor ${edId}`;
+          const tasks=[];
+          let edTotal=0;
+          Object.entries(dayData).forEach(([taskId,val])=>{
+            const secs=typeof val==="number"?val:(val?.secs||0);
+            const name=typeof val==="object"?(val?.name||taskId):taskId;
+            const parentName=typeof val==="object"?(val?.parentName||""):"";
+            const stage=typeof val==="object"?(val?.stage||""):"";
+            const category=typeof val==="object"?(val?.category||categorizeContent(parentName,val?.type)):categorizeContent(parentName,"");
+            if(secs>0){
+              tasks.push({taskId,secs,name,parentName,stage,category});
+              edTotal+=secs;
+            }
+          });
+          if(tasks.length>0)dateData[edId]={name:edName,tasks,total:edTotal};
+        });
+        const grandTotal=Object.values(dateData).reduce((s,ed)=>s+ed.total,0);
+        const datePrev=()=>{const d=new Date(timeLogDate+"T00:00:00");d.setDate(d.getDate()-1);setTimeLogDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);};
+        const dateNext=()=>{const d=new Date(timeLogDate+"T00:00:00");d.setDate(d.getDate()+1);setTimeLogDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);};
+        const dateLabel=new Date(timeLogDate+"T00:00:00").toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+
+        return(<div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <button onClick={datePrev} style={NB}>&larr;</button>
+              <div style={{textAlign:"center",minWidth:260}}>
+                <div style={{fontSize:17,fontWeight:800,color:"var(--fg)"}}>{dateLabel}</div>
+                {timeLogDate===todayKey()&&<div style={{fontSize:11,color:"var(--accent)",fontWeight:600,marginTop:2}}>Today</div>}
+              </div>
+              <button onClick={dateNext} style={NB}>&rarr;</button>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setTimeLogDate(todayKey())} style={{...NB,fontSize:11,fontWeight:600}}>Today</button>
+              <div style={{padding:"8px 16px",borderRadius:8,background:grandTotal>0?"rgba(16,185,129,0.12)":"var(--bg)",border:"1px solid var(--border)"}}>
+                <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em"}}>Total </span>
+                <span style={{fontSize:18,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:grandTotal>0?"#10B981":"var(--fg)",marginLeft:8}}>{fmtHM(grandTotal)}</span>
+              </div>
+            </div>
+          </div>
+
+          {timeLogLoading?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}>Loading time logs...</div>)
+          :Object.keys(dateData).length===0?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>⏱</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No time logged</div><div style={{fontSize:13}}>No editors have logged time for this date</div></div>)
+          :(<div style={{display:"grid",gap:16}}>
+            {Object.entries(dateData).sort((a,b)=>b[1].total-a[1].total).map(([edId,ed])=>(
+              <div key={edId} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,overflow:"hidden"}}>
+                <div style={{padding:"14px 20px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{width:32,height:32,borderRadius:"50%",background:"var(--accent-soft)",color:"var(--accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800}}>{ed.name.split(" ").map(n=>n[0]).join("")}</span>
+                    <span style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{ed.name}</span>
+                  </div>
+                  <span style={{fontSize:18,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:"#10B981"}}>{fmtHM(ed.total)}</span>
+                </div>
+                <div style={{padding:"8px 12px"}}>
+                  {ed.tasks.sort((a,b)=>b.secs-a.secs).map(t=>{
+                    const stageColors={"Edit":"#0082FA","Shoot":"#F87700","Pre Production":"#8B5CF6","Revisions":"#EF4444","Delivery":"#10B981"};
+                    const stageCol=stageColors[t.stage]||"var(--accent)";
+                    return(
+                    <div key={t.taskId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",borderBottom:"1px solid var(--border-light)"}}>
+                      <div style={{flex:1}}>
+                        {t.parentName&&<div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:2}}>{t.parentName}</div>}
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <span style={{fontSize:13,color:"var(--fg)",fontWeight:500}}>{t.name}</span>
+                          {t.stage&&<span style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:3,background:`${stageCol}20`,color:stageCol,textTransform:"uppercase"}}>{t.stage}</span>}
+                          {t.category&&<span style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:3,background:`${CAT_COLORS[t.category]||"#5A6B85"}15`,color:CAT_COLORS[t.category]||"#5A6B85"}}>{t.category}</span>}
+                        </div>
+                      </div>
+                      <span style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"var(--fg)"}}>{fmtHM(t.secs)}</span>
+                    </div>);
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>)}
+
+          {/* Category Averages (all time) */}
+          {Object.keys(allTimeLogs).length>0&&(()=>{
+            const catStats={};
+            CONTENT_CATEGORIES.forEach(cat=>{catStats[cat]={};});
+            Object.entries(allTimeLogs).forEach(([edId,dates])=>{
+              if(!dates||typeof dates!=="object")return;
+              Object.entries(dates).forEach(([date,tasks2])=>{
+                if(!tasks2||typeof tasks2!=="object")return;
+                const parentTotals={};
+                Object.entries(tasks2).forEach(([tid,val])=>{
+                  const secs=typeof val==="number"?val:(val?.secs||0);
+                  if(secs<=0)return;
+                  const cat=typeof val==="object"?(val?.category||"Other"):"Other";
+                  const pName=typeof val==="object"?(val?.parentName||tid):tid;
+                  const key=`${cat}|||${pName}|||${date}`;
+                  if(!parentTotals[key])parentTotals[key]={cat,secs:0};
+                  parentTotals[key].secs+=secs;
+                });
+                Object.values(parentTotals).forEach(({cat,secs})=>{
+                  if(!catStats[cat])catStats[cat]={};
+                  if(!catStats[cat][edId])catStats[cat][edId]={totalSecs:0,count:0};
+                  catStats[cat][edId].totalSecs+=secs;
+                  catStats[cat][edId].count+=1;
+                });
+              });
+            });
+            const hasCatData=CONTENT_CATEGORIES.some(cat=>Object.keys(catStats[cat]).length>0);
+            if(!hasCatData)return null;
+            return(<div style={{marginTop:32}}>
+              <div style={{fontSize:15,fontWeight:800,color:"var(--fg)",marginBottom:16}}>Average Time by Content Type</div>
+              <div style={{display:"grid",gap:16}}>
+                {CONTENT_CATEGORIES.map(cat=>{
+                  const editors2=catStats[cat];
+                  const edEntries=Object.entries(editors2).filter(([_,v])=>v.count>0);
+                  if(edEntries.length===0)return null;
+                  const allTotal=edEntries.reduce((s,[_,v])=>s+v.totalSecs,0);
+                  const allCount=edEntries.reduce((s,[_,v])=>s+v.count,0);
+                  const allAvg=allCount>0?Math.round(allTotal/allCount):0;
+                  const catColor=CAT_COLORS[cat]||"#5A6B85";
+                  return(<div key={cat} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,overflow:"hidden"}}>
+                    <div style={{padding:"14px 20px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{width:10,height:10,borderRadius:"50%",background:catColor}}/>
+                        <span style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{cat}</span>
+                        <span style={{fontSize:11,color:"var(--muted)"}}>{allCount} task{allCount!==1?"s":""} logged</span>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Avg per task</div>
+                        <div style={{fontSize:18,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:catColor}}>{fmtHM(allAvg)}</div>
+                      </div>
+                    </div>
+                    <div style={{padding:"8px 12px"}}>
+                      {edEntries.sort((a,b)=>b[1].count-a[1].count).map(([edId2,v])=>{
+                        const edName2=editorMap[edId2]||`Editor ${edId2}`;
+                        const avg=v.count>0?Math.round(v.totalSecs/v.count):0;
+                        return(<div key={edId2} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",borderBottom:"1px solid var(--border-light)"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <span style={{width:24,height:24,borderRadius:"50%",background:"var(--accent-soft)",color:"var(--accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:800}}>{edName2.split(" ").map(n=>n[0]).join("")}</span>
+                            <span style={{fontSize:12,color:"var(--fg)",fontWeight:500}}>{edName2}</span>
+                            <span style={{fontSize:10,color:"var(--muted)"}}>{v.count} task{v.count!==1?"s":""}</span>
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:12}}>
+                            <span style={{fontSize:10,color:"var(--muted)"}}>avg</span>
+                            <span style={{fontSize:13,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"var(--fg)"}}>{fmtHM(avg)}</span>
+                          </div>
+                        </div>);
+                      })}
+                    </div>
+                  </div>);
+                })}
+              </div>
+            </div>);
+          })()}
+        </div>);
+      })()}
 
       </div>
     </>)}
