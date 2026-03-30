@@ -136,7 +136,6 @@ function fmtRange(m){const a=new Date(m),b=new Date(a);b.setDate(b.getDate()+4);
 function fmtLabel(m){return new Date(m).toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"});}
 function dayDates(m){return DK.map((_,i)=>{const d=new Date(m);d.setDate(d.getDate()+i);return d;});}
 function addW(d,n){const x=new Date(d);x.setDate(x.getDate()+n*7);return x;}
-const ORIGIN=new Date(2026,2,23);
 
 const DEF_EDS=[
   {id:"ed-1",name:"Angus",defaultDays:{mon:true,tue:true,wed:true,thu:false,fri:true}},
@@ -254,7 +253,8 @@ function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
   const startEdit=ed=>{setEditingId(ed.id);setEditName(ed.name);};
   const doRename=()=>{if(!editName.trim()){setEditingId(null);return;}sv({editors:eds.map(e=>e.id===editingId?{...e,name:editName.trim()}:e)});setEditingId(null);};
   const openNote=(edId,day)=>{const ed=eds.find(e=>e.id===edId);setNoteEdit({editorId:edId,day});setNoteText(ed?.notes?.[day]||"");};
-  const saveNote=()=>{if(!noteEdit)return;sv({editors:eds.map(e=>e.id===noteEdit.editorId?{...e,notes:{...e.notes,[noteEdit.day]:noteText.trim()||undefined}}:e)});setNoteEdit(null);setNoteText("");};
+  const saveNote=()=>{if(!noteEdit)return;const txt=noteText.trim();const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};if(txt){newNotes[noteEdit.day]=txt;}else{newNotes[noteEdit.day]=null;}return{...e,notes:newNotes};});sv({editors:updated});fbSet(`/weekData/${wk}`,{...data,editors:updated});setNoteEdit(null);setNoteText("");};
+  const clearNote=()=>{if(!noteEdit)return;const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};newNotes[noteEdit.day]=null;return{...e,notes:newNotes};});sv({editors:updated});fbSet(`/weekData/${wk}`,{...data,editors:updated});setNoteEdit(null);setNoteText("");};
 
   // Only "in" counts as occupying a suite. "shoot" = working but no suite.
   const occPerDay=DK.map(d=>eds.filter(e=>dayVal(e.days[d])==="in").length);
@@ -266,7 +266,7 @@ function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
   useEffect(()=>{if(noteEdit&&noteRef.current)noteRef.current.focus();},[noteEdit]);
 
   const cellStyle=(ed,day)=>{
-    const v=dayVal(ed.days[day]);const hasNote=ed.notes?.[day];
+    const v=dayVal(ed.days[day]);const hasNote=ed.notes?.[day]!=null&&ed.notes[day]!=="";
     if(v==="in")return{background:hasNote?"rgba(0,130,250,0.22)":"var(--accent-soft)",color:"var(--accent)"};
     if(v==="shoot")return{background:hasNote?"rgba(248,119,0,0.22)":"rgba(248,119,0,0.12)",color:"#F87700"};
     return{background:"transparent",color:"#3A4558"};
@@ -277,7 +277,7 @@ function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
     <thead><tr><th style={{...TH,width:150,textAlign:"left"}}>Editor</th>{DK.map((_,i)=>(<th key={i} style={{...TH,textAlign:"center",minWidth:90}}><div>{DL[i]}</div><div style={{fontSize:11,fontWeight:600,color:"var(--accent)",marginTop:2}}>{fmtD(dd[i])}</div></th>))}<th style={{...TH,width:55,textAlign:"center"}}>Days</th><th style={{...TH,width:40}}></th></tr></thead>
     <tbody>{eds.map(ed=>{const dn=DK.filter(d=>dayVal(ed.days[d])!=="off").length;const isE=editingId===ed.id;return(<tr key={ed.id}>
       <td style={{...TD,fontWeight:700,color:"var(--fg)",cursor:"pointer"}} onClick={()=>{if(!isE)startEdit(ed);}}>{isE?(<input ref={editRef} type="text" value={editName} onChange={e=>setEditName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doRename();if(e.key==="Escape")setEditingId(null);}} onBlur={doRename} style={{width:"100%",padding:"3px 6px",borderRadius:4,border:"1px solid var(--accent)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,fontWeight:700,outline:"none"}}/>):(<span style={{borderBottom:"1px dashed #3A4558"}} title="Click to rename">{ed.name}</span>)}</td>
-      {DK.map(day=>{const v=dayVal(ed.days[day]);const cs=cellStyle(ed,day);const hasNote=ed.notes?.[day];return(
+      {DK.map(day=>{const v=dayVal(ed.days[day]);const cs=cellStyle(ed,day);const hasNote=ed.notes?.[day]!=null&&ed.notes[day]!=="";return(
         <td key={day} onClick={()=>tog(ed.id,day)} onContextMenu={e=>{e.preventDefault();openNote(ed.id,day);}}
           style={{...TD,textAlign:"center",cursor:"pointer",userSelect:"none",transition:"all 0.15s",position:"relative",...cs,fontWeight:700}}
           title={hasNote?`Note: ${hasNote}`:"Right-click to add note"}>
@@ -299,7 +299,7 @@ function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
       <input ref={noteRef} type="text" value={noteText} onChange={e=>setNoteText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveNote();if(e.key==="Escape"){setNoteEdit(null);}}} placeholder="e.g. Starts late 10am, Leaves 3pm..." style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,outline:"none",marginBottom:12}}/>
       <div style={{display:"flex",gap:8}}>
         <button onClick={saveNote} style={{...BTN,background:"var(--accent)",color:"white",flex:1}}>Save</button>
-        <button onClick={()=>{if(!noteEdit)return;sv({editors:eds.map(e=>e.id===noteEdit.editorId?{...e,notes:{...e.notes,[noteEdit.day]:undefined}}:e)});setNoteEdit(null);setNoteText("");}} style={{...BTN,background:"#374151",color:"#EF4444"}}>Clear Note</button>
+        <button onClick={clearNote} style={{...BTN,background:"#374151",color:"#EF4444"}}>Clear Note</button>
         <button onClick={()=>setNoteEdit(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
       </div>
     </div>
@@ -362,14 +362,14 @@ function QuoteCalc({quote,onUpdate,onBack,rateCards}){
   const totalCost=itemCosts.reduce((s,it)=>s+it.cost,0)+customCosts.reduce((s,it)=>s+it.baseCost,0);
   const totalCustomMarkup=customCosts.reduce((s,it)=>s+it.sellCost-it.baseCost,0);
 
-  // Margin calc: two modes
+  // Margin calc: two modes (markup style - matches Google Sheet)
   let sellExGST,margin;
   if(q.sellPriceMode&&q.sellPrice!=null){
     sellExGST=q.sellPrice;
-    margin=totalCost>0?(sellExGST-totalCost)/sellExGST:0;
+    margin=totalCost>0?(sellExGST-totalCost)/totalCost:0;
   } else {
     margin=q.margin||0;
-    sellExGST=totalCost>0?totalCost/(1-margin):0;
+    sellExGST=totalCost>0?totalCost*(1+margin):0;
   }
   sellExGST+=totalCustomMarkup;
   const sellIncGST=sellExGST*1.1;
@@ -671,7 +671,8 @@ function EditorDashboard({embedded,onLogout}){
     if(!task.startDate&&!task.endDate)return false;
     return false;
   };
-  const todayTasks=tasks.filter(t=>isOnDay(t,today)||((!t.startDate&&!t.endDate)&&(t.status==="IN PROGRESS"||t.status==="STUCK")));
+  const todayTasks=tasks.filter(t=>isOnDay(t,today));
+  const overdueTasks=tasks.filter(t=>t.endDate&&t.endDate<today&&t.status!=="DONE"&&!isOnDay(t,today));
   const tomorrowTasks=tasks.filter(t=>isOnDay(t,tomorrow)&&!isOnDay(t,today));
 
   if(!editorId){
@@ -720,7 +721,7 @@ function EditorDashboard({embedded,onLogout}){
       </div>
 
       {loading?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}>Loading tasks from Monday.com...</div>)
-      :todayTasks.length===0&&tomorrowTasks.length===0?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}><div style={{fontSize:40,marginBottom:12}}>🎬</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No tasks assigned</div><div style={{fontSize:13}}>No tasks found for {editorName} today or tomorrow</div></div>)
+      :todayTasks.length===0&&tomorrowTasks.length===0&&overdueTasks.length===0?(<div style={{textAlign:"center",padding:60,color:"var(--muted)"}}><div style={{fontSize:40,marginBottom:12}}>🎬</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No tasks assigned</div><div style={{fontSize:13}}>No tasks found for {editorName} today or tomorrow</div></div>)
       :(<>
         {/* Today's tasks */}
         {todayTasks.length>0&&(<div style={{marginBottom:24}}>
@@ -821,6 +822,30 @@ function EditorDashboard({embedded,onLogout}){
             })}
           </div>
         </div>)}
+
+        {/* Overdue tasks */}
+        {overdueTasks.length>0&&(<div style={{marginBottom:24}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#EF4444",marginBottom:12}}>Overdue ({overdueTasks.length})</div>
+          <div style={{display:"grid",gap:8}}>
+            {overdueTasks.map(task=>{
+              const stageColors={"Edit":"#0082FA","Shoot":"#F87700","Pre Production":"#8B5CF6","Revisions":"#EF4444","Delivery":"#10B981"};
+              const stageCol=stageColors[task.stage]||"var(--accent)";
+              return(<div key={task.id} style={{background:"var(--card)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:10,padding:"14px 20px",opacity:0.7}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",marginBottom:2,textTransform:"uppercase",letterSpacing:"0.04em"}}>{task.parentName}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:"var(--fg)"}}>{task.name}</div>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    {task.stage&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:`${stageCol}20`,color:stageCol,textTransform:"uppercase"}}>{task.stage}</span>}
+                    {task.status&&<span style={{fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:4,background:"rgba(239,68,68,0.12)",color:"#EF4444",textTransform:"uppercase"}}>{task.status}</span>}
+                    {task.timeline&&<span style={{fontSize:10,fontWeight:600,padding:"3px 10px",borderRadius:4,background:"var(--bg)",color:"var(--muted)"}}>{task.timeline}</span>}
+                  </div>
+                </div>
+              </div>);
+            })}
+          </div>
+        </div>)}
       </>)}
 
       {/* Daily Summary */}
@@ -871,7 +896,7 @@ export default function App(){
   const[inputs,setInputs]=useState(DEF_IN);
   const[editors,setEditors]=useState(DEF_EDS);
   const[weekData,setWeekData]=useState({});
-  const[curW,setCurW]=useState(wKey(ORIGIN));
+  const[curW,setCurW]=useState(wKey(getMonday(new Date())));
   const[scMode,setScMode]=useState(false);const[scIn,setScIn]=useState(null);
   const[jumpOpen,setJumpOpen]=useState(false);const[jumpDate,setJumpDate]=useState("");
 
@@ -897,6 +922,22 @@ export default function App(){
   const[allTimeLogs,setAllTimeLogs]=useState({});
   const[timeLogDate,setTimeLogDate]=useState(todayKey());
   const[timeLogLoading,setTimeLogLoading]=useState(false);
+
+  // Clients state
+  const[clients,setClients]=useState([]);
+  const[clientAdding,setClientAdding]=useState(false);
+  const[clientNewName,setClientNewName]=useState("");
+  const[clientNewDoc,setClientNewDoc]=useState("");
+  const[clientEditId,setClientEditId]=useState(null);
+  const[clientEditName,setClientEditName]=useState("");
+  const[clientEditDoc,setClientEditDoc]=useState("");
+
+  // Clients state
+  const[clients,setClients]=useState([]);
+  const[clientAdding,setClientAdding]=useState(false);
+  const[clientNewName,setClientNewName]=useState("");
+  const[clientNewDoc,setClientNewDoc]=useState("");
+  const[clientEditId,setClientEditId]=useState(null);
 
   // Merge default + custom rate cards, filtering out hidden defaults
   const rcArr=Array.isArray(clientRateCards)?clientRateCards:[];
@@ -928,6 +969,10 @@ export default function App(){
               const rcArr=Object.values(data.clientRateCards).filter(r=>r&&r.id);
               setClientRateCards(rcArr);
             }
+            if(data.clients){
+              const cArr=Object.values(data.clients).filter(c=>c&&c.id);
+              setClients(cArr);
+            }
           }
         }catch(e){console.error("Firebase data parse error:",e);}
         setLoading(false);
@@ -937,7 +982,7 @@ export default function App(){
   },[]);
 
   const wt=useRef(null);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);}catch(e){console.error("Firebase write error:",e);}},400);},[inputs,editors,weekData,quotes,clientRateCards]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);}catch(e){console.error("Firebase write error:",e);}},400);},[inputs,editors,weekData,quotes,clientRateCards,clients]);
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
@@ -961,7 +1006,7 @@ export default function App(){
 
   // Capacity helpers
   const goW=dir=>setCurW(wKey(addW(new Date(curW+"T00:00:00"),dir)));
-  const goToday=()=>setCurW(wKey(ORIGIN));
+  const goToday=()=>setCurW(wKey(getMonday(new Date())));
   const jumpTo=()=>{if(!jumpDate)return;setCurW(wKey(getMonday(new Date(jumpDate+"T00:00:00"))));setJumpOpen(false);setJumpDate("");};
   const upWeek=(wk,data)=>setWeekData(p=>({...p,[wk]:data}));
   const rosterToggle=(eid,day)=>setEditors(prev=>prev.map(e=>e.id===eid?{...e,defaultDays:{...e.defaultDays,[day]:!e.defaultDays[day]}}:e));
@@ -998,6 +1043,7 @@ export default function App(){
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       <SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>
       {isFounder&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
+      {isFounder&&<SideIcon icon="📋" label="Clients" active={tool==="clients"} onClick={()=>setTool("clients")}/>}
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
@@ -1010,7 +1056,7 @@ export default function App(){
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
         <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Capacity Planner</span>
         <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3}}>
-          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
+          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"},{key:"clients",label:"Clients"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
         </div>
       </div>
 
@@ -1195,6 +1241,53 @@ export default function App(){
         </div>);
       })()}
 
+      {capTab==="clients"&&(<div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div>
+            <div style={{fontSize:17,fontWeight:800,color:"var(--fg)"}}>Clients</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Client list with Google Doc links for the team</div>
+          </div>
+          {!clientAdding&&<button onClick={()=>setClientAdding(true)} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Client</button>}
+        </div>
+        {clientAdding&&(<div style={{marginBottom:16,padding:"16px 20px",background:"var(--card)",border:"1px solid var(--accent)",borderRadius:10}}>
+          <div style={{display:"grid",gap:10,marginBottom:12}}>
+            <input type="text" value={clientNewName} onChange={e=>setClientNewName(e.target.value)} placeholder="Client name..." autoFocus style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
+            <input type="text" value={clientNewDoc} onChange={e=>setClientNewDoc(e.target.value)} placeholder="Google Doc URL (optional)..." onKeyDown={e=>{if(e.key==="Enter"&&clientNewName.trim()){setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}}} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
+            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+          </div>
+        </div>)}
+        {clients.length===0&&!clientAdding?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No clients yet</div><div style={{fontSize:13}}>Click "+ Add Client" to add your first client</div></div>)
+        :(<div style={{display:"grid",gap:8}}>
+          {clients.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(cl=>{
+            const isEditing=clientEditId===cl.id;
+            return(<div key={cl.id} style={{background:"var(--card)",border:`1px solid ${isEditing?"var(--accent)":"var(--border)"}`,borderRadius:10,padding:"14px 20px"}}>
+              {isEditing?(<div>
+                <div style={{display:"grid",gap:8,marginBottom:10}}>
+                  <input type="text" value={clientEditName} onChange={e=>setClientEditName(e.target.value)} style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
+                  <input type="text" value={clientEditDoc} onChange={e=>setClientEditDoc(e.target.value)} placeholder="Google Doc URL..." onKeyDown={e=>{if(e.key==="Enter"){setClients(p=>p.map(c=>c.id===cl.id?{...c,name:clientEditName.trim()||c.name,docUrl:clientEditDoc.trim()}:c));setClientEditId(null);}}} style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>{setClients(p=>p.map(c=>c.id===cl.id?{...c,name:clientEditName.trim()||c.name,docUrl:clientEditDoc.trim()}:c));setClientEditId(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Save</button>
+                  <button onClick={()=>setClientEditId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+                  <button onClick={()=>{setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444"}}>Delete</button>
+                </div>
+              </div>)
+              :(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <span style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{cl.name}</span>
+                  {cl.docUrl&&<a href={cl.docUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"var(--accent)",textDecoration:"none",fontWeight:600}} onClick={e=>e.stopPropagation()}>Open Google Doc ↗</a>}
+                  {!cl.docUrl&&<span style={{fontSize:11,color:"var(--muted)"}}>No doc linked</span>}
+                </div>
+                <button onClick={()=>{setClientEditId(cl.id);setClientEditName(cl.name);setClientEditDoc(cl.docUrl||"");}} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>Edit</button>
+              </div>)}
+            </div>);
+          })}
+        </div>)}
+      </div>)}
+
       </div>
     </>)}
 
@@ -1320,7 +1413,7 @@ export default function App(){
             <div style={{display:"grid",gap:12}}>
               {(clientFilter?quotes.filter(q=>q.clientName===clientFilter):quotes).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(q=>{
                 const cost=q.items.reduce((s,it)=>s+(it.rateOverride??it.rate)*(it.hours||0),0)+(q.customItems||[]).reduce((s,it)=>s+it.rate*(it.hours||0),0);
-                const sell=q.sellPriceMode&&q.sellPrice?q.sellPrice:cost>0?cost/(1-(q.margin||0.4)):0;
+                const sell=q.sellPriceMode&&q.sellPrice?q.sellPrice:cost>0?cost*(1+(q.margin||0.4)):0;
                 return(<div key={q.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"16px 20px",cursor:"pointer",transition:"all 0.15s"}} onClick={()=>setActiveQuoteId(q.id)}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                     <div>
@@ -1345,6 +1438,57 @@ export default function App(){
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&isFounder&&(<EditorDashboard embedded/>)}
+
+    {/* ═══ CLIENTS ═══ */}
+    {tool==="clients"&&isFounder&&(<>
+      <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
+        <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Clients</span>
+        {!clientAdding&&<button onClick={()=>setClientAdding(true)} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Client</button>}
+      </div>
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
+        {clientAdding&&(<div style={{marginBottom:16,padding:"16px 20px",background:"var(--card)",border:"1px solid var(--accent)",borderRadius:10}}>
+          <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>New Client</div>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <input type="text" value={clientNewName} onChange={e=>setClientNewName(e.target.value)} placeholder="Client name..." autoFocus
+              style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
+          </div>
+          <div style={{display:"flex",gap:8,marginBottom:12}}>
+            <input type="text" value={clientNewDoc} onChange={e=>setClientNewDoc(e.target.value)} placeholder="Google Doc URL (optional)..."
+              style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
+            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+          </div>
+        </div>)}
+        {clients.length===0&&!clientAdding?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No clients yet</div><div style={{fontSize:13}}>Click "+ Add Client" to get started</div></div>)
+        :(<div style={{display:"grid",gap:8}}>
+          {clients.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(cl=>{
+            const isEditing=clientEditId===cl.id;
+            return(<div key={cl.id} style={{background:"var(--card)",border:`1px solid ${isEditing?"var(--accent)":"var(--border)"}`,borderRadius:10,padding:"14px 20px"}}>
+              {isEditing?(<div>
+                <input type="text" defaultValue={cl.name} id={`cl-name-${cl.id}`}
+                  style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none",marginBottom:8}}/>
+                <input type="text" defaultValue={cl.docUrl||""} id={`cl-doc-${cl.id}`} placeholder="Google Doc URL..."
+                  style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",marginBottom:8}}/>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>{const n=document.getElementById(`cl-name-${cl.id}`)?.value?.trim();const d=document.getElementById(`cl-doc-${cl.id}`)?.value?.trim();if(!n)return;setClients(p=>p.map(c=>c.id===cl.id?{...c,name:n,docUrl:d||""}:c));setClientEditId(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Save</button>
+                  <button onClick={()=>setClientEditId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+                  <button onClick={()=>{setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444",marginLeft:"auto"}}>Delete</button>
+                </div>
+              </div>)
+              :(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{cl.name}</div>
+                  {cl.docUrl&&<a href={cl.docUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"var(--accent)",textDecoration:"none",display:"inline-flex",alignItems:"center",gap:4,marginTop:4}}>📄 Open Google Doc</a>}
+                </div>
+                <button onClick={()=>setClientEditId(cl.id)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>Edit</button>
+              </div>)}
+            </div>);
+          })}
+        </div>)}
+      </div>
+    </>)}
 
     </div>
   </div>);
