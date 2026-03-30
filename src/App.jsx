@@ -1043,7 +1043,7 @@ export default function App(){
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       <SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>
       {isFounder&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
-      {isFounder&&<SideIcon icon="📋" label="Clients" active={tool==="clients"} onClick={()=>setTool("clients")}/>}
+      <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
@@ -1056,7 +1056,7 @@ export default function App(){
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
         <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Capacity Planner</span>
         <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3}}>
-          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"},{key:"clients",label:"Clients"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
+          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
         </div>
       </div>
 
@@ -1241,53 +1241,6 @@ export default function App(){
         </div>);
       })()}
 
-      {capTab==="clients"&&(<div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <div>
-            <div style={{fontSize:17,fontWeight:800,color:"var(--fg)"}}>Clients</div>
-            <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Client list with Google Doc links for the team</div>
-          </div>
-          {!clientAdding&&<button onClick={()=>setClientAdding(true)} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Client</button>}
-        </div>
-        {clientAdding&&(<div style={{marginBottom:16,padding:"16px 20px",background:"var(--card)",border:"1px solid var(--accent)",borderRadius:10}}>
-          <div style={{display:"grid",gap:10,marginBottom:12}}>
-            <input type="text" value={clientNewName} onChange={e=>setClientNewName(e.target.value)} placeholder="Client name..." autoFocus style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
-            <input type="text" value={clientNewDoc} onChange={e=>setClientNewDoc(e.target.value)} placeholder="Google Doc URL (optional)..." onKeyDown={e=>{if(e.key==="Enter"&&clientNewName.trim()){setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}}} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
-            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
-          </div>
-        </div>)}
-        {clients.length===0&&!clientAdding?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No clients yet</div><div style={{fontSize:13}}>Click "+ Add Client" to add your first client</div></div>)
-        :(<div style={{display:"grid",gap:8}}>
-          {clients.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(cl=>{
-            const isEditing=clientEditId===cl.id;
-            return(<div key={cl.id} style={{background:"var(--card)",border:`1px solid ${isEditing?"var(--accent)":"var(--border)"}`,borderRadius:10,padding:"14px 20px"}}>
-              {isEditing?(<div>
-                <div style={{display:"grid",gap:8,marginBottom:10}}>
-                  <input type="text" value={clientEditName} onChange={e=>setClientEditName(e.target.value)} style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
-                  <input type="text" value={clientEditDoc} onChange={e=>setClientEditDoc(e.target.value)} placeholder="Google Doc URL..." onKeyDown={e=>{if(e.key==="Enter"){setClients(p=>p.map(c=>c.id===cl.id?{...c,name:clientEditName.trim()||c.name,docUrl:clientEditDoc.trim()}:c));setClientEditId(null);}}} style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
-                </div>
-                <div style={{display:"flex",gap:8}}>
-                  <button onClick={()=>{setClients(p=>p.map(c=>c.id===cl.id?{...c,name:clientEditName.trim()||c.name,docUrl:clientEditDoc.trim()}:c));setClientEditId(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Save</button>
-                  <button onClick={()=>setClientEditId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
-                  <button onClick={()=>{setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444"}}>Delete</button>
-                </div>
-              </div>)
-              :(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <span style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{cl.name}</span>
-                  {cl.docUrl&&<a href={cl.docUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"var(--accent)",textDecoration:"none",fontWeight:600}} onClick={e=>e.stopPropagation()}>Open Google Doc ↗</a>}
-                  {!cl.docUrl&&<span style={{fontSize:11,color:"var(--muted)"}}>No doc linked</span>}
-                </div>
-                <button onClick={()=>{setClientEditId(cl.id);setClientEditName(cl.name);setClientEditDoc(cl.docUrl||"");}} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>Edit</button>
-              </div>)}
-            </div>);
-          })}
-        </div>)}
-      </div>)}
-
       </div>
     </>)}
 
@@ -1439,10 +1392,10 @@ export default function App(){
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&isFounder&&(<EditorDashboard embedded/>)}
 
-    {/* ═══ CLIENTS ═══ */}
-    {tool==="clients"&&isFounder&&(<>
+    {/* ═══ SHERPAS ═══ */}
+    {tool==="sherpas"&&(<>
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
-        <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Clients</span>
+        <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Sherpas</span>
         {!clientAdding&&<button onClick={()=>setClientAdding(true)} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Client</button>}
       </div>
       <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
