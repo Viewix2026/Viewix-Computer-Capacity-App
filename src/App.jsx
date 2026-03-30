@@ -932,13 +932,6 @@ export default function App(){
   const[clientEditName,setClientEditName]=useState("");
   const[clientEditDoc,setClientEditDoc]=useState("");
 
-  // Clients state
-  const[clients,setClients]=useState([]);
-  const[clientAdding,setClientAdding]=useState(false);
-  const[clientNewName,setClientNewName]=useState("");
-  const[clientNewDoc,setClientNewDoc]=useState("");
-  const[clientEditId,setClientEditId]=useState(null);
-
   // Merge default + custom rate cards, filtering out hidden defaults
   const rcArr=Array.isArray(clientRateCards)?clientRateCards:[];
   const hiddenIds=rcArr.filter(c=>c&&c.deleted).map(c=>c.id.replace("del-",""));
