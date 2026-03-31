@@ -21,7 +21,7 @@ const MONDAY_API="https://api.monday.com/v2";
 const MONDAY_TOKEN="eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjM5NzQ3MTI3OSwiYWFpIjoxMSwidWlkIjo2MjY3NDg4NSwiaWFkIjoiMjAyNC0wOC0xNVQwNjo0MjoxMC4wMDBaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MjQxMzg2NTksInJnbiI6ImFwc2UyIn0.-YhtvI8VFze2Tv971jezS8BAaABF3nQG7vjBS0xXq_E";
 const MONDAY_BOARD_ID="1884080816";
 const MONDAY_IN_PROGRESS_GROUP="new_group__1";
-const MONDAY_EDITORS=[
+const DEFAULT_MONDAY_EDITORS=[
   {id:"66265733",name:"Angus Roche"},
   {id:"96885430",name:"Billy White"},
   {id:"68480795",name:"David Esdaile"},
@@ -33,6 +33,27 @@ const MONDAY_EDITORS=[
   {id:"90227304",name:"Vish Peiris"},
   {id:"99188387",name:"Farah"},
 ];
+
+async function fetchMondayUsers(){
+  const q=`query { users { id name } }`;
+  const res=await mondayQuery(q);
+  if(!res?.data?.users)return null;
+  return res.data.users.filter(u=>u.name&&!u.name.toLowerCase().includes("trial"));
+}
+
+async function fetchActiveProjectCount(){
+  const q=`query { boards(ids: ${MONDAY_BOARD_ID}) { items_page(limit: 200) { items { id group { id } } } } }`;
+  const res=await mondayQuery(q);
+  if(!res?.data?.boards?.[0]?.items_page?.items)return null;
+  return res.data.boards[0].items_page.items.filter(it=>it.group?.id===MONDAY_IN_PROGRESS_GROUP).length;
+}
+
+async function fetchInProgressParents(){
+  const q=`query { boards(ids: ${MONDAY_BOARD_ID}) { items_page(limit: 200) { items { id name group { id } subitems { id name } } } } }`;
+  const res=await mondayQuery(q);
+  if(!res?.data?.boards?.[0]?.items_page?.items)return[];
+  return res.data.boards[0].items_page.items.filter(it=>it.group?.id===MONDAY_IN_PROGRESS_GROUP);
+}
 
 async function mondayQuery(q){
   try{
@@ -120,6 +141,111 @@ function categorizeContent(parentName,type){
 }
 const CONTENT_CATEGORIES=["Meta Ad","Social Media","Corporate Video","Other"];
 const CAT_COLORS={"Meta Ad":"#8B5CF6","Social Media":"#0082FA","Corporate Video":"#F87700","Other":"#5A6B85"};
+
+// ─── Deliveries ───
+const VIEWIX_STATUSES=["In Development","Ready for Review","Need Revisions","Completed"];
+const VIEWIX_STATUS_COLORS={"In Development":"#F59E0B","Ready for Review":"#0082FA","Need Revisions":"#EF4444","Completed":"#10B981"};
+const CLIENT_REVISION_OPTIONS=["","Approved","Need Revisions"];
+const CLIENT_REVISION_COLORS={"Approved":"#10B981","Need Revisions":"#EF4444"};
+
+function newDelivery(clientName,projectName){
+  return{id:`del-${Date.now()}`,clientName:clientName||"",projectName:projectName||"",logoUrl:"",videos:[],createdAt:new Date().toISOString()};
+}
+function newVideo(){
+  return{id:`v-${Date.now()}`,name:"",link:"",viewixStatus:"In Development",revision1:"",revision2:"",notes:""};
+}
+
+function StatusSelect({value,options,colors,onChange,disabled}){
+  const col=colors[value]||"var(--muted)";
+  return(<select value={value||""} onChange={e=>onChange(e.target.value)} disabled={disabled}
+    style={{padding:"4px 8px",borderRadius:4,border:"none",background:value?`${col}20`:"var(--bg)",color:value?col:"var(--muted)",fontSize:11,fontWeight:700,cursor:disabled?"default":"pointer",outline:"none",appearance:"auto",textTransform:"uppercase"}}>
+    <option value="">—</option>
+    {options.filter(o=>o).map(o=>(<option key={o} value={o}>{o}</option>))}
+  </select>);
+}
+
+// ─── Public Delivery View ───
+function DeliveryPublicView(){
+  const[delivery,setDelivery]=useState(null);
+  const[loading,setLoading]=useState(true);
+  const[saving,setSaving]=useState(false);
+  const deliveryId=new URLSearchParams(window.location.search).get("d");
+
+  useEffect(()=>{
+    if(!deliveryId)return;
+    initFB();
+    onFB(()=>{
+      fbListen(`/deliveries/${deliveryId}`,(data)=>{
+        if(data)setDelivery(data);
+        setLoading(false);
+      });
+    });
+  },[deliveryId]);
+
+  const updateRevision=(videoId,field,value)=>{
+    if(!delivery)return;
+    const updated={...delivery,videos:delivery.videos.map(v=>v.id===videoId?{...v,[field]:value}:v)};
+    setDelivery(updated);
+    setSaving(true);
+    fbSet(`/deliveries/${deliveryId}`,updated);
+    setTimeout(()=>setSaving(false),800);
+  };
+
+  if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif"}}><div style={{color:"#5A6B85",fontSize:14}}>Loading...</div></div>);
+  if(!delivery)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif"}}><div style={{color:"#5A6B85",fontSize:14}}>Delivery not found</div></div>);
+
+  const readyCount=delivery.videos.filter(v=>v.viewixStatus==="Ready for Review"||v.viewixStatus==="Completed").length;
+  const totalCount=delivery.videos.length;
+
+  return(<div style={{minHeight:"100vh",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif",color:"#E8ECF4"}}>
+    <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:#0B0F1A;}::-webkit-scrollbar-thumb{background:#1E2A3A;border-radius:3px;}`}</style>
+    {/* Header */}
+    <div style={{padding:"24px 40px",borderBottom:"1px solid #1E2A3A",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <div style={{display:"flex",alignItems:"center",gap:16}}>
+        {delivery.logoUrl&&<img src={delivery.logoUrl} alt="" style={{height:40,borderRadius:6,objectFit:"contain"}}/>}
+        <div>
+          <div style={{fontSize:18,fontWeight:800,color:"#E8ECF4"}}>{delivery.projectName}</div>
+          <div style={{fontSize:13,color:"#5A6B85"}}>{delivery.clientName}</div>
+        </div>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        {saving&&<span style={{fontSize:11,color:"#10B981",fontWeight:600}}>Saved</span>}
+        <div style={{fontSize:12,color:"#5A6B85"}}>{readyCount}/{totalCount} ready</div>
+        <Logo h={20}/>
+      </div>
+    </div>
+
+    {/* Video table */}
+    <div style={{maxWidth:1100,margin:"0 auto",padding:"32px 40px"}}>
+      {delivery.videos.length===0?(<div style={{textAlign:"center",padding:60,color:"#5A6B85"}}><div style={{fontSize:16,fontWeight:600}}>No videos yet</div></div>)
+      :(<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:13}}>
+        <thead><tr>
+          <th style={{padding:"10px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Video Name</th>
+          <th style={{padding:"10px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Link</th>
+          <th style={{padding:"10px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center"}}>Status</th>
+          <th style={{padding:"10px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center"}}>Revision Round 1</th>
+          <th style={{padding:"10px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center"}}>Revision Round 2</th>
+          <th style={{padding:"10px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Notes</th>
+        </tr></thead>
+        <tbody>{delivery.videos.map(v=>{
+          const sc=VIEWIX_STATUS_COLORS[v.viewixStatus]||"#5A6B85";
+          return(<tr key={v.id}>
+            <td style={{padding:"10px 14px",borderBottom:"1px solid #1E2A3A",fontWeight:600,color:"#E8ECF4"}}>{v.name}</td>
+            <td style={{padding:"10px 14px",borderBottom:"1px solid #1E2A3A"}}>{v.link?<a href={v.link} target="_blank" rel="noopener noreferrer" style={{color:"#0082FA",textDecoration:"none",fontWeight:600}}>View ↗</a>:<span style={{color:"#5A6B85"}}>—</span>}</td>
+            <td style={{padding:"10px 14px",borderBottom:"1px solid #1E2A3A",textAlign:"center"}}><span style={{padding:"4px 10px",borderRadius:4,background:`${sc}20`,color:sc,fontSize:11,fontWeight:700,textTransform:"uppercase"}}>{v.viewixStatus}</span></td>
+            <td style={{padding:"10px 14px",borderBottom:"1px solid #1E2A3A",textAlign:"center"}}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateRevision(v.id,"revision1",val)}/></td>
+            <td style={{padding:"10px 14px",borderBottom:"1px solid #1E2A3A",textAlign:"center"}}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateRevision(v.id,"revision2",val)}/></td>
+            <td style={{padding:"10px 14px",borderBottom:"1px solid #1E2A3A",color:"#5A6B85",fontSize:12}}>{v.notes||"—"}</td>
+          </tr>);})}
+        </tbody>
+      </table></div>)}
+
+      <div style={{marginTop:40,textAlign:"center",color:"#3A4558",fontSize:11}}>
+        Powered by <span style={{color:"#0082FA",fontWeight:700}}>Viewix</span>
+      </div>
+    </div>
+  </div>);
+}
 
 function todayKey(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function fmtSecs(s){const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);const sec=s%60;return`${h>0?h+"h ":""}${m>0?m+"m ":""}${sec}s`;}
@@ -576,17 +702,27 @@ function EditorDashboard({embedded,onLogout}){
   const[expanded,setExpanded]=useState({}); // {parentId: true/false}
   const[updates,setUpdates]=useState({}); // {parentId: [...updates]}
   const[loadingUpdates,setLoadingUpdates]=useState({});
+  const[mondayEditors,setMondayEditors]=useState(DEFAULT_MONDAY_EDITORS);
+  const[editorsLoading,setEditorsLoading]=useState(true);
   const intervalRef=useRef(null);
   const today=todayKey();
 
-  // Init Firebase
-  useEffect(()=>{initFB();},[]);
+  // Init Firebase and load editors
+  useEffect(()=>{
+    initFB();
+    onFB(()=>{
+      fbListen("/mondayEditors",(data)=>{
+        if(data&&Array.isArray(data)&&data.length>0){setMondayEditors(data);setEditorsLoading(false);}
+        else{fetchMondayUsers().then(users=>{if(users&&users.length>0){setMondayEditors(users);fbSet("/mondayEditors",users);}setEditorsLoading(false);}).catch(()=>setEditorsLoading(false));}
+      });
+    });
+  },[]);
 
   // Load tasks when editor selected
   useEffect(()=>{
     if(!editorId)return;
     setLoading(true);
-    const ed=MONDAY_EDITORS.find(e=>e.id===editorId);
+    const ed=mondayEditors.find(e=>e.id===editorId);
     if(!ed){setLoading(false);return;}
     fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));
   },[editorId]);
@@ -651,7 +787,7 @@ function EditorDashboard({embedded,onLogout}){
   const loggedTime=(taskId)=>{const v=timeLogs[taskId];if(!v)return 0;if(typeof v==="number")return v;return v.secs||0;};
   const totalToday=Object.values(timeLogs).reduce((a,v)=>{const s=typeof v==="number"?v:(v?.secs||0);return a+s;},0);
 
-  const editorName=MONDAY_EDITORS.find(e=>e.id===editorId)?.name||"";
+  const editorName=mondayEditors.find(e=>e.id===editorId)?.name||"";
 
   const toggleExpand=async(parentId)=>{
     if(expanded[parentId]){setExpanded(p=>({...p,[parentId]:false}));return;}
@@ -682,7 +818,7 @@ function EditorDashboard({embedded,onLogout}){
         <div style={{fontSize:18,fontWeight:700,color:"var(--fg)",marginBottom:6}}>Editor Dashboard</div>
         <div style={{fontSize:13,color:"var(--muted)",marginBottom:28}}>Select your name to see today's tasks</div>
         <div style={{display:"grid",gap:10}}>
-          {MONDAY_EDITORS.map(ed=>(
+          {mondayEditors.map(ed=>(
             <button key={ed.id} onClick={()=>setEditorId(ed.id)}
               style={{padding:"14px 20px",borderRadius:10,border:"1px solid var(--border)",background:"var(--bg)",color:"var(--fg)",fontSize:15,fontWeight:600,cursor:"pointer",transition:"all 0.15s",textAlign:"left",display:"flex",alignItems:"center",gap:12}}>
               <span style={{width:36,height:36,borderRadius:"50%",background:"var(--accent-soft)",color:"var(--accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800}}>{ed.name.split(" ").map(n=>n[0]).join("")}</span>
@@ -690,6 +826,7 @@ function EditorDashboard({embedded,onLogout}){
             </button>
           ))}
         </div>
+        <button onClick={()=>{setEditorsLoading(true);fetchMondayUsers().then(users=>{if(users&&users.length>0){setMondayEditors(users);fbSet("/mondayEditors",users);}setEditorsLoading(false);}).catch(()=>setEditorsLoading(false));}} style={{marginTop:16,padding:"8px 16px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer",width:"100%"}}>{editorsLoading?"Syncing...":"Sync from Monday.com"}</button>
       </div>
     </div>);
   }
@@ -709,7 +846,7 @@ function EditorDashboard({embedded,onLogout}){
           <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em"}}>Today's Total </span>
           <span style={{fontSize:18,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:totalToday>0?"#10B981":"var(--fg)",marginLeft:8}}>{fmtSecsShort(totalToday)}</span>
         </div>
-        <button onClick={()=>{setLoading(true);const ed=MONDAY_EDITORS.find(e=>e.id===editorId);if(ed)fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
+        <button onClick={()=>{setLoading(true);const ed=mondayEditors.find(e=>e.id===editorId);if(ed)fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
         <button onClick={()=>setEditorId(null)} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Switch Editor</button>
       </div>
     </div>
@@ -932,6 +1069,14 @@ export default function App(){
   const[clientEditName,setClientEditName]=useState("");
   const[clientEditDoc,setClientEditDoc]=useState("");
 
+  // Deliveries state
+  const[deliveries,setDeliveries]=useState([]);
+  const[activeDeliveryId,setActiveDeliveryId]=useState(null);
+  const[mondayEditorList,setMondayEditorList]=useState(DEFAULT_MONDAY_EDITORS);
+  const[importMode,setImportMode]=useState(false);
+  const[importProjects,setImportProjects]=useState([]);
+  const[importLoading,setImportLoading]=useState(false);
+
   // Merge default + custom rate cards, filtering out hidden defaults
   const rcArr=Array.isArray(clientRateCards)?clientRateCards:[];
   const hiddenIds=rcArr.filter(c=>c&&c.deleted).map(c=>c.id.replace("del-",""));
@@ -966,6 +1111,13 @@ export default function App(){
               const cArr=Object.values(data.clients).filter(c=>c&&c.id);
               setClients(cArr);
             }
+            if(data.deliveries){
+              const dArr=Object.values(data.deliveries).filter(d=>d&&d.id);
+              setDeliveries(dArr);
+            }
+            if(data.mondayEditors&&Array.isArray(data.mondayEditors)){
+              setMondayEditorList(data.mondayEditors);
+            }
           }
         }catch(e){console.error("Firebase data parse error:",e);}
         setLoading(false);
@@ -975,10 +1127,18 @@ export default function App(){
   },[]);
 
   const wt=useRef(null);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);}catch(e){console.error("Firebase write error:",e);}},400);},[inputs,editors,weekData,quotes,clientRateCards,clients]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);}catch(e){console.error("Firebase write error:",e);}},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries]);
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
+
+  // Auto-update active projects from Monday.com
+  useEffect(()=>{
+    if(role!=="founder"||tool!=="capacity")return;
+    fetchActiveProjectCount().then(count=>{
+      if(count!=null)setInputs(p=>({...p,currentActiveProjects:count}));
+    }).catch(()=>{});
+  },[role,tool]);
 
   // Time logs listener
   useEffect(()=>{
@@ -1022,6 +1182,10 @@ export default function App(){
 
   const activeQuote=quotes.find(q=>q.id===activeQuoteId);
 
+  // Check for public delivery link
+  const deliveryParam=new URLSearchParams(window.location.search).get("d");
+  if(deliveryParam)return(<><style>{CSS}</style><DeliveryPublicView/></>);
+
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
   if(role==="editor")return(<><style>{CSS}</style><EditorDashboard/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
@@ -1036,6 +1200,7 @@ export default function App(){
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       <SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>
       {isFounder&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
+      {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
@@ -1077,7 +1242,7 @@ export default function App(){
       {capTab==="timelogs"&&(()=>{
         const fmtHM=(secs)=>{const h=Math.floor(secs/3600);const m=Math.floor((secs%3600)/60);if(h>0&&m>0)return`${h}h ${m}m`;if(h>0)return`${h}h`;if(m>0)return`${m}m`;if(secs>0)return`${secs}s`;return"0m";};
         const editorMap={};
-        MONDAY_EDITORS.forEach(ed=>{editorMap[ed.id]=ed.name;});
+        mondayEditorList.forEach(ed=>{editorMap[ed.id]=ed.name;});
         // Build data for selected date
         const dateData={};
         Object.entries(allTimeLogs).forEach(([edId,dates])=>{
@@ -1384,6 +1549,146 @@ export default function App(){
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&isFounder&&(<EditorDashboard embedded/>)}
+
+    {/* ═══ DELIVERIES ═══ */}
+    {tool==="deliveries"&&isFounder&&(()=>{
+      const activeDelivery=deliveries.find(d=>d.id===activeDeliveryId);
+
+      const startImport=()=>{setImportMode(true);setImportLoading(true);fetchInProgressParents().then(items=>{setImportProjects(items);setImportLoading(false);}).catch(()=>setImportLoading(false));};
+      const importProject=(proj)=>{
+        const nameParts=proj.name.split(":");
+        const clientName=nameParts.length>1?nameParts[0].trim():proj.name;
+        const projectName=nameParts.length>1?nameParts.slice(1).join(":").trim():proj.name;
+        const videos=(proj.subitems||[]).map(sub=>({id:`v-${sub.id}`,name:sub.name,link:"",viewixStatus:"In Development",revision1:"",revision2:"",notes:""}));
+        const d={...newDelivery(clientName,projectName),videos,mondayItemId:proj.id};
+        setDeliveries(p=>[...p,d]);
+        setActiveDeliveryId(d.id);
+        setImportMode(false);
+      };
+      const createBlank=()=>{const d=newDelivery("New Client","New Project");setDeliveries(p=>[...p,d]);setActiveDeliveryId(d.id);setImportMode(false);};
+      const updateDelivery=(updated)=>{setDeliveries(p=>p.map(d=>d.id===updated.id?updated:d));};
+      const deleteDelivery=(id)=>{setDeliveries(p=>p.filter(d=>d.id!==id));if(activeDeliveryId===id)setActiveDeliveryId(null);};
+      const shareUrl=(id)=>`${window.location.origin}?d=${id}`;
+      const copyLink=(id)=>{navigator.clipboard?.writeText(shareUrl(id));};
+
+      if(activeDelivery){
+        const d=activeDelivery;
+        const setD=(patch)=>updateDelivery({...d,...patch});
+        const addVideo=()=>setD({videos:[...d.videos,newVideo()]});
+        const updateVideo=(vid,patch)=>setD({videos:d.videos.map(v=>v.id===vid?{...v,...patch}:v)});
+        const removeVideo=(vid)=>setD({videos:d.videos.filter(v=>v.id!==vid)});
+        const inputSt={padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",width:"100%"};
+
+        return(<>
+          <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <button onClick={()=>setActiveDeliveryId(null)} style={{...NB,fontSize:12}}>&larr; Back</button>
+              <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{d.clientName}: {d.projectName}</span>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>copyLink(d.id)} style={{...BTN,background:"var(--accent)",color:"white"}}>Copy Share Link</button>
+              <button onClick={()=>deleteDelivery(d.id)} style={{...BTN,background:"#374151",color:"#EF4444"}}>Delete</button>
+            </div>
+          </div>
+          <div style={{maxWidth:1200,margin:"0 auto",padding:"24px 28px 60px"}}>
+            {/* Project details */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+              <div><label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4,display:"block"}}>Client Name</label><input value={d.clientName} onChange={e=>setD({clientName:e.target.value})} style={inputSt}/></div>
+              <div><label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4,display:"block"}}>Project Name</label><input value={d.projectName} onChange={e=>setD({projectName:e.target.value})} style={inputSt}/></div>
+              <div><label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4,display:"block"}}>Client Logo URL</label><input value={d.logoUrl||""} onChange={e=>setD({logoUrl:e.target.value})} placeholder="https://..." style={inputSt}/></div>
+            </div>
+
+            {/* Share link */}
+            <div style={{padding:"12px 16px",background:"var(--bg)",borderRadius:8,border:"1px solid var(--border)",marginBottom:20,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div><span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>Client Share Link</span><div style={{fontSize:12,color:"var(--accent)",marginTop:2,fontFamily:"'JetBrains Mono',monospace"}}>{shareUrl(d.id)}</div></div>
+              <button onClick={()=>copyLink(d.id)} style={{...BTN,background:"var(--accent)",color:"white"}}>Copy</button>
+            </div>
+
+            {/* Videos table */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <span style={{fontSize:13,fontWeight:700,color:"var(--fg)"}}>Videos ({d.videos.length})</span>
+              <button onClick={addVideo} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Video</button>
+            </div>
+            {d.videos.length===0?(<div style={{textAlign:"center",padding:40,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:13}}>No videos yet. Click "+ Add Video" to start.</div></div>)
+            :(<div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,overflow:"hidden"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr>
+                <th style={{...TH,textAlign:"left",padding:"8px 12px"}}>Video Name</th>
+                <th style={{...TH,textAlign:"left",padding:"8px 12px",width:200}}>Link</th>
+                <th style={{...TH,textAlign:"center",padding:"8px 12px",width:140}}>Viewix Status</th>
+                <th style={{...TH,textAlign:"center",padding:"8px 12px",width:120}}>Rev Round 1</th>
+                <th style={{...TH,textAlign:"center",padding:"8px 12px",width:120}}>Rev Round 2</th>
+                <th style={{...TH,textAlign:"left",padding:"8px 12px",width:180}}>Notes</th>
+                <th style={{...TH,width:40}}></th>
+              </tr></thead>
+              <tbody>{d.videos.map(v=>(<tr key={v.id}>
+                <td style={{padding:"6px 12px",borderBottom:"1px solid var(--border-light)"}}><input value={v.name} onChange={e=>updateVideo(v.id,{name:e.target.value})} placeholder="Video name..." style={{...inputSt,fontWeight:600}}/></td>
+                <td style={{padding:"6px 12px",borderBottom:"1px solid var(--border-light)"}}><input value={v.link} onChange={e=>updateVideo(v.id,{link:e.target.value})} placeholder="https://..." style={inputSt}/></td>
+                <td style={{padding:"6px 12px",borderBottom:"1px solid var(--border-light)",textAlign:"center"}}><StatusSelect value={v.viewixStatus} options={VIEWIX_STATUSES} colors={VIEWIX_STATUS_COLORS} onChange={val=>updateVideo(v.id,{viewixStatus:val})}/></td>
+                <td style={{padding:"6px 12px",borderBottom:"1px solid var(--border-light)",textAlign:"center"}}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateVideo(v.id,{revision1:val})}/></td>
+                <td style={{padding:"6px 12px",borderBottom:"1px solid var(--border-light)",textAlign:"center"}}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateVideo(v.id,{revision2:val})}/></td>
+                <td style={{padding:"6px 12px",borderBottom:"1px solid var(--border-light)"}}><input value={v.notes||""} onChange={e=>updateVideo(v.id,{notes:e.target.value})} placeholder="Notes..." style={inputSt}/></td>
+                <td style={{padding:"6px 12px",borderBottom:"1px solid var(--border-light)",textAlign:"center"}}><button onClick={()=>removeVideo(v.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#5A6B85",fontSize:16}}>x</button></td>
+              </tr>))}</tbody>
+            </table></div>)}
+          </div>
+        </>);
+      }
+
+      // Deliveries list
+      return(<>
+        <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
+          <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Deliveries</span>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={startImport} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Import from Monday.com</button>
+            <button onClick={createBlank} style={{...BTN,background:"#374151",color:"var(--fg)"}}>+ Blank Delivery</button>
+          </div>
+        </div>
+        <div style={{maxWidth:1200,margin:"0 auto",padding:"24px 28px 60px"}}>
+
+          {/* Import picker */}
+          {importMode&&(<div style={{marginBottom:24,background:"var(--card)",border:"1px solid var(--accent)",borderRadius:12,padding:"20px 24px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:700,color:"var(--fg)"}}>Select a project to import</div>
+              <button onClick={()=>setImportMode(false)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+            </div>
+            {importLoading?(<div style={{textAlign:"center",padding:30,color:"var(--muted)"}}>Loading projects from Monday.com...</div>)
+            :importProjects.length===0?(<div style={{textAlign:"center",padding:30,color:"var(--muted)"}}>No "In Progress" projects found</div>)
+            :(<div style={{display:"grid",gap:8,maxHeight:400,overflowY:"auto"}}>
+              {importProjects.map(proj=>(<div key={proj.id} onClick={()=>importProject(proj)}
+                style={{padding:"12px 16px",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:8,cursor:"pointer",transition:"all 0.15s"}}>
+                <div style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{proj.name}</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{(proj.subitems||[]).length} sub-task{(proj.subitems||[]).length!==1?"s":""}</div>
+              </div>))}
+            </div>)}
+          </div>)}
+
+          {deliveries.length===0&&!importMode?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>📦</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No deliveries yet</div><div style={{fontSize:13}}>Import from Monday.com or create a blank delivery</div></div>)
+          :(<div style={{display:"grid",gap:12}}>
+            {deliveries.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(d=>{
+              const ready=d.videos.filter(v=>v.viewixStatus==="Completed"||v.viewixStatus==="Ready for Review").length;
+              const approved=d.videos.filter(v=>v.revision1==="Approved").length;
+              return(<div key={d.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"16px 20px",cursor:"pointer",transition:"all 0.15s"}} onClick={()=>setActiveDeliveryId(d.id)}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    {d.logoUrl&&<img src={d.logoUrl} alt="" style={{height:28,borderRadius:4,objectFit:"contain"}}/>}
+                    <div>
+                      <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{d.clientName}</div>
+                      <div style={{fontSize:12,color:"var(--muted)"}}>{d.projectName} · {d.videos.length} video{d.videos.length!==1?"s":""}</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:11,color:"var(--muted)"}}>{ready}/{d.videos.length} ready · {approved}/{d.videos.length} approved</div>
+                    </div>
+                    <button onClick={e=>{e.stopPropagation();copyLink(d.id);}} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>Copy Link</button>
+                  </div>
+                </div>
+              </div>);
+            })}
+          </div>)}
+        </div>
+      </>);
+    })()}
 
     {/* ═══ SHERPAS ═══ */}
     {tool==="sherpas"&&(<>
