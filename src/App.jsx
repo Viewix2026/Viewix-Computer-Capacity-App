@@ -148,6 +148,36 @@ const VIEWIX_STATUS_COLORS={"In Development":"#F59E0B","Ready for Review":"#0082
 const CLIENT_REVISION_OPTIONS=["","Approved","Need Revisions"];
 const CLIENT_REVISION_COLORS={"Approved":"#10B981","Need Revisions":"#EF4444"};
 
+// ─── Training ───
+const DEFAULT_TRAINING=[
+  {id:"tc-1",name:"Editor Onboarding",order:1,modules:[
+    {id:"tm-01",name:"Editor Onboarding Start",order:0,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-02",name:"Viewix Software Suite",order:1,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-03",name:"Navigating the Server",order:2,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-04",name:"Project Setup Basics",order:3,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-05",name:"Premiere Productions",order:4,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-06",name:"Colour Grading",order:5,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-07",name:"Sound Mix and Final Delivery",order:6,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-08",name:"Social Retainers Intro",order:7,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-09",name:"Editing Social Retainers",order:8,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-10",name:"Hook Find Guide",order:9,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-11",name:"Meta Ads Intro",order:10,description:"",videoUrl:"",comments:[],completions:{}},
+  ]},
+  {id:"tc-2",name:"Sales Training",order:2,modules:[
+    {id:"tm-20",name:"ICP 1 & Sales Funnel",order:1,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-21",name:"ICP2 & Sales Mentality",order:2,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-22",name:"Sales Process & Meeting Structure",order:3,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-23",name:"Buyer Personality Types",order:4,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-24",name:"Meta Ads Funnel",order:5,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-25",name:"Call Leads Instantly",order:6,description:"",videoUrl:"",comments:[],completions:{}},
+  ]},
+  {id:"tc-3",name:"Producer Onboarding",order:3,modules:[
+    {id:"tm-30",name:"Project Lead Roles and Responsibilities",order:1,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-31",name:"Social Media Retainer",order:2,description:"",videoUrl:"",comments:[],completions:{}},
+    {id:"tm-32",name:"Meta Ads",order:3,description:"",videoUrl:"",comments:[],completions:{}},
+  ]},
+];
+
 function newDelivery(clientName,projectName){
   return{id:`del-${Date.now()}`,clientName:clientName||"",projectName:projectName||"",logoUrl:"",videos:[],createdAt:new Date().toISOString()};
 }
@@ -1095,6 +1125,7 @@ export default function App(){
   const[clientAdding,setClientAdding]=useState(false);
   const[clientNewName,setClientNewName]=useState("");
   const[clientNewDoc,setClientNewDoc]=useState("");
+  const[clientNewLead,setClientNewLead]=useState("");
   const[clientEditId,setClientEditId]=useState(null);
   const[clientEditName,setClientEditName]=useState("");
   const[clientEditDoc,setClientEditDoc]=useState("");
@@ -1106,6 +1137,19 @@ export default function App(){
   const[importMode,setImportMode]=useState(false);
   const[importProjects,setImportProjects]=useState([]);
   const[importLoading,setImportLoading]=useState(false);
+
+  // Training state
+  const[trainingData,setTrainingData]=useState(DEFAULT_TRAINING);
+  const[trainingSuggestions,setTrainingSuggestions]=useState([]);
+  const[activeModuleId,setActiveModuleId]=useState(null);
+  const[trainingEditMode,setTrainingEditMode]=useState(false);
+  const[trainingCommentText,setTrainingCommentText]=useState("");
+  const[sugType,setSugType]=useState("new");
+  const[sugTitle,setSugTitle]=useState("");
+  const[sugDesc,setSugDesc]=useState("");
+  const[sugOpen,setSugOpen]=useState(false);
+  const[editCatId,setEditCatId]=useState(null);
+  const[editCatName,setEditCatName]=useState("");
 
   // Merge default + custom rate cards, filtering out hidden defaults
   const rcArr=Array.isArray(clientRateCards)?clientRateCards:[];
@@ -1148,6 +1192,12 @@ export default function App(){
             if(data.mondayEditors&&Array.isArray(data.mondayEditors)){
               setMondayEditorList(data.mondayEditors);
             }
+            if(data.training&&Array.isArray(data.training)){
+              setTrainingData(data.training);
+            }
+            if(data.trainingSuggestions&&Array.isArray(data.trainingSuggestions)){
+              setTrainingSuggestions(data.trainingSuggestions);
+            }
           }
         }catch(e){console.error("Firebase data parse error:",e);}
         setLoading(false);
@@ -1157,7 +1207,7 @@ export default function App(){
   },[]);
 
   const wt=useRef(null);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);}catch(e){console.error("Firebase write error:",e);}},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);}catch(e){console.error("Firebase write error:",e);}},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions]);
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
@@ -1184,7 +1234,7 @@ export default function App(){
     return()=>unsub();
   },[capTab]);
 
-  const login=pw=>{if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");setTool("quoting");return true;}if(pw==="Letsgo"){setRole("editor");return true;}return false;};
+  const login=pw=>{if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");setTool("quoting");return true;}if(pw==="Letsgo"){setRole("editor");setTool("editors");return true;}return false;};
   const logout=()=>{setRole(null);};
 
   // Capacity helpers
@@ -1217,7 +1267,6 @@ export default function App(){
   if(deliveryParam)return(<><style>{CSS}</style><DeliveryPublicView/></>);
 
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
-  if(role==="editor")return(<><style>{CSS}</style><EditorDashboard/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
 
   const isFounder=role==="founder";
@@ -1228,10 +1277,11 @@ export default function App(){
     <div style={{width:72,background:"var(--card)",borderRight:"1px solid var(--border)",display:"flex",flexDirection:"column",alignItems:"center",padding:"16px 8px",gap:4,flexShrink:0}}>
       <div style={{marginBottom:12}}><Logo h={20}/></div>
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
-      <SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>
-      {isFounder&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
+      {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
+      {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
+      <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
@@ -1578,7 +1628,7 @@ export default function App(){
     </>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
-    {tool==="editors"&&isFounder&&(<EditorDashboard embedded/>)}
+    {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}
 
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{
@@ -1733,13 +1783,17 @@ export default function App(){
             <input type="text" value={clientNewName} onChange={e=>setClientNewName(e.target.value)} placeholder="Client name..." autoFocus
               style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
           </div>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <input type="text" value={clientNewLead} onChange={e=>setClientNewLead(e.target.value)} placeholder="Project lead..."
+              style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
+          </div>
           <div style={{display:"flex",gap:8,marginBottom:12}}>
             <input type="text" value={clientNewDoc} onChange={e=>setClientNewDoc(e.target.value)} placeholder="Google Doc URL (optional)..."
               style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
-            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),projectLead:clientNewLead.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewLead("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
+            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewLead("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
           </div>
         </div>)}
         {clients.length===0&&!clientAdding?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No clients yet</div><div style={{fontSize:13}}>Click "+ Add Client" to get started</div></div>)
@@ -1750,10 +1804,12 @@ export default function App(){
               {isEditing?(<div>
                 <input type="text" defaultValue={cl.name} id={`cl-name-${cl.id}`}
                   style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none",marginBottom:8}}/>
+                <input type="text" defaultValue={cl.projectLead||""} id={`cl-lead-${cl.id}`} placeholder="Project lead..."
+                  style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",marginBottom:8}}/>
                 <input type="text" defaultValue={cl.docUrl||""} id={`cl-doc-${cl.id}`} placeholder="Google Doc URL..."
                   style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",marginBottom:8}}/>
                 <div style={{display:"flex",gap:8}}>
-                  <button onClick={()=>{const n=document.getElementById(`cl-name-${cl.id}`)?.value?.trim();const d=document.getElementById(`cl-doc-${cl.id}`)?.value?.trim();if(!n)return;setClients(p=>p.map(c=>c.id===cl.id?{...c,name:n,docUrl:d||""}:c));setClientEditId(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Save</button>
+                  <button onClick={()=>{const n=document.getElementById(`cl-name-${cl.id}`)?.value?.trim();const d=document.getElementById(`cl-doc-${cl.id}`)?.value?.trim();const l=document.getElementById(`cl-lead-${cl.id}`)?.value?.trim();if(!n)return;setClients(p=>p.map(c=>c.id===cl.id?{...c,name:n,projectLead:l||"",docUrl:d||""}:c));setClientEditId(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Save</button>
                   <button onClick={()=>setClientEditId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
                   <button onClick={()=>{setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444",marginLeft:"auto"}}>Delete</button>
                 </div>
@@ -1761,6 +1817,7 @@ export default function App(){
               :(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
                   <div style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{cl.name}</div>
+                  {cl.projectLead&&<div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Lead: <span style={{color:"var(--fg)",fontWeight:600}}>{cl.projectLead}</span></div>}
                   {cl.docUrl&&<a href={cl.docUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"var(--accent)",textDecoration:"none",display:"inline-flex",alignItems:"center",gap:4,marginTop:4}}>📄 Open Google Doc</a>}
                 </div>
                 <button onClick={()=>setClientEditId(cl.id)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>Edit</button>
@@ -1770,6 +1827,185 @@ export default function App(){
         </div>)}
       </div>
     </>)}
+
+    {/* ═══ TRAINING ═══ */}
+    {tool==="training"&&(()=>{
+      const isAdmin=role==="founder";
+      const userName=role==="founder"?"Jeremy":role==="closer"?"Team":"Editor";
+
+      // Training helper functions
+      const updateCat=(catId,patch)=>setTrainingData(p=>p.map(c=>c.id===catId?{...c,...patch}:c));
+      const updateMod=(catId,modId,patch)=>setTrainingData(p=>p.map(c=>c.id===catId?{...c,modules:(c.modules||[]).map(m=>m.id===modId?{...m,...patch}:m)}:c));
+      const addCategory=()=>{setTrainingData(p=>[...p,{id:`tc-${Date.now()}`,name:"New Category",order:p.length+1,modules:[]}]);};
+      const deleteCat=(catId)=>setTrainingData(p=>p.filter(c=>c.id!==catId));
+      const addModule=(catId)=>{setTrainingData(p=>p.map(c=>c.id===catId?{...c,modules:[...(c.modules||[]),{id:`tm-${Date.now()}`,name:"New Module",order:(c.modules||[]).length+1,description:"",videoUrl:"",comments:[],completions:{}}]}:c));};
+      const deleteMod=(catId,modId)=>setTrainingData(p=>p.map(c=>c.id===catId?{...c,modules:(c.modules||[]).filter(m=>m.id!==modId)}:c));
+      const addComment=(catId,modId,text)=>{if(!text.trim())return;updateMod(catId,modId,{comments:[...(trainingData.find(c=>c.id===catId)?.modules?.find(m=>m.id===modId)?.comments||[]),{id:`cmt-${Date.now()}`,author:userName,text:text.trim(),createdAt:new Date().toISOString()}]});};
+      const toggleComplete=(catId,modId,editorName)=>{const mod=trainingData.find(c=>c.id===catId)?.modules?.find(m=>m.id===modId);if(!mod)return;const comp={...(mod.completions||{})};if(comp[editorName])delete comp[editorName];else comp[editorName]=new Date().toISOString();updateMod(catId,modId,{completions:comp});};
+      const addSuggestion=(type,title,desc)=>{setTrainingSuggestions(p=>[...p,{id:`sug-${Date.now()}`,type,title,description:desc,author:userName,createdAt:new Date().toISOString(),status:"pending"}]);};
+      const dismissSuggestion=(id)=>setTrainingSuggestions(p=>p.filter(s=>s.id!==id));
+
+      // Find active module and its category
+      let activeMod=null,activeCat=null;
+      if(activeModuleId){trainingData.forEach(c=>{const m=(c.modules||[]).find(m2=>m2.id===activeModuleId);if(m){activeMod=m;activeCat=c;}});}
+
+      // Module detail view
+      if(activeMod&&activeCat){
+        const videoId=activeMod.videoUrl?.match(/f\.io\/([^\s?]+)/)?.[1]||null;
+        const completionCount=Object.keys(activeMod.completions||{}).length;
+        const commentText=trainingCommentText;
+        const setCommentText=setTrainingCommentText;
+
+        return(<>
+          <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <button onClick={()=>setActiveModuleId(null)} style={{...NB,fontSize:12}}>&larr; Back</button>
+              <div>
+                <div style={{fontSize:11,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em"}}>{activeCat.name}</div>
+                <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{activeMod.name}</div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              {completionCount>0&&<span style={{fontSize:11,color:"#10B981",fontWeight:600}}>{completionCount} completed</span>}
+              <button onClick={()=>toggleComplete(activeCat.id,activeMod.id,userName)} style={{...BTN,background:(activeMod.completions||{})[userName]?"#10B981":"var(--bg)",color:(activeMod.completions||{})[userName]?"white":"var(--fg)",border:"1px solid var(--border)"}}>
+                {(activeMod.completions||{})[userName]?"✓ Completed":"Mark Complete"}
+              </button>
+            </div>
+          </div>
+          <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
+            {/* Video embed */}
+            {activeMod.videoUrl&&(<div style={{marginBottom:24,borderRadius:12,overflow:"hidden",background:"#000",aspectRatio:"16/9"}}>
+              <iframe src={activeMod.videoUrl.includes("frame.io")||activeMod.videoUrl.includes("f.io")?activeMod.videoUrl:activeMod.videoUrl} style={{width:"100%",height:"100%",border:"none"}} allow="fullscreen" allowFullScreen/>
+            </div>)}
+            {!activeMod.videoUrl&&isAdmin&&(<div style={{marginBottom:24,padding:"40px 20px",textAlign:"center",background:"var(--card)",borderRadius:12,border:"1px dashed var(--border)",color:"var(--muted)"}}><div style={{fontSize:13}}>No video added. Edit this module to add a Frame.io link.</div></div>)}
+
+            {/* Description */}
+            {activeMod.description&&(<div style={{marginBottom:24,padding:"20px",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:8}}>Description</div>
+              <div style={{fontSize:14,color:"var(--fg)",lineHeight:1.7,whiteSpace:"pre-wrap"}}>{activeMod.description}</div>
+            </div>)}
+
+            {/* Admin edit */}
+            {isAdmin&&trainingEditMode&&(<div style={{marginBottom:24,padding:"20px",background:"var(--card)",borderRadius:12,border:"1px solid var(--accent)"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Edit Module</div>
+              <div style={{display:"grid",gap:10}}>
+                <input value={activeMod.name} onChange={e=>updateMod(activeCat.id,activeMod.id,{name:e.target.value})} placeholder="Module name..." style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
+                <input value={activeMod.videoUrl||""} onChange={e=>updateMod(activeCat.id,activeMod.id,{videoUrl:e.target.value})} placeholder="Frame.io link (e.g. https://f.io/HVX4NtTD)..." style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
+                <textarea value={activeMod.description||""} onChange={e=>updateMod(activeCat.id,activeMod.id,{description:e.target.value})} placeholder="Module description..." rows={4} style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",resize:"vertical",fontFamily:"'DM Sans',sans-serif"}}/>
+              </div>
+              <button onClick={()=>setTrainingEditMode(false)} style={{...BTN,background:"#10B981",color:"white",marginTop:10}}>Done Editing</button>
+            </div>)}
+            {isAdmin&&!trainingEditMode&&(<button onClick={()=>setTrainingEditMode(true)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)",marginBottom:24}}>Edit Module</button>)}
+
+            {/* Comments */}
+            <div style={{background:"var(--card)",borderRadius:12,border:"1px solid var(--border)",padding:"20px"}}>
+              <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:16}}>Comments ({(activeMod.comments||[]).length})</div>
+              {(activeMod.comments||[]).length>0&&(<div style={{display:"grid",gap:8,marginBottom:16}}>
+                {(activeMod.comments||[]).map(c=>(<div key={c.id} style={{padding:"12px",background:"var(--bg)",borderRadius:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                    <span style={{fontSize:12,fontWeight:700,color:"var(--accent)"}}>{c.author}</span>
+                    <span style={{fontSize:10,color:"var(--muted)"}}>{new Date(c.createdAt).toLocaleDateString("en-AU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</span>
+                  </div>
+                  <div style={{fontSize:13,color:"var(--fg)",lineHeight:1.5}}>{c.text}</div>
+                </div>))}
+              </div>)}
+              <div style={{display:"flex",gap:8}}>
+                <input value={commentText} onChange={e=>setCommentText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&commentText.trim()){addComment(activeCat.id,activeMod.id,commentText);setCommentText("");}}} placeholder="Add a comment..." style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
+                <button onClick={()=>{if(commentText.trim()){addComment(activeCat.id,activeMod.id,commentText);setCommentText("");}}} style={{...BTN,background:"var(--accent)",color:"white"}}>Post</button>
+              </div>
+            </div>
+          </div>
+        </>);
+      }
+
+      // Training list view
+
+      return(<>
+        <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
+          <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Training</span>
+          <div style={{display:"flex",gap:8}}>
+            {!isAdmin&&<button onClick={()=>setSugOpen(!sugOpen)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>{sugOpen?"Cancel":"Suggest"}</button>}
+            {isAdmin&&<button onClick={addCategory} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Category</button>}
+          </div>
+        </div>
+        <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
+
+          {/* Suggestion form (non-admin) */}
+          {sugOpen&&(<div style={{marginBottom:24,padding:"20px",background:"var(--card)",border:"1px solid var(--accent)",borderRadius:12}}>
+            <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Suggest a change</div>
+            <div style={{display:"flex",gap:8,marginBottom:10}}>
+              <button onClick={()=>setSugType("new")} style={{...BTN,background:sugType==="new"?"var(--accent)":"var(--bg)",color:sugType==="new"?"white":"var(--muted)",border:"1px solid var(--border)"}}>New Module</button>
+              <button onClick={()=>setSugType("outdated")} style={{...BTN,background:sugType==="outdated"?"#F59E0B":"var(--bg)",color:sugType==="outdated"?"white":"var(--muted)",border:"1px solid var(--border)"}}>Flag Outdated</button>
+            </div>
+            <input value={sugTitle} onChange={e=>setSugTitle(e.target.value)} placeholder={sugType==="new"?"Module title...":"Which module needs updating..."} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",marginBottom:8}}/>
+            <textarea value={sugDesc} onChange={e=>setSugDesc(e.target.value)} placeholder="Details..." rows={3} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",resize:"vertical",fontFamily:"'DM Sans',sans-serif",marginBottom:8}}/>
+            <button onClick={()=>{if(sugTitle.trim()){addSuggestion(sugType,sugTitle,sugDesc);setSugTitle("");setSugDesc("");setSugOpen(false);}}} style={{...BTN,background:"var(--accent)",color:"white"}}>Submit</button>
+          </div>)}
+
+          {/* Pending suggestions (admin only) */}
+          {isAdmin&&trainingSuggestions.filter(s=>s.status==="pending").length>0&&(<div style={{marginBottom:24,background:"var(--card)",border:"1px solid #F59E0B",borderRadius:12,padding:"16px 20px"}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#F59E0B",marginBottom:12}}>Suggestions ({trainingSuggestions.filter(s=>s.status==="pending").length})</div>
+            <div style={{display:"grid",gap:8}}>
+              {trainingSuggestions.filter(s=>s.status==="pending").map(s=>(<div key={s.id} style={{padding:"10px 12px",background:"var(--bg)",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:3,background:s.type==="new"?"rgba(0,130,250,0.12)":"rgba(245,158,11,0.12)",color:s.type==="new"?"#0082FA":"#F59E0B",textTransform:"uppercase"}}>{s.type==="new"?"New Module":"Outdated"}</span>
+                    <span style={{fontSize:12,fontWeight:600,color:"var(--fg)"}}>{s.title}</span>
+                  </div>
+                  {s.description&&<div style={{fontSize:11,color:"var(--muted)"}}>{s.description}</div>}
+                  <div style={{fontSize:10,color:"var(--muted)",marginTop:4}}>by {s.author} · {new Date(s.createdAt).toLocaleDateString("en-AU")}</div>
+                </div>
+                <button onClick={()=>dismissSuggestion(s.id)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Dismiss</button>
+              </div>))}
+            </div>
+          </div>)}
+
+          {/* Categories and modules */}
+          {trainingData.sort((a,b)=>(a.order||0)-(b.order||0)).map(cat=>(<div key={cat.id} style={{marginBottom:24}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+              {editCatId===cat.id?(<div style={{display:"flex",gap:8,flex:1}}>
+                <input value={editCatName} onChange={e=>setEditCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){updateCat(cat.id,{name:editCatName.trim()||cat.name});setEditCatId(null);}}} autoFocus style={{flex:1,padding:"6px 12px",borderRadius:6,border:"1px solid var(--accent)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:700,outline:"none"}}/>
+                <button onClick={()=>{updateCat(cat.id,{name:editCatName.trim()||cat.name});setEditCatId(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Save</button>
+                <button onClick={()=>setEditCatId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+              </div>)
+              :(<div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:15,fontWeight:800,color:"var(--fg)"}}>{cat.name}</span>
+                <span style={{fontSize:11,color:"var(--muted)"}}>{(cat.modules||[]).length} module{(cat.modules||[]).length!==1?"s":""}</span>
+              </div>)}
+              {isAdmin&&editCatId!==cat.id&&(<div style={{display:"flex",gap:6}}>
+                <button onClick={()=>{setEditCatId(cat.id);setEditCatName(cat.name);}} style={{...BTN,background:"var(--bg)",color:"var(--muted)",border:"1px solid var(--border)"}}>Rename</button>
+                <button onClick={()=>addModule(cat.id)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>+ Module</button>
+                {(cat.modules||[]).length===0&&<button onClick={()=>deleteCat(cat.id)} style={{...BTN,background:"#374151",color:"#EF4444"}}>Delete</button>}
+              </div>)}
+            </div>
+            <div style={{display:"grid",gap:6}}>
+              {(cat.modules||[]).sort((a,b)=>(a.order||0)-(b.order||0)).map(mod=>{
+                const completed=(mod.completions||{})[userName];
+                const commentCount=(mod.comments||[]).length;
+                const completionCount=Object.keys(mod.completions||{}).length;
+                return(<div key={mod.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"14px 20px",cursor:"pointer",transition:"all 0.15s",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>setActiveModuleId(mod.id)}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{width:28,height:28,borderRadius:"50%",border:`2px solid ${completed?"#10B981":"var(--border)"}`,background:completed?"rgba(16,185,129,0.12)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:completed?"#10B981":"var(--muted)"}}>{completed?"✓":""}</div>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:600,color:"var(--fg)"}}>{mod.name}</div>
+                      <div style={{display:"flex",gap:8,marginTop:2}}>
+                        {mod.videoUrl&&<span style={{fontSize:10,color:"var(--accent)"}}>🎥 Video</span>}
+                        {commentCount>0&&<span style={{fontSize:10,color:"var(--muted)"}}>{commentCount} comment{commentCount!==1?"s":""}</span>}
+                        {completionCount>0&&<span style={{fontSize:10,color:"#10B981"}}>{completionCount} completed</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    {isAdmin&&<button onClick={e=>{e.stopPropagation();deleteMod(cat.id,mod.id);}} style={{background:"none",border:"none",cursor:"pointer",color:"#5A6B85",fontSize:14}}>x</button>}
+                    <span style={{color:"var(--muted)",fontSize:14}}>→</span>
+                  </div>
+                </div>);
+              })}
+            </div>
+          </div>))}
+        </div>
+      </>);
+    })()}
 
     </div>
   </div>);
