@@ -1279,7 +1279,7 @@ export default function App(){
                     setAttioDeals(data);
                     // Auto-calculate metrics from deals
                     if(data?.data){
-                      const extractVal=d=>{const v=d.values;const candidates=[v?.deal_value,v?.amount,v?.value,v?.revenue,v?.contract_value];for(const c of candidates){if(c?.[0]?.value!=null){const n=c[0].value;return typeof n==="number"?n:parseFloat(n)||0;}}return 0;};
+                      const extractVal=d=>{const v=d.values;const candidates=[v?.deal_value,v?.amount,v?.value,v?.revenue,v?.contract_value];for(const c of candidates){if(c?.[0]!=null){const n=c[0].currency_value??c[0].value;if(n!=null)return typeof n==="number"?n:parseFloat(n)||0;}}return 0;};
                       const extractDate=d=>{const v=d.values;const candidates=[v?.close_date,v?.closed_at,v?.won_date,v?.created_at];for(const c of candidates){if(c?.[0]?.value){return c[0].value;}}return d.created_at||null;};
                       const extractStage=d=>{const v=d.values;const candidates=[v?.stage,v?.status,v?.deal_stage,v?.pipeline_stage];for(const c of candidates){const t=c?.[0]?.status?.title||c?.[0]?.value;if(t)return(typeof t==="string"?t:"").toLowerCase();}return "";};
                       const extractCompany=d=>{const v=d.values;const candidates=[v?.company,v?.client,v?.account,v?.organisation,v?.name,v?.deal_name];for(const c of candidates){const t=c?.[0]?.value;if(t){if(typeof t==="string")return t;if(t?.name)return t.name;}}return null;};
@@ -1354,7 +1354,7 @@ export default function App(){
             </div>
             {attioDeals?.data?(()=>{
               // Extract value and date from deals, trying multiple field name patterns
-              const extractVal=d=>{const v=d.values;const candidates=[v?.deal_value,v?.amount,v?.value,v?.revenue,v?.contract_value];for(const c of candidates){if(c?.[0]?.value!=null){const n=c[0].value;return typeof n==="number"?n:parseFloat(n)||0;}}return 0;};
+              const extractVal=d=>{const v=d.values;const candidates=[v?.deal_value,v?.amount,v?.value,v?.revenue,v?.contract_value];for(const c of candidates){if(c?.[0]!=null){const n=c[0].currency_value??c[0].value;if(n!=null)return typeof n==="number"?n:parseFloat(n)||0;}}return 0;};
               const extractDate=d=>{const v=d.values;const candidates=[v?.close_date,v?.closed_at,v?.won_date,v?.created_at];for(const c of candidates){if(c?.[0]?.value){return c[0].value;}}return d.created_at||null;};
 
               // Build monthly totals
