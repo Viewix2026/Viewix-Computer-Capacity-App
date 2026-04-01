@@ -43,7 +43,7 @@ export async function fetchInProgressParents() {
 }
 
 export async function fetchEditorTasks(editorName) {
-  const q = `query { boards(ids: ${MONDAY_BOARD_ID}) { items_page(limit: 200) { items { id name group { id title } column_values(ids: ["text9","date","date8","project_status","status_18","text1","email","dropdown","long_text"]) { id text } subitems { id name column_values(ids: ["people","status8","stage","timeline","due_date","numeric_mkyg3qb1"]) { id text } } } } } }`;
+  const q = `query { boards(ids: ${MONDAY_BOARD_ID}) { items_page(limit: 200) { items { id name group { id title } column_values(ids: ["text9","date","date8","project_status","status_18","text1","email","dropdown","long_text"]) { id text } subitems { id name column_values(ids: ["people","status8","stage","timeline","due_date","numeric_mkyg3qb1","hour","hour9"]) { id text } } } } } }`;
   const res = await mondayQuery(q);
   console.log("Monday API response:", res);
   if (!res?.data?.boards?.[0]?.items_page?.items) return [];
@@ -91,6 +91,8 @@ export async function fetchEditorTasks(editorName) {
         endDate: endDate,
         people: people,
         estimatedHours: getCol("numeric_mkyg3qb1"),
+        startTime: getCol("hour"),
+        endTime: getCol("hour9"),
       });
     });
   });

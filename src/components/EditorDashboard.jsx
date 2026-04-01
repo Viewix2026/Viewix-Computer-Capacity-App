@@ -407,8 +407,10 @@ export function EditorDashboard({embedded,onLogout}){
                 {l:"Assigned To",v:selectedTask.people||"N/A"},
                 {l:"Start Date",v:selectedTask.startDate||"N/A"},
                 {l:"End Date",v:selectedTask.endDate||"N/A"},
+                {l:"Start Time",v:selectedTask.startTime||"N/A"},
+                {l:"End Time",v:selectedTask.endTime||"N/A"},
                 {l:"Estimated Hours",v:selectedTask.estimatedHours||"N/A"},
-              ].map((f,i)=>(
+              ].filter(f=>f.v&&f.v!=="N/A"&&f.v!=="").map((f,i)=>(
                 <div key={i} style={{padding:"8px 12px",background:"var(--bg)",borderRadius:8}}>
                   <div style={{fontSize:9,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",marginBottom:3}}>{f.l}</div>
                   <div style={{fontSize:13,fontWeight:600,color:"var(--fg)"}}>{f.v}</div>
@@ -430,13 +432,11 @@ export function EditorDashboard({embedded,onLogout}){
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 {[
                   {l:"Project",v:selectedTask.parentName||"N/A"},
-                  {l:"Client",v:selectedTask.parentInfo.clientName||"N/A"},
                   {l:"Type",v:selectedTask.parentInfo.type||"N/A"},
                   {l:"Project Status",v:selectedTask.parentInfo.status||"N/A"},
                   {l:"Stage",v:selectedTask.parentInfo.stage||"N/A"},
                   {l:"Due Date",v:selectedTask.parentInfo.dueDate||"N/A"},
                   {l:"Project Due Date",v:selectedTask.parentInfo.projectDueDate||"N/A"},
-                  {l:"Client Email",v:selectedTask.parentInfo.clientEmail||"N/A"},
                 ].filter(f=>f.v&&f.v!=="N/A"&&f.v!=="").map((f,i)=>(
                   <div key={i} style={{padding:"8px 12px",background:"var(--bg)",borderRadius:8}}>
                     <div style={{fontSize:9,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",marginBottom:3}}>{f.l}</div>
