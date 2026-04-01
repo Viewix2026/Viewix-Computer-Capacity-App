@@ -196,7 +196,7 @@ export function EditorDashboard({embedded,onLogout}){
         {weeks.map((week,wi)=>(
           <div key={wi} style={{marginBottom:16}}>
             <div style={{fontSize:11,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Week of {fmtShort(week.mon)}</div>
-            <div style={{overflowX:"auto"}}><div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(140px,1fr))",gap:4,minWidth:1000}}>
+            <div style={{overflowX:"auto"}}><div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(140px,1fr))",gap:6,minWidth:1000,alignItems:"start"}}>
               {week.days.map((day,di)=>{
                 const key=fmtKey(day);
                 const isToday=key===todayStr;
@@ -207,15 +207,15 @@ export function EditorDashboard({embedded,onLogout}){
                   return false;
                 });
                 return(
-                  <div key={di} style={{background:isToday?"rgba(0,130,250,0.08)":isWeekend?"var(--bg)":"var(--card)",border:`1px solid ${isToday?"var(--accent)":"var(--border)"}`,borderRadius:8,padding:"8px",minHeight:80}}>
+                  <div key={di} style={{background:isToday?"rgba(0,130,250,0.08)":isWeekend?"var(--bg)":"var(--card)",border:`1px solid ${isToday?"var(--accent)":"var(--border)"}`,borderRadius:8,padding:"8px",minHeight:80,overflow:"hidden"}}>
                     <div style={{fontSize:10,fontWeight:700,color:isToday?"var(--accent)":"var(--muted)",marginBottom:6}}>
                       {DK2[di]} {day.getDate()}
                     </div>
-                    <div style={{display:"grid",gap:3}}>
+                    <div style={{display:"grid",gap:4}}>
                       {dayTasks.map(t=>{
                         const col=stageColors[t.stage]||"var(--accent)";
                         return(
-                          <div key={t.id} onClick={()=>{setSelectedTask(t);setSelectedTaskUpdates(null);setSelectedTaskLoading(true);fetchItemUpdates(t.parentInfo?.id||t.id).then(u=>{setSelectedTaskUpdates(u);setSelectedTaskLoading(false);}).catch(()=>setSelectedTaskLoading(false));}} style={{padding:"4px 6px",borderRadius:4,background:`${col}15`,borderLeft:`3px solid ${col}`,fontSize:10,cursor:"pointer",transition:"opacity 0.15s"}}>
+                          <div key={t.id} onClick={()=>{setSelectedTask(t);setSelectedTaskUpdates(null);setSelectedTaskLoading(true);fetchItemUpdates(t.parentInfo?.id||t.id).then(u=>{setSelectedTaskUpdates(u);setSelectedTaskLoading(false);}).catch(()=>setSelectedTaskLoading(false));}} style={{padding:"4px 6px",borderRadius:4,background:`${col}15`,borderLeft:`3px solid ${col}`,fontSize:10,cursor:"pointer",overflow:"hidden"}}>
                             <div style={{fontWeight:600,color:"var(--fg)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.parentName}</div>
                             <div style={{color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.name}</div>
                           </div>
