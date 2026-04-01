@@ -409,7 +409,6 @@ export function EditorDashboard({embedded,onLogout}){
                 {l:"End Date",v:selectedTask.endDate||"N/A"},
                 {l:"Start Time",v:selectedTask.startTime||"N/A"},
                 {l:"End Time",v:selectedTask.endTime||"N/A"},
-                {l:"Estimated Hours",v:selectedTask.estimatedHours||"N/A"},
               ].filter(f=>f.v&&f.v!=="N/A"&&f.v!=="").map((f,i)=>(
                 <div key={i} style={{padding:"8px 12px",background:"var(--bg)",borderRadius:8}}>
                   <div style={{fontSize:9,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",marginBottom:3}}>{f.l}</div>

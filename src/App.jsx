@@ -559,6 +559,35 @@ export default function App(){
         </div>);
       })()}
 
+      {capTab==="lunch"&&(
+        <div style={{maxWidth:700,margin:"0 auto"}}>
+          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
+            <div style={{fontSize:15,fontWeight:700,color:"var(--fg)",marginBottom:16}}>Team Lunch</div>
+            {isFounder?(
+              <div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                  <input type="date" value={teamLunch?.date||""} onChange={e=>setTeamLunch(p=>({...p,date:e.target.value}))} style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",colorScheme:"dark"}}/>
+                  <input value={teamLunch?.time||""} onChange={e=>setTeamLunch(p=>({...p,time:e.target.value}))} placeholder="Time (e.g. 12:30pm)" style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",width:160}}/>
+                  <input value={teamLunch?.location||""} onChange={e=>setTeamLunch(p=>({...p,location:e.target.value}))} placeholder="Location" style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",flex:1,minWidth:180}}/>
+                </div>
+                <input value={teamLunch?.notes||""} onChange={e=>setTeamLunch(p=>({...p,notes:e.target.value}))} placeholder="Notes" style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",width:"100%"}}/>
+              </div>
+            ):(
+              teamLunch?(
+                <div style={{padding:"16px 20px",background:"var(--bg)",borderRadius:10,border:"1px solid var(--border)"}}>
+                  <div style={{fontSize:20,fontWeight:800,color:"var(--accent)",fontFamily:"'JetBrains Mono',monospace",marginBottom:4}}>{teamLunch.date?new Date(teamLunch.date+"T00:00:00").toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"}):"Date TBC"}</div>
+                  {teamLunch.time&&<div style={{fontSize:14,color:"var(--fg)",marginBottom:4}}>{teamLunch.time}</div>}
+                  {teamLunch.location&&<div style={{fontSize:13,color:"var(--muted)"}}>📍 {teamLunch.location}</div>}
+                  {teamLunch.notes&&<div style={{fontSize:13,color:"var(--muted)",marginTop:8}}>{teamLunch.notes}</div>}
+                </div>
+              ):(
+                <div style={{padding:30,textAlign:"center",color:"var(--muted)",fontSize:13}}>No team lunch scheduled. Founders can set one.</div>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
       </div>
     </>)}
 
@@ -703,35 +732,6 @@ export default function App(){
           )}
         </div>
       ):null}
-
-      {capTab==="lunch"&&(
-        <div style={{maxWidth:700,margin:"0 auto"}}>
-          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
-            <div style={{fontSize:15,fontWeight:700,color:"var(--fg)",marginBottom:16}}>Team Lunch</div>
-            {isFounder?(
-              <div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
-                  <input type="date" value={teamLunch?.date||""} onChange={e=>setTeamLunch(p=>({...p,date:e.target.value}))} style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",colorScheme:"dark"}}/>
-                  <input value={teamLunch?.time||""} onChange={e=>setTeamLunch(p=>({...p,time:e.target.value}))} placeholder="Time (e.g. 12:30pm)" style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",width:160}}/>
-                  <input value={teamLunch?.location||""} onChange={e=>setTeamLunch(p=>({...p,location:e.target.value}))} placeholder="Location" style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",flex:1,minWidth:180}}/>
-                </div>
-                <input value={teamLunch?.notes||""} onChange={e=>setTeamLunch(p=>({...p,notes:e.target.value}))} placeholder="Notes" style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",width:"100%"}}/>
-              </div>
-            ):(
-              teamLunch?(
-                <div style={{padding:"16px 20px",background:"var(--bg)",borderRadius:10,border:"1px solid var(--border)"}}>
-                  <div style={{fontSize:20,fontWeight:800,color:"var(--accent)",fontFamily:"'JetBrains Mono',monospace",marginBottom:4}}>{teamLunch.date?new Date(teamLunch.date+"T00:00:00").toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"}):"Date TBC"}</div>
-                  {teamLunch.time&&<div style={{fontSize:14,color:"var(--fg)",marginBottom:4}}>{teamLunch.time}</div>}
-                  {teamLunch.location&&<div style={{fontSize:13,color:"var(--muted)"}}>📍 {teamLunch.location}</div>}
-                  {teamLunch.notes&&<div style={{fontSize:13,color:"var(--muted)",marginTop:8}}>{teamLunch.notes}</div>}
-                </div>
-              ):(
-                <div style={{padding:30,textAlign:"center",color:"var(--muted)",fontSize:13}}>No team lunch scheduled. Founders can set one.</div>
-              )
-            )}
-          </div>
-        </div>
-      )}
 
       </div>
     </>)}
