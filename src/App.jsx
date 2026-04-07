@@ -126,6 +126,7 @@ export default function App(){
   const allRateCards=[...visibleDefaults,...customOnly];
 
   const skipWrite=useRef(true);
+  const skipRead=useRef(false);
 
   // Firebase
   useEffect(()=>{
@@ -134,6 +135,7 @@ export default function App(){
     onFB(()=>{
       clearTimeout(fallback);
       fbListen("/",(data)=>{
+        if(skipRead.current)return;
         try{
           if(data){
             if(data.inputs)setInputs(prev=>({...prev,...data.inputs}));
@@ -187,7 +189,7 @@ export default function App(){
   },[]);
 
   const wt=useRef(null);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);const ftObj={};founderTodos.forEach(t=>{if(t&&t.id)ftObj[t.id]=t;});fbSet("/founderTodos",ftObj);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);}catch(e){console.error("Firebase write error:",e);}},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,founderTodos,teamLunch,foundersData]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);const ftObj={};founderTodos.forEach(t=>{if(t&&t.id)ftObj[t.id]=t;});fbSet("/founderTodos",ftObj);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,founderTodos,teamLunch,foundersData]);
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
