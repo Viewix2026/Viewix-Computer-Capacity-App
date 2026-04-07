@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const ATTIO_KEY = "4b3e2b54beefb2b23095e90df934db4dbdf843cdd19ce83b77cf20e63e4c2f6e";
+  const ATTIO_KEY = process.env.ATTIO_API_KEY;
   const headers = { "Authorization": `Bearer ${ATTIO_KEY}`, "Content-Type": "application/json" };
   const { action } = req.body || {};
 
