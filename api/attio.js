@@ -54,6 +54,16 @@ export default async function handler(req, res) {
       return res.status(200).json(data);
     }
 
+    if (action === "debugCompanies") {
+      const resp = await fetch("https://api.attio.com/v2/objects/companies/records/query", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ limit: 2 })
+      });
+      const raw = await resp.text();
+      return res.status(200).json({ status: resp.status, raw: raw.substring(0, 2000) });
+    }
+
     if (action === "currentCustomers") {
       let allRecords = [];
       let offset = 0;
@@ -77,19 +87,7 @@ export default async function handler(req, res) {
         if (allRecords.length >= 500) break;
       }
 
-      const companies = allRecords
-        .filter(r => {
-          const ct = r.values?.contact_type;
-          if (!ct || !ct.length) return false;
-          const val = ct[0]?.option?.title || ct[0]?.status?.title || ct[0]?.value || "";
-          return typeof val === "string" && val.toLowerCase() === "current customer";
-        })
-        .map(r => ({
-          id: r.id?.record_id || "",
-          name: r.values?.name?.[0]?.value || r.values?.name?.[0]?.first_name || "",
-        }));
-
-      return res.status(200).json({ companies, total: companies.length });
+      return res.status(200).json({ data: allRecords, total: allRecords.length });
     }
 
     return res.status(400).json({ error: "Unknown action. Use: deals, all_deals, object_schema, attributes, currentCustomers" });
