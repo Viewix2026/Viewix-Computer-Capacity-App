@@ -55,37 +55,41 @@ export default async function handler(req, res) {
     }
 
     if (action === "currentCustomers") {
-      let allCompanies = [];
+      let allRecords = [];
       let offset = 0;
-      const limit = 50;
+      const limit = 100;
       let hasMore = true;
 
       while (hasMore) {
         const resp = await fetch("https://api.attio.com/v2/objects/companies/records/query", {
           method: "POST",
           headers,
-          body: JSON.stringify({
-            limit,
-            offset,
-            filter: { attribute: "contact_type", op: "eq", value: "Current Customer" },
-            sorts: [{ attribute: "name", direction: "asc" }]
-          })
+          body: JSON.stringify({ limit, offset, sorts: [{ attribute: "name", direction: "asc" }] })
         });
         const data = await resp.json();
         if (data?.data && data.data.length > 0) {
-          data.data.forEach(r => {
-            const name = r.values?.name?.[0]?.value || "";
-            allCompanies.push({ id: r.id?.record_id || "", name });
-          });
+          allRecords = allRecords.concat(data.data);
           offset += data.data.length;
           hasMore = data.data.length === limit;
         } else {
           hasMore = false;
         }
-        if (allCompanies.length >= 200) break;
+        if (allRecords.length >= 500) break;
       }
 
-      return res.status(200).json({ companies: allCompanies, total: allCompanies.length });
+      const companies = allRecords
+        .filter(r => {
+          const ct = r.values?.contact_type;
+          if (!ct || !ct.length) return false;
+          const val = ct[0]?.option?.title || ct[0]?.status?.title || ct[0]?.value || "";
+          return typeof val === "string" && val.toLowerCase() === "current customer";
+        })
+        .map(r => ({
+          id: r.id?.record_id || "",
+          name: r.values?.name?.[0]?.value || r.values?.name?.[0]?.first_name || "",
+        }));
+
+      return res.status(200).json({ companies, total: companies.length });
     }
 
     return res.status(400).json({ error: "Unknown action. Use: deals, all_deals, object_schema, attributes, currentCustomers" });

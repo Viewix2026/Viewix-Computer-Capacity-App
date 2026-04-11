@@ -7,7 +7,7 @@ export function BuyerJourney({data,onChange}){
   const safeGrid=grid.length>0?grid:Array.from({length:rows},()=>Array.from({length:cols},()=>({})));
   const arrows="→←↑↓↘↗↙↖";
   const isArrowCell=c=>c&&c.a&&arrows.indexOf(c.a)>=0;
-  const isTextCell=c=>c&&(c.t||c.d);
+  const isTextCell=c=>c&&("t" in c);
   const updateGrid=(g)=>onChange({...data,grid:g});
   const setCell=(r,c,val)=>{const g=safeGrid.map(row=>[...row]);g[r][c]=val;updateGrid(g);};
   const addCol=()=>{const g=safeGrid.map(row=>[...row,{}]);onChange({...data,grid:g,cols:cols+1});};

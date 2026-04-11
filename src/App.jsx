@@ -1064,7 +1064,7 @@ export default function App(){
 
       // Training list view
       const visibleTraining=role==="trial"
-        ?trainingData.map(c=>({...c,modules:(c.modules||[]).filter(m=>(m.name||"").toLowerCase().includes("trial editor onboarding"))})).filter(c=>(c.modules||[]).length>0)
+        ?trainingData.map(c=>({...c,modules:(c.modules||[]).filter(m=>(m.name||"").toLowerCase().includes("trial"))})).filter(c=>(c.modules||[]).length>0)
         :trainingData;
 
       return(<>
