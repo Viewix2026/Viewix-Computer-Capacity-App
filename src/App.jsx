@@ -770,7 +770,7 @@ export default function App(){
     {tool==="buyerjourney"&&isFounder&&(<BuyerJourney data={buyerJourney} onChange={setBuyerJourney}/>)}
 
     {/* ═══ ACCOUNTS ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();if(!d?.data)return[];const extractCT=rec=>{const v=rec.values||rec.attributes||{};const ct=v.contact_type||v.contactType||[];if(!Array.isArray(ct)||!ct.length)return"";return ct[0]?.option?.title||ct[0]?.status?.title||ct[0]?.value||ct[0]||"";};const extractName=rec=>{const v=rec.values||rec.attributes||{};const n=v.name||[];if(typeof n==="string")return n;if(Array.isArray(n)&&n.length)return n[0]?.value||n[0]?.first_name||String(n[0])||"";return"";};return d.data.filter(rec=>{const ct=extractCT(rec);return typeof ct==="string"&&ct.toLowerCase().includes("current customer");}).map(rec=>({id:rec.id?.record_id||rec.record_id||"",name:extractName(rec)}));}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{
