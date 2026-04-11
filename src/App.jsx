@@ -19,6 +19,8 @@ import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./co
 import { Grid } from "./components/Grid";
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { EditorDashboard } from "./components/EditorDashboard";
+import { BuyerJourney } from "./components/BuyerJourney";
+import { AccountsDashboard } from "./components/AccountsDashboard";
 import { DeliveryPublicView } from "./components/DeliveryPublicView";
 import { Login } from "./components/Login";
 
@@ -77,6 +79,13 @@ export default function App(){
   const[importMode,setImportMode]=useState(false);
   const[importProjects,setImportProjects]=useState([]);
   const[importLoading,setImportLoading]=useState(false);
+
+  // Buyer Journey state
+  const[buyerJourney,setBuyerJourney]=useState({grid:[],rows:6,cols:6});
+
+  // Accounts state
+  const[accounts,setAccounts]=useState({});
+  const[turnaround,setTurnaround]=useState({});
 
   // Training state
   const[trainingData,setTrainingData]=useState(DEFAULT_TRAINING);
@@ -154,8 +163,22 @@ export default function App(){
               setClients(cArr);
             }
             if(data.deliveries){
-              const dArr=Object.values(data.deliveries).filter(d=>d&&d.id);
+              const dArr=Object.values(data.deliveries).filter(d=>d&&d.id).map(d=>({...d,videos:Array.isArray(d.videos)?d.videos:[]}));
               setDeliveries(dArr);
+            }
+            if(data.buyerJourney&&data.buyerJourney.grid){
+              const g=data.buyerJourney.grid;
+              const rows=data.buyerJourney.rows||g.length||6;
+              const cols=data.buyerJourney.cols||(g[0]?g[0].length:6)||6;
+              const grid=[];
+              for(let r=0;r<rows;r++){grid[r]=[];for(let c=0;c<cols;c++){grid[r][c]=(g[r]&&g[r][c])?g[r][c]:{};}}
+              setBuyerJourney({grid,rows,cols});
+            }
+            if(data.accounts){
+              setAccounts(data.accounts);
+            }
+            if(data.turnaround){
+              setTurnaround(data.turnaround);
             }
             if(data.mondayEditors&&Array.isArray(data.mondayEditors)){
               setMondayEditorList(data.mondayEditors);
@@ -189,7 +212,7 @@ export default function App(){
   },[]);
 
   const wt=useRef(null);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);const ftObj={};founderTodos.forEach(t=>{if(t&&t.id)ftObj[t.id]=t;});fbSet("/founderTodos",ftObj);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,founderTodos,teamLunch,foundersData]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);const ftObj={};founderTodos.forEach(t=>{if(t&&t.id)ftObj[t.id]=t;});fbSet("/founderTodos",ftObj);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/accounts",accounts);fbSet("/turnaround",turnaround);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,founderTodos,teamLunch,foundersData,buyerJourney,accounts,turnaround]);
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
@@ -225,7 +248,7 @@ export default function App(){
     fetch("/api/google-reviews").then(r=>r.json()).then(data=>{if(data?.rating)setGoogleReviewData(data);}).catch(()=>{});
   },[tool]);
 
-  const login=pw=>{if(pw==="Sanpel"){setRole("founders");return true;}if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");return true;}if(pw==="Letsgo"){setRole("editor");return true;}return false;};
+  const login=pw=>{if(pw==="Sanpel"){setRole("founders");return true;}if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");return true;}if(pw==="Letsgo"){setRole("editor");return true;}if(pw==="Trial"){setRole("trial");return true;}return false;};
   const logout=()=>{setRole(null);};
 
   // Capacity helpers
@@ -269,6 +292,8 @@ export default function App(){
       {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
+      {isFounder&&<SideIcon icon="🧭" label="Buyer Journey" active={tool==="buyerjourney"} onClick={()=>setTool("buyerjourney")}/>}
+      {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
@@ -741,6 +766,12 @@ export default function App(){
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}
 
+    {/* ═══ BUYER JOURNEY ═══ */}
+    {tool==="buyerjourney"&&isFounder&&(<BuyerJourney data={buyerJourney} onChange={setBuyerJourney}/>)}
+
+    {/* ═══ ACCOUNTS ═══ */}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround}/>)}
+
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{
       const activeDelivery=deliveries.find(d=>d.id===activeDeliveryId);
@@ -1032,6 +1063,9 @@ export default function App(){
       }
 
       // Training list view
+      const visibleTraining=role==="trial"
+        ?trainingData.map(c=>({...c,modules:(c.modules||[]).filter(m=>(m.name||"").toLowerCase().includes("trial editor onboarding"))})).filter(c=>(c.modules||[]).length>0)
+        :trainingData;
 
       return(<>
         <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
@@ -1074,7 +1108,7 @@ export default function App(){
           </div>)}
 
           {/* Categories and modules */}
-          {trainingData.sort((a,b)=>(a.order||0)-(b.order||0)).map(cat=>{
+          {visibleTraining.sort((a,b)=>(a.order||0)-(b.order||0)).map(cat=>{
             const isCollapsed=collapsedCats[cat.id]!==false;
             const sortedMods=(cat.modules||[]).sort((a,b)=>(a.order||0)-(b.order||0));
             return(<div key={cat.id} style={{marginBottom:20}}>
