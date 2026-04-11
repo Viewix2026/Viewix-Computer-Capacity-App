@@ -770,7 +770,7 @@ export default function App(){
     {tool==="buyerjourney"&&isFounder&&(<BuyerJourney data={buyerJourney} onChange={setBuyerJourney}/>)}
 
     {/* ═══ ACCOUNTS ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{

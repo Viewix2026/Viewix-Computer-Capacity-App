@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const ATTIO_KEY = process.env.ATTIO_API_KEY;
+  const ATTIO_KEY = "4b3e2b54beefb2b23095e90df934db4dbdf843cdd19ce83b77cf20e63e4c2f6e";
   const headers = { "Authorization": `Bearer ${ATTIO_KEY}`, "Content-Type": "application/json" };
   const { action } = req.body || {};
 
@@ -54,7 +54,41 @@ export default async function handler(req, res) {
       return res.status(200).json(data);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: deals, all_deals, object_schema, attributes" });
+    if (action === "currentCustomers") {
+      let allCompanies = [];
+      let offset = 0;
+      const limit = 50;
+      let hasMore = true;
+
+      while (hasMore) {
+        const resp = await fetch("https://api.attio.com/v2/objects/companies/records/query", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            limit,
+            offset,
+            filter: { attribute: "contact_type", op: "eq", value: "Current Customer" },
+            sorts: [{ attribute: "name", direction: "asc" }]
+          })
+        });
+        const data = await resp.json();
+        if (data?.data && data.data.length > 0) {
+          data.data.forEach(r => {
+            const name = r.values?.name?.[0]?.value || "";
+            allCompanies.push({ id: r.id?.record_id || "", name });
+          });
+          offset += data.data.length;
+          hasMore = data.data.length === limit;
+        } else {
+          hasMore = false;
+        }
+        if (allCompanies.length >= 200) break;
+      }
+
+      return res.status(200).json({ companies: allCompanies, total: allCompanies.length });
+    }
+
+    return res.status(400).json({ error: "Unknown action. Use: deals, all_deals, object_schema, attributes, currentCustomers" });
   } catch (e) {
     console.error("Attio API error:", e);
     return res.status(500).json({ error: e.message });
