@@ -65,54 +65,24 @@ export default async function handler(req, res) {
     }
 
     if (action === "currentCustomers") {
-      // Confirmed attribute IDs from Attio
-      const CT_SLUG = "contact_type";
-      const CT_UUID = "b8434ac0-4705-4e1a-90d2-37e47b6c370b";
-      const CURRENT_CUSTOMER_OPT = "dca55277-f510-4690-a1d8-b9942d4a156b";
-      const NAME_SLUG = "name";
-      const NAME_UUID = "b1e0f62f-3aa7-415e-a259-5a769878c38a";
+      const resp = await fetch("https://api.attio.com/v2/objects/companies/records/query", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          filter: { "contact_type": "Current Customer" },
+          limit: 500
+        })
+      });
+      const data = await resp.json();
+      if (!data?.data) return res.status(200).json({ companies: [], total: 0, error: data });
 
-      let allRecords = [];
-      let offset = 0;
-      const limit = 100;
-      let hasMore = true;
+      const companies = data.data.map(r => {
+        const nameArr = r.values?.name || [];
+        const name = nameArr[0]?.value || nameArr[0]?.first_name || "";
+        return { id: r.id?.record_id || "", name };
+      }).filter(c => c.name);
 
-      while (hasMore) {
-        const resp = await fetch("https://api.attio.com/v2/objects/companies/records/query", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ limit, offset })
-        });
-        const data = await resp.json();
-        if (data?.data && data.data.length > 0) {
-          allRecords = allRecords.concat(data.data);
-          offset += data.data.length;
-          hasMore = data.data.length === limit;
-        } else {
-          hasMore = false;
-        }
-        if (allRecords.length >= 500) break;
-      }
-
-      const companies = [];
-      for (const r of allRecords) {
-        const v = r.values || {};
-        const ct = v[CT_SLUG] || v[CT_UUID] || [];
-        if (!Array.isArray(ct) || ct.length === 0) continue;
-        const ctStr = JSON.stringify(ct[0]).toLowerCase();
-        if (!ctStr.includes("current customer") && !ctStr.includes(CURRENT_CUSTOMER_OPT)) continue;
-        const nameArr = v[NAME_SLUG] || v[NAME_UUID] || [];
-        let name = "";
-        if (Array.isArray(nameArr) && nameArr.length > 0) {
-          name = nameArr[0]?.value || nameArr[0]?.first_name || "";
-        } else if (typeof nameArr === "string") {
-          name = nameArr;
-        }
-        const id = r.id?.record_id || "";
-        if (name) companies.push({ id, name });
-      }
-
-      return res.status(200).json({ companies, total: companies.length, scanned: allRecords.length });
+      return res.status(200).json({ companies, total: companies.length });
     }
 
     return res.status(400).json({ error: "Unknown action. Use: deals, all_deals, object_schema, attributes, currentCustomers" });
