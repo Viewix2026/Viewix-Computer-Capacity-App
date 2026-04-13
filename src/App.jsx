@@ -68,7 +68,6 @@ export default function App(){
   const[clientAdding,setClientAdding]=useState(false);
   const[clientNewName,setClientNewName]=useState("");
   const[clientNewDoc,setClientNewDoc]=useState("");
-  const[clientNewLead,setClientNewLead]=useState("");
   const[clientEditId,setClientEditId]=useState(null);
   const[clientEditName,setClientEditName]=useState("");
   const[clientEditDoc,setClientEditDoc]=useState("");
@@ -205,26 +204,28 @@ export default function App(){
   // Sync Accounts → Sherpas: create/update clients from accounts
   useEffect(()=>{
     if(!accounts||Object.keys(accounts).length===0)return;
-    let changed=false;
-    let updatedClients=[...clients];
-    Object.values(accounts).forEach(acct=>{
-      if(!acct||!acct.companyName)return;
-      const nameLC=acct.companyName.toLowerCase();
-      const existing=updatedClients.find(c=>(c.name||"").toLowerCase()===nameLC);
-      if(!existing){
-        updatedClients.push({id:`cl-${Date.now()}-${Math.random().toString(36).slice(2,5)}`,name:acct.companyName,projectLead:acct.projectLead||"",accountManager:acct.accountManager||"",docUrl:""});
-        changed=true;
-      }else{
-        let patch={};
-        if(acct.projectLead&&existing.projectLead!==acct.projectLead)patch.projectLead=acct.projectLead;
-        if(acct.accountManager&&existing.accountManager!==acct.accountManager)patch.accountManager=acct.accountManager;
-        if(Object.keys(patch).length>0){
-          updatedClients=updatedClients.map(c=>c.id===existing.id?{...c,...patch}:c);
+    setClients(prev=>{
+      let changed=false;
+      let updatedClients=[...prev];
+      Object.values(accounts).forEach(acct=>{
+        if(!acct||!acct.companyName)return;
+        const nameLC=acct.companyName.toLowerCase();
+        const existing=updatedClients.find(c=>(c.name||"").toLowerCase()===nameLC);
+        if(!existing){
+          updatedClients.push({id:`cl-${Date.now()}-${Math.random().toString(36).slice(2,5)}`,name:acct.companyName,projectLead:acct.projectLead||"",accountManager:acct.accountManager||"",docUrl:""});
           changed=true;
+        }else{
+          let patch={};
+          if(acct.projectLead&&existing.projectLead!==acct.projectLead)patch.projectLead=acct.projectLead;
+          if(acct.accountManager&&existing.accountManager!==acct.accountManager)patch.accountManager=acct.accountManager;
+          if(Object.keys(patch).length>0){
+            updatedClients=updatedClients.map(c=>c.id===existing.id?{...c,...patch}:c);
+            changed=true;
+          }
         }
-      }
+      });
+      return changed?updatedClients:prev;
     });
-    if(changed)setClients(updatedClients);
   },[accounts]);
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
@@ -783,7 +784,7 @@ export default function App(){
     {tool==="buyerjourney"&&isFounder&&(<BuyerJourney data={buyerJourney} onChange={setBuyerJourney}/>)}
 
     {/* ═══ ACCOUNTS ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{
@@ -943,17 +944,13 @@ export default function App(){
             <input type="text" value={clientNewName} onChange={e=>setClientNewName(e.target.value)} placeholder="Client name..." autoFocus
               style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
           </div>
-          <div style={{display:"flex",gap:8,marginBottom:8}}>
-            <input type="text" value={clientNewLead} onChange={e=>setClientNewLead(e.target.value)} placeholder="Project lead..."
-              style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
-          </div>
           <div style={{display:"flex",gap:8,marginBottom:12}}>
             <input type="text" value={clientNewDoc} onChange={e=>setClientNewDoc(e.target.value)} placeholder="Google Doc URL (optional)..."
               style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),projectLead:clientNewLead.trim(),docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewLead("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
-            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewLead("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),projectLead:"",docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
+            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
           </div>
         </div>)}
         {clients.length===0&&!clientAdding?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No clients yet</div><div style={{fontSize:13}}>Click "+ Add Client" to get started</div></div>)
@@ -964,12 +961,15 @@ export default function App(){
               {isEditing?(<div>
                 <input type="text" defaultValue={cl.name} id={`cl-name-${cl.id}`}
                   style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none",marginBottom:8}}/>
-                <input type="text" defaultValue={cl.projectLead||""} id={`cl-lead-${cl.id}`} placeholder="Project lead..."
-                  style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",marginBottom:8}}/>
                 <input type="text" defaultValue={cl.docUrl||""} id={`cl-doc-${cl.id}`} placeholder="Google Doc URL..."
                   style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",marginBottom:8}}/>
+                {(cl.projectLead||cl.accountManager)&&<div style={{padding:"8px 12px",marginBottom:8,fontSize:12,color:"var(--muted)",background:"var(--bg)",borderRadius:6}}>
+                  {cl.projectLead&&<span>Project Lead: <span style={{color:"var(--fg)",fontWeight:600}}>{cl.projectLead}</span></span>}
+                  {cl.projectLead&&cl.accountManager&&<span style={{margin:"0 8px"}}>|</span>}
+                  {cl.accountManager&&<span>Account Manager: <span style={{color:"var(--accent)",fontWeight:600}}>{cl.accountManager}</span></span>}
+                </div>}
                 <div style={{display:"flex",gap:8}}>
-                  <button onClick={()=>{const n=document.getElementById(`cl-name-${cl.id}`)?.value?.trim();const d=document.getElementById(`cl-doc-${cl.id}`)?.value?.trim();const l=document.getElementById(`cl-lead-${cl.id}`)?.value?.trim();if(!n)return;setClients(p=>p.map(c=>c.id===cl.id?{...c,name:n,projectLead:l||"",docUrl:d||""}:c));setClientEditId(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Save</button>
+                  <button onClick={()=>{const n=document.getElementById(`cl-name-${cl.id}`)?.value?.trim();const d=document.getElementById(`cl-doc-${cl.id}`)?.value?.trim();if(!n)return;setClients(p=>p.map(c=>c.id===cl.id?{...c,name:n,docUrl:d||""}:c));setClientEditId(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Save</button>
                   <button onClick={()=>setClientEditId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
                   <button onClick={()=>{setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444",marginLeft:"auto"}}>Delete</button>
                 </div>

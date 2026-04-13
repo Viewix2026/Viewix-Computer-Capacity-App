@@ -29,7 +29,6 @@ const PARTNERSHIP_TYPES = [
 ];
 
 const ACCOUNT_MANAGERS = ["Jeremy", "Steve", "Vish"];
-const PROJECT_LEADS = ["Angus Roche", "Billy White", "David Esdaile", "Felipe Fuhr", "Jude Palmer Rowlands", "Luke Genovese-Kollar", "Matt Healey", "Mia Wolczak", "Vish Peiris", "Farah", "Steve Chestney"];
 const MANAGER_COLORS = {
   "Jeremy": { bg: "rgba(0,130,250,0.12)", color: "#0082FA" },
   "Steve": { bg: "rgba(139,92,246,0.12)", color: "#8B5CF6" },
@@ -78,7 +77,7 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio }) {
+export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors }) {
   const [tab, setTab] = useState("clients");
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -290,7 +289,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                       <td style={{ ...TD, position: "sticky", left: 250, zIndex: 5, background: "var(--card)", textAlign: "center" }}>
                         <select value={acct.projectLead || ""} onChange={e => updateAccount(acct.id, { projectLead: e.target.value })} style={{ ...selectSt, background: acct.projectLead ? "var(--accent-soft)" : "var(--bg)", color: acct.projectLead ? "var(--fg)" : "var(--muted)" }}>
                           <option value="">Assign</option>
-                          {PROJECT_LEADS.map(m => <option key={m} value={m}>{m}</option>)}
+                          {(editors||[]).map(e => <option key={e.id||e.name} value={e.name}>{e.name}</option>)}
                         </select>
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>

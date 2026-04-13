@@ -76,6 +76,14 @@ export default async function handler(req, res) {
       const data = await resp.json();
       if (!data?.data) return res.status(200).json({ companies: [], total: 0, error: data });
 
+      // Fetch video_type attribute options for UUID -> title mapping
+      const attrResp = await fetch("https://api.attio.com/v2/objects/deals/attributes/video_type", { headers });
+      const attrData = await attrResp.json();
+      const vtOptions = {};
+      if (attrData?.data?.config?.options) {
+        attrData.data.config.options.forEach(o => { vtOptions[o.id] = o.title; });
+      }
+
       // Fetch all deals to map video_type per company
       let allDeals = [];
       let offset = 0;
@@ -105,7 +113,10 @@ export default async function handler(req, res) {
         if (!companyId || videoTypeMap[companyId]) continue;
         const vtArr = deal.values?.video_type || [];
         if (Array.isArray(vtArr) && vtArr.length > 0) {
-          const vt = vtArr[0]?.option?.title || vtArr[0]?.status?.title || vtArr[0]?.value || vtArr[0]?.title || (typeof vtArr[0] === "string" ? vtArr[0] : "");
+          const raw = vtArr[0];
+          const vt = (typeof raw?.option === "string" ? vtOptions[raw.option] : null)
+            || raw?.option?.title || raw?.status?.title || raw?.value || raw?.title
+            || (typeof raw === "string" ? (vtOptions[raw] || raw) : "");
           if (vt) videoTypeMap[companyId] = vt;
         }
       }
