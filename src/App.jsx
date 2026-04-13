@@ -21,6 +21,7 @@ import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { EditorDashboard } from "./components/EditorDashboard";
 import { BuyerJourney } from "./components/BuyerJourney";
 import { AccountsDashboard } from "./components/AccountsDashboard";
+import { FoundersData } from "./components/FoundersData";
 import { DeliveryPublicView } from "./components/DeliveryPublicView";
 import { Login } from "./components/Login";
 
@@ -81,7 +82,7 @@ export default function App(){
   const[importLoading,setImportLoading]=useState(false);
 
   // Buyer Journey state
-  const[buyerJourney,setBuyerJourney]=useState({grid:[],rows:6,cols:6});
+  const[buyerJourney,setBuyerJourney]=useState({});
 
   // Accounts state
   const[accounts,setAccounts]=useState({});
@@ -116,14 +117,9 @@ export default function App(){
 
   // Founders state
   const[foundersData,setFoundersData]=useState({});
-  const[founderTodos,setFounderTodos]=useState([]);
-  const[founderTodoText,setFounderTodoText]=useState("");
-  const[founderTodoCategory,setFounderTodoCategory]=useState("General");
-  const[founderTodoAssignee,setFounderTodoAssignee]=useState("Jeremy");
+  const[foundersMetrics,setFoundersMetrics]=useState({});
   const[attioDeals,setAttioDeals]=useState(null);
   const[attioLoading,setAttioLoading]=useState(false);
-  const[founderTodoCatFilter,setFounderTodoCatFilter]=useState("all");
-  const[founderTodoPersonFilter,setFounderTodoPersonFilter]=useState("all");
   const[revenueTableExpanded,setRevenueTableExpanded]=useState(false);
 
   // Merge default + custom rate cards, filtering out hidden defaults
@@ -166,13 +162,8 @@ export default function App(){
               const dArr=Object.values(data.deliveries).filter(d=>d&&d.id).map(d=>({...d,videos:Array.isArray(d.videos)?d.videos:[]}));
               setDeliveries(dArr);
             }
-            if(data.buyerJourney&&data.buyerJourney.grid){
-              const g=data.buyerJourney.grid;
-              const rows=data.buyerJourney.rows||g.length||6;
-              const cols=data.buyerJourney.cols||(g[0]?g[0].length:6)||6;
-              const grid=[];
-              for(let r=0;r<rows;r++){grid[r]=[];for(let c=0;c<cols;c++){grid[r][c]=(g[r]&&g[r][c])?g[r][c]:{};}}
-              setBuyerJourney({grid,rows,cols});
+            if(data.buyerJourney){
+              setBuyerJourney(data.buyerJourney);
             }
             if(data.accounts){
               setAccounts(data.accounts);
@@ -193,10 +184,7 @@ export default function App(){
               const arr=Array.isArray(data.todos)?data.todos.filter(Boolean):Object.values(data.todos).filter(Boolean);
               setTodos(arr);
             }
-            if(data.founderTodos){
-              const arr=Array.isArray(data.founderTodos)?data.founderTodos.filter(Boolean):Object.values(data.founderTodos).filter(Boolean);
-              setFounderTodos(arr);
-            }
+            if(data.foundersMetrics){setFoundersMetrics(data.foundersMetrics);}
             if(data.teamLunch){
               setTeamLunch(data.teamLunch);
             }
@@ -212,7 +200,32 @@ export default function App(){
   },[]);
 
   const wt=useRef(null);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);const ftObj={};founderTodos.forEach(t=>{if(t&&t.id)ftObj[t.id]=t;});fbSet("/founderTodos",ftObj);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/accounts",accounts);fbSet("/turnaround",turnaround);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,founderTodos,teamLunch,foundersData,buyerJourney,accounts,turnaround]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/accounts",accounts);fbSet("/turnaround",turnaround);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics]);
+
+  // Sync Accounts → Sherpas: create/update clients from accounts
+  useEffect(()=>{
+    if(!accounts||Object.keys(accounts).length===0)return;
+    let changed=false;
+    let updatedClients=[...clients];
+    Object.values(accounts).forEach(acct=>{
+      if(!acct||!acct.companyName)return;
+      const nameLC=acct.companyName.toLowerCase();
+      const existing=updatedClients.find(c=>(c.name||"").toLowerCase()===nameLC);
+      if(!existing){
+        updatedClients.push({id:`cl-${Date.now()}-${Math.random().toString(36).slice(2,5)}`,name:acct.companyName,projectLead:acct.projectLead||"",accountManager:acct.accountManager||"",docUrl:""});
+        changed=true;
+      }else{
+        let patch={};
+        if(acct.projectLead&&existing.projectLead!==acct.projectLead)patch.projectLead=acct.projectLead;
+        if(acct.accountManager&&existing.accountManager!==acct.accountManager)patch.accountManager=acct.accountManager;
+        if(Object.keys(patch).length>0){
+          updatedClients=updatedClients.map(c=>c.id===existing.id?{...c,...patch}:c);
+          changed=true;
+        }
+      }
+    });
+    if(changed)setClients(updatedClients);
+  },[accounts]);
 
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
@@ -892,7 +905,7 @@ export default function App(){
               return(<div key={d.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"16px 20px",cursor:"pointer",transition:"all 0.15s"}} onClick={()=>setActiveDeliveryId(d.id)}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    {d.logoUrl&&<img src={d.logoUrl} alt="" style={{height:28,borderRadius:4,objectFit:"contain"}}/>}
+                    {d.logoUrl&&<img src={d.logoUrl} alt="" style={{height:28,borderRadius:4,objectFit:"contain",background:"#fff",padding:3}}/>}
                     <div>
                       <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{d.clientName}</div>
                       <div style={{fontSize:12,color:"var(--muted)"}}>{d.projectName} · {d.videos.length} video{d.videos.length!==1?"s":""}</div>
@@ -964,7 +977,8 @@ export default function App(){
               :(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
                   <div style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{cl.name}</div>
-                  {cl.projectLead&&<div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Lead: <span style={{color:"var(--fg)",fontWeight:600}}>{cl.projectLead}</span></div>}
+                  {cl.projectLead&&<div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Project Lead: <span style={{color:"var(--fg)",fontWeight:600}}>{cl.projectLead}</span></div>}
+                  {cl.accountManager&&<div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Account Manager: <span style={{color:"var(--accent)",fontWeight:600}}>{cl.accountManager}</span></div>}
                   {cl.docUrl&&<a href={cl.docUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"var(--accent)",textDecoration:"none",display:"inline-flex",alignItems:"center",gap:4,marginTop:4}}>📄 Open Google Doc</a>}
                 </div>
                 <button onClick={()=>setClientEditId(cl.id)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>Edit</button>
@@ -1269,11 +1283,7 @@ export default function App(){
       const onTrackRevenue=REVENUE_TARGET*yearProgress;
       const revenueDelta=currentRevenue-onTrackRevenue;
 
-      const FOUNDER_TODO_CATS=["Strategy","Operations","Sales","Finance","Hiring","Product","Other"];
-      const FOUNDER_PEOPLE=["Jeremy","Steve","Both"];
-      const addFounderTodo=()=>{if(!founderTodoText.trim())return;setFounderTodos(p=>[...p,{id:`ft-${Date.now()}`,text:founderTodoText.trim(),status:"open",category:founderTodoCategory,assignee:founderTodoAssignee,createdAt:new Date().toISOString()}]);setFounderTodoText("");};
-      const toggleFounderTodo=id=>setFounderTodos(p=>p.map(t=>t.id===id?{...t,status:t.status==="open"?"done":"open"}:t));
-      const deleteFounderTodo=id=>setFounderTodos(p=>p.filter(t=>t.id!==id));
+
 
       const updateRevenue=val=>{setFoundersData(p=>({...p,currentRevenue:parseFloat(val)||0}));};
       const updateMetric=(key,val)=>{setFoundersData(p=>({...p,[key]:val}));};
@@ -1282,7 +1292,7 @@ export default function App(){
         <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
           <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Founders Dashboard</span>
           <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3}}>
-            {[{key:"dashboard",label:"Dashboard"},{key:"todo",label:"To Do"}].map(t=>(<button key={t.key} onClick={()=>setFoundersTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:foundersTab===t.key?"var(--card)":"transparent",color:foundersTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
+            {[{key:"dashboard",label:"Dashboard"},{key:"data",label:"Data"}].map(t=>(<button key={t.key} onClick={()=>setFoundersTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:foundersTab===t.key?"var(--card)":"transparent",color:foundersTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
           </div>
         </div>
         <div style={{maxWidth:1200,margin:"0 auto",padding:"24px 28px 60px"}}>
@@ -1545,53 +1555,7 @@ export default function App(){
 
           {/* Team Lunch Manager removed - now in Capacity tab */}
 
-          {foundersTab==="todo"&&(<>
-          {/* Founder To Do List */}
-          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"20px 24px"}}>
-            <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Founder To Do List</div>
-            <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-              <input value={founderTodoText} onChange={e=>setFounderTodoText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addFounderTodo();}} placeholder="Add a task..." style={{flex:1,minWidth:200,padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
-              <select value={founderTodoAssignee} onChange={e=>setFounderTodoAssignee(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:12,outline:"none"}}>
-                {FOUNDER_PEOPLE.map(p2=><option key={p2} value={p2}>{p2}</option>)}
-              </select>
-              <select value={founderTodoCategory} onChange={e=>setFounderTodoCategory(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:12,outline:"none"}}>
-                {FOUNDER_TODO_CATS.map(c2=><option key={c2} value={c2}>{c2}</option>)}
-              </select>
-              <button onClick={addFounderTodo} style={{...BTN,background:"var(--accent)",color:"white",padding:"8px 16px"}}>Add</button>
-            </div>
-            {/* Filters */}
-            <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-              <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",marginRight:4}}>Person:</span>
-                <button onClick={()=>setFounderTodoPersonFilter("all")} style={{padding:"4px 10px",borderRadius:4,border:"none",background:founderTodoPersonFilter==="all"?"var(--accent-soft)":"transparent",color:founderTodoPersonFilter==="all"?"var(--accent)":"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>All</button>
-                {FOUNDER_PEOPLE.map(p2=>(
-                  <button key={p2} onClick={()=>setFounderTodoPersonFilter(p2)} style={{padding:"4px 10px",borderRadius:4,border:"none",background:founderTodoPersonFilter===p2?"var(--accent-soft)":"transparent",color:founderTodoPersonFilter===p2?"var(--accent)":"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>{p2} ({founderTodos.filter(t=>(t.assignee===p2||(p2!=="Both"&&t.assignee==="Both"))&&t.status!=="done").length})</button>
-                ))}
-              </div>
-              <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",marginRight:4}}>Category:</span>
-                <button onClick={()=>setFounderTodoCatFilter("all")} style={{padding:"4px 10px",borderRadius:4,border:"none",background:founderTodoCatFilter==="all"?"var(--accent-soft)":"transparent",color:founderTodoCatFilter==="all"?"var(--accent)":"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>All</button>
-                {FOUNDER_TODO_CATS.map(cat=>(
-                  <button key={cat} onClick={()=>setFounderTodoCatFilter(cat)} style={{padding:"4px 10px",borderRadius:4,border:"none",background:founderTodoCatFilter===cat?"var(--accent-soft)":"transparent",color:founderTodoCatFilter===cat?"var(--accent)":"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>{cat}</button>
-                ))}
-              </div>
-            </div>
-            <div style={{display:"grid",gap:6}}>
-              {founderTodos.filter(t=>(founderTodoCatFilter==="all"||t.category===founderTodoCatFilter)&&(founderTodoPersonFilter==="all"||t.assignee===founderTodoPersonFilter||t.assignee==="Both"&&founderTodoPersonFilter!=="Both")).sort((a,b)=>{if(a.status==="done"&&b.status!=="done")return 1;if(a.status!=="done"&&b.status==="done")return-1;return 0;}).map(todo=>(
-                <div key={todo.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:"var(--bg)",borderRadius:8,opacity:todo.status==="done"?0.5:1}}>
-                  <button onClick={()=>toggleFounderTodo(todo.id)} style={{width:22,height:22,borderRadius:"50%",border:`2px solid ${todo.status==="done"?"#10B981":"var(--border)"}`,background:todo.status==="done"?"rgba(16,185,129,0.12)":"transparent",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#10B981",flexShrink:0}}>{todo.status==="done"?"✓":""}</button>
-                  <span style={{flex:1,fontSize:13,color:"var(--fg)",textDecoration:todo.status==="done"?"line-through":"none"}}>{todo.text}</span>
-                  <select value={todo.assignee||"Jeremy"} onChange={e=>setFounderTodos(p=>p.map(t=>t.id===todo.id?{...t,assignee:e.target.value}:t))} style={{padding:"2px 8px",borderRadius:4,border:"1px solid var(--border)",background:"var(--bg)",color:todo.assignee==="Steve"?"#F87700":todo.assignee==="Both"?"#10B981":"#0082FA",fontSize:10,fontWeight:700,cursor:"pointer",outline:"none"}}>
-                    {FOUNDER_PEOPLE.map(p2=><option key={p2} value={p2}>{p2}</option>)}
-                  </select>
-                  <span style={{fontSize:9,padding:"2px 8px",borderRadius:3,background:"var(--card)",color:"var(--muted)",fontWeight:600}}>{todo.category}</span>
-                  <button onClick={()=>deleteFounderTodo(todo.id)} style={{background:"none",border:"none",color:"#5A6B85",cursor:"pointer",fontSize:12}}>x</button>
-                </div>
-              ))}
-              {founderTodos.length===0&&<div style={{textAlign:"center",padding:30,color:"var(--muted)",fontSize:13}}>No tasks yet</div>}
-            </div>
-          </div>
-          </>)}
+          {foundersTab==="data"&&(<FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics}/>)}
         </div>
       </>);
     })()}

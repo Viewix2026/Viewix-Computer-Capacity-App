@@ -23,11 +23,13 @@ const DEFAULT_GAPS = {
 };
 
 const PARTNERSHIP_TYPES = [
-  "Standard Meta Ad", "Premium Meta Ad", "Deluxe Meta Ad",
-  "Starter Pack", "Brand Builder", "Market Leader", "Market Dominator", "Live Action"
+  "Live Action", "Standard - Meta Ads", "Premium - Meta Ads", "Deluxe - Meta Ads",
+  "Starter Pack - Social Media", "Brand Builder - Social Media", "Market Leader - Social Media",
+  "Market Dominator - Social Media", "90 Day Gameplan", "Animation"
 ];
 
 const ACCOUNT_MANAGERS = ["Jeremy", "Steve", "Vish"];
+const PROJECT_LEADS = ["Angus Roche", "Billy White", "David Esdaile", "Felipe Fuhr", "Jude Palmer Rowlands", "Luke Genovese-Kollar", "Matt Healey", "Mia Wolczak", "Vish Peiris", "Farah", "Steve Chestney"];
 const MANAGER_COLORS = {
   "Jeremy": { bg: "rgba(0,130,250,0.12)", color: "#0082FA" },
   "Steve": { bg: "rgba(139,92,246,0.12)", color: "#8B5CF6" },
@@ -124,7 +126,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
     const id = "acct-" + Date.now();
     setAccounts(prev => ({
       ...prev,
-      [id]: { id, companyName: newName.trim(), attioId: "", accountManager: "", partnershipType: "", lastContact: "", milestones: {} }
+      [id]: { id, companyName: newName.trim(), attioId: "", accountManager: "", projectLead: "", partnershipType: "", lastContact: "", milestones: {} }
     }));
     setNewName("");
     setAdding(false);
@@ -151,7 +153,9 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
             const existing = Object.values(next).find(a => a.attioId === c.id);
             if (!existing) {
               const id = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
-              next[id] = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", partnershipType: "", lastContact: "", milestones: {} };
+              next[id] = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: c.videoType || "", lastContact: "", milestones: {} };
+            } else if (c.videoType && !existing.partnershipType) {
+              next[existing.id] = { ...existing, partnershipType: c.videoType };
             }
           });
           return next;
@@ -261,6 +265,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                 <tr>
                   <th style={{ ...TH, position: "sticky", left: 0, zIndex: 10, background: "var(--card)", minWidth: 160, textAlign: "left" }}>Client</th>
                   <th style={{ ...TH, position: "sticky", left: 160, zIndex: 10, background: "var(--card)", minWidth: 90, textAlign: "center" }}>Manager</th>
+                  <th style={{ ...TH, position: "sticky", left: 250, zIndex: 10, background: "var(--card)", minWidth: 110, textAlign: "center" }}>Project Lead</th>
                   <th style={{ ...TH, minWidth: 130, textAlign: "center" }}>Partnership</th>
                   <th style={{ ...TH, minWidth: 100, textAlign: "center" }}>Last Contact</th>
                   {MILESTONE_DEFS.map(m => (
@@ -280,6 +285,12 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                         <select value={acct.accountManager || ""} onChange={e => updateAccount(acct.id, { accountManager: e.target.value })} style={{ ...selectSt, background: mc.bg, color: mc.color }}>
                           <option value="">Assign</option>
                           {ACCOUNT_MANAGERS.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ ...TD, position: "sticky", left: 250, zIndex: 5, background: "var(--card)", textAlign: "center" }}>
+                        <select value={acct.projectLead || ""} onChange={e => updateAccount(acct.id, { projectLead: e.target.value })} style={{ ...selectSt, background: acct.projectLead ? "var(--accent-soft)" : "var(--bg)", color: acct.projectLead ? "var(--fg)" : "var(--muted)" }}>
+                          <option value="">Assign</option>
+                          {PROJECT_LEADS.map(m => <option key={m} value={m}>{m}</option>)}
                         </select>
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>

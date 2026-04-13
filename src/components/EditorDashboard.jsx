@@ -20,6 +20,9 @@ export function EditorDashboard({embedded,onLogout}){
   const[selectedTask,setSelectedTask]=useState(null);
   const[selectedTaskUpdates,setSelectedTaskUpdates]=useState(null);
   const[selectedTaskLoading,setSelectedTaskLoading]=useState(false);
+  const[timerWarning,setTimerWarning]=useState(null); // {pendingTaskId, runningTaskId, runningTaskName}
+  const[adjustingTask,setAdjustingTask]=useState(null); // taskId being adjusted
+  const[adjustMins,setAdjustMins]=useState("");
   const intervalRef=useRef(null);
   const today=todayKey();
 
@@ -43,12 +46,23 @@ export function EditorDashboard({embedded,onLogout}){
     fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));
   },[editorId]);
 
-  // Listen to Firebase time logs for this editor + today
+  // Listen to Firebase time logs for this editor + today, resume running timer
   useEffect(()=>{
     if(!editorId)return;
     const path=`/timeLogs/${editorId}/${today}`;
     let unsub=()=>{};
-    onFB(()=>{unsub=fbListen(path,(data)=>{if(data)setTimeLogs(data);else setTimeLogs({});});});
+    onFB(()=>{unsub=fbListen(path,(data)=>{
+      if(data){
+        const{_running,...logs}=data;
+        setTimeLogs(logs);
+        if(_running&&_running.taskId&&_running.startedAt){
+          setTimers(prev=>{
+            if(prev[_running.taskId]?.running)return prev;
+            return{...prev,[_running.taskId]:{running:true,elapsed:Math.floor((Date.now()-_running.startedAt)/1000),startedAt:_running.startedAt}};
+          });
+        }
+      }else{setTimeLogs({});}
+    });});
     return()=>unsub();
   },[editorId,today]);
 
@@ -70,8 +84,32 @@ export function EditorDashboard({embedded,onLogout}){
     return()=>clearInterval(intervalRef.current);
   },[]);
 
+  const getRunningTaskId=()=>{
+    for(const tid of Object.keys(timers)){if(timers[tid]?.running)return tid;}
+    return null;
+  };
+
   const startTimer=(taskId)=>{
-    setTimers(prev=>({...prev,[taskId]:{running:true,elapsed:0,startedAt:Date.now()}}));
+    const runningId=getRunningTaskId();
+    if(runningId&&runningId!==taskId){
+      const runningTask=tasks.find(t=>t.id===runningId);
+      setTimerWarning({pendingTaskId:taskId,runningTaskId:runningId,runningTaskName:runningTask?.name||"another task"});
+      return;
+    }
+    doStartTimer(taskId);
+  };
+
+  const doStartTimer=(taskId)=>{
+    const now=Date.now();
+    setTimers(prev=>({...prev,[taskId]:{running:true,elapsed:0,startedAt:now}}));
+    fbSet(`/timeLogs/${editorId}/${today}/_running`,{taskId,startedAt:now});
+  };
+
+  const confirmTimerSwitch=()=>{
+    if(!timerWarning)return;
+    stopTimer(timerWarning.runningTaskId);
+    doStartTimer(timerWarning.pendingTaskId);
+    setTimerWarning(null);
   };
 
   const stopTimer=(taskId)=>{
@@ -79,7 +117,6 @@ export function EditorDashboard({embedded,onLogout}){
     if(!t||!t.running)return;
     const elapsed=Math.floor((Date.now()-t.startedAt)/1000);
     setTimers(prev=>({...prev,[taskId]:{running:false,elapsed:0,startedAt:null}}));
-    // Save to Firebase with task metadata
     const prevLog=timeLogs[taskId]||{};
     const prevSecs=typeof prevLog==="number"?prevLog:(prevLog.secs||0);
     const newTotal=prevSecs+elapsed;
@@ -88,14 +125,30 @@ export function EditorDashboard({embedded,onLogout}){
     const logData={secs:newTotal,name:task?.name||"",parentName:task?.parentName||"",stage:task?.stage||"",type:task?.parentInfo?.type||"",category:category};
     const path=`/timeLogs/${editorId}/${today}/${taskId}`;
     fbSet(path,logData);
+    fbSet(`/timeLogs/${editorId}/${today}/_running`,null);
     setTimeLogs(p=>({...p,[taskId]:logData}));
   };
 
   const resetTimer=(taskId)=>{
     const path=`/timeLogs/${editorId}/${today}/${taskId}`;
     fbSet(path,null);
+    fbSet(`/timeLogs/${editorId}/${today}/_running`,null);
     setTimeLogs(p=>{const n={...p};delete n[taskId];return n;});
     setTimers(prev=>({...prev,[taskId]:{running:false,elapsed:0,startedAt:null}}));
+  };
+
+  const adjustTime=(taskId,minutes)=>{
+    const secs=Math.round(minutes*60);
+    const prevLog=timeLogs[taskId]||{};
+    const prevSecs=typeof prevLog==="number"?prevLog:(prevLog.secs||0);
+    const newTotal=Math.max(0,prevSecs+secs);
+    const task=tasks.find(t2=>t2.id===taskId);
+    const category=categorizeContent(task?.parentName,task?.parentInfo?.type);
+    const logData={secs:newTotal,name:task?.name||"",parentName:task?.parentName||"",stage:task?.stage||"",type:task?.parentInfo?.type||"",category:category};
+    fbSet(`/timeLogs/${editorId}/${today}/${taskId}`,logData);
+    setTimeLogs(p=>({...p,[taskId]:logData}));
+    setAdjustingTask(null);
+    setAdjustMins("");
   };
 
   const isRunning=(taskId)=>timers[taskId]?.running;
@@ -162,9 +215,14 @@ export function EditorDashboard({embedded,onLogout}){
           <button onClick={()=>setViewMode("tasks")} style={{padding:"6px 12px",borderRadius:6,border:"none",background:viewMode==="tasks"?"var(--card)":"transparent",color:viewMode==="tasks"?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Tasks</button>
           <button onClick={()=>setViewMode("timeline")} style={{padding:"6px 12px",borderRadius:6,border:"none",background:viewMode==="timeline"?"var(--card)":"transparent",color:viewMode==="timeline"?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Timeline</button>
         </div>
-        <div style={{padding:"8px 16px",borderRadius:8,background:totalToday>0?"rgba(16,185,129,0.12)":"var(--bg)",border:"1px solid var(--border)"}}>
-          <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em"}}>Today's Total </span>
-          <span style={{fontSize:18,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:totalToday>0?"#10B981":"var(--fg)",marginLeft:8}}>{fmtSecsShort(totalToday)}</span>
+        <div style={{padding:"8px 16px",borderRadius:8,background:totalToday>0?"rgba(16,185,129,0.12)":"var(--bg)",border:"1px solid var(--border)",minWidth:180}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+            <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em"}}>Today </span>
+            <span style={{fontSize:14,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:totalToday>0?"#10B981":"var(--fg)"}}>{fmtSecsShort(totalToday)} / 8h</span>
+          </div>
+          <div style={{width:"100%",height:6,background:"var(--bg)",borderRadius:3,overflow:"hidden"}}>
+            <div style={{width:`${Math.min((totalToday/(8*3600))*100,100)}%`,height:"100%",background:totalToday>=8*3600?"#F59E0B":"#10B981",borderRadius:3,transition:"width 0.3s"}}/>
+          </div>
         </div>
         <button onClick={()=>{setLoading(true);const ed=mondayEditors.find(e=>e.id===editorId);if(ed)fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>
         <button onClick={()=>setEditorId(null)} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Switch Editor</button>
@@ -271,7 +329,14 @@ export function EditorDashboard({embedded,onLogout}){
                   {!running?(<button onClick={()=>startTimer(task.id)} style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#10B981",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>▶ Start</button>)
                   :(<button onClick={()=>stopTimer(task.id)} style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#EF4444",color:"white",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>■ Stop</button>)}
                   {logged>0&&!running&&(<button onClick={()=>resetTimer(task.id)} style={{padding:"10px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>Reset</button>)}
+                  {!running&&(<button onClick={()=>{setAdjustingTask(adjustingTask===task.id?null:task.id);setAdjustMins("");}} style={{padding:"10px 14px",borderRadius:8,border:"1px solid var(--border)",background:adjustingTask===task.id?"var(--accent-soft)":"transparent",color:adjustingTask===task.id?"var(--accent)":"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer"}}>+/- Time</button>)}
                 </div>
+                {adjustingTask===task.id&&!running&&(<div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}>
+                  <input type="number" value={adjustMins} onChange={e=>setAdjustMins(e.target.value)} placeholder="mins" style={{width:70,padding:"6px 8px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:12,outline:"none",fontFamily:"'DM Sans',sans-serif",textAlign:"center"}}/>
+                  <button onClick={()=>{const m=parseFloat(adjustMins);if(!isNaN(m)&&m!==0)adjustTime(task.id,m);}} style={{padding:"6px 12px",borderRadius:6,border:"none",background:"#10B981",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>Add</button>
+                  <button onClick={()=>{const m=parseFloat(adjustMins);if(!isNaN(m)&&m>0)adjustTime(task.id,-m);}} style={{padding:"6px 12px",borderRadius:6,border:"none",background:"#EF4444",color:"white",fontSize:11,fontWeight:700,cursor:"pointer"}}>Remove</button>
+                  <span style={{fontSize:10,color:"var(--muted)"}}>minutes</span>
+                </div>)}
               </div>
             </div>
             {/* More Info button */}
@@ -463,6 +528,22 @@ export function EditorDashboard({embedded,onLogout}){
                 ))}
               </div>
             ):<div style={{padding:16,textAlign:"center",color:"var(--muted)",fontSize:12,background:"var(--bg)",borderRadius:8}}>No updates found</div>}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Timer Switch Warning Modal */}
+    {timerWarning&&(
+      <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300}} onClick={()=>setTimerWarning(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:16,padding:"28px",width:420,boxShadow:"0 20px 60px rgba(0,0,0,0.5)"}}>
+          <div style={{fontSize:16,fontWeight:800,color:"var(--fg)",marginBottom:12}}>Timer Already Running</div>
+          <div style={{fontSize:13,color:"var(--muted)",marginBottom:20,lineHeight:1.5}}>
+            You have a timer running on <span style={{fontWeight:700,color:"var(--fg)"}}>{timerWarning.runningTaskName}</span>. Do you want to stop it and start the new timer?
+          </div>
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            <button onClick={()=>setTimerWarning(null)} style={{padding:"10px 20px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+            <button onClick={confirmTimerSwitch} style={{padding:"10px 20px",borderRadius:8,border:"none",background:"#0082FA",color:"white",fontSize:13,fontWeight:700,cursor:"pointer"}}>Stop & Start</button>
           </div>
         </div>
       </div>

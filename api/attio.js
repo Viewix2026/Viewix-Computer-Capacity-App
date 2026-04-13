@@ -76,10 +76,45 @@ export default async function handler(req, res) {
       const data = await resp.json();
       if (!data?.data) return res.status(200).json({ companies: [], total: 0, error: data });
 
+      // Fetch all deals to map video_type per company
+      let allDeals = [];
+      let offset = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const dr = await fetch("https://api.attio.com/v2/objects/deals/records/query", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ limit: 100, offset, sorts: [{ attribute: "created_at", direction: "desc" }] })
+        });
+        const dd = await dr.json();
+        if (dd?.data && dd.data.length > 0) {
+          allDeals = allDeals.concat(dd.data);
+          offset += dd.data.length;
+          hasMore = dd.data.length === 100;
+        } else { hasMore = false; }
+        if (allDeals.length >= 1000) break;
+      }
+
+      // Build map: company_record_id -> most recent deal's video_type
+      const videoTypeMap = {};
+      for (const deal of allDeals) {
+        const companyRef = deal.values?.associated_company;
+        const companyId = Array.isArray(companyRef) && companyRef[0]
+          ? companyRef[0].target_record_id
+          : (companyRef?.target_record_id || null);
+        if (!companyId || videoTypeMap[companyId]) continue;
+        const vtArr = deal.values?.video_type || [];
+        if (Array.isArray(vtArr) && vtArr.length > 0) {
+          const vt = vtArr[0]?.option?.title || vtArr[0]?.status?.title || vtArr[0]?.value || vtArr[0]?.title || (typeof vtArr[0] === "string" ? vtArr[0] : "");
+          if (vt) videoTypeMap[companyId] = vt;
+        }
+      }
+
       const companies = data.data.map(r => {
         const nameArr = r.values?.name || [];
         const name = nameArr[0]?.value || nameArr[0]?.first_name || "";
-        return { id: r.id?.record_id || "", name };
+        const id = r.id?.record_id || "";
+        return { id, name, videoType: videoTypeMap[id] || "" };
       }).filter(c => c.name);
 
       return res.status(200).json({ companies, total: companies.length });

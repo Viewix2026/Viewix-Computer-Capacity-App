@@ -45,7 +45,7 @@ export function DeliveryPublicView(){
     {/* Header */}
     <div style={{padding:"24px 40px",borderBottom:"1px solid #1E2A3A",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
       <div style={{display:"flex",alignItems:"center",gap:16}}>
-        {delivery.logoUrl&&<img src={delivery.logoUrl} alt="" onError={e=>{e.target.style.display="none";}} style={{height:40,borderRadius:6,objectFit:"contain"}}/>}
+        {delivery.logoUrl&&<img src={delivery.logoUrl} alt="" onError={e=>{e.target.style.display="none";}} style={{height:40,borderRadius:6,objectFit:"contain",background:"#fff",padding:4}}/>}
         <div>
           <div style={{fontSize:18,fontWeight:800,color:"#E8ECF4"}}>{delivery.projectName}</div>
           <div style={{fontSize:13,color:"#5A6B85"}}>{delivery.clientName}</div>
@@ -90,7 +90,7 @@ export function DeliveryPublicView(){
         <thead><tr>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Video Name</th>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Link</th>
-          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center"}}>Viewix Status</th>
+          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",minWidth:130}}>Viewix Status</th>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 1 ✎</th>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 2 ✎</th>
         </tr></thead>
@@ -99,7 +99,7 @@ export function DeliveryPublicView(){
           return(<tr key={v.id}>
             <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A",fontWeight:600,color:"#E8ECF4"}}>{v.name}</td>
             <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A"}}>{v.link?<a href={v.link} target="_blank" rel="noopener noreferrer" style={{color:"#0082FA",textDecoration:"none",fontWeight:600}}>View ↗</a>:<span style={{color:"#5A6B85"}}>—</span>}</td>
-            <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A",textAlign:"center"}}><span style={{padding:"5px 12px",borderRadius:4,background:`${sc}20`,color:sc,fontSize:11,fontWeight:700,textTransform:"uppercase"}}>{v.viewixStatus}</span></td>
+            <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A",textAlign:"center"}}><span style={{padding:"5px 12px",borderRadius:4,background:`${sc}20`,color:sc,fontSize:11,fontWeight:700,textTransform:"uppercase",whiteSpace:"nowrap"}}>{v.viewixStatus}</span></td>
             <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}><div style={{border:editableBorder,borderRadius:6,padding:"4px",background:editableBg}}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateField(v.id,"revision1",val)}/></div></td>
             <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}><div style={{border:editableBorder,borderRadius:6,padding:"4px",background:editableBg}}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateField(v.id,"revision2",val)}/></div></td>
           </tr>);})}
