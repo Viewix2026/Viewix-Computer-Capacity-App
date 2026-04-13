@@ -77,7 +77,7 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors }) {
+export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors, onDeletePath }) {
   const [tab, setTab] = useState("clients");
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -133,6 +133,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
 
   const removeClient = (id) => {
     if (!window.confirm("Remove this client from accounts?")) return;
+    if(onDeletePath)onDeletePath("/accounts/"+id);
     setAccounts(prev => { const next = { ...prev }; delete next[id]; return next; });
   };
 

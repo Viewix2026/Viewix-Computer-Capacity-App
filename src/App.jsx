@@ -199,7 +199,8 @@ export default function App(){
   },[]);
 
   const wt=useRef(null);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);const cObj={};clients.forEach(c=>{if(c&&c.id)cObj[c.id]=c;});fbSet("/clients",cObj);const dObj={};deliveries.forEach(d=>{if(d&&d.id)dObj[d.id]=d;});fbSet("/deliveries",dObj);fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/accounts",accounts);fbSet("/turnaround",turnaround);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics]);
+  const deletedPaths=useRef([]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics]);
 
   // Sync Accounts → Sherpas: create/update clients from accounts
   useEffect(()=>{
@@ -784,7 +785,7 @@ export default function App(){
     {tool==="buyerjourney"&&isFounder&&(<BuyerJourney data={buyerJourney} onChange={setBuyerJourney}/>)}
 
     {/* ═══ ACCOUNTS ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} onDeletePath={p=>deletedPaths.current.push(p)} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{
@@ -971,7 +972,7 @@ export default function App(){
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>{const n=document.getElementById(`cl-name-${cl.id}`)?.value?.trim();const d=document.getElementById(`cl-doc-${cl.id}`)?.value?.trim();if(!n)return;setClients(p=>p.map(c=>c.id===cl.id?{...c,name:n,docUrl:d||""}:c));setClientEditId(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Save</button>
                   <button onClick={()=>setClientEditId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
-                  <button onClick={()=>{setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444",marginLeft:"auto"}}>Delete</button>
+                  <button onClick={()=>{deletedPaths.current.push("/clients/"+cl.id);setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444",marginLeft:"auto"}}>Delete</button>
                 </div>
               </div>)
               :(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
