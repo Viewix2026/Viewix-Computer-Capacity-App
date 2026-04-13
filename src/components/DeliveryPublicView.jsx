@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { initFB, onFB, fbSet, fbListen } from "../firebase";
 import { StatusSelect } from "./UIComponents";
@@ -10,6 +10,8 @@ export function DeliveryPublicView(){
   const[saving,setSaving]=useState(false);
   const[showInstructions,setShowInstructions]=useState(true);
   const deliveryId=new URLSearchParams(window.location.search).get("d");
+  const pendingChanges=useRef([]);
+  const batchTimer=useRef(null);
 
   useEffect(()=>{
     if(!deliveryId)return;
@@ -23,13 +25,27 @@ export function DeliveryPublicView(){
     });
   },[deliveryId]);
 
+  const flushNotifications=()=>{
+    if(pendingChanges.current.length===0)return;
+    const changes=[...pendingChanges.current];
+    pendingChanges.current=[];
+    const clientName=delivery?.clientName||"Unknown Client";
+    fetch("/api/notify-revision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clientName,deliveryId,changes})}).catch(e=>console.error("Notification error:",e));
+  };
+
   const updateField=(videoId,field,value)=>{
     if(!delivery)return;
+    const video=delivery.videos.find(v=>v.id===videoId);
     const updated={...delivery,videos:delivery.videos.map(v=>v.id===videoId?{...v,[field]:value}:v)};
     setDelivery(updated);
     setSaving(true);
     fbSet(`/deliveries/${deliveryId}`,updated);
     setTimeout(()=>setSaving(false),800);
+    if(field==="revision1"||field==="revision2"){
+      pendingChanges.current.push({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});
+      if(batchTimer.current)clearTimeout(batchTimer.current);
+      batchTimer.current=setTimeout(flushNotifications,120000);
+    }
   };
 
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif"}}><div style={{color:"#5A6B85",fontSize:14}}>Loading...</div></div>);

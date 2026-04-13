@@ -77,7 +77,7 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors, onDeletePath }) {
+export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors, clients, setClients, onDeletePath }) {
   const [tab, setTab] = useState("clients");
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -91,8 +91,30 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
   const filtered = filterManager === "all" ? accountList : accountList.filter(a => a.accountManager === filterManager);
   const sorted = [...filtered].sort((a, b) => (a.companyName || "").localeCompare(b.companyName || ""));
 
+  const syncToSherpas = (companyName, patch) => {
+    if (!setClients || !companyName) return;
+    const nameLC = companyName.toLowerCase();
+    setClients(prev => {
+      const existing = prev.find(c => (c.name || "").toLowerCase() === nameLC);
+      if (existing) {
+        return prev.map(c => c.id === existing.id ? { ...c, ...patch } : c);
+      }
+      return prev;
+    });
+  };
+
   const updateAccount = (id, patch) => {
-    setAccounts(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+    setAccounts(prev => {
+      const acct = { ...prev[id], ...patch };
+      // Sync to sherpas if manager or lead changed
+      if (patch.accountManager !== undefined || patch.projectLead !== undefined) {
+        const sherpaSync = {};
+        if (patch.accountManager !== undefined) sherpaSync.accountManager = patch.accountManager;
+        if (patch.projectLead !== undefined) sherpaSync.projectLead = patch.projectLead;
+        syncToSherpas(acct.companyName, sherpaSync);
+      }
+      return { ...prev, [id]: acct };
+    });
   };
 
   const updateMilestone = (id, milestoneKey, patch) => {
@@ -154,6 +176,14 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
             if (!existing) {
               const id = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
               next[id] = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: c.videoType || "", lastContact: "", milestones: {} };
+              // Create sherpas client
+              if (setClients && c.name) {
+                const nameLC = c.name.toLowerCase();
+                setClients(prev2 => {
+                  if (prev2.find(cl => (cl.name || "").toLowerCase() === nameLC)) return prev2;
+                  return [...prev2, { id: `cl-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, name: c.name, projectLead: "", accountManager: "", docUrl: "" }];
+                });
+              }
             } else if (c.videoType && !existing.partnershipType) {
               next[existing.id] = { ...existing, partnershipType: c.videoType };
             }

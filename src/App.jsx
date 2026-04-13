@@ -202,33 +202,6 @@ export default function App(){
   const deletedPaths=useRef([]);
   useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics]);
 
-  // Sync Accounts → Sherpas: create/update clients from accounts
-  useEffect(()=>{
-    if(!accounts||Object.keys(accounts).length===0)return;
-    setClients(prev=>{
-      let changed=false;
-      let updatedClients=[...prev];
-      Object.values(accounts).forEach(acct=>{
-        if(!acct||!acct.companyName)return;
-        const nameLC=acct.companyName.toLowerCase();
-        const existing=updatedClients.find(c=>(c.name||"").toLowerCase()===nameLC);
-        if(!existing){
-          updatedClients.push({id:`cl-${Date.now()}-${Math.random().toString(36).slice(2,5)}`,name:acct.companyName,projectLead:acct.projectLead||"",accountManager:acct.accountManager||"",docUrl:""});
-          changed=true;
-        }else{
-          let patch={};
-          if(acct.projectLead&&existing.projectLead!==acct.projectLead)patch.projectLead=acct.projectLead;
-          if(acct.accountManager&&existing.accountManager!==acct.accountManager)patch.accountManager=acct.accountManager;
-          if(Object.keys(patch).length>0){
-            updatedClients=updatedClients.map(c=>c.id===existing.id?{...c,...patch}:c);
-            changed=true;
-          }
-        }
-      });
-      return changed?updatedClients:prev;
-    });
-  },[accounts]);
-
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
 
@@ -785,7 +758,7 @@ export default function App(){
     {tool==="buyerjourney"&&isFounder&&(<BuyerJourney data={buyerJourney} onChange={setBuyerJourney}/>)}
 
     {/* ═══ ACCOUNTS ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} onDeletePath={p=>deletedPaths.current.push(p)} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{
@@ -1004,6 +977,7 @@ export default function App(){
       const deleteMod=(catId,modId)=>setTrainingData(p=>p.map(c=>c.id===catId?{...c,modules:(c.modules||[]).filter(m=>m.id!==modId)}:c));
       const addComment=(catId,modId,text)=>{if(!text.trim())return;updateMod(catId,modId,{comments:[...(trainingData.find(c=>c.id===catId)?.modules?.find(m=>m.id===modId)?.comments||[]),{id:`cmt-${Date.now()}`,author:userName,text:text.trim(),createdAt:new Date().toISOString()}]});};
       const reorderMod=(catId,modId,dir)=>{setTrainingData(p=>p.map(c=>{if(c.id!==catId)return c;const mods=[...(c.modules||[])].sort((a,b)=>(a.order||0)-(b.order||0));const idx=mods.findIndex(m=>m.id===modId);if(idx<0)return c;const swapIdx=idx+dir;if(swapIdx<0||swapIdx>=mods.length)return c;const tmp=mods[idx].order;mods[idx]={...mods[idx],order:mods[swapIdx].order};mods[swapIdx]={...mods[swapIdx],order:tmp};return{...c,modules:mods};}));};
+      const reorderCat=(catId,dir)=>{setTrainingData(p=>{const idx=p.findIndex(c=>c.id===catId);if(idx<0)return p;const si=idx+dir;if(si<0||si>=p.length)return p;const n=[...p];[n[idx],n[si]]=[n[si],n[idx]];return n;});};
       const toggleCat=(catId)=>setCollapsedCats(p=>{const cur=p[catId]===undefined?true:p[catId];return{...p,[catId]:!cur};});
       const addSuggestion=(type,title,desc)=>{setTrainingSuggestions(p=>[...p,{id:`sug-${Date.now()}`,type,title,description:desc,author:userName,createdAt:new Date().toISOString(),status:"pending"}]);};
       const dismissSuggestion=(id)=>setTrainingSuggestions(p=>p.filter(s=>s.id!==id));
@@ -1139,6 +1113,8 @@ export default function App(){
                 <span style={{fontSize:11,color:"var(--muted)"}}>{sortedMods.length} module{sortedMods.length!==1?"s":""}</span>
               </div>)}
               {isAdmin&&editCatId!==cat.id&&(<div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+                <button onClick={()=>reorderCat(cat.id,-1)} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--muted)",cursor:"pointer",fontSize:11,padding:"4px 8px"}}>▲</button>
+                <button onClick={()=>reorderCat(cat.id,1)} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--muted)",cursor:"pointer",fontSize:11,padding:"4px 8px"}}>▼</button>
                 <button onClick={()=>{setEditCatId(cat.id);setEditCatName(cat.name);}} style={{...BTN,background:"var(--bg)",color:"var(--muted)",border:"1px solid var(--border)"}}>Rename</button>
                 <button onClick={()=>addModule(cat.id)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>+ Module</button>
                 {sortedMods.length===0&&<button onClick={()=>deleteCat(cat.id)} style={{...BTN,background:"#374151",color:"#EF4444"}}>Delete</button>}
