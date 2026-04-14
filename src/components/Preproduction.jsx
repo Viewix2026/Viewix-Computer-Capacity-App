@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen } from "../firebase";
-import * as XLSX from "xlsx";
 
 // ─── Constants ───
 const STATUS_COLORS = {
@@ -230,8 +229,9 @@ export function Preproduction() {
   }
 
   // ─── Export xlsx ───
-  function handleExport() {
+  async function handleExport() {
     if (!activeProject?.scriptTable) return;
+    const XLSX = await import("xlsx");
 
     const p = activeProject;
     const rows = [];
