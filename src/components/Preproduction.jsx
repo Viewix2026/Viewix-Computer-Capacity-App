@@ -245,52 +245,87 @@ export function Preproduction() {
   }
 
   // ─── Export xlsx ───
-  async function handleExport() {
+  function handleExport() {
     if (!activeProject?.scriptTable) return;
-    const XLSX = await import("xlsx");
-
     const p = activeProject;
-    const rows = [];
+
+    const motColors = {
+      toward: { bg: "#dcfce7", fg: "#166534" },
+      awayFrom: { bg: "#fee2e2", fg: "#991b1b" },
+      triedBefore: { bg: "#dbeafe", fg: "#1e40af" },
+    };
+
+    const cols = ["Video Name", "Hook", "Explain the Pain", "Results", "The Offer", "Why the Offer", "CTA", "Meta Ad Headline", "Meta Ad Copy"];
+    const colKeys = ["videoName", "hook", "explainThePain", "results", "theOffer", "whyTheOffer", "cta", "metaAdHeadline", "metaAdCopy"];
+
+    let tableRows = "";
 
     // Visuals row
-    rows.push({
-      "Video Name": "VISUALS",
-      "Hook": p.visuals?.onCameraPresence || "",
-      "Explain the Pain": p.visuals?.location || "",
-      "Results": p.visuals?.visualLanguage || "",
-      "The Offer": p.visuals?.motionGraphics || "",
-      "Why the Offer": "",
-      "CTA": "",
-      "Meta Ad Headline": "",
-      "Meta Ad Copy": "",
-    });
+    const visVals = [p.visuals?.onCameraPresence || "", p.visuals?.location || "", p.visuals?.visualLanguage || "", p.visuals?.motionGraphics || "", "", "", "", ""];
+    tableRows += `<tr><td style="font-weight:700;background:#f3f4f6;">VISUALS</td>${visVals.map(v => `<td>${v}</td>`).join("")}</tr>`;
 
     // Script rows
     for (const row of p.scriptTable) {
-      rows.push({
-        "Video Name": row.videoName || "",
-        "Hook": row.hook || "",
-        "Explain the Pain": row.explainThePain || "",
-        "Results": row.results || "",
-        "The Offer": row.theOffer || "",
-        "Why the Offer": row.whyTheOffer || "",
-        "CTA": row.cta || "",
-        "Meta Ad Headline": row.metaAdHeadline || "",
-        "Meta Ad Copy": row.metaAdCopy || "",
+      const mc = motColors[row.motivatorType] || motColors.toward;
+      tableRows += `<tr>`;
+      colKeys.forEach((key, i) => {
+        const val = row[key] || "";
+        if (i === 0) {
+          tableRows += `<td style="font-weight:700;background:${mc.bg};color:${mc.fg};">${val}</td>`;
+        } else {
+          tableRows += `<td>${val}</td>`;
+        }
       });
+      tableRows += `</tr>`;
     }
 
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const html = `<!DOCTYPE html><html><head><title>${p.companyName} - Meta Ads Scripts</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'DM Sans', sans-serif; font-size: 10px; color: #1a1a1a; padding: 20px; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: #666; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th { background: #111827; color: #fff; padding: 6px 8px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 6px 8px; border: 1px solid #e5e7eb; vertical-align: top; line-height: 1.4; font-size: 10px; }
+  .brand-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .brand-card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; }
+  .brand-card h3 { font-size: 10px; text-transform: uppercase; color: #666; margin-bottom: 6px; letter-spacing: 0.5px; }
+  .brand-card li { margin-bottom: 2px; }
+  .mot-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .mot-card { border-radius: 6px; padding: 10px; }
+  .mot-card h3 { font-size: 10px; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px; }
+  .mot-card li { margin-bottom: 2px; }
+  @media print { body { padding: 0; } @page { size: landscape; margin: 10mm; } }
+</style></head><body>
+<h1>${p.companyName}</h1>
+<div class="sub">Meta Ads Scripts — ${(p.packageTier || "").charAt(0).toUpperCase() + (p.packageTier || "").slice(1)} Package — ${p.scriptTable.length} ads</div>
 
-    // Column widths
-    ws["!cols"] = [
-      { wch: 22 }, { wch: 35 }, { wch: 30 }, { wch: 30 },
-      { wch: 35 }, { wch: 30 }, { wch: 25 }, { wch: 25 }, { wch: 40 },
-    ];
+${p.brandAnalysis ? `<div class="brand-grid">
+  <div class="brand-card"><h3>Brand Truths</h3><ul>${(p.brandAnalysis.brandTruths || []).map(t => `<li>${t}</li>`).join("")}</ul></div>
+  <div class="brand-card"><h3>Brand Ambitions</h3><ul>${(p.brandAnalysis.brandAmbitions || []).map(t => `<li>${t}</li>`).join("")}</ul></div>
+  <div class="brand-card"><h3>Brand Personality</h3><div>${(p.brandAnalysis.brandPersonality?.types || []).join(", ")}</div><div style="margin-top:4px;">${p.brandAnalysis.brandPersonality?.summary || ""}</div></div>
+  <div class="brand-card"><h3>Target Customer</h3><ul>${(p.targetCustomer || []).map(t => `<li>${t}</li>`).join("")}</ul></div>
+</div>` : ""}
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Meta Ads");
-    XLSX.writeFile(wb, `${p.companyName.replace(/[^a-zA-Z0-9]/g, "_")}_Meta_Ads.xlsx`);
+${p.motivators ? `<div class="mot-grid">
+  <div class="mot-card" style="background:#dcfce7;"><h3 style="color:#166534;">Toward Motivators</h3><ul>${(p.motivators.toward || []).map(m => `<li>${m}</li>`).join("")}</ul></div>
+  <div class="mot-card" style="background:#fee2e2;"><h3 style="color:#991b1b;">Away From Motivators</h3><ul>${(p.motivators.awayFrom || []).map(m => `<li>${m}</li>`).join("")}</ul></div>
+  <div class="mot-card" style="background:#dbeafe;"><h3 style="color:#1e40af;">Tried Before</h3><ul>${(p.motivators.triedBefore || []).map(m => `<li>${m}</li>`).join("")}</ul></div>
+</div>` : ""}
+
+<table>
+  <thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
+  <tbody>${tableRows}</tbody>
+</table>
+
+<script>window.onload = function() { window.print(); }</script>
+</body></html>`;
+
+    const win = window.open("", "_blank");
+    win.document.write(html);
+    win.document.close();
 
     // Update status
     fbPatchProject(p.id, { status: "exported" });
@@ -320,7 +355,7 @@ export function Preproduction() {
               <button onClick={() => fbPatchProject(p.id, { status: "approved" })} style={btnSecondary}>Approve</button>
             )}
             {hasScripts && (
-              <button onClick={handleExport} style={btnPrimary}>Export .xlsx</button>
+              <button onClick={handleExport} style={btnPrimary}>Export PDF</button>
             )}
           </div>
         </div>
