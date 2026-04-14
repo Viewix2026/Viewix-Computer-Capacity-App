@@ -120,6 +120,12 @@ export function Preproduction() {
   const [manualCompany, setManualCompany] = useState("");
   const [manualTier, setManualTier] = useState("standard");
   const [accounts, setAccounts] = useState({});
+  const [colWidths, setColWidths] = useState(() => {
+    const w = {};
+    SCRIPT_COLUMNS.forEach(c => { w[c.key] = c.width; });
+    return w;
+  });
+  const resizeRef = useRef(null);
 
   // Firebase listeners
   useEffect(() => {
@@ -760,7 +766,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 Script Table ({p.scriptTable.length} ads)
               </h3>
               <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 10 }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <table style={{ width: "max-content", minWidth: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
                   <thead>
                     <tr>
                       {SCRIPT_COLUMNS.map(col => (
@@ -769,9 +775,27 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                           color: "var(--muted)", borderBottom: "1px solid var(--border)",
                           background: "var(--card)", whiteSpace: "nowrap",
                           fontSize: 11, textTransform: "uppercase", letterSpacing: "0.5px",
-                          minWidth: col.width,
+                          width: colWidths[col.key] || col.width, position: "relative",
+                          overflow: "hidden",
                         }}>
                           {col.label}
+                          <div
+                            onMouseDown={e => {
+                              e.preventDefault();
+                              const startX = e.clientX;
+                              const startW = colWidths[col.key] || col.width;
+                              const onMove = ev => {
+                                const diff = ev.clientX - startX;
+                                setColWidths(prev => ({ ...prev, [col.key]: Math.max(80, startW + diff) }));
+                              };
+                              const onUp = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+                              document.addEventListener("mousemove", onMove);
+                              document.addEventListener("mouseup", onUp);
+                            }}
+                            style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 5, cursor: "col-resize", background: "transparent" }}
+                            onMouseEnter={e => { e.currentTarget.style.background = "var(--accent)"; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                          />
                         </th>
                       ))}
                       <th style={{ padding: "10px 8px", borderBottom: "1px solid var(--border)", background: "var(--card)", width: 36 }}></th>
@@ -816,8 +840,8 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                                   cursor: "pointer",
                                   verticalAlign: "top",
                                   lineHeight: 1.5,
-                                  minWidth: col.width,
-                                  maxWidth: col.width + 60,
+                                  width: colWidths[col.key] || col.width,
+                                  overflow: "hidden",
                                   position: "relative",
                                 }}
                               >
