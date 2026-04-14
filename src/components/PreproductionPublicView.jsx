@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { initFB, onFB, fbSet, fbListen } from "../firebase";
 import { Logo } from "./Logo";
 
@@ -27,9 +27,10 @@ const SCRIPT_COLUMNS = [
 export function PreproductionPublicView() {
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [feedbackCell, setFeedbackCell] = useState(null); // { cellId, column }
+  const [feedbackCell, setFeedbackCell] = useState(null); // { cellId, column } or { cellId, column: "_row" } for row feedback
   const [feedbackText, setFeedbackText] = useState("");
   const [saving, setSaving] = useState(false);
+  const notifyTimer = useRef(null);
 
   const projectId = new URLSearchParams(window.location.search).get("p");
 
@@ -45,10 +46,24 @@ export function PreproductionPublicView() {
     });
   }, [projectId]);
 
+  // Send Slack notification 2 minutes after last feedback submission
+  const scheduleNotify = () => {
+    if (notifyTimer.current) clearTimeout(notifyTimer.current);
+    notifyTimer.current = setTimeout(() => {
+      fetch("/api/preproduction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "notifyFeedback", projectId }),
+      }).catch(() => {});
+    }, 120000); // 2 minutes
+  };
+
   const submitFeedback = () => {
     if (!feedbackCell || !feedbackText.trim() || !projectId) return;
     setSaving(true);
-    const key = `${feedbackCell.cellId}_${feedbackCell.column}`;
+    const key = feedbackCell.column === "_row"
+      ? `${feedbackCell.cellId}__row`
+      : `${feedbackCell.cellId}_${feedbackCell.column}`;
     fbSet(`/preproduction/metaAds/${projectId}/clientFeedback/${key}`, {
       text: feedbackText.trim(),
       submittedAt: new Date().toISOString(),
@@ -58,6 +73,7 @@ export function PreproductionPublicView() {
     setFeedbackCell(null);
     setFeedbackText("");
     setTimeout(() => setSaving(false), 800);
+    scheduleNotify();
   };
 
   const getFeedback = (cellId, column) => {
@@ -241,11 +257,17 @@ export function PreproductionPublicView() {
                           const feedback = getFeedback(cellId, col.key);
                           const isActive = feedbackCell?.cellId === cellId && feedbackCell?.column === col.key;
 
+                          const rowFeedback = isVideoName ? getFeedback(cellId, "_row") : null;
+                          const isRowFbActive = isVideoName && feedbackCell?.cellId === cellId && feedbackCell?.column === "_row";
+
                           return (
                             <td
                               key={col.key}
                               onClick={() => {
-                                if (!isVideoName) {
+                                if (isVideoName) {
+                                  setFeedbackCell({ cellId, column: "_row" });
+                                  setFeedbackText(rowFeedback?.text || "");
+                                } else {
                                   setFeedbackCell({ cellId, column: col.key });
                                   setFeedbackText(feedback?.text || "");
                                 }
@@ -256,7 +278,7 @@ export function PreproductionPublicView() {
                                 background: isVideoName ? mc.bg : (isActive ? "rgba(0,130,250,0.08)" : "transparent"),
                                 color: isVideoName ? mc.fg : "#C8D2DE",
                                 fontWeight: isVideoName ? 700 : 400,
-                                cursor: isVideoName ? "default" : "pointer",
+                                cursor: "pointer",
                                 verticalAlign: "top",
                                 lineHeight: 1.6,
                                 minWidth: col.width,
@@ -267,8 +289,41 @@ export function PreproductionPublicView() {
                                 {feedback && !isVideoName && (
                                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginTop: 4 }} />
                                 )}
+                                {rowFeedback && isVideoName && (
+                                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginTop: 4 }} />
+                                )}
                                 <span>{row[col.key] || ""}</span>
                               </div>
+                              {isVideoName && isRowFbActive && (
+                                <div onClick={e => e.stopPropagation()} style={{
+                                  marginTop: 10, padding: 12, background: "#0B0F1A",
+                                  border: "1px solid #0082FA", borderRadius: 8,
+                                  boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                                }}>
+                                  <div style={{ fontSize: 11, color: "#5A6B85", marginBottom: 6 }}>
+                                    {rowFeedback ? "Update feedback for this video:" : "Leave feedback for this entire video:"}
+                                  </div>
+                                  <textarea
+                                    autoFocus
+                                    value={feedbackText}
+                                    onChange={e => setFeedbackText(e.target.value)}
+                                    onKeyDown={e => { if (e.key === "Escape") setFeedbackCell(null); }}
+                                    placeholder="e.g. This whole ad concept doesn't resonate with our brand"
+                                    rows={3}
+                                    style={{
+                                      width: "100%", padding: "8px 10px", borderRadius: 6,
+                                      border: "1px solid #1E2A3A", background: "#131825",
+                                      color: "#E8ECF4", fontSize: 12, fontFamily: "inherit",
+                                      outline: "none", resize: "vertical", boxSizing: "border-box",
+                                    }}
+                                  />
+                                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                                    <button onClick={submitFeedback} disabled={!feedbackText.trim()} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#0082FA", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", opacity: !feedbackText.trim() ? 0.5 : 1 }}>Submit</button>
+                                    <button onClick={() => setFeedbackCell(null)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #1E2A3A", background: "transparent", color: "#5A6B85", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                                  </div>
+                                  {rowFeedback && <div style={{ marginTop: 8, fontSize: 10, color: "#5A6B85" }}>Last submitted: {new Date(rowFeedback.submittedAt).toLocaleString("en-AU")}</div>}
+                                </div>
+                              )}
 
                               {isActive && (
                                 <div onClick={e => e.stopPropagation()} style={{

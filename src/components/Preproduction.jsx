@@ -94,6 +94,8 @@ export function Preproduction() {
   const [rewriteCell, setRewriteCell] = useState(null); // { cellId, column }
   const [rewriteInstruction, setRewriteInstruction] = useState("");
   const [rewriting, setRewriting] = useState(false);
+  const [editMode, setEditMode] = useState(false); // toggle between rewrite (AI) and edit (manual)
+  const [editText, setEditText] = useState("");
   const [manualAddOpen, setManualAddOpen] = useState(false);
   const [manualCompany, setManualCompany] = useState("");
   const [manualTier, setManualTier] = useState("standard");
@@ -199,6 +201,20 @@ export function Preproduction() {
     } finally {
       setRewriting(false);
     }
+  }
+
+  // ─── Manual cell edit (no AI) ───
+  function handleManualEdit() {
+    if (!rewriteCell || !activeProject) return;
+    const p = activeProject;
+    const rowIndex = p.scriptTable?.findIndex(r => (r.id || r.videoName) === rewriteCell.cellId);
+    if (rowIndex === -1 || rowIndex == null) return;
+    fbSet(`/preproduction/metaAds/${p.id}/scriptTable/${rowIndex}/${rewriteCell.column}`, editText);
+    fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString());
+    setRewriteCell(null);
+    setRewriteInstruction("");
+    setEditText("");
+    setEditMode(false);
   }
 
   // ─── Create manual project ───
@@ -487,6 +503,8 @@ export function Preproduction() {
                                   if (isEditable) {
                                     setRewriteCell({ cellId, column: col.key });
                                     setRewriteInstruction(clientFb?.text || "");
+                                    setEditText(row[col.key] || "");
+                                    setEditMode(false);
                                   }
                                 }}
                                 style={{
@@ -516,25 +534,40 @@ export function Preproduction() {
                                       boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
                                     }}
                                   >
-                                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Rewrite instruction:</div>
-                                    <input
-                                      autoFocus
-                                      value={rewriteInstruction}
-                                      onChange={e => setRewriteInstruction(e.target.value)}
-                                      onKeyDown={e => { if (e.key === "Enter") handleRewrite(); if (e.key === "Escape") setRewriteCell(null); }}
-                                      placeholder="e.g. Make it more confrontational"
-                                      style={{ ...inputSt, fontSize: 12, marginBottom: 6 }}
-                                    />
-                                    <div style={{ display: "flex", gap: 6 }}>
-                                      <button
-                                        onClick={handleRewrite}
-                                        disabled={rewriting || !rewriteInstruction.trim()}
-                                        style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px", opacity: (rewriting || !rewriteInstruction.trim()) ? 0.5 : 1 }}
-                                      >
-                                        {rewriting ? "Rewriting..." : "Rewrite"}
-                                      </button>
-                                      <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+                                    {/* Mode toggle */}
+                                    <div style={{ display: "flex", gap: 2, marginBottom: 8, background: "var(--bg)", borderRadius: 4, padding: 2, width: "fit-content" }}>
+                                      <button onClick={() => setEditMode(false)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: !editMode ? "var(--accent)" : "transparent", color: !editMode ? "#fff" : "var(--muted)" }}>AI Rewrite</button>
+                                      <button onClick={() => setEditMode(true)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: editMode ? "var(--accent)" : "transparent", color: editMode ? "#fff" : "var(--muted)" }}>Manual Edit</button>
                                     </div>
+                                    {!editMode ? (<>
+                                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Rewrite instruction:</div>
+                                      <input
+                                        autoFocus
+                                        value={rewriteInstruction}
+                                        onChange={e => setRewriteInstruction(e.target.value)}
+                                        onKeyDown={e => { if (e.key === "Enter") handleRewrite(); if (e.key === "Escape") setRewriteCell(null); }}
+                                        placeholder="e.g. Make it more confrontational"
+                                        style={{ ...inputSt, fontSize: 12, marginBottom: 6 }}
+                                      />
+                                      <div style={{ display: "flex", gap: 6 }}>
+                                        <button onClick={handleRewrite} disabled={rewriting || !rewriteInstruction.trim()} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px", opacity: (rewriting || !rewriteInstruction.trim()) ? 0.5 : 1 }}>{rewriting ? "Rewriting..." : "Rewrite"}</button>
+                                        <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+                                      </div>
+                                    </>) : (<>
+                                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Edit text directly:</div>
+                                      <textarea
+                                        autoFocus
+                                        value={editText}
+                                        onChange={e => setEditText(e.target.value)}
+                                        onKeyDown={e => { if (e.key === "Escape") setRewriteCell(null); }}
+                                        rows={4}
+                                        style={{ ...inputSt, fontSize: 12, marginBottom: 6, resize: "vertical", minHeight: 60 }}
+                                      />
+                                      <div style={{ display: "flex", gap: 6 }}>
+                                        <button onClick={handleManualEdit} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px" }}>Save</button>
+                                        <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+                                      </div>
+                                    </>)}
                                   </div>
                                 )}
                               </td>

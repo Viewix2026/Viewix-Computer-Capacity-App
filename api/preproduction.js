@@ -269,7 +269,30 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: generate, rewrite" });
+    // ─── NOTIFY FEEDBACK: Slack notification when client leaves feedback ───
+    if (action === "notifyFeedback") {
+      const { projectId } = req.body;
+      if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+      const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+      if (!project) return res.status(404).json({ error: "Project not found" });
+
+      const slackUrl = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
+      if (slackUrl) {
+        const feedbackCount = project.clientFeedback ? Object.keys(project.clientFeedback).length : 0;
+        await fetch(slackUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: `${project.companyName} has left feedback on their Meta Ads scripts (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}). Review in dashboard: planner.viewix.com.au`,
+          }),
+        });
+      }
+
+      return res.status(200).json({ success: true });
+    }
+
+    return res.status(400).json({ error: "Unknown action. Use: generate, rewrite, notifyFeedback" });
   } catch (e) {
     console.error("Preproduction API error:", e);
     return res.status(500).json({ error: e.message });
