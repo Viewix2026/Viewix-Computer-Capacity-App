@@ -149,9 +149,9 @@ export function Preproduction() {
         body: JSON.stringify(body),
       });
 
-      const text = await resp.text();
+      const rawResp = await resp.text();
       let data;
-      try { data = JSON.parse(text); } catch { throw new Error(text || "Generation failed"); }
+      try { data = JSON.parse(rawResp); } catch { throw new Error(rawResp || "Generation failed"); }
       if (!resp.ok) throw new Error(data.error || "Generation failed");
 
       // Firebase listener will pick up the new data automatically
