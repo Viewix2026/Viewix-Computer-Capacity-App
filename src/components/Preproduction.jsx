@@ -310,7 +310,11 @@ export function Preproduction() {
     <h1>${p.companyName}</h1>
     <div class="sub">Meta Ads Scripts \u2014 ${(p.packageTier || "").charAt(0).toUpperCase() + (p.packageTier || "").slice(1)} Package \u2014 ${p.scriptTable.length} ads</div>
   </div>
-  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAS0AAABQCAYAAABMKCNFAAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAA" alt="Viewix" />
+  <svg width="120" height="28" viewBox="0 0 120 28" xmlns="http://www.w3.org/2000/svg">
+    <text x="0" y="22" font-family="DM Sans, sans-serif" font-size="24" font-weight="800">
+      <tspan fill="#F97316">V</tspan><tspan fill="#111827">iewix</tspan>
+    </text>
+  </svg>
 </div>
 
 ${p.brandAnalysis ? `<div class="section-title">Brand Analysis</div>
@@ -541,17 +545,23 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                         <tr key={row.id || rowIdx}>
                           {SCRIPT_COLUMNS.map(col => {
                             const isVideoName = col.key === "videoName";
-                            const isEditable = col.editable !== false && !isVideoName;
                             const cellId = row.id || row.videoName;
                             const isActive = rewriteCell?.cellId === cellId && rewriteCell?.column === col.key;
+                            const isRowActive = isVideoName && rewriteCell?.cellId === cellId && rewriteCell?.column === "_row";
                             const feedbackKey = `${cellId}_${col.key}`;
-                            const clientFb = p.clientFeedback?.[feedbackKey];
+                            const rowFbKey = `${cellId}__row`;
+                            const clientFb = isVideoName ? p.clientFeedback?.[rowFbKey] : p.clientFeedback?.[feedbackKey];
 
                             return (
                               <td
                                 key={col.key}
                                 onClick={() => {
-                                  if (isEditable) {
+                                  if (isVideoName) {
+                                    setRewriteCell({ cellId, column: "_row" });
+                                    setRewriteInstruction(clientFb?.text || "");
+                                    setEditText("");
+                                    setEditMode(false);
+                                  } else {
                                     setRewriteCell({ cellId, column: col.key });
                                     setRewriteInstruction(clientFb?.text || "");
                                     setEditText(row[col.key] || "");
@@ -561,10 +571,10 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                                 style={{
                                   padding: "10px 12px",
                                   borderBottom: "1px solid var(--border-light)",
-                                  background: isVideoName ? mc.bg : (isActive ? "rgba(59,130,246,0.08)" : (clientFb ? "rgba(245,158,11,0.05)" : "transparent")),
+                                  background: isVideoName ? (isRowActive ? "rgba(59,130,246,0.08)" : mc.bg) : (isActive ? "rgba(59,130,246,0.08)" : (clientFb ? "rgba(245,158,11,0.05)" : "transparent")),
                                   color: isVideoName ? mc.fg : "var(--fg)",
                                   fontWeight: isVideoName ? 700 : 400,
-                                  cursor: isEditable ? "pointer" : "default",
+                                  cursor: "pointer",
                                   verticalAlign: "top",
                                   lineHeight: 1.5,
                                   minWidth: col.width,
@@ -619,6 +629,24 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                                         <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
                                       </div>
                                     </>)}
+                                  </div>
+                                )}
+                                {isRowActive && (
+                                  <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, padding: 10, background: "var(--card)", border: "1px solid var(--accent)", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}>
+                                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Rewrite instruction for entire row:</div>
+                                    {clientFb && <div style={{ fontSize: 10, color: "#F59E0B", marginBottom: 6, padding: "4px 8px", background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>Client feedback: {clientFb.text}</div>}
+                                    <input
+                                      autoFocus
+                                      value={rewriteInstruction}
+                                      onChange={e => setRewriteInstruction(e.target.value)}
+                                      onKeyDown={e => { if (e.key === "Escape") setRewriteCell(null); }}
+                                      placeholder="e.g. Rework this entire ad to be more confrontational"
+                                      style={{ ...inputSt, fontSize: 12, marginBottom: 6 }}
+                                    />
+                                    <div style={{ display: "flex", gap: 6 }}>
+                                      <button onClick={() => { /* TODO: row-level rewrite via API */ alert("Row rewrite coming soon — use individual cells for now"); }} disabled={!rewriteInstruction.trim()} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px", opacity: !rewriteInstruction.trim() ? 0.5 : 1 }}>Rewrite Row</button>
+                                      <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+                                    </div>
                                   </div>
                                 )}
                               </td>
