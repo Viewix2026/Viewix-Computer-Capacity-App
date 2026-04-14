@@ -96,19 +96,29 @@ export function Preproduction() {
   const [rewriting, setRewriting] = useState(false);
   const [editMode, setEditMode] = useState(false); // toggle between rewrite (AI) and edit (manual)
   const [editText, setEditText] = useState("");
+  const [sectionEdit, setSectionEdit] = useState(null); // { path, value, label } for brand section editing
+  const [sectionInstruction, setSectionInstruction] = useState("");
+  const [sectionEditText, setSectionEditText] = useState("");
+  const [sectionEditMode, setSectionEditMode] = useState(false);
+  const [sectionRewriting, setSectionRewriting] = useState(false);
   const [manualAddOpen, setManualAddOpen] = useState(false);
   const [manualCompany, setManualCompany] = useState("");
   const [manualTier, setManualTier] = useState("standard");
+  const [accounts, setAccounts] = useState({});
 
-  // Firebase listener
+  // Firebase listeners
   useEffect(() => {
-    let unsub = () => {};
+    let unsub1 = () => {};
+    let unsub2 = () => {};
     onFB(() => {
-      unsub = fbListen("/preproduction/metaAds", (data) => {
+      unsub1 = fbListen("/preproduction/metaAds", (data) => {
         setProjects(data || {});
       });
+      unsub2 = fbListen("/accounts", (data) => {
+        setAccounts(data || {});
+      });
     });
-    return unsub;
+    return () => { unsub1(); unsub2(); };
   }, []);
 
   const projectList = Object.values(projects)
@@ -120,6 +130,14 @@ export function Preproduction() {
     : projectList.filter(p => p.status === statusFilter);
 
   const activeProject = activeProjectId ? projects[activeProjectId] : null;
+
+  // Find project lead from accounts (match by attioCompanyId or company name)
+  const getProjectLead = (proj) => {
+    if (!proj) return null;
+    const acctList = Object.values(accounts).filter(Boolean);
+    const match = acctList.find(a => (proj.attioCompanyId && a.attioId === proj.attioCompanyId) || (a.companyName || "").toLowerCase() === (proj.companyName || "").toLowerCase());
+    return match?.projectLead || null;
+  };
 
   // ─── Process transcript ───
   async function handleProcess() {
@@ -215,6 +233,96 @@ export function Preproduction() {
     setRewriteInstruction("");
     setEditText("");
     setEditMode(false);
+  }
+
+  // ─── Section edit (for brand analysis, motivators, visuals, target customer) ───
+  function handleSectionSave() {
+    if (!sectionEdit || !activeProject) return;
+    const val = sectionEditMode ? sectionEditText : null;
+    if (sectionEditMode && val != null) {
+      // Manual edit: parse as array if it's a list (one item per line)
+      const isArray = Array.isArray(sectionEdit.value);
+      const parsed = isArray ? val.split("\n").filter(l => l.trim()) : val;
+      fbSet(`/preproduction/metaAds/${activeProject.id}/${sectionEdit.path}`, parsed);
+      fbSet(`/preproduction/metaAds/${activeProject.id}/updatedAt`, new Date().toISOString());
+    }
+    setSectionEdit(null);
+    setSectionInstruction("");
+    setSectionEditText("");
+    setSectionEditMode(false);
+  }
+
+  async function handleSectionRewrite() {
+    if (!sectionEdit || !sectionInstruction.trim() || !activeProject) return;
+    setSectionRewriting(true);
+    try {
+      const resp = await fetch("/api/preproduction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rewrite",
+          projectId: activeProject.id,
+          cellId: sectionEdit.path,
+          column: "section",
+          instruction: sectionInstruction,
+          currentValue: Array.isArray(sectionEdit.value) ? sectionEdit.value.join("\n") : (sectionEdit.value || ""),
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Rewrite failed");
+      // Parse the response: if original was array, split by newlines or bullet points
+      const newVal = data.newValue || "";
+      const isArray = Array.isArray(sectionEdit.value);
+      const parsed = isArray ? newVal.split(/\n|(?:^|\n)[-•]\s*/).filter(l => l.trim()) : newVal;
+      fbSet(`/preproduction/metaAds/${activeProject.id}/${sectionEdit.path}`, parsed);
+      fbSet(`/preproduction/metaAds/${activeProject.id}/updatedAt`, new Date().toISOString());
+      setSectionEdit(null);
+      setSectionInstruction("");
+    } catch (e) {
+      alert("Rewrite failed: " + e.message);
+    } finally {
+      setSectionRewriting(false);
+    }
+  }
+
+  // Helper: open section editor
+  function openSectionEdit(path, value, label) {
+    setSectionEdit({ path, value, label });
+    setSectionInstruction("");
+    const textVal = Array.isArray(value) ? value.join("\n") : (value || "");
+    setSectionEditText(textVal);
+    setSectionEditMode(false);
+  }
+
+  // ─── Render section edit panel ───
+  function renderSectionPanel() {
+    if (!sectionEdit) return null;
+    const p = activeProject;
+    const clientFb = p?.clientFeedback?.[sectionEdit.path.replace(/\//g, "_")];
+    return (
+      <div style={{ marginTop: 10, padding: 12, background: "var(--card)", border: "1px solid var(--accent)", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>Edit: {sectionEdit.label}</div>
+        {clientFb && <div style={{ fontSize: 10, color: "#F59E0B", marginBottom: 8, padding: "4px 8px", background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>Client feedback: {clientFb.text}</div>}
+        <div style={{ display: "flex", gap: 2, marginBottom: 8, background: "var(--bg)", borderRadius: 4, padding: 2, width: "fit-content" }}>
+          <button onClick={() => setSectionEditMode(false)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: !sectionEditMode ? "var(--accent)" : "transparent", color: !sectionEditMode ? "#fff" : "var(--muted)" }}>AI Rewrite</button>
+          <button onClick={() => setSectionEditMode(true)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: sectionEditMode ? "var(--accent)" : "transparent", color: sectionEditMode ? "#fff" : "var(--muted)" }}>Manual Edit</button>
+        </div>
+        {!sectionEditMode ? (<>
+          <input value={sectionInstruction} onChange={e => setSectionInstruction(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleSectionRewrite(); if (e.key === "Escape") setSectionEdit(null); }} placeholder="e.g. Make these more specific to the client's industry" style={{ ...inputSt, fontSize: 12, marginBottom: 6 }} autoFocus />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={handleSectionRewrite} disabled={sectionRewriting || !sectionInstruction.trim()} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px", opacity: (sectionRewriting || !sectionInstruction.trim()) ? 0.5 : 1 }}>{sectionRewriting ? "Rewriting..." : "Rewrite"}</button>
+            <button onClick={() => setSectionEdit(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+          </div>
+        </>) : (<>
+          <textarea value={sectionEditText} onChange={e => setSectionEditText(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setSectionEdit(null); }} rows={6} style={{ ...inputSt, fontSize: 12, marginBottom: 6, resize: "vertical", minHeight: 80 }} autoFocus />
+          <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 6 }}>{Array.isArray(sectionEdit.value) ? "One item per line" : ""}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={handleSectionSave} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px" }}>Save</button>
+            <button onClick={() => setSectionEdit(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+          </div>
+        </>)}
+      </div>
+    );
   }
 
   // ─── Create manual project ───
@@ -366,6 +474,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
             <PBadge text={p.packageTier} colors={TIER_COLORS[p.packageTier] || TIER_COLORS.standard} />
             <PBadge text={STATUS_LABELS[p.status] || p.status} colors={STATUS_COLORS[p.status] || STATUS_COLORS.draft} />
+            {getProjectLead(p) && <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>Lead: <span style={{ color: "var(--fg)", fontWeight: 600 }}>{getProjectLead(p)}</span></span>}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             {hasScripts && (
@@ -433,60 +542,44 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             )}
           </div>
 
-          {/* Section 2: Brand Analysis */}
+          {/* Section 2: Brand Analysis (editable) */}
           {p.brandAnalysis && (
             <div style={{ marginBottom: 32 }}>
               <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 12 }}>Brand Analysis</h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                {/* Brand Truths */}
-                <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Brand Truths</div>
-                  <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "var(--fg)", lineHeight: 1.6 }}>
-                    {(p.brandAnalysis.brandTruths || []).map((t, i) => <li key={i}>{t}</li>)}
-                  </ul>
-                </div>
-
-                {/* Brand Ambitions */}
-                <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Brand Ambitions</div>
-                  <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "var(--fg)", lineHeight: 1.6 }}>
-                    {(p.brandAnalysis.brandAmbitions || []).map((t, i) => <li key={i}>{t}</li>)}
-                  </ul>
-                </div>
-
-                {/* Brand Personality */}
-                <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Brand Personality</div>
-                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                    {(p.brandAnalysis.brandPersonality?.types || []).map((t, i) => (
-                      <span key={i} style={{ padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: "var(--accent-soft)", color: "var(--accent)" }}>{t}</span>
-                    ))}
+                {[
+                  { path: "brandAnalysis/brandTruths", label: "Brand Truths", value: p.brandAnalysis.brandTruths },
+                  { path: "brandAnalysis/brandAmbitions", label: "Brand Ambitions", value: p.brandAnalysis.brandAmbitions },
+                  { path: "brandAnalysis/brandPersonality/summary", label: "Brand Personality", value: p.brandAnalysis.brandPersonality?.summary, extra: p.brandAnalysis.brandPersonality?.types },
+                  { path: "targetCustomer", label: "Target Customer", value: p.targetCustomer },
+                ].map(sec => (
+                  <div key={sec.path} onClick={() => openSectionEdit(sec.path, sec.value, sec.label)} style={{ background: "var(--card)", border: `1px solid ${sectionEdit?.path === sec.path ? "var(--accent)" : "var(--border)"}`, borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>{sec.label}</div>
+                    {sec.extra && <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>{sec.extra.map((t, i) => <span key={i} style={{ padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: "var(--accent-soft)", color: "var(--accent)" }}>{t}</span>)}</div>}
+                    {Array.isArray(sec.value) ? (
+                      <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "var(--fg)", lineHeight: 1.6 }}>{sec.value.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                    ) : (
+                      <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5 }}>{sec.value || ""}</div>
+                    )}
+                    {sectionEdit?.path === sec.path && <div onClick={e => e.stopPropagation()}>{renderSectionPanel()}</div>}
                   </div>
-                  <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5 }}>
-                    {p.brandAnalysis.brandPersonality?.summary || ""}
-                  </div>
-                </div>
-
-                {/* Target Customer */}
-                <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Target Customer</div>
-                  <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "var(--fg)", lineHeight: 1.6 }}>
-                    {(p.targetCustomer || []).map((t, i) => <li key={i}>{t}</li>)}
-                  </ul>
-                </div>
+                ))}
               </div>
 
-              {/* Motivators */}
+              {/* Motivators (editable) */}
               {p.motivators && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
                   {["toward", "awayFrom", "triedBefore"].map(type => {
                     const mc = MOTIVATOR_COLORS[type];
+                    const motPath = `motivators/${type}`;
+                    const isEditing = sectionEdit?.path === motPath;
                     return (
-                      <div key={type} style={{ background: mc.bg, border: `1px solid ${mc.border}`, borderRadius: 10, padding: 16 }}>
+                      <div key={type} onClick={() => openSectionEdit(motPath, p.motivators[type], mc.label)} style={{ background: mc.bg, border: `1px solid ${isEditing ? "var(--accent)" : mc.border}`, borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: mc.fg, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>{mc.label}</div>
                         <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "var(--fg)", lineHeight: 1.6 }}>
                           {(p.motivators[type] || []).map((m, i) => <li key={i}>{m}</li>)}
                         </ul>
+                        {isEditing && <div onClick={e => e.stopPropagation()}>{renderSectionPanel()}</div>}
                       </div>
                     );
                   })}
@@ -495,7 +588,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             </div>
           )}
 
-          {/* Section 3: Visuals */}
+          {/* Section 3: Visuals (editable) */}
           {p.visuals && (
             <div style={{ marginBottom: 32 }}>
               <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 12 }}>Visual Direction</h3>
@@ -505,12 +598,17 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                   { key: "location", label: "Location" },
                   { key: "visualLanguage", label: "Visual Language" },
                   { key: "motionGraphics", label: "Motion Graphics" },
-                ].map(v => (
-                  <div key={v.key} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>{v.label}</div>
-                    <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5 }}>{p.visuals[v.key] || ""}</div>
-                  </div>
-                ))}
+                ].map(v => {
+                  const visPath = `visuals/${v.key}`;
+                  const isEditing = sectionEdit?.path === visPath;
+                  return (
+                    <div key={v.key} onClick={() => openSectionEdit(visPath, p.visuals[v.key] || "", v.label)} style={{ background: "var(--card)", border: `1px solid ${isEditing ? "var(--accent)" : "var(--border)"}`, borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>{v.label}</div>
+                      <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5 }}>{p.visuals[v.key] || ""}</div>
+                      {isEditing && <div onClick={e => e.stopPropagation()}>{renderSectionPanel()}</div>}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -794,6 +892,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                       {p.scriptTable.length} ads generated
                     </div>
                   )}
+                  {getProjectLead(p) && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>Lead: {getProjectLead(p)}</div>}
                 </div>
               ))}
             </div>

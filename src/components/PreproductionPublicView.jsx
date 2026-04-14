@@ -144,40 +144,40 @@ export function PreproductionPublicView() {
           <div style={{ marginBottom: 32 }}>
             <div style={{ fontSize: 15, fontWeight: 800, color: "#E8ECF4", marginBottom: 16 }}>Brand Analysis</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              {/* Brand Truths */}
-              <div style={{ background: "#131825", border: "1px solid #1E2A3A", borderRadius: 10, padding: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Brand Truths</div>
-                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "#C8D2DE", lineHeight: 1.7 }}>
-                  {(p.brandAnalysis.brandTruths || []).map((t, i) => <li key={i}>{t}</li>)}
-                </ul>
-              </div>
-
-              {/* Brand Ambitions */}
-              <div style={{ background: "#131825", border: "1px solid #1E2A3A", borderRadius: 10, padding: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Brand Ambitions</div>
-                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "#C8D2DE", lineHeight: 1.7 }}>
-                  {(p.brandAnalysis.brandAmbitions || []).map((t, i) => <li key={i}>{t}</li>)}
-                </ul>
-              </div>
-
-              {/* Brand Personality */}
-              <div style={{ background: "#131825", border: "1px solid #1E2A3A", borderRadius: 10, padding: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Brand Personality</div>
-                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                  {(p.brandAnalysis.brandPersonality?.types || []).map((t, i) => (
-                    <span key={i} style={{ padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: "rgba(0,130,250,0.12)", color: "#0082FA" }}>{t}</span>
-                  ))}
-                </div>
-                <div style={{ fontSize: 13, color: "#C8D2DE", lineHeight: 1.5 }}>{p.brandAnalysis.brandPersonality?.summary || ""}</div>
-              </div>
-
-              {/* Target Customer */}
-              <div style={{ background: "#131825", border: "1px solid #1E2A3A", borderRadius: 10, padding: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Target Customer</div>
-                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "#C8D2DE", lineHeight: 1.7 }}>
-                  {(p.targetCustomer || []).map((t, i) => <li key={i}>{t}</li>)}
-                </ul>
-              </div>
+              {[
+                { key: "brandAnalysis_brandTruths", label: "Brand Truths", items: p.brandAnalysis.brandTruths },
+                { key: "brandAnalysis_brandAmbitions", label: "Brand Ambitions", items: p.brandAnalysis.brandAmbitions },
+                { key: "brandAnalysis_brandPersonality", label: "Brand Personality", text: p.brandAnalysis.brandPersonality?.summary, types: p.brandAnalysis.brandPersonality?.types },
+                { key: "targetCustomer", label: "Target Customer", items: p.targetCustomer },
+              ].map(sec => {
+                const fb = getFeedback(sec.key, "section");
+                const isActive = feedbackCell?.cellId === sec.key && feedbackCell?.column === "section";
+                return (
+                  <div key={sec.key} onClick={() => { setFeedbackCell({ cellId: sec.key, column: "section" }); setFeedbackText(fb?.text || ""); }} style={{ background: "#131825", border: `1px solid ${isActive ? "#0082FA" : "#1E2A3A"}`, borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      {fb && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0 }} />}
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.5px" }}>{sec.label}</div>
+                    </div>
+                    {sec.types && <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>{sec.types.map((t, i) => <span key={i} style={{ padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: "rgba(0,130,250,0.12)", color: "#0082FA" }}>{t}</span>)}</div>}
+                    {sec.items ? (
+                      <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "#C8D2DE", lineHeight: 1.7 }}>{sec.items.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                    ) : (
+                      <div style={{ fontSize: 13, color: "#C8D2DE", lineHeight: 1.5 }}>{sec.text || ""}</div>
+                    )}
+                    {isActive && (
+                      <div onClick={e => e.stopPropagation()} style={{ marginTop: 10, padding: 12, background: "#0B0F1A", border: "1px solid #0082FA", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.4)" }}>
+                        <div style={{ fontSize: 11, color: "#5A6B85", marginBottom: 6 }}>{fb ? "Update your feedback:" : "Leave feedback on this section:"}</div>
+                        <textarea autoFocus value={feedbackText} onChange={e => setFeedbackText(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setFeedbackCell(null); }} placeholder="e.g. These brand truths don't quite capture our core values" rows={3} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #1E2A3A", background: "#131825", color: "#E8ECF4", fontSize: 12, fontFamily: "inherit", outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                          <button onClick={submitFeedback} disabled={!feedbackText.trim()} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#0082FA", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", opacity: !feedbackText.trim() ? 0.5 : 1 }}>Submit</button>
+                          <button onClick={() => setFeedbackCell(null)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #1E2A3A", background: "transparent", color: "#5A6B85", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                        </div>
+                        {fb && <div style={{ marginTop: 8, fontSize: 10, color: "#5A6B85" }}>Last submitted: {new Date(fb.submittedAt).toLocaleString("en-AU")}</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Motivators */}
@@ -185,12 +185,29 @@ export function PreproductionPublicView() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
                 {["toward", "awayFrom", "triedBefore"].map(type => {
                   const mc = MOTIVATOR_COLORS[type];
+                  const motKey = `motivators_${type}`;
+                  const fb = getFeedback(motKey, "section");
+                  const isActive = feedbackCell?.cellId === motKey && feedbackCell?.column === "section";
                   return (
-                    <div key={type} style={{ background: mc.bg, border: `1px solid ${mc.border}`, borderRadius: 10, padding: 16 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: mc.fg, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>{mc.label}</div>
+                    <div key={type} onClick={() => { setFeedbackCell({ cellId: motKey, column: "section" }); setFeedbackText(fb?.text || ""); }} style={{ background: mc.bg, border: `1px solid ${isActive ? "#0082FA" : mc.border}`, borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                        {fb && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0 }} />}
+                        <div style={{ fontSize: 11, fontWeight: 700, color: mc.fg, textTransform: "uppercase", letterSpacing: "0.5px" }}>{mc.label}</div>
+                      </div>
                       <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "#C8D2DE", lineHeight: 1.7 }}>
                         {(p.motivators[type] || []).map((m, i) => <li key={i}>{m}</li>)}
                       </ul>
+                      {isActive && (
+                        <div onClick={e => e.stopPropagation()} style={{ marginTop: 10, padding: 12, background: "#0B0F1A", border: "1px solid #0082FA", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.4)" }}>
+                          <div style={{ fontSize: 11, color: "#5A6B85", marginBottom: 6 }}>{fb ? "Update your feedback:" : "Leave feedback:"}</div>
+                          <textarea autoFocus value={feedbackText} onChange={e => setFeedbackText(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setFeedbackCell(null); }} placeholder="e.g. These motivators need to be more specific" rows={3} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #1E2A3A", background: "#131825", color: "#E8ECF4", fontSize: 12, fontFamily: "inherit", outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <button onClick={submitFeedback} disabled={!feedbackText.trim()} style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: "#0082FA", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", opacity: !feedbackText.trim() ? 0.5 : 1 }}>Submit</button>
+                            <button onClick={() => setFeedbackCell(null)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #1E2A3A", background: "transparent", color: "#5A6B85", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                          </div>
+                          {fb && <div style={{ marginTop: 8, fontSize: 10, color: "#5A6B85" }}>Last submitted: {new Date(fb.submittedAt).toLocaleString("en-AU")}</div>}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
