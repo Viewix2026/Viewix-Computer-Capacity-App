@@ -125,7 +125,7 @@ export default async function handler(req, res) {
       for (let i = 0; i < numVids; i++) {
         newDelivery.videos.push({
           id: `vid-${Date.now()}-${i}`,
-          name: dealName ? `${dealName} - Video ${i + 1}` : `Video ${i + 1}`,
+          name: `Video ${i + 1}:`,
           viewixStatus: "In Development",
           revision1: "",
           revision2: "",
@@ -138,17 +138,19 @@ export default async function handler(req, res) {
     // --- 3. SHERPAS (clients) ---
     const clients = (await fbGet("/clients")) || {};
     let sherpaExists = false;
-    for (const cl of Object.values(clients)) {
-      if (cl && (cl.name || "").toLowerCase() === nameLC) {
+    const clientEntries = Object.values(clients).filter(Boolean);
+    for (const cl of clientEntries) {
+      if ((cl.name || "").trim().toLowerCase() === nameLC.trim()) {
         sherpaExists = true;
         break;
       }
     }
+    console.log(`Sherpas check: "${companyName}" exists=${sherpaExists}, total clients=${clientEntries.length}`);
     if (!sherpaExists) {
       const clId = "cl-" + Date.now() + "-" + Math.random().toString(36).slice(2, 5);
       await fbSet(`/clients/${clId}`, {
         id: clId,
-        name: companyName,
+        name: companyName.trim(),
         projectLead: "",
         accountManager: "",
         docUrl: "",
@@ -156,6 +158,48 @@ export default async function handler(req, res) {
       results.sherpas = "created";
     } else {
       results.sherpas = "exists";
+    }
+
+    // --- 4. PREPRODUCTION ---
+    const metaAdsTiers = ["standard", "premium", "deluxe"];
+    const socialRetainerTiers = ["starter pack", "brand builder", "market leader", "market dominator"];
+    const dealTypeLower = (videoType || "").toLowerCase();
+
+    if (metaAdsTiers.some(t => dealTypeLower.includes(t))) {
+      const projectId = `meta_${Date.now()}`;
+      const tier = metaAdsTiers.find(t => dealTypeLower.includes(t));
+      await fbSet(`/preproduction/metaAds/${projectId}`, {
+        id: projectId,
+        companyName: companyName,
+        packageTier: tier,
+        status: "draft",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        attioCompanyId: companyId || null,
+        attioDealId: null,
+        dealValue: dealValue || null,
+        transcript: null,
+        brandAnalysis: null,
+        targetCustomer: null,
+        motivators: null,
+        visuals: null,
+        scriptTable: null,
+        rewriteHistory: [],
+      });
+      results.preproduction = "metaAds created";
+    }
+
+    if (socialRetainerTiers.some(t => dealTypeLower.includes(t))) {
+      const projectId = `social_${Date.now()}`;
+      const tier = socialRetainerTiers.find(t => dealTypeLower.includes(t));
+      await fbSet(`/preproduction/socialOrganic/${projectId}`, {
+        id: projectId,
+        companyName: companyName,
+        packageTier: tier,
+        status: "draft",
+        createdAt: new Date().toISOString(),
+      });
+      results.preproduction = "socialOrganic created";
     }
 
     return res.status(200).json({

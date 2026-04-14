@@ -23,6 +23,8 @@ import { BuyerJourney } from "./components/BuyerJourney";
 import { AccountsDashboard } from "./components/AccountsDashboard";
 import { FoundersData } from "./components/FoundersData";
 import { DeliveryPublicView } from "./components/DeliveryPublicView";
+import { Preproduction } from "./components/Preproduction";
+import { PreproductionPublicView } from "./components/PreproductionPublicView";
 import { Login } from "./components/Login";
 
 export default function App(){
@@ -236,7 +238,7 @@ export default function App(){
     fetch("/api/google-reviews").then(r=>r.json()).then(data=>{if(data?.rating)setGoogleReviewData(data);}).catch(()=>{});
   },[tool]);
 
-  const login=pw=>{if(pw==="Sanpel"){setRole("founders");return true;}if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");return true;}if(pw==="Letsgo"){setRole("editor");return true;}if(pw==="Trial"){setRole("trial");return true;}return false;};
+  const login=pw=>{if(pw==="Sanpel"){setRole("founders");return true;}if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");return true;}if(pw==="Letsgo"){setRole("editor");return true;}if(pw==="Lead"){setRole("lead");return true;}if(pw==="Trial"){setRole("trial");return true;}return false;};
   const logout=()=>{setRole(null);};
 
   // Capacity helpers
@@ -268,6 +270,10 @@ export default function App(){
   const deliveryParam=new URLSearchParams(window.location.search).get("d");
   if(deliveryParam)return(<><style>{CSS}</style><DeliveryPublicView/></>);
 
+  // Check for public preproduction link
+  const preprodParam=new URLSearchParams(window.location.search).get("p");
+  if(preprodParam)return(<><style>{CSS}</style><PreproductionPublicView/></>);
+
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
 
@@ -283,6 +289,7 @@ export default function App(){
       {isFounder&&<SideIcon icon="🧭" label="Buyer Journey" active={tool==="buyerjourney"} onClick={()=>setTool("buyerjourney")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
+      {(isFounder||role==="lead")&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
@@ -298,7 +305,7 @@ export default function App(){
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
         <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Capacity Planner</span>
         <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3}}>
-          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"},{key:"todos",label:"To Do"},{key:"lunch",label:"Team Lunch"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
+          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"},{key:"lunch",label:"Team Lunch"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
         </div>
       </div>
 
@@ -483,97 +490,6 @@ export default function App(){
         </div>);
       })()}
 
-      {capTab==="todos"&&(()=>{
-        const TODO_STATUSES=["idea","in_progress","done"];
-        const TODO_STATUS_LABELS={"idea":"Idea","in_progress":"In Progress","done":"Done"};
-        const TODO_STATUS_COLORS={"idea":"#8B5CF6","in_progress":"#F59E0B","done":"#10B981"};
-        const TODO_ASSIGNEES=["Vish","Steve","Jeremy"];
-        const TODO_CATEGORIES=["General","Operations","Sales","Content","Tech","Admin"];
-
-        const addTodo=()=>{if(!todoNewText.trim())return;setTodos(p=>[...p,{id:`todo-${Date.now()}`,text:todoNewText.trim(),status:"idea",assignee:todoNewAssignee,category:todoNewCategory,createdAt:new Date().toISOString()}]);setTodoNewText("");};
-        const updateTodo=(id,patch)=>setTodos(p=>p.map(t=>t.id===id?{...t,...patch}:t));
-        const deleteTodo=id=>setTodos(p=>p.filter(t=>t.id!==id));
-
-        const filtered=todoFilter==="all"?todos:todos.filter(t=>t.status===todoFilter);
-        const grouped={"idea":filtered.filter(t=>t.status==="idea"),"in_progress":filtered.filter(t=>t.status==="in_progress"),"done":filtered.filter(t=>t.status==="done")};
-
-        return(<div>
-          {/* Add new todo */}
-          <div style={{marginBottom:20,padding:"16px 20px",background:"var(--card)",border:"1px solid var(--border)",borderRadius:12}}>
-            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-              <input value={todoNewText} onChange={e=>setTodoNewText(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addTodo();}} placeholder="What needs doing..." style={{flex:1,minWidth:200,padding:"10px 14px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,outline:"none"}}/>
-              <select value={todoNewAssignee} onChange={e=>setTodoNewAssignee(e.target.value)} style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}>
-                {TODO_ASSIGNEES.map(a=><option key={a} value={a}>{a}</option>)}
-              </select>
-              <select value={todoNewCategory} onChange={e=>setTodoNewCategory(e.target.value)} style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}>
-                {TODO_CATEGORIES.map(c2=><option key={c2} value={c2}>{c2}</option>)}
-              </select>
-              <button onClick={addTodo} style={{...BTN,background:"var(--accent)",color:"white",padding:"10px 20px"}}>Add</button>
-            </div>
-          </div>
-
-          {/* Filter bar */}
-          <div style={{display:"flex",gap:4,marginBottom:16,background:"var(--bg)",borderRadius:8,padding:3,width:"fit-content"}}>
-            {[{k:"all",l:"All"},{k:"idea",l:"Ideas"},{k:"in_progress",l:"In Progress"},{k:"done",l:"Done"}].map(f=>(
-              <button key={f.k} onClick={()=>setTodoFilter(f.k)} style={{padding:"6px 14px",borderRadius:6,border:"none",background:todoFilter===f.k?"var(--card)":"transparent",color:todoFilter===f.k?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{f.l} ({f.k==="all"?todos.length:todos.filter(t=>t.status===f.k).length})</button>
-            ))}
-          </div>
-
-          {/* Columns view */}
-          {todoFilter==="all"?(
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>
-              {TODO_STATUSES.map(status=>(
-                <div key={status}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-                    <span style={{width:10,height:10,borderRadius:"50%",background:TODO_STATUS_COLORS[status]}}/>
-                    <span style={{fontSize:13,fontWeight:700,color:"var(--fg)"}}>{TODO_STATUS_LABELS[status]}</span>
-                    <span style={{fontSize:11,color:"var(--muted)"}}>{grouped[status].length}</span>
-                  </div>
-                  <div style={{display:"grid",gap:8}}>
-                    {grouped[status].map(todo=>(
-                      <div key={todo.id} style={{padding:"12px 16px",background:"var(--card)",border:"1px solid var(--border)",borderRadius:10}}>
-                        <div style={{fontSize:13,color:"var(--fg)",fontWeight:500,marginBottom:8}}>{todo.text}</div>
-                        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                          <select value={todo.status} onChange={e=>updateTodo(todo.id,{status:e.target.value})} style={{padding:"3px 8px",borderRadius:4,border:"none",background:`${TODO_STATUS_COLORS[todo.status]}20`,color:TODO_STATUS_COLORS[todo.status],fontSize:10,fontWeight:700,cursor:"pointer",outline:"none"}}>
-                            {TODO_STATUSES.map(s=><option key={s} value={s}>{TODO_STATUS_LABELS[s]}</option>)}
-                          </select>
-                          <select value={todo.assignee||""} onChange={e=>updateTodo(todo.id,{assignee:e.target.value})} style={{padding:"3px 8px",borderRadius:4,border:"1px solid var(--border)",background:"var(--bg)",color:"var(--fg)",fontSize:10,fontWeight:600,cursor:"pointer",outline:"none"}}>
-                            {TODO_ASSIGNEES.map(a=><option key={a} value={a}>{a}</option>)}
-                          </select>
-                          <span style={{fontSize:9,padding:"2px 8px",borderRadius:3,background:"var(--bg)",color:"var(--muted)",fontWeight:600}}>{todo.category||"General"}</span>
-                          <button onClick={()=>deleteTodo(todo.id)} style={{marginLeft:"auto",background:"none",border:"none",color:"#5A6B85",cursor:"pointer",fontSize:12}}>x</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ):(
-            <div style={{display:"grid",gap:8}}>
-              {filtered.map(todo=>(
-                <div key={todo.id} style={{padding:"12px 16px",background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:13,color:"var(--fg)",fontWeight:500}}>{todo.text}</div>
-                    <div style={{display:"flex",gap:6,alignItems:"center",marginTop:6}}>
-                      <select value={todo.status} onChange={e=>updateTodo(todo.id,{status:e.target.value})} style={{padding:"3px 8px",borderRadius:4,border:"none",background:`${TODO_STATUS_COLORS[todo.status]}20`,color:TODO_STATUS_COLORS[todo.status],fontSize:10,fontWeight:700,cursor:"pointer",outline:"none"}}>
-                        {TODO_STATUSES.map(s=><option key={s} value={s}>{TODO_STATUS_LABELS[s]}</option>)}
-                      </select>
-                      <select value={todo.assignee||""} onChange={e=>updateTodo(todo.id,{assignee:e.target.value})} style={{padding:"3px 8px",borderRadius:4,border:"1px solid var(--border)",background:"var(--bg)",color:"var(--fg)",fontSize:10,fontWeight:600,cursor:"pointer",outline:"none"}}>
-                        {TODO_ASSIGNEES.map(a=><option key={a} value={a}>{a}</option>)}
-                      </select>
-                      <span style={{fontSize:9,padding:"2px 8px",borderRadius:3,background:"var(--bg)",color:"var(--muted)",fontWeight:600}}>{todo.category||"General"}</span>
-                    </div>
-                  </div>
-                  <button onClick={()=>deleteTodo(todo.id)} style={{background:"none",border:"none",color:"#5A6B85",cursor:"pointer",fontSize:14}}>x</button>
-                </div>
-              ))}
-              {filtered.length===0&&<div style={{textAlign:"center",padding:40,color:"var(--muted)"}}>No items</div>}
-            </div>
-          )}
-        </div>);
-      })()}
-
       {capTab==="lunch"&&(
         <div style={{maxWidth:700,margin:"0 auto"}}>
           <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
@@ -750,6 +666,9 @@ export default function App(){
 
       </div>
     </>)}
+
+    {/* ═══ PREPRODUCTION ═══ */}
+    {tool==="preproduction"&&(isFounder||role==="lead")&&(<Preproduction/>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}

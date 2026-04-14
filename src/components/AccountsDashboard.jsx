@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { fbSet } from "../firebase";
 import { BTN, TH, TD } from "../config";
 
 const MILESTONE_DEFS = [
@@ -113,6 +114,8 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
         if (patch.projectLead !== undefined) sherpaSync.projectLead = patch.projectLead;
         syncToSherpas(acct.companyName, sherpaSync);
       }
+      // Write immediately to Firebase to prevent skipRead race condition
+      fbSet(`/accounts/${id}`, acct);
       return { ...prev, [id]: acct };
     });
   };
@@ -122,7 +125,9 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
       const acct = prev[id] || {};
       const milestones = { ...(acct.milestones || {}) };
       milestones[milestoneKey] = { ...(milestones[milestoneKey] || {}), ...patch };
-      return { ...prev, [id]: { ...acct, milestones } };
+      const updated = { ...acct, milestones };
+      fbSet(`/accounts/${id}`, updated);
+      return { ...prev, [id]: updated };
     });
   };
 
@@ -138,7 +143,9 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
           status: existing.status || "Scheduled"
         };
       });
-      return { ...prev, [id]: { ...acct, milestones } };
+      const updated = { ...acct, milestones };
+      fbSet(`/accounts/${id}`, updated);
+      return { ...prev, [id]: updated };
     });
   };
 
