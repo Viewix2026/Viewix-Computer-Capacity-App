@@ -283,42 +283,58 @@ export function Preproduction() {
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap');
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'DM Sans', sans-serif; font-size: 10px; color: #1a1a1a; padding: 20px; }
-  h1 { font-size: 18px; margin-bottom: 4px; }
-  .sub { font-size: 12px; color: #666; margin-bottom: 16px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-  th { background: #111827; color: #fff; padding: 6px 8px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 6px 8px; border: 1px solid #e5e7eb; vertical-align: top; line-height: 1.4; font-size: 10px; }
-  .brand-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-  .brand-card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; }
-  .brand-card h3 { font-size: 10px; text-transform: uppercase; color: #666; margin-bottom: 6px; letter-spacing: 0.5px; }
-  .brand-card li { margin-bottom: 2px; }
-  .mot-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-  .mot-card { border-radius: 6px; padding: 10px; }
-  .mot-card h3 { font-size: 10px; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px; }
-  .mot-card li { margin-bottom: 2px; }
-  @media print { body { padding: 0; } @page { size: landscape; margin: 10mm; } }
+  body { font-family: 'DM Sans', sans-serif; font-size: 10px; color: #1a1a1a; padding: 40px 48px; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #111827; }
+  .header img { height: 28px; }
+  h1 { font-size: 20px; margin-bottom: 2px; }
+  .sub { font-size: 12px; color: #666; }
+  .section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #111827; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th { background: #111827; color: #fff; padding: 8px 10px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 8px 10px; border: 1px solid #e5e7eb; vertical-align: top; line-height: 1.5; font-size: 10px; }
+  .brand-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+  .brand-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; }
+  .brand-card h3 { font-size: 10px; text-transform: uppercase; color: #666; margin-bottom: 8px; letter-spacing: 0.5px; }
+  .brand-card li { margin-bottom: 3px; line-height: 1.5; }
+  .brand-card ul { padding-left: 16px; }
+  .mot-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+  .mot-card { border-radius: 8px; padding: 14px; }
+  .mot-card h3 { font-size: 10px; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
+  .mot-card li { margin-bottom: 3px; line-height: 1.5; }
+  .mot-card ul { padding-left: 16px; }
+  .footer { margin-top: 32px; text-align: center; font-size: 9px; color: #999; padding-top: 12px; border-top: 1px solid #e5e7eb; }
+  @media print { body { padding: 24px 32px; } @page { size: landscape; margin: 12mm; } }
 </style></head><body>
-<h1>${p.companyName}</h1>
-<div class="sub">Meta Ads Scripts — ${(p.packageTier || "").charAt(0).toUpperCase() + (p.packageTier || "").slice(1)} Package — ${p.scriptTable.length} ads</div>
+<div class="header">
+  <div>
+    <h1>${p.companyName}</h1>
+    <div class="sub">Meta Ads Scripts \u2014 ${(p.packageTier || "").charAt(0).toUpperCase() + (p.packageTier || "").slice(1)} Package \u2014 ${p.scriptTable.length} ads</div>
+  </div>
+  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAS0AAABQCAYAAABMKCNFAAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAA" alt="Viewix" />
+</div>
 
-${p.brandAnalysis ? `<div class="brand-grid">
+${p.brandAnalysis ? `<div class="section-title">Brand Analysis</div>
+<div class="brand-grid">
   <div class="brand-card"><h3>Brand Truths</h3><ul>${(p.brandAnalysis.brandTruths || []).map(t => `<li>${t}</li>`).join("")}</ul></div>
   <div class="brand-card"><h3>Brand Ambitions</h3><ul>${(p.brandAnalysis.brandAmbitions || []).map(t => `<li>${t}</li>`).join("")}</ul></div>
   <div class="brand-card"><h3>Brand Personality</h3><div>${(p.brandAnalysis.brandPersonality?.types || []).join(", ")}</div><div style="margin-top:4px;">${p.brandAnalysis.brandPersonality?.summary || ""}</div></div>
   <div class="brand-card"><h3>Target Customer</h3><ul>${(p.targetCustomer || []).map(t => `<li>${t}</li>`).join("")}</ul></div>
 </div>` : ""}
 
-${p.motivators ? `<div class="mot-grid">
+${p.motivators ? `<div class="section-title">Motivators</div>
+<div class="mot-grid">
   <div class="mot-card" style="background:#dcfce7;"><h3 style="color:#166534;">Toward Motivators</h3><ul>${(p.motivators.toward || []).map(m => `<li>${m}</li>`).join("")}</ul></div>
   <div class="mot-card" style="background:#fee2e2;"><h3 style="color:#991b1b;">Away From Motivators</h3><ul>${(p.motivators.awayFrom || []).map(m => `<li>${m}</li>`).join("")}</ul></div>
   <div class="mot-card" style="background:#dbeafe;"><h3 style="color:#1e40af;">Tried Before</h3><ul>${(p.motivators.triedBefore || []).map(m => `<li>${m}</li>`).join("")}</ul></div>
 </div>` : ""}
 
+<div class="section-title">Script Table</div>
 <table>
   <thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
   <tbody>${tableRows}</tbody>
 </table>
+
+<div class="footer">Prepared by Viewix Video Production</div>
 
 <script>window.onload = function() { window.print(); }</script>
 </body></html>`;
