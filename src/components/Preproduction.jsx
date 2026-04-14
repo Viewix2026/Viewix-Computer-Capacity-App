@@ -81,6 +81,21 @@ function PBadge({ text, colors }) {
   );
 }
 
+// ─── Modal component ───
+function EditModal({ title, onClose, children }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "24px 28px", width: "90%", maxWidth: 640, maxHeight: "80vh", overflow: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{title}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 18, cursor: "pointer" }}>x</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ───
 export function Preproduction() {
   const [subTab, setSubTab] = useState("metaAds");
@@ -297,6 +312,34 @@ export function Preproduction() {
     }
   }
 
+  // ─── Regenerate scripts from updated motivators ───
+  async function handleRegenerateFromMotivators() {
+    if (!activeProject) return;
+    const p = activeProject;
+    setProcessing(true);
+    try {
+      const resp = await fetch("/api/preproduction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "generate",
+          projectId: p.id,
+          transcript: p.transcript?.text || "",
+          packageTier: p.packageTier,
+          companyName: p.companyName,
+        }),
+      });
+      const rawResp = await resp.text();
+      let data;
+      try { data = JSON.parse(rawResp); } catch { throw new Error(rawResp || "Regeneration failed"); }
+      if (!resp.ok) throw new Error(data.error || "Regeneration failed");
+    } catch (e) {
+      alert("Script regeneration failed: " + e.message);
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   // Helper: open section editor
   function openSectionEdit(path, value, label) {
     setSectionEdit({ path, value, label });
@@ -306,34 +349,82 @@ export function Preproduction() {
     setSectionEditMode(false);
   }
 
-  // ─── Render section edit panel ───
-  function renderSectionPanel() {
+  // ─── Render section edit modal ───
+  function renderSectionModal() {
     if (!sectionEdit) return null;
     const p = activeProject;
     const clientFb = p?.clientFeedback?.[sectionEdit.path.replace(/\//g, "_")];
+    const isMotivator = sectionEdit.path.startsWith("motivators/");
     return (
-      <div style={{ marginTop: 10, padding: 12, background: "var(--card)", border: "1px solid var(--accent)", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>Edit: {sectionEdit.label}</div>
-        {clientFb && <div style={{ fontSize: 10, color: "#F59E0B", marginBottom: 8, padding: "4px 8px", background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>Client feedback: {clientFb.text}</div>}
-        <div style={{ display: "flex", gap: 2, marginBottom: 8, background: "var(--bg)", borderRadius: 4, padding: 2, width: "fit-content" }}>
-          <button onClick={() => setSectionEditMode(false)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: !sectionEditMode ? "var(--accent)" : "transparent", color: !sectionEditMode ? "#fff" : "var(--muted)" }}>AI Rewrite</button>
-          <button onClick={() => setSectionEditMode(true)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: sectionEditMode ? "var(--accent)" : "transparent", color: sectionEditMode ? "#fff" : "var(--muted)" }}>Manual Edit</button>
+      <EditModal title={`Edit: ${sectionEdit.label}`} onClose={() => setSectionEdit(null)}>
+        {clientFb && <div style={{ fontSize: 12, color: "#F59E0B", marginBottom: 12, padding: "8px 12px", background: "rgba(245,158,11,0.1)", borderRadius: 6 }}>Client feedback: {clientFb.text}</div>}
+        <div style={{ display: "flex", gap: 2, marginBottom: 12, background: "var(--bg)", borderRadius: 6, padding: 3, width: "fit-content" }}>
+          <button onClick={() => setSectionEditMode(false)} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: !sectionEditMode ? "var(--accent)" : "transparent", color: !sectionEditMode ? "#fff" : "var(--muted)" }}>AI Rewrite</button>
+          <button onClick={() => setSectionEditMode(true)} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: sectionEditMode ? "var(--accent)" : "transparent", color: sectionEditMode ? "#fff" : "var(--muted)" }}>Manual Edit</button>
+        </div>
+        {/* Current content preview */}
+        <div style={{ marginBottom: 12, padding: "10px 14px", background: "var(--bg)", borderRadius: 6, fontSize: 12, color: "var(--muted)", maxHeight: 120, overflow: "auto" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, textTransform: "uppercase" }}>Current</div>
+          {Array.isArray(sectionEdit.value) ? sectionEdit.value.map((v, i) => <div key={i}>- {v}</div>) : (sectionEdit.value || "Empty")}
         </div>
         {!sectionEditMode ? (<>
-          <input value={sectionInstruction} onChange={e => setSectionInstruction(e.target.value)} onKeyDown={e => { if (e.key === "Enter") handleSectionRewrite(); if (e.key === "Escape") setSectionEdit(null); }} placeholder="e.g. Make these more specific to the client's industry" style={{ ...inputSt, fontSize: 12, marginBottom: 6 }} autoFocus />
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={handleSectionRewrite} disabled={sectionRewriting || !sectionInstruction.trim()} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px", opacity: (sectionRewriting || !sectionInstruction.trim()) ? 0.5 : 1 }}>{sectionRewriting ? "Rewriting..." : "Rewrite"}</button>
-            <button onClick={() => setSectionEdit(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+          <textarea value={sectionInstruction} onChange={e => setSectionInstruction(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setSectionEdit(null); }} placeholder="e.g. Make these more specific to the client's industry" rows={3} style={{ ...inputSt, fontSize: 13, marginBottom: 10, resize: "vertical" }} autoFocus />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleSectionRewrite} disabled={sectionRewriting || !sectionInstruction.trim()} style={{ ...btnPrimary, opacity: (sectionRewriting || !sectionInstruction.trim()) ? 0.5 : 1 }}>{sectionRewriting ? "Rewriting..." : "Rewrite"}</button>
+            {isMotivator && <button onClick={() => { handleSectionRewrite().then(() => { if (window.confirm("Motivators updated. Regenerate the corresponding video scripts?")) handleRegenerateFromMotivators(); }); }} disabled={sectionRewriting || !sectionInstruction.trim()} style={{ ...btnSecondary, opacity: (sectionRewriting || !sectionInstruction.trim()) ? 0.5 : 1 }}>Rewrite + Regenerate Scripts</button>}
+            <button onClick={() => setSectionEdit(null)} style={btnSecondary}>Cancel</button>
           </div>
         </>) : (<>
-          <textarea value={sectionEditText} onChange={e => setSectionEditText(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setSectionEdit(null); }} rows={6} style={{ ...inputSt, fontSize: 12, marginBottom: 6, resize: "vertical", minHeight: 80 }} autoFocus />
-          <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 6 }}>{Array.isArray(sectionEdit.value) ? "One item per line" : ""}</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={handleSectionSave} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px" }}>Save</button>
-            <button onClick={() => setSectionEdit(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
+          <textarea value={sectionEditText} onChange={e => setSectionEditText(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setSectionEdit(null); }} rows={8} style={{ ...inputSt, fontSize: 13, marginBottom: 6, resize: "vertical", minHeight: 120 }} autoFocus />
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>{Array.isArray(sectionEdit.value) ? "One item per line" : ""}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleSectionSave} style={btnPrimary}>Save</button>
+            {isMotivator && <button onClick={() => { handleSectionSave(); if (window.confirm("Motivators updated. Regenerate the corresponding video scripts?")) handleRegenerateFromMotivators(); }} style={btnSecondary}>Save + Regenerate Scripts</button>}
+            <button onClick={() => setSectionEdit(null)} style={btnSecondary}>Cancel</button>
           </div>
         </>)}
-      </div>
+      </EditModal>
+    );
+  }
+
+  // ─── Render cell edit modal ───
+  function renderCellModal() {
+    if (!rewriteCell || !activeProject) return null;
+    const p = activeProject;
+    const isRow = rewriteCell.column === "_row";
+    const row = p.scriptTable?.find(r => (r.id || r.videoName) === rewriteCell.cellId);
+    const colLabel = isRow ? `Row: ${rewriteCell.cellId}` : SCRIPT_COLUMNS.find(c => c.key === rewriteCell.column)?.label || rewriteCell.column;
+    const fbKey = isRow ? `${rewriteCell.cellId}__row` : `${rewriteCell.cellId}_${rewriteCell.column}`;
+    const clientFb = p.clientFeedback?.[fbKey];
+    const currentVal = isRow ? "" : (row?.[rewriteCell.column] || "");
+
+    return (
+      <EditModal title={isRow ? `Edit Video: ${rewriteCell.cellId}` : `Edit: ${colLabel}`} onClose={() => setRewriteCell(null)}>
+        {clientFb && <div style={{ fontSize: 12, color: "#F59E0B", marginBottom: 12, padding: "8px 12px", background: "rgba(245,158,11,0.1)", borderRadius: 6 }}>Client feedback: {clientFb.text}</div>}
+        {!isRow && currentVal && (
+          <div style={{ marginBottom: 12, padding: "10px 14px", background: "var(--bg)", borderRadius: 6, fontSize: 12, color: "var(--muted)", maxHeight: 120, overflow: "auto" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, textTransform: "uppercase" }}>Current</div>
+            {currentVal}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 2, marginBottom: 12, background: "var(--bg)", borderRadius: 6, padding: 3, width: "fit-content" }}>
+          <button onClick={() => setEditMode(false)} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: !editMode ? "var(--accent)" : "transparent", color: !editMode ? "#fff" : "var(--muted)" }}>AI Rewrite</button>
+          {!isRow && <button onClick={() => setEditMode(true)} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: editMode ? "var(--accent)" : "transparent", color: editMode ? "#fff" : "var(--muted)" }}>Manual Edit</button>}
+        </div>
+        {!editMode ? (<>
+          <textarea value={rewriteInstruction} onChange={e => setRewriteInstruction(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setRewriteCell(null); }} placeholder={isRow ? "e.g. Rework this entire ad to be more confrontational" : "e.g. Make it more confrontational"} rows={3} style={{ ...inputSt, fontSize: 13, marginBottom: 10, resize: "vertical" }} autoFocus />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleRewrite} disabled={rewriting || !rewriteInstruction.trim()} style={{ ...btnPrimary, opacity: (rewriting || !rewriteInstruction.trim()) ? 0.5 : 1 }}>{rewriting ? "Rewriting..." : (isRow ? "Rewrite Row" : "Rewrite")}</button>
+            <button onClick={() => setRewriteCell(null)} style={btnSecondary}>Cancel</button>
+          </div>
+        </>) : (<>
+          <textarea value={editText} onChange={e => setEditText(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setRewriteCell(null); }} rows={6} style={{ ...inputSt, fontSize: 13, marginBottom: 10, resize: "vertical", minHeight: 120 }} autoFocus />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleManualEdit} style={btnPrimary}>Save</button>
+            <button onClick={() => setRewriteCell(null)} style={btnSecondary}>Cancel</button>
+          </div>
+        </>)}
+      </EditModal>
     );
   }
 
@@ -536,6 +627,10 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
           </div>
         </div>
 
+        {/* Modals */}
+        {renderSectionModal()}
+        {rewriteCell && renderCellModal()}
+
         <div style={{ padding: "24px 28px", maxWidth: 1400 }}>
 
           {/* Section 1: Transcript Input */}
@@ -608,7 +703,6 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     ) : (
                       <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5 }}>{sec.value || ""}</div>
                     )}
-                    {sectionEdit?.path === sec.path && <div onClick={e => e.stopPropagation()}>{renderSectionPanel()}</div>}
                   </div>
                 ))}
               </div>
@@ -626,7 +720,6 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                         <ul style={{ margin: 0, paddingLeft: 16, fontSize: 13, color: "var(--fg)", lineHeight: 1.6 }}>
                           {(p.motivators[type] || []).map((m, i) => <li key={i}>{m}</li>)}
                         </ul>
-                        {isEditing && <div onClick={e => e.stopPropagation()}>{renderSectionPanel()}</div>}
                       </div>
                     );
                   })}
@@ -739,69 +832,6 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                                     <option value="triedBefore">Tried Before</option>
                                   </select>
                                 )}
-                                {isActive && (
-                                  <div
-                                    onClick={e => e.stopPropagation()}
-                                    style={{
-                                      marginTop: 8, padding: 10, background: "var(--card)",
-                                      border: "1px solid var(--accent)", borderRadius: 8,
-                                      boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-                                    }}
-                                  >
-                                    {/* Mode toggle */}
-                                    <div style={{ display: "flex", gap: 2, marginBottom: 8, background: "var(--bg)", borderRadius: 4, padding: 2, width: "fit-content" }}>
-                                      <button onClick={() => setEditMode(false)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: !editMode ? "var(--accent)" : "transparent", color: !editMode ? "#fff" : "var(--muted)" }}>AI Rewrite</button>
-                                      <button onClick={() => setEditMode(true)} style={{ padding: "3px 8px", borderRadius: 3, border: "none", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: editMode ? "var(--accent)" : "transparent", color: editMode ? "#fff" : "var(--muted)" }}>Manual Edit</button>
-                                    </div>
-                                    {!editMode ? (<>
-                                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Rewrite instruction:</div>
-                                      <input
-                                        autoFocus
-                                        value={rewriteInstruction}
-                                        onChange={e => setRewriteInstruction(e.target.value)}
-                                        onKeyDown={e => { if (e.key === "Enter") handleRewrite(); if (e.key === "Escape") setRewriteCell(null); }}
-                                        placeholder="e.g. Make it more confrontational"
-                                        style={{ ...inputSt, fontSize: 12, marginBottom: 6 }}
-                                      />
-                                      <div style={{ display: "flex", gap: 6 }}>
-                                        <button onClick={handleRewrite} disabled={rewriting || !rewriteInstruction.trim()} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px", opacity: (rewriting || !rewriteInstruction.trim()) ? 0.5 : 1 }}>{rewriting ? "Rewriting..." : "Rewrite"}</button>
-                                        <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
-                                      </div>
-                                    </>) : (<>
-                                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Edit text directly:</div>
-                                      <textarea
-                                        autoFocus
-                                        value={editText}
-                                        onChange={e => setEditText(e.target.value)}
-                                        onKeyDown={e => { if (e.key === "Escape") setRewriteCell(null); }}
-                                        rows={4}
-                                        style={{ ...inputSt, fontSize: 12, marginBottom: 6, resize: "vertical", minHeight: 60 }}
-                                      />
-                                      <div style={{ display: "flex", gap: 6 }}>
-                                        <button onClick={handleManualEdit} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px" }}>Save</button>
-                                        <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
-                                      </div>
-                                    </>)}
-                                  </div>
-                                )}
-                                {isRowActive && (
-                                  <div onClick={e => e.stopPropagation()} style={{ marginTop: 8, padding: 10, background: "var(--card)", border: "1px solid var(--accent)", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}>
-                                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>Rewrite instruction for entire row:</div>
-                                    {clientFb && <div style={{ fontSize: 10, color: "#F59E0B", marginBottom: 6, padding: "4px 8px", background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>Client feedback: {clientFb.text}</div>}
-                                    <input
-                                      autoFocus
-                                      value={rewriteInstruction}
-                                      onChange={e => setRewriteInstruction(e.target.value)}
-                                      onKeyDown={e => { if (e.key === "Escape") setRewriteCell(null); }}
-                                      placeholder="e.g. Rework this entire ad to be more confrontational"
-                                      style={{ ...inputSt, fontSize: 12, marginBottom: 6 }}
-                                    />
-                                    <div style={{ display: "flex", gap: 6 }}>
-                                      <button onClick={() => { /* TODO: row-level rewrite via API */ alert("Row rewrite coming soon — use individual cells for now"); }} disabled={!rewriteInstruction.trim()} style={{ ...btnPrimary, fontSize: 11, padding: "4px 10px", opacity: !rewriteInstruction.trim() ? 0.5 : 1 }}>Rewrite Row</button>
-                                      <button onClick={() => setRewriteCell(null)} style={{ ...NB, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
-                                    </div>
-                                  </div>
-                                )}
                               </td>
                             );
                           })}
@@ -816,6 +846,35 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
               </div>
               <div style={{ marginTop: 12 }}>
                 <button onClick={() => { const num = (p.scriptTable?.length || 0) + 1; const newRow = { id: `video-${Date.now()}`, videoName: `Video ${num}`, motivatorType: "toward", audienceType: "problemAware", hook: "", explainThePain: "", results: "", theOffer: "", whyTheOffer: "", cta: "", metaAdHeadline: "", metaAdCopy: "" }; fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, [...(p.scriptTable || []), newRow]); fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString()); }} style={btnSecondary}>+ Add Video</button>
+              </div>
+            </div>
+          )}
+
+          {/* Feedback Checklist */}
+          {p.clientFeedback && Object.keys(p.clientFeedback).length > 0 && (
+            <div style={{ marginBottom: 32 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 12 }}>
+                Client Feedback ({Object.values(p.clientFeedback).filter(f => f && !f.resolved).length} outstanding)
+              </h3>
+              <div style={{ display: "grid", gap: 6 }}>
+                {Object.entries(p.clientFeedback).sort(([, a], [, b]) => (a.resolved ? 1 : 0) - (b.resolved ? 1 : 0)).map(([key, fb]) => {
+                  if (!fb || !fb.text) return null;
+                  const colLabel = fb.column === "_row" ? "Whole video" : fb.column === "section" ? "Section" : (SCRIPT_COLUMNS.find(c => c.key === fb.column)?.label || fb.column);
+                  return (
+                    <div key={key} style={{ padding: "10px 14px", background: fb.resolved ? "var(--bg)" : "var(--card)", border: `1px solid ${fb.resolved ? "var(--border)" : "rgba(245,158,11,0.3)"}`, borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 10, opacity: fb.resolved ? 0.6 : 1 }}>
+                      <input type="checkbox" checked={!!fb.resolved} onChange={e => { fbSet(`/preproduction/metaAds/${p.id}/clientFeedback/${key}/resolved`, e.target.checked); fbSet(`/preproduction/metaAds/${p.id}/clientFeedback/${key}/resolvedAt`, e.target.checked ? new Date().toISOString() : null); }} style={{ marginTop: 3, cursor: "pointer", accentColor: "var(--accent)" }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 2 }}>{fb.text}</div>
+                        <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                          {fb.cellId && <span>{fb.cellId}</span>}
+                          {colLabel && <span> / {colLabel}</span>}
+                          {fb.submittedAt && <span> / {new Date(fb.submittedAt).toLocaleDateString("en-AU")}</span>}
+                        </div>
+                      </div>
+                      {fb.resolved && <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 600 }}>Resolved</span>}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
