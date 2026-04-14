@@ -111,29 +111,38 @@ export default async function handler(req, res) {
     }
 
     // --- 2. DELIVERIES ---
-    const delId = "del-" + Date.now();
-    const newDelivery = {
-      id: delId,
-      clientName: companyName,
-      logoUrl: "",
-      notes: "",
-      videos: [],
-    };
-    // Add placeholder videos based on numberOfVideos
-    const numVids = parseInt(numberOfVideos) || 0;
-    if (numVids > 0) {
-      for (let i = 0; i < numVids; i++) {
-        newDelivery.videos.push({
-          id: `vid-${Date.now()}-${i}`,
-          name: `Video ${i + 1}:`,
-          viewixStatus: "In Development",
-          revision1: "",
-          revision2: "",
-        });
+    // Meta Ads packages skip delivery creation here — delivery is auto-created
+    // when the preproduction scripts are approved in the dashboard.
+    const metaAdsTiers = ["standard", "premium", "deluxe"];
+    const isMetaAds = metaAdsTiers.some(t => (videoType || "").toLowerCase().includes(t));
+
+    if (!isMetaAds) {
+      const delId = "del-" + Date.now();
+      const newDelivery = {
+        id: delId,
+        clientName: companyName,
+        logoUrl: "",
+        notes: "",
+        videos: [],
+      };
+      // Add placeholder videos based on numberOfVideos
+      const numVids = parseInt(numberOfVideos) || 0;
+      if (numVids > 0) {
+        for (let i = 0; i < numVids; i++) {
+          newDelivery.videos.push({
+            id: `vid-${Date.now()}-${i}`,
+            name: `Video ${i + 1}:`,
+            viewixStatus: "In Development",
+            revision1: "",
+            revision2: "",
+          });
+        }
       }
+      await fbSet(`/deliveries/${delId}`, newDelivery);
+      results.delivery = "created";
+    } else {
+      results.delivery = "deferred to preproduction approval";
     }
-    await fbSet(`/deliveries/${delId}`, newDelivery);
-    results.delivery = "created";
 
     // --- 3. SHERPAS (clients) ---
     const clients = (await fbGet("/clients")) || {};
@@ -161,11 +170,10 @@ export default async function handler(req, res) {
     }
 
     // --- 4. PREPRODUCTION ---
-    const metaAdsTiers = ["standard", "premium", "deluxe"];
     const socialRetainerTiers = ["starter pack", "brand builder", "market leader", "market dominator"];
     const dealTypeLower = (videoType || "").toLowerCase();
 
-    if (metaAdsTiers.some(t => dealTypeLower.includes(t))) {
+    if (isMetaAds) {
       const projectId = `meta_${Date.now()}`;
       const tier = metaAdsTiers.find(t => dealTypeLower.includes(t));
       await fbSet(`/preproduction/metaAds/${projectId}`, {
