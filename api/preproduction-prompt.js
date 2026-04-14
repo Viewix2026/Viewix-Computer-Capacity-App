@@ -8,9 +8,12 @@ const PACKAGE_CONFIGS = {
   deluxe:   { motivatorsPerType: 5, hooks: ["problemAware", "problemUnaware"], totalAds: 30 },
 };
 
-function buildSystemPrompt({ packageTier, companyName }) {
+function buildSystemPrompt({ packageTier, companyName, promptLearnings }) {
   const config = PACKAGE_CONFIGS[packageTier] || PACKAGE_CONFIGS.standard;
   const isDeluxe = packageTier === "deluxe";
+  const learningsBlock = promptLearnings && promptLearnings.length > 0
+    ? `\n─────────────────────────────────\nLEARNINGS FROM PAST PROJECTS\n─────────────────────────────────\n\nThese rules are derived from patterns in past client feedback and producer edits. Follow them unless they directly conflict with the transcript content.\n\n${promptLearnings.map((l, i) => `${i + 1}. ${l}`).join("\n")}\n`
+    : "";
   const hookDesc = isDeluxe
     ? "TWO hooks per ad: one for Problem Aware (PA) customers and one for Problem Unaware (PU) customers. This doubles the row count."
     : "ONE hook per ad, targeting Problem Aware (PA) customers only.";
@@ -215,7 +218,7 @@ Things They've Tried Before — Language Style
 - Reset expectations. Lower the hype, raise the credibility. Calm, confident, matter-of-fact tone. Examples: no silver bullets, here's what actually changes, this works when you apply it consistently.
 
 In the Things They've Tried Before scripts specifically, where the onboarding call provides data on speed of delivery, use it to contrast against the slower alternative being addressed. Speed is a value driver. Name it plainly rather than implying it.
-
+${learningsBlock}
 ─────────────────────────────────
 OUTPUT FORMAT
 ─────────────────────────────────

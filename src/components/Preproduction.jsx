@@ -105,11 +105,13 @@ export function Preproduction() {
   const [manualCompany, setManualCompany] = useState("");
   const [manualTier, setManualTier] = useState("standard");
   const [accounts, setAccounts] = useState({});
+  const [feedbackLog, setFeedbackLog] = useState({});
+  const [promptLearnings, setPromptLearnings] = useState({});
+  const [newLearning, setNewLearning] = useState("");
 
   // Firebase listeners
   useEffect(() => {
-    let unsub1 = () => {};
-    let unsub2 = () => {};
+    let unsub1 = () => {}, unsub2 = () => {}, unsub3 = () => {}, unsub4 = () => {};
     onFB(() => {
       unsub1 = fbListen("/preproduction/metaAds", (data) => {
         setProjects(data || {});
@@ -117,8 +119,14 @@ export function Preproduction() {
       unsub2 = fbListen("/accounts", (data) => {
         setAccounts(data || {});
       });
+      unsub3 = fbListen("/preproduction/feedbackLog", (data) => {
+        setFeedbackLog(data || {});
+      });
+      unsub4 = fbListen("/preproduction/promptLearnings", (data) => {
+        setPromptLearnings(data || {});
+      });
     });
-    return () => { unsub1(); unsub2(); };
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, []);
 
   const projectList = Object.values(projects)
@@ -228,8 +236,20 @@ export function Preproduction() {
     const p = activeProject;
     const rowIndex = p.scriptTable?.findIndex(r => (r.id || r.videoName) === rewriteCell.cellId);
     if (rowIndex === -1 || rowIndex == null) return;
+    const prevValue = p.scriptTable[rowIndex]?.[rewriteCell.column] || "";
     fbSet(`/preproduction/metaAds/${p.id}/scriptTable/${rowIndex}/${rewriteCell.column}`, editText);
     fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString());
+    // Log to central feedback log
+    fbSet(`/preproduction/feedbackLog/me_${Date.now()}`, {
+      type: "manualEdit",
+      projectId: p.id,
+      companyName: p.companyName || "",
+      cellId: rewriteCell.cellId,
+      column: rewriteCell.column,
+      previousValue: prevValue,
+      newValue: editText,
+      timestamp: new Date().toISOString(),
+    });
     setRewriteCell(null);
     setRewriteInstruction("");
     setEditText("");
@@ -815,6 +835,15 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 color: subTab === "socialOrganic" ? "#fff" : "var(--muted)",
               }}
             >Social Media Organic</button>
+            <button
+              onClick={() => setSubTab("learnings")}
+              style={{
+                padding: "5px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", fontFamily: "inherit",
+                background: subTab === "learnings" ? "var(--accent)" : "transparent",
+                color: subTab === "learnings" ? "#fff" : "var(--muted)",
+              }}
+            >Learnings</button>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -869,6 +898,80 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             <div style={{ fontSize: 32, marginBottom: 12 }}>&#128196;</div>
             <div style={{ fontSize: 14 }}>Social Media Organic</div>
             <div style={{ fontSize: 12, marginTop: 4 }}>Coming soon</div>
+          </div>
+        )}
+
+        {/* Learnings tab (founders only) */}
+        {subTab === "learnings" && (
+          <div>
+            {/* Active prompt learnings */}
+            <div style={{ marginBottom: 24 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 12 }}>Active Prompt Learnings</h3>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>These rules are injected into every new script generation to improve output quality over time.</div>
+              <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+                {Object.entries(promptLearnings).filter(([, l]) => l && l.active).map(([id, l]) => (
+                  <div key={id} style={{ padding: "10px 14px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 13, color: "var(--fg)" }}>{l.rule}</span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => fbSet(`/preproduction/promptLearnings/${id}/active`, false)} style={{ ...NB, fontSize: 10, padding: "3px 8px" }}>Disable</button>
+                      <button onClick={() => { if (window.confirm("Delete this learning?")) fbSet(`/preproduction/promptLearnings/${id}`, null); }} style={{ background: "none", border: "none", color: "#5A6B85", cursor: "pointer", fontSize: 12 }}>x</button>
+                    </div>
+                  </div>
+                ))}
+                {Object.values(promptLearnings).filter(l => l && l.active).length === 0 && (
+                  <div style={{ padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>No active learnings yet. Add one below or promote from the feedback log.</div>
+                )}
+              </div>
+              {/* Add new learning */}
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={newLearning} onChange={e => setNewLearning(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newLearning.trim()) { fbSet(`/preproduction/promptLearnings/pl_${Date.now()}`, { rule: newLearning.trim(), active: true, createdAt: new Date().toISOString() }); setNewLearning(""); } }} placeholder="Add a learning, e.g. 'For Refined brands, reduce hook aggression by 20%'" style={{ ...inputSt, flex: 1 }} />
+                <button onClick={() => { if (!newLearning.trim()) return; fbSet(`/preproduction/promptLearnings/pl_${Date.now()}`, { rule: newLearning.trim(), active: true, createdAt: new Date().toISOString() }); setNewLearning(""); }} disabled={!newLearning.trim()} style={{ ...btnPrimary, opacity: !newLearning.trim() ? 0.5 : 1 }}>Add Learning</button>
+              </div>
+              {/* Disabled learnings */}
+              {Object.entries(promptLearnings).filter(([, l]) => l && !l.active).length > 0 && (
+                <details style={{ marginTop: 12 }}>
+                  <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer" }}>Disabled learnings ({Object.entries(promptLearnings).filter(([, l]) => l && !l.active).length})</summary>
+                  <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                    {Object.entries(promptLearnings).filter(([, l]) => l && !l.active).map(([id, l]) => (
+                      <div key={id} style={{ padding: "8px 12px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between", opacity: 0.6 }}>
+                        <span style={{ fontSize: 12, color: "var(--muted)" }}>{l.rule}</span>
+                        <button onClick={() => fbSet(`/preproduction/promptLearnings/${id}/active`, true)} style={{ ...NB, fontSize: 10, padding: "3px 8px" }}>Re-enable</button>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+
+            {/* Feedback log */}
+            <div>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 12 }}>Feedback Log</h3>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>All client feedback and producer edits across projects. Use this to identify patterns and create learnings.</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {Object.entries(feedbackLog).sort(([, a], [, b]) => (b.timestamp || "").localeCompare(a.timestamp || "")).slice(0, 50).map(([id, entry]) => {
+                  const typeColors = { clientFeedback: { bg: "rgba(245,158,11,0.1)", fg: "#F59E0B", label: "Client" }, rewrite: { bg: "rgba(59,130,246,0.1)", fg: "#3B82F6", label: "AI Rewrite" }, manualEdit: { bg: "rgba(139,92,246,0.1)", fg: "#8B5CF6", label: "Manual" } };
+                  const tc = typeColors[entry.type] || typeColors.manualEdit;
+                  return (
+                    <div key={id} style={{ padding: "10px 14px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 3, background: tc.bg, color: tc.fg }}>{tc.label}</span>
+                        <span style={{ fontSize: 11, color: "var(--fg)", fontWeight: 600 }}>{entry.companyName}</span>
+                        <span style={{ fontSize: 10, color: "var(--muted)" }}>{entry.column}{entry.cellId ? ` / ${entry.cellId}` : ""}</span>
+                        <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: "auto" }}>{entry.timestamp ? new Date(entry.timestamp).toLocaleDateString("en-AU") : ""}</span>
+                      </div>
+                      {entry.instruction && <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 4 }}><strong>Instruction:</strong> {entry.instruction}</div>}
+                      {entry.text && <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 4 }}><strong>Feedback:</strong> {entry.text}</div>}
+                      {entry.previousValue && <div style={{ fontSize: 11, color: "var(--muted)" }}>Was: {entry.previousValue.substring(0, 100)}{entry.previousValue.length > 100 ? "..." : ""}</div>}
+                      {entry.newValue && <div style={{ fontSize: 11, color: "var(--accent)" }}>Now: {entry.newValue.substring(0, 100)}{entry.newValue.length > 100 ? "..." : ""}</div>}
+                      <button onClick={() => { const rule = window.prompt("Create a learning from this feedback:", entry.instruction || entry.text || ""); if (rule) fbSet(`/preproduction/promptLearnings/pl_${Date.now()}`, { rule, active: true, createdAt: new Date().toISOString(), sourceLogId: id }); }} style={{ ...NB, fontSize: 10, padding: "3px 8px", marginTop: 6 }}>Promote to Learning</button>
+                    </div>
+                  );
+                })}
+                {Object.keys(feedbackLog).length === 0 && (
+                  <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>No feedback logged yet. Feedback will appear here as clients and producers interact with scripts.</div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

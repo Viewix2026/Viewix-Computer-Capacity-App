@@ -133,8 +133,12 @@ export default async function handler(req, res) {
         updatedAt: new Date().toISOString(),
       });
 
+      // Fetch prompt learnings (curated rules from past feedback)
+      const learningsData = await fbGet("/preproduction/promptLearnings");
+      const promptLearnings = learningsData ? Object.values(learningsData).filter(l => l && l.active && l.rule).map(l => l.rule) : [];
+
       // Build prompts
-      const systemPrompt = buildSystemPrompt({ packageTier, companyName });
+      const systemPrompt = buildSystemPrompt({ packageTier, companyName, promptLearnings });
       const userMessage = `Here is the onboarding call transcript for ${companyName}:\n\n${resolvedTranscript}`;
 
       // Call Claude (maxDuration: 60 in vercel.json allows up to 60s)
@@ -254,6 +258,20 @@ export default async function handler(req, res) {
           const history = project.rewriteHistory || [];
           history.push(historyEntry);
           await fbSet(`/preproduction/metaAds/${projectId}/rewriteHistory`, history);
+
+          // Log to central feedback log for prompt refinement
+          const logId = `rw_${Date.now()}`;
+          await fbSet(`/preproduction/feedbackLog/${logId}`, {
+            type: "rewrite",
+            projectId,
+            companyName: project.companyName || "",
+            cellId,
+            column,
+            instruction,
+            previousValue: currentValue || "",
+            newValue,
+            timestamp: new Date().toISOString(),
+          });
 
           await fbPatch(`/preproduction/metaAds/${projectId}`, {
             updatedAt: new Date().toISOString(),

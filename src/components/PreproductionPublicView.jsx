@@ -80,11 +80,22 @@ export function PreproductionPublicView() {
     const key = feedbackCell.column === "_row"
       ? `${feedbackCell.cellId}__row`
       : `${feedbackCell.cellId}_${feedbackCell.column}`;
+    const now = new Date().toISOString();
     fbSet(`/preproduction/metaAds/${projectId}/clientFeedback/${key}`, {
       text: feedbackText.trim(),
-      submittedAt: new Date().toISOString(),
+      submittedAt: now,
       cellId: feedbackCell.cellId,
       column: feedbackCell.column,
+    });
+    // Log to central feedback log for prompt refinement
+    fbSet(`/preproduction/feedbackLog/cf_${Date.now()}`, {
+      type: "clientFeedback",
+      projectId,
+      companyName: project?.companyName || "",
+      cellId: feedbackCell.cellId,
+      column: feedbackCell.column,
+      text: feedbackText.trim(),
+      timestamp: now,
     });
     setFeedbackCell(null);
     setFeedbackText("");
