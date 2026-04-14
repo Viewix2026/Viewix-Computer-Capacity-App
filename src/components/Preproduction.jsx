@@ -124,22 +124,30 @@ export function Preproduction() {
   async function handleProcess() {
     if (!activeProject) return;
     const text = transcriptText.trim();
-    if (!text) return;
+    const url = docUrl.trim();
+    if (!text && !url) return;
 
     setProcessing(true);
     setProcessError(null);
 
     try {
+      const body = {
+        action: "generate",
+        projectId: activeProject.id,
+        packageTier: activeProject.packageTier,
+        companyName: activeProject.companyName,
+      };
+      // Prefer pasted transcript; fall back to Google Doc URL
+      if (text) {
+        body.transcript = text;
+      } else {
+        body.googleDocUrl = url;
+      }
+
       const resp = await fetch("/api/preproduction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "generate",
-          projectId: activeProject.id,
-          transcript: text,
-          packageTier: activeProject.packageTier,
-          companyName: activeProject.companyName,
-        }),
+        body: JSON.stringify(body),
       });
 
       const data = await resp.json();
@@ -147,6 +155,7 @@ export function Preproduction() {
 
       // Firebase listener will pick up the new data automatically
       setTranscriptText("");
+      setDocUrl("");
     } catch (e) {
       setProcessError(e.message);
     } finally {
@@ -326,16 +335,18 @@ export function Preproduction() {
                   style={{ ...inputSt, minHeight: 150, resize: "vertical" }}
                 />
                 <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
-                  <input
-                    value={docUrl}
-                    onChange={e => setDocUrl(e.target.value)}
-                    placeholder="Or paste Google Doc URL (optional)"
-                    style={{ ...inputSt, flex: 1 }}
-                  />
+                  <div style={{ flex: 1 }}>
+                    <input
+                      value={docUrl}
+                      onChange={e => setDocUrl(e.target.value)}
+                      placeholder="Or paste Google Doc URL (must be set to 'Anyone with the link can view')"
+                      style={{ ...inputSt }}
+                    />
+                  </div>
                   <button
                     onClick={handleProcess}
-                    disabled={processing || !transcriptText.trim()}
-                    style={{ ...btnPrimary, opacity: (processing || !transcriptText.trim()) ? 0.5 : 1 }}
+                    disabled={processing || (!transcriptText.trim() && !docUrl.trim())}
+                    style={{ ...btnPrimary, opacity: (processing || (!transcriptText.trim() && !docUrl.trim())) ? 0.5 : 1 }}
                   >
                     {processing ? "Processing..." : "Process"}
                   </button>

@@ -85,14 +85,46 @@ export default async function handler(req, res) {
   try {
     // ─── GENERATE: Full script generation from transcript ───
     if (action === "generate") {
-      const { projectId, transcript, packageTier, companyName } = req.body;
+      const { projectId, transcript, googleDocUrl, packageTier, companyName } = req.body;
 
-      if (!projectId || !transcript || !packageTier || !companyName) {
-        return res.status(400).json({ error: "Missing required fields: projectId, transcript, packageTier, companyName" });
+      if (!projectId || !packageTier || !companyName) {
+        return res.status(400).json({ error: "Missing required fields: projectId, packageTier, companyName" });
+      }
+
+      if (!transcript && !googleDocUrl) {
+        return res.status(400).json({ error: "Either transcript or googleDocUrl is required" });
       }
 
       if (!PACKAGE_CONFIGS[packageTier]) {
         return res.status(400).json({ error: `Invalid packageTier: ${packageTier}. Must be standard, premium, or deluxe` });
+      }
+
+      // Resolve transcript: use pasted text or fetch from Google Doc
+      let resolvedTranscript = transcript;
+      let transcriptSource = "manual";
+
+      if (!resolvedTranscript && googleDocUrl) {
+        // Extract doc ID from Google Doc URL
+        const docIdMatch = googleDocUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (!docIdMatch) {
+          return res.status(400).json({ error: "Invalid Google Doc URL. Expected format: https://docs.google.com/document/d/{docId}/..." });
+        }
+        const docId = docIdMatch[1];
+
+        try {
+          const docResp = await fetch(`https://docs.google.com/document/d/${docId}/export?format=txt`);
+          if (!docResp.ok) {
+            throw new Error(`Google Doc fetch failed (${docResp.status}). Make sure the doc is set to "Anyone with the link can view".`);
+          }
+          resolvedTranscript = await docResp.text();
+          transcriptSource = "googledoc";
+        } catch (docErr) {
+          return res.status(400).json({ error: docErr.message });
+        }
+
+        if (!resolvedTranscript || resolvedTranscript.trim().length < 50) {
+          return res.status(400).json({ error: "Google Doc appears empty or too short. Check the sharing settings." });
+        }
       }
 
       // Update status to processing
@@ -103,7 +135,7 @@ export default async function handler(req, res) {
 
       // Build prompts
       const systemPrompt = buildSystemPrompt({ packageTier, companyName });
-      const userMessage = `Here is the onboarding call transcript for ${companyName}:\n\n${transcript}`;
+      const userMessage = `Here is the onboarding call transcript for ${companyName}:\n\n${resolvedTranscript}`;
 
       // Call Claude (maxDuration: 60 in vercel.json allows up to 60s)
       const rawResponse = await callClaude(systemPrompt, userMessage, ANTHROPIC_KEY);
@@ -136,8 +168,9 @@ export default async function handler(req, res) {
         status: "review",
         updatedAt: now,
         transcript: {
-          source: "manual",
-          text: transcript,
+          source: transcriptSource,
+          googleDocUrl: googleDocUrl || null,
+          text: resolvedTranscript,
           addedAt: now,
         },
         brandAnalysis: parsed.brandAnalysis || null,
