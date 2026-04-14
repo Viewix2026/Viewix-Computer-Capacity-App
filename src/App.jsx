@@ -289,7 +289,7 @@ export default function App(){
       {isFounder&&<SideIcon icon="🧭" label="Buyer Journey" active={tool==="buyerjourney"} onClick={()=>setTool("buyerjourney")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
-      {(isFounder||role==="lead")&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
+      {(isFounder||role==="lead"||role==="editor")&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
@@ -668,7 +668,7 @@ export default function App(){
     </>)}
 
     {/* ═══ PREPRODUCTION ═══ */}
-    {tool==="preproduction"&&(isFounder||role==="lead")&&(<Preproduction/>)}
+    {tool==="preproduction"&&(isFounder||role==="lead"||role==="editor")&&(<Preproduction/>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}
@@ -682,6 +682,8 @@ export default function App(){
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(()=>{
       const activeDelivery=deliveries.find(d=>d.id===activeDeliveryId);
+
+      const getAcctLogo=(clientName)=>{if(!clientName)return null;const nameLC=clientName.toLowerCase();const match=Object.values(accounts).find(a=>a&&(a.companyName||"").toLowerCase()===nameLC);return match?.logoUrl||null;};
 
       const startImport=()=>{setImportMode(true);setImportLoading(true);fetchInProgressParents().then(items=>{setImportProjects(items);setImportLoading(false);}).catch(()=>setImportLoading(false));};
       const importProject=(proj)=>{
@@ -799,7 +801,7 @@ export default function App(){
               return(<div key={d.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"16px 20px",cursor:"pointer",transition:"all 0.15s"}} onClick={()=>setActiveDeliveryId(d.id)}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    {d.logoUrl&&<img src={d.logoUrl} alt="" style={{height:28,borderRadius:4,objectFit:"contain",background:"#fff",padding:3}}/>}
+                    {(getAcctLogo(d.clientName)||d.logoUrl)&&<img src={getAcctLogo(d.clientName)||d.logoUrl} alt="" onError={e=>{e.target.style.display="none";}} style={{height:28,borderRadius:4,objectFit:"contain",background:"#fff",padding:3}}/>}
                     <div>
                       <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{d.clientName}</div>
                       <div style={{fontSize:12,color:"var(--muted)"}}>{d.projectName} · {d.videos.length} video{d.videos.length!==1?"s":""}</div>

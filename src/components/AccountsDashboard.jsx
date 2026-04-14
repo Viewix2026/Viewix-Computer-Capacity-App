@@ -154,7 +154,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
     const id = "acct-" + Date.now();
     setAccounts(prev => ({
       ...prev,
-      [id]: { id, companyName: newName.trim(), attioId: "", accountManager: "", projectLead: "", partnershipType: "", lastContact: "", milestones: {} }
+      [id]: { id, companyName: newName.trim(), attioId: "", accountManager: "", projectLead: "", partnershipType: "", lastContact: "", milestones: {}, logoUrl: "" }
     }));
     setNewName("");
     setAdding(false);
@@ -182,7 +182,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
             const existing = Object.values(next).find(a => a.attioId === c.id);
             if (!existing) {
               const id = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
-              next[id] = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: c.videoType || "", lastContact: "", milestones: {} };
+              next[id] = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: c.videoType || "", lastContact: "", milestones: {}, logoUrl: "" };
               // Create sherpas client
               if (setClients && c.name) {
                 const nameLC = c.name.toLowerCase();
@@ -304,6 +304,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                   <th style={{ ...TH, position: "sticky", left: 160, zIndex: 10, background: "var(--card)", minWidth: 90, textAlign: "center" }}>Manager</th>
                   <th style={{ ...TH, position: "sticky", left: 250, zIndex: 10, background: "var(--card)", minWidth: 110, textAlign: "center" }}>Project Lead</th>
                   <th style={{ ...TH, minWidth: 130, textAlign: "center" }}>Partnership</th>
+                  <th style={{ ...TH, minWidth: 160, textAlign: "center" }}>Logo</th>
                   <th style={{ ...TH, minWidth: 100, textAlign: "center" }}>Last Contact</th>
                   {MILESTONE_DEFS.map(m => (
                     <th key={m.key} style={{ ...TH, minWidth: 130, textAlign: "center" }}>{m.label}</th>
@@ -317,7 +318,12 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                   const mc = MANAGER_COLORS[acct.accountManager] || { bg: "var(--bg)", color: "var(--muted)" };
                   return (
                     <tr key={acct.id}>
-                      <td style={{ ...TD, position: "sticky", left: 0, zIndex: 5, background: "var(--card)", fontWeight: 700, color: "var(--fg)" }}>{acct.companyName}</td>
+                      <td style={{ ...TD, position: "sticky", left: 0, zIndex: 5, background: "var(--card)", fontWeight: 700, color: "var(--fg)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          {acct.logoUrl && <img src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 3 }} />}
+                          {acct.companyName}
+                        </div>
+                      </td>
                       <td style={{ ...TD, position: "sticky", left: 160, zIndex: 5, background: "var(--card)", textAlign: "center" }}>
                         <select value={acct.accountManager || ""} onChange={e => updateAccount(acct.id, { accountManager: e.target.value })} style={{ ...selectSt, background: mc.bg, color: mc.color }}>
                           <option value="">Assign</option>
@@ -335,6 +341,9 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                           <option value="">Select</option>
                           {PARTNERSHIP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
+                      </td>
+                      <td style={{ ...TD }}>
+                        <input type="text" value={acct.logoUrl || ""} onChange={e => updateAccount(acct.id, { logoUrl: e.target.value })} placeholder="https://..." style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 11, outline: "none", width: "100%", fontFamily: "inherit" }} />
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>

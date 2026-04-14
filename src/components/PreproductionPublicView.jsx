@@ -30,6 +30,7 @@ export function PreproductionPublicView() {
   const [feedbackCell, setFeedbackCell] = useState(null); // { cellId, column } or { cellId, column: "_row" } for row feedback
   const [feedbackText, setFeedbackText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [accountLogo, setAccountLogo] = useState(null);
   const notifyTimer = useRef(null);
 
   const projectId = new URLSearchParams(window.location.search).get("p");
@@ -45,6 +46,21 @@ export function PreproductionPublicView() {
       });
     });
   }, [projectId]);
+
+  // Resolve account logo
+  useEffect(() => {
+    if (!project?.companyName) return;
+    let unsub = () => {};
+    onFB(() => {
+      unsub = fbListen("/accounts", (acctData) => {
+        if (!acctData) return;
+        const nameLC = project.companyName.toLowerCase();
+        const match = Object.values(acctData).find(a => a && (a.companyName || "").toLowerCase() === nameLC);
+        setAccountLogo(match?.logoUrl || null);
+      });
+    });
+    return () => unsub();
+  }, [project?.companyName]);
 
   // Send Slack notification 2 minutes after last feedback submission
   const scheduleNotify = () => {
@@ -104,6 +120,7 @@ export function PreproductionPublicView() {
       {/* Header */}
       <div style={{ padding: "24px 40px", borderBottom: "1px solid #1E2A3A", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {accountLogo && <img src={accountLogo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 40, borderRadius: 6, objectFit: "contain", background: "#fff", padding: 4 }} />}
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: "#E8ECF4" }}>{p.companyName}</div>
             <div style={{ fontSize: 13, color: "#5A6B85" }}>Meta Ads Script Review</div>

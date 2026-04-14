@@ -132,12 +132,13 @@ export function Preproduction() {
   const activeProject = activeProjectId ? projects[activeProjectId] : null;
 
   // Find project lead from accounts (match by attioCompanyId or company name)
-  const getProjectLead = (proj) => {
+  const findAccount = (proj) => {
     if (!proj) return null;
     const acctList = Object.values(accounts).filter(Boolean);
-    const match = acctList.find(a => (proj.attioCompanyId && a.attioId === proj.attioCompanyId) || (a.companyName || "").toLowerCase() === (proj.companyName || "").toLowerCase());
-    return match?.projectLead || null;
+    return acctList.find(a => (proj.attioCompanyId && a.attioId === proj.attioCompanyId) || (a.companyName || "").toLowerCase() === (proj.companyName || "").toLowerCase()) || null;
   };
+  const getProjectLead = (proj) => findAccount(proj)?.projectLead || null;
+  const getAccountLogo = (proj) => findAccount(proj)?.logoUrl || null;
 
   // ─── Process transcript ───
   async function handleProcess() {
@@ -471,6 +472,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => setActiveProjectId(null)} style={NB}>&larr; Back</button>
+            {getAccountLogo(p) && <img src={getAccountLogo(p)} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 32, borderRadius: 6, objectFit: "contain", background: "#fff", padding: 3 }} />}
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
             <PBadge text={p.packageTier} colors={TIER_COLORS[p.packageTier] || TIER_COLORS.standard} />
             <PBadge text={STATUS_LABELS[p.status] || p.status} colors={STATUS_COLORS[p.status] || STATUS_COLORS.draft} />
@@ -634,6 +636,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                           {col.label}
                         </th>
                       ))}
+                      <th style={{ padding: "10px 8px", borderBottom: "1px solid var(--border)", background: "var(--card)", width: 36 }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -684,6 +687,13 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                                   {clientFb && !isVideoName && <span title={`Client: ${clientFb.text}`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginTop: 4 }} />}
                                   <span>{row[col.key] || ""}</span>
                                 </div>
+                                {isVideoName && (
+                                  <select value={row.motivatorType || "toward"} onChange={e => { e.stopPropagation(); const updated = [...p.scriptTable]; updated[rowIdx] = { ...updated[rowIdx], motivatorType: e.target.value }; fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, updated); }} onClick={e => e.stopPropagation()} style={{ fontSize: 9, padding: "2px 4px", borderRadius: 3, border: `1px solid ${mc.border}`, background: mc.bg, color: mc.fg, fontWeight: 600, marginTop: 4, cursor: "pointer", display: "block" }}>
+                                    <option value="toward">Toward</option>
+                                    <option value="awayFrom">Away From</option>
+                                    <option value="triedBefore">Tried Before</option>
+                                  </select>
+                                )}
                                 {isActive && (
                                   <div
                                     onClick={e => e.stopPropagation()}
@@ -750,11 +760,17 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                               </td>
                             );
                           })}
+                          <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-light)", textAlign: "center", verticalAlign: "top" }}>
+                            <button onClick={e => { e.stopPropagation(); if (!window.confirm(`Delete "${row.videoName || "this video"}"?`)) return; const updated = p.scriptTable.filter((_, i) => i !== rowIdx); fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, updated); fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString()); setRewriteCell(null); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14, padding: "2px 6px" }} title="Delete video">x</button>
+                          </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <button onClick={() => { const num = (p.scriptTable?.length || 0) + 1; const newRow = { id: `video-${Date.now()}`, videoName: `Video ${num}`, motivatorType: "toward", audienceType: "problemAware", hook: "", explainThePain: "", results: "", theOffer: "", whyTheOffer: "", cta: "", metaAdHeadline: "", metaAdCopy: "" }; fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, [...(p.scriptTable || []), newRow]); fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString()); }} style={btnSecondary}>+ Add Video</button>
               </div>
             </div>
           )}
@@ -877,8 +893,9 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                   onMouseEnter={e => e.currentTarget.style.borderColor = "var(--accent)"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}
                 >
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>
-                    {p.companyName}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    {getAccountLogo(p) && <img src={getAccountLogo(p)} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 2 }} />}
+                    <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                     <PBadge text={p.packageTier} colors={TIER_COLORS[p.packageTier] || TIER_COLORS.standard} />
