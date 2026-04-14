@@ -120,7 +120,7 @@ export function Preproduction() {
 
   const activeProject = activeProjectId ? projects[activeProjectId] : null;
 
-  // ─── Process transcript (streaming to avoid Vercel timeout) ───
+  // ─── Process transcript ───
   async function handleProcess() {
     if (!activeProject) return;
     const text = transcriptText.trim();
@@ -142,34 +142,8 @@ export function Preproduction() {
         }),
       });
 
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({}));
-        throw new Error(errData.error || "Generation failed");
-      }
-
-      // Read SSE stream until complete
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            if (event.type === "error") throw new Error(event.error || "Generation failed");
-          } catch (e) {
-            if (e.message && e.message !== "Generation failed" && !e.message.includes("Unexpected")) throw e;
-          }
-        }
-      }
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Generation failed");
 
       // Firebase listener will pick up the new data automatically
       setTranscriptText("");

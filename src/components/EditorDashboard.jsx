@@ -24,6 +24,7 @@ export function EditorDashboard({embedded,onLogout}){
   const[adjustingTask,setAdjustingTask]=useState(null); // taskId being adjusted
   const[adjustMins,setAdjustMins]=useState("");
   const intervalRef=useRef(null);
+  const justStoppedRef=useRef({}); // guard: {taskId: timestamp} prevents listener from re-enabling stopped timers
   const today=todayKey();
 
   // Init Firebase and load editors
@@ -56,6 +57,9 @@ export function EditorDashboard({embedded,onLogout}){
         const{_running,...logs}=data;
         setTimeLogs(logs);
         if(_running&&_running.taskId&&_running.startedAt){
+          // Guard: don't re-enable a timer that was just stopped (within last 3 seconds)
+          const stoppedAt=justStoppedRef.current[_running.taskId];
+          if(stoppedAt&&(Date.now()-stoppedAt)<3000)return;
           setTimers(prev=>{
             if(prev[_running.taskId]?.running)return prev;
             return{...prev,[_running.taskId]:{running:true,elapsed:Math.floor((Date.now()-_running.startedAt)/1000),startedAt:_running.startedAt}};
@@ -115,17 +119,19 @@ export function EditorDashboard({embedded,onLogout}){
   const stopTimer=(taskId)=>{
     const t=timers[taskId];
     if(!t||!t.running)return;
+    // Set guard immediately to prevent listener from re-enabling this timer
+    justStoppedRef.current[taskId]=Date.now();
     const elapsed=Math.floor((Date.now()-t.startedAt)/1000);
     setTimers(prev=>({...prev,[taskId]:{running:false,elapsed:0,startedAt:null}}));
+    // Clear _running FIRST to prevent listener race condition
+    fbSet(`/timeLogs/${editorId}/${today}/_running`,null);
     const prevLog=timeLogs[taskId]||{};
     const prevSecs=typeof prevLog==="number"?prevLog:(prevLog.secs||0);
     const newTotal=prevSecs+elapsed;
     const task=tasks.find(t2=>t2.id===taskId);
     const category=categorizeContent(task?.parentName,task?.parentInfo?.type);
     const logData={secs:newTotal,name:task?.name||"",parentName:task?.parentName||"",stage:task?.stage||"",type:task?.parentInfo?.type||"",category:category};
-    const path=`/timeLogs/${editorId}/${today}/${taskId}`;
-    fbSet(path,logData);
-    fbSet(`/timeLogs/${editorId}/${today}/_running`,null);
+    fbSet(`/timeLogs/${editorId}/${today}/${taskId}`,logData);
     setTimeLogs(p=>({...p,[taskId]:logData}));
   };
 

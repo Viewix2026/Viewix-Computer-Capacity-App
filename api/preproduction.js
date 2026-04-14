@@ -2,7 +2,7 @@
 // Vercel Serverless Function: Preproduction AI pipeline
 // Actions: generate (full script), rewrite (single cell)
 // Uses Claude Opus 4.6 via Anthropic API with prompt caching
-// Generate uses streaming to avoid Vercel timeout on Hobby plan
+// Requires maxDuration: 60 in vercel.json (Hobby plan max)
 
 import { buildSystemPrompt, buildRewritePrompt, PACKAGE_CONFIGS } from "./preproduction-prompt.js";
 
@@ -31,7 +31,6 @@ async function fbPatch(path, data) {
   });
 }
 
-// Non-streaming call for short requests (rewrites)
 async function callClaude(systemPrompt, userMessage, apiKey) {
   const resp = await fetch(ANTHROPIC_API, {
     method: "POST",
@@ -63,74 +62,6 @@ async function callClaude(systemPrompt, userMessage, apiKey) {
   return data.content?.[0]?.text || "";
 }
 
-// Streaming call for long requests (generate) — keeps connection alive
-async function callClaudeStreaming(systemPrompt, userMessage, apiKey, res) {
-  const resp = await fetch(ANTHROPIC_API, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 16000,
-      stream: true,
-      system: [
-        {
-          type: "text",
-          text: systemPrompt,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [{ role: "user", content: userMessage }],
-    }),
-  });
-
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`Anthropic API error ${resp.status}: ${err}`);
-  }
-
-  // Set headers to keep Vercel connection alive via SSE
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  let fullText = "";
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const data = line.slice(6).trim();
-      if (data === "[DONE]") continue;
-
-      try {
-        const event = JSON.parse(data);
-        if (event.type === "content_block_delta" && event.delta?.text) {
-          fullText += event.delta.text;
-          // Send a heartbeat to keep the connection alive
-          res.write(`data: {"type":"progress","length":${fullText.length}}\n\n`);
-        }
-      } catch (e) {
-        // Skip unparseable lines
-      }
-    }
-  }
-
-  return fullText;
-}
-
 function parseJSON(raw) {
   let cleaned = raw.trim();
   if (cleaned.startsWith("```")) {
@@ -152,7 +83,7 @@ export default async function handler(req, res) {
   const { action } = req.body || {};
 
   try {
-    // ─── GENERATE: Full script generation from transcript (streaming) ───
+    // ─── GENERATE: Full script generation from transcript ───
     if (action === "generate") {
       const { projectId, transcript, packageTier, companyName } = req.body;
 
@@ -174,8 +105,8 @@ export default async function handler(req, res) {
       const systemPrompt = buildSystemPrompt({ packageTier, companyName });
       const userMessage = `Here is the onboarding call transcript for ${companyName}:\n\n${transcript}`;
 
-      // Call Claude with streaming to keep connection alive
-      const rawResponse = await callClaudeStreaming(systemPrompt, userMessage, ANTHROPIC_KEY, res);
+      // Call Claude (maxDuration: 60 in vercel.json allows up to 60s)
+      const rawResponse = await callClaude(systemPrompt, userMessage, ANTHROPIC_KEY);
 
       // Parse JSON response
       let parsed;
@@ -188,8 +119,7 @@ export default async function handler(req, res) {
           _rawResponse: rawResponse.substring(0, 5000),
           _parseError: parseErr.message,
         });
-        res.write(`data: ${JSON.stringify({ type: "error", error: "Failed to parse Claude response as JSON", detail: parseErr.message })}\n\n`);
-        return res.end();
+        return res.status(422).json({ error: "Failed to parse Claude response as JSON", detail: parseErr.message });
       }
 
       // Add IDs to script table rows
@@ -233,9 +163,7 @@ export default async function handler(req, res) {
         }
       }
 
-      // Send final result
-      res.write(`data: ${JSON.stringify({
-        type: "complete",
+      return res.status(200).json({
         success: true,
         projectId,
         status: "review",
@@ -244,11 +172,10 @@ export default async function handler(req, res) {
         motivators: parsed.motivators,
         visuals: parsed.visuals,
         scriptTable: parsed.scriptTable,
-      })}\n\n`);
-      return res.end();
+      });
     }
 
-    // ─── REWRITE: Targeted cell rewrite (non-streaming, fast) ───
+    // ─── REWRITE: Targeted cell rewrite ───
     if (action === "rewrite") {
       const { projectId, cellId, column, instruction, currentValue } = req.body;
 
