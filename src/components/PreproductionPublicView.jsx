@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { initFB, onFB, fbSet, fbListen } from "../firebase";
+import { initFB, onFB, fbSet, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 
 const MOTIVATOR_COLORS = {
@@ -39,7 +39,9 @@ export function PreproductionPublicView() {
     if (!projectId) return;
     document.title = "Viewix - Script Review";
     initFB();
-    onFB(() => {
+    onFB(async () => {
+      try { await signInAnonymouslyForPublic(); }
+      catch (e) { console.warn("Anonymous auth failed, continuing:", e.message); }
       fbListen(`/preproduction/metaAds/${projectId}`, (data) => {
         if (data) setProject(data);
         setLoading(false);

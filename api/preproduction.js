@@ -5,17 +5,24 @@
 // Requires maxDuration: 60 in vercel.json (Hobby plan max)
 
 import { buildSystemPrompt, buildRewritePrompt, PACKAGE_CONFIGS } from "./preproduction-prompt.js";
+import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-opus-4-6";
 
+// Firebase helpers: prefer admin SDK (bypasses security rules), fall back to REST
+// if FIREBASE_SERVICE_ACCOUNT env var isn't set yet (local dev / pre-rules deploy).
 async function fbGet(path) {
+  const { err } = getAdmin();
+  if (!err) return adminGet(path);
   const r = await fetch(`${FIREBASE_URL}${path}.json`);
   return r.json();
 }
 
 async function fbSet(path, data) {
+  const { err } = getAdmin();
+  if (!err) return adminSet(path, data);
   await fetch(`${FIREBASE_URL}${path}.json`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -24,6 +31,8 @@ async function fbSet(path, data) {
 }
 
 async function fbPatch(path, data) {
+  const { err } = getAdmin();
+  if (!err) return adminPatch(path, data);
   await fetch(`${FIREBASE_URL}${path}.json`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

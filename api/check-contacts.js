@@ -3,6 +3,8 @@
 // Runs daily at 8am AEST (10pm UTC previous day)
 // Env vars needed: SLACK_WEBHOOK_URL
 
+import { adminGet, getAdmin } from "./_fb-admin.js";
+
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
 const MANAGER_SLACK_IDS = {
@@ -31,9 +33,15 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "SLACK_WEBHOOK_URL not set" });
     }
 
-    // Read accounts from Firebase
-    const accountsRes = await fetch(`${FB_URL}/accounts.json`);
-    const accounts = await accountsRes.json();
+    // Read accounts from Firebase (prefer admin SDK, fall back to REST)
+    let accounts;
+    const { err: adminErr } = getAdmin();
+    if (!adminErr) {
+      accounts = await adminGet("/accounts");
+    } else {
+      const accountsRes = await fetch(`${FB_URL}/accounts.json`);
+      accounts = await accountsRes.json();
+    }
     if (!accounts) {
       return res.status(200).json({ message: "No accounts found" });
     }

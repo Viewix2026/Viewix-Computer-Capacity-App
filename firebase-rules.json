@@ -1,0 +1,31 @@
+{
+  "rules": {
+    ".read": "auth != null && auth.token.role != null",
+    ".write": "auth != null && auth.token.role != null",
+    "deliveries": {
+      "$deliveryId": {
+        ".read": "auth != null",
+        "videos": {
+          "$idx": {
+            "revision1": { ".write": "auth != null" },
+            "revision2": { ".write": "auth != null" }
+          }
+        }
+      }
+    },
+    "preproduction": {
+      "metaAds": {
+        "$projectId": {
+          ".read": "auth != null",
+          "clientFeedback": {
+            ".write": "auth != null"
+          }
+        }
+      }
+    },
+    "foundersData": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": "auth != null && auth.token.role == 'founders'"
+    }
+  }
+}

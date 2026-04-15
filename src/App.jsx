@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { initFB, onFB, fbSet, fbListen } from "./firebase";
+import { initFB, onFB, fbSet, fbListen, onAuthReady, signOutUser } from "./firebase";
 import { fetchMondayUsers, fetchActiveProjectCount, fetchInProgressParents } from "./monday";
 import {
   DEFAULT_MONDAY_EDITORS, CONTENT_CATEGORIES, CAT_COLORS,
@@ -134,11 +134,21 @@ export default function App(){
   const skipWrite=useRef(true);
   const skipRead=useRef(false);
 
-  // Firebase
+  // Session restore: if Firebase auth has a persisted user, restore the role immediately.
+  useEffect(()=>{
+    initFB();
+    onAuthReady(restoredRole=>{
+      if(restoredRole)setRole(restoredRole);
+    });
+  },[]);
+
+  // Firebase data listeners — gated on auth being ready so the root listener
+  // doesn't attach before the auth token is available (prevents listener lockout
+  // once security rules are applied).
   useEffect(()=>{
     initFB();
     const fallback=setTimeout(()=>{setLoading(false);skipWrite.current=false;},3000);
-    onFB(()=>{
+    onFB(()=>{onAuthReady(()=>{
       clearTimeout(fallback);
       fbListen("/",(data)=>{
         if(skipRead.current)return;
@@ -197,7 +207,7 @@ export default function App(){
         setLoading(false);
         setTimeout(()=>{skipWrite.current=false;},500);
       });
-    });
+    });});
   },[]);
 
   const wt=useRef(null);
@@ -238,8 +248,8 @@ export default function App(){
     fetch("/api/google-reviews").then(r=>r.json()).then(data=>{if(data?.rating)setGoogleReviewData(data);}).catch(()=>{});
   },[tool]);
 
-  const login=pw=>{if(pw==="Sanpel"){setRole("founders");return true;}if(pw==="Push"){setRole("founder");return true;}if(pw==="Close"){setRole("closer");return true;}if(pw==="Letsgo"){setRole("editor");return true;}if(pw==="Lead"){setRole("lead");return true;}if(pw==="Trial"){setRole("trial");return true;}return false;};
-  const logout=()=>{setRole(null);};
+  const login=resolvedRole=>{if(resolvedRole)setRole(resolvedRole);};
+  const logout=async()=>{try{await signOutUser();}catch{}setRole(null);};
 
   // Capacity helpers
   const goW=dir=>setCurW(wKey(addW(new Date(curW+"T00:00:00"),dir)));

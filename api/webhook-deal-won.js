@@ -1,7 +1,9 @@
 // api/webhook-deal-won.js
 // Zapier webhook: fires when a deal stage changes to "Won" in Attio
 // Creates/updates account, auto-calcs milestones, creates delivery + sherpas entry
-// Writes directly to Firebase
+// Writes to Firebase via admin SDK (falls back to REST if service account not configured)
+
+import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = "viewix-webhook-2026";
@@ -24,11 +26,15 @@ function addDays(dateStr, days) {
 }
 
 async function fbGet(path) {
+  const { err } = getAdmin();
+  if (!err) return adminGet(path);
   const r = await fetch(`${FIREBASE_URL}${path}.json`);
   return r.json();
 }
 
 async function fbSet(path, data) {
+  const { err } = getAdmin();
+  if (!err) return adminSet(path, data);
   await fetch(`${FIREBASE_URL}${path}.json`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -37,6 +43,8 @@ async function fbSet(path, data) {
 }
 
 async function fbPatch(path, data) {
+  const { err } = getAdmin();
+  if (!err) return adminPatch(path, data);
   await fetch(`${FIREBASE_URL}${path}.json`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

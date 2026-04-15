@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
-import { initFB, onFB, fbSet, fbListen } from "../firebase";
+import { initFB, onFB, fbSet, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { StatusSelect } from "./UIComponents";
 import { Logo } from "./Logo";
 
@@ -18,15 +18,16 @@ export function DeliveryPublicView(){
     if(!deliveryId)return;
     document.title="Viewix Dashboard";
     initFB();
-    onFB(()=>{
+    onFB(async()=>{
+      try{await signInAnonymouslyForPublic();}
+      catch(e){console.warn("Anonymous auth failed, continuing:",e.message);}
       fbListen(`/deliveries/${deliveryId}`,(data)=>{
         if(data)setDelivery(data);
         setLoading(false);
       });
       fbListen("/accounts",(acctData)=>{
         if(!acctData)return;
-        // Will resolve once delivery clientName is known
-        setAccountLogo(prev=>prev); // trigger re-check below
+        setAccountLogo(prev=>prev);
       });
     });
   },[deliveryId]);
