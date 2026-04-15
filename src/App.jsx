@@ -25,6 +25,7 @@ import { FoundersData } from "./components/FoundersData";
 import { DeliveryPublicView } from "./components/DeliveryPublicView";
 import { Preproduction } from "./components/Preproduction";
 import { PreproductionPublicView } from "./components/PreproductionPublicView";
+import { RoasCalculator, RoasCalculatorPublicView } from "./components/RoasCalculator";
 import { Login } from "./components/Login";
 
 export default function App(){
@@ -33,6 +34,7 @@ export default function App(){
   const[tool,setTool]=useState("home");
   const[capTab,setCapTab]=useState("dashboard");
   const[foundersTab,setFoundersTab]=useState("dashboard");
+  const[resourceTab,setResourceTab]=useState("roas");
 
   // Capacity state
   const[inputs,setInputs]=useState(DEF_IN);
@@ -284,6 +286,10 @@ export default function App(){
   const preprodParam=new URLSearchParams(window.location.search).get("p");
   if(preprodParam)return(<><style>{CSS}</style><PreproductionPublicView/></>);
 
+  // Check for public ROAS calculator link (no auth required, pure client-side state)
+  const roasParam=new URLSearchParams(window.location.search).get("roas");
+  if(roasParam)return(<RoasCalculatorPublicView/>);
+
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
 
@@ -296,6 +302,7 @@ export default function App(){
       {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
+      {(isFounder||role==="closer")&&<SideIcon icon="📚" label="Resources" active={tool==="resources"} onClick={()=>setTool("resources")}/>}
       {isFounder&&<SideIcon icon="🧭" label="Buyer Journey" active={tool==="buyerjourney"} onClick={()=>setTool("buyerjourney")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
@@ -679,6 +686,19 @@ export default function App(){
 
     {/* ═══ PREPRODUCTION ═══ */}
     {tool==="preproduction"&&(isFounder||role==="lead"||role==="editor")&&(<Preproduction/>)}
+
+    {/* ═══ RESOURCES ═══ */}
+    {tool==="resources"&&(isFounder||role==="closer")&&(<>
+      <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
+        <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Resources</span>
+        <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3}}>
+          {[{key:"roas",label:"ROAS Calculator"}].map(t=>(
+            <button key={t.key} onClick={()=>setResourceTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:resourceTab===t.key?"var(--card)":"transparent",color:resourceTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>
+          ))}
+        </div>
+      </div>
+      {resourceTab==="roas"&&(<RoasCalculator embedded/>)}
+    </>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}
