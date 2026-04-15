@@ -204,6 +204,9 @@ export default function App(){
             if(data.foundersData){
               setFoundersData(data.foundersData);
             }
+            if(data.attioCache&&data.attioCache.data){
+              setAttioDeals({data:data.attioCache.data,total:data.attioCache.total||data.attioCache.data.length,lastSyncedAt:data.attioCache.lastSyncedAt||null});
+            }
           }
         }catch(e){console.error("Firebase data parse error:",e);}
         setLoading(false);
@@ -1296,14 +1299,31 @@ export default function App(){
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
               <div>
                 <div style={{fontSize:13,fontWeight:700,color:"var(--fg)"}}>Monthly Revenue (Attio)</div>
-                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>All time deal revenue by month</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+                  All time deal revenue by month
+                  {attioDeals?.lastSyncedAt&&(()=>{
+                    const ms=Date.now()-new Date(attioDeals.lastSyncedAt).getTime();
+                    const mins=Math.floor(ms/60000);
+                    const hrs=Math.floor(mins/60);
+                    const days=Math.floor(hrs/24);
+                    const label=days>0?`${days}d ago`:hrs>0?`${hrs}h ago`:mins>0?`${mins}m ago`:"just now";
+                    return <span style={{marginLeft:8,color:"var(--accent)"}}>· Cached {label}</span>;
+                  })()}
+                </div>
               </div>
               <button onClick={()=>{
                 setAttioLoading(true);
                 fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"all_deals"})})
                   .then(r=>r.json())
                   .then(data=>{
-                    setAttioDeals(data);
+                    const lastSyncedAt=new Date().toISOString();
+                    setAttioDeals({...data,lastSyncedAt});
+                    // Persist the cache so the data stays across reloads and is updated
+                    // by the deal-won webhook. Writing via fbSet hits the same /attioCache
+                    // path the webhook uses (admin SDK).
+                    if(data?.data){
+                      fbSet("/attioCache",{data:data.data,total:data.total||data.data.length,lastSyncedAt,lastSyncTrigger:"manual"});
+                    }
                     // Auto-calculate metrics from deals
                     if(data?.data){
                       const extractVal=d=>{const v=d.values;const candidates=[v?.deal_value,v?.amount,v?.value,v?.revenue,v?.contract_value];for(const c of candidates){if(c?.[0]!=null){const n=c[0].currency_value??c[0].value;if(n!=null)return typeof n==="number"?n:parseFloat(n)||0;}}return 0;};

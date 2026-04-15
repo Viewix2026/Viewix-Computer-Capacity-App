@@ -218,6 +218,50 @@ export default async function handler(req, res) {
       results.preproduction = "socialOrganic created";
     }
 
+    // --- 5. REFRESH ATTIO CACHE ---
+    // Pull a fresh copy of all deals from Attio and store at /attioCache so the
+    // Founders dashboard shows the newly-won deal on next load (or immediately
+    // for anyone currently listening to root). Failures here are non-fatal —
+    // the main webhook work is already committed above.
+    try {
+      const ATTIO_KEY = process.env.ATTIO_API_KEY;
+      if (ATTIO_KEY) {
+        const attioHeaders = { "Authorization": `Bearer ${ATTIO_KEY}`, "Content-Type": "application/json" };
+        let allDeals = [];
+        let offset = 0;
+        let hasMore = true;
+        while (hasMore) {
+          const r = await fetch("https://api.attio.com/v2/objects/deals/records/query", {
+            method: "POST",
+            headers: attioHeaders,
+            body: JSON.stringify({ limit: 100, offset, sorts: [{ attribute: "created_at", direction: "desc" }] }),
+          });
+          const d = await r.json();
+          if (d?.data && d.data.length > 0) {
+            allDeals = allDeals.concat(d.data);
+            offset += d.data.length;
+            hasMore = d.data.length === 100;
+          } else {
+            hasMore = false;
+          }
+          if (allDeals.length >= 1000) break;
+        }
+        await fbSet("/attioCache", {
+          data: allDeals,
+          total: allDeals.length,
+          lastSyncedAt: new Date().toISOString(),
+          lastSyncTrigger: "webhook",
+          lastTriggerCompany: companyName,
+        });
+        results.attioCache = `refreshed (${allDeals.length} deals)`;
+      } else {
+        results.attioCache = "skipped (no ATTIO_API_KEY)";
+      }
+    } catch (cacheErr) {
+      console.error("Attio cache refresh failed:", cacheErr);
+      results.attioCache = `failed: ${cacheErr.message}`;
+    }
+
     return res.status(200).json({
       success: true,
       companyName,
