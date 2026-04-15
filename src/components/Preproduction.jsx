@@ -637,7 +637,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         {renderSectionModal()}
         {rewriteCell && renderCellModal()}
 
-        <div style={{ padding: "24px 28px", maxWidth: 1400 }}>
+        <div style={{ padding: "24px 28px" }}>
 
           {/* Section 1: Transcript Input */}
           <div style={{ marginBottom: 32 }}>
@@ -751,7 +751,6 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     <div key={v.key} onClick={() => openSectionEdit(visPath, p.visuals[v.key] || "", v.label)} style={{ background: "var(--card)", border: `1px solid ${isEditing ? "var(--accent)" : "var(--border)"}`, borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>{v.label}</div>
                       <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5 }}>{p.visuals[v.key] || ""}</div>
-                      {isEditing && <div onClick={e => e.stopPropagation()}>{renderSectionPanel()}</div>}
                     </div>
                   );
                 })}

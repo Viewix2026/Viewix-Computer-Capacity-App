@@ -212,7 +212,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ─── REWRITE: Targeted cell rewrite ───
+    // ─── REWRITE: Targeted cell or row rewrite ───
     if (action === "rewrite") {
       const { projectId, cellId, column, instruction, currentValue } = req.body;
 
@@ -223,6 +223,98 @@ export default async function handler(req, res) {
       const project = await fbGet(`/preproduction/metaAds/${projectId}`);
       if (!project) return res.status(404).json({ error: "Project not found" });
 
+      // ─── ROW REWRITE: rewrite all content fields in one call, return JSON ───
+      if (column === "_row") {
+        const rowIndex = project.scriptTable?.findIndex((r) => r.id === cellId || r.videoName === cellId);
+        if (rowIndex == null || rowIndex === -1) {
+          return res.status(404).json({ error: "Row not found in script table" });
+        }
+        const row = project.scriptTable[rowIndex];
+        const rowSystemPrompt = `You are rewriting an entire Meta Ad script row. You receive the existing row content and an instruction, and you return a complete rewritten row as JSON.
+
+CLIENT: ${project.companyName}
+BRAND CONTEXT:
+Brand Truths: ${JSON.stringify(project.brandAnalysis?.brandTruths || [])}
+Brand Ambitions: ${JSON.stringify(project.brandAnalysis?.brandAmbitions || [])}
+Brand Personality: ${JSON.stringify(project.brandAnalysis?.brandPersonality || {})}
+Target Customer: ${JSON.stringify(project.targetCustomer || [])}
+Motivators — Toward: ${JSON.stringify(project.motivators?.toward || [])}
+Motivators — Away From: ${JSON.stringify(project.motivators?.awayFrom || [])}
+Motivators — Tried Before: ${JSON.stringify(project.motivators?.triedBefore || [])}
+
+EXISTING ROW:
+Video Name: ${row.videoName || ""}
+Motivator Type: ${row.motivatorType || ""}
+Audience Type: ${row.audienceType || ""}
+Hook: ${row.hook || ""}
+Explain the Pain: ${row.explainThePain || ""}
+Results: ${row.results || ""}
+The Offer: ${row.theOffer || ""}
+Why the Offer: ${row.whyTheOffer || ""}
+CTA: ${row.cta || ""}
+Meta Ad Headline: ${row.metaAdHeadline || ""}
+Meta Ad Copy: ${row.metaAdCopy || ""}
+
+REWRITE INSTRUCTION: ${instruction}
+
+RULES:
+- Never use em dashes. Use a comma, full stop, or rewrite.
+- Use contractions throughout.
+- Keep every field tight.
+- Hook: one or two sentences, confrontational, direct.
+- Explain the Pain: one sentence only.
+- Results: one sentence only, lives in the viewer's world.
+- The Offer: max two sentences, opens with "At ${project.companyName}, we..."
+- Why the Offer: one or two short sentences.
+- CTA: one short sentence, use "tap".
+- Meta Ad Headline: 35 characters max.
+- Meta Ad Copy: 60 to 120 words.
+- Keep videoName, motivatorType, audienceType unchanged unless the instruction asks for it.
+
+Return a single JSON object with this exact structure (no markdown, no preamble, no explanation):
+{
+  "videoName": "...",
+  "hook": "...",
+  "explainThePain": "...",
+  "results": "...",
+  "theOffer": "...",
+  "whyTheOffer": "...",
+  "cta": "...",
+  "metaAdHeadline": "...",
+  "metaAdCopy": "..."
+}`;
+
+        const rawRowResp = await callClaude(rowSystemPrompt, "Rewrite the row now.", ANTHROPIC_KEY);
+        let parsedRow;
+        try {
+          parsedRow = parseJSON(rawRowResp);
+        } catch (e) {
+          return res.status(422).json({ error: "Failed to parse row rewrite response", detail: e.message });
+        }
+
+        // Merge: keep existing row fields, overwrite with parsed ones
+        const updatedRow = { ...row, ...parsedRow };
+        await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${rowIndex}`, updatedRow);
+
+        const logId = `rwrow_${Date.now()}`;
+        await fbSet(`/preproduction/feedbackLog/${logId}`, {
+          type: "rewrite",
+          projectId,
+          companyName: project.companyName || "",
+          cellId,
+          column: "_row",
+          instruction,
+          timestamp: new Date().toISOString(),
+        });
+
+        await fbPatch(`/preproduction/metaAds/${projectId}`, {
+          updatedAt: new Date().toISOString(),
+        });
+
+        return res.status(200).json({ success: true, cellId, column: "_row", newValue: JSON.stringify(parsedRow) });
+      }
+
+      // ─── CELL REWRITE: rewrite a single column ───
       const systemPrompt = buildRewritePrompt({
         brandAnalysis: project.brandAnalysis,
         motivators: project.motivators,
