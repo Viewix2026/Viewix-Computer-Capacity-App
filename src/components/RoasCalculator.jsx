@@ -21,7 +21,7 @@ const FUNNELS = {
     // Industry-standard defaults for a Meta B2C direct-response funnel
     defaults: {
       dailyBudget: 525, productPrice: 380,
-      cpm: 25, ctr: 0.015, optIn: 0.10, contactRate: 0.70, closeRate: 0.20,
+      cpm: 25, ctr: 0.01, optIn: 0.10, contactRate: 0.70, closeRate: 0.20,
     },
     sections: [
       { name: "Clicks", rows: [
@@ -60,7 +60,7 @@ const FUNNELS = {
     // Industry-standard defaults for a Meta lead-magnet → booking → show → close funnel
     defaults: {
       dailyBudget: 120, productPrice: 340,
-      cpm: 25, ctr: 0.015, optIn: 0.25, bookingRate: 0.20, showRate: 0.60, closeRate: 0.25,
+      cpm: 25, ctr: 0.01, optIn: 0.05, bookingRate: 0.20, showRate: 0.60, closeRate: 0.25,
     },
     sections: [
       { name: "Clicks", rows: [
@@ -194,8 +194,9 @@ function RoasGauge({ roas }) {
   const clamped = Math.min(safeRoas, MAX);
   const pinned = safeRoas > MAX;
 
-  // Geometry: semi-circle from left (-90°) through top (0°) to right (+90°)
-  const cx = 160, cy = 150, r = 108;
+  // Geometry — generous viewBox so the readout below the gauge is never clipped
+  const VB_W = 340, VB_H = 260;
+  const cx = 170, cy = 135, r = 100;
   const START = -90, END = 90;
   const sweep = END - START;
   const valueToAngle = v => START + (v / MAX) * sweep;
@@ -214,12 +215,14 @@ function RoasGauge({ roas }) {
   };
 
   const zones = [
-    { from: 0, to: 1,  color: "#EF4444" }, // losing money
-    { from: 1, to: 2,  color: "#F59E0B" }, // break-even / poor
-    { from: 2, to: 4,  color: "#EAB308" }, // acceptable
-    { from: 4, to: 10, color: "#10B981" }, // good / great
+    { from: 0, to: 1,  color: "#EF4444", label: "LOSING" },
+    { from: 1, to: 2,  color: "#F59E0B", label: "POOR" },
+    { from: 2, to: 4,  color: "#EAB308", label: "GOOD" },
+    { from: 4, to: 10, color: "#10B981", label: "GREAT" },
   ];
-  const ticks = [0, 1, 2, 4, 10];
+  const majorTicks = [0, 1, 2, 4, 10];
+  // Minor ticks halfway between major ticks + extra granularity in the green band
+  const minorTicks = [0.5, 1.5, 3, 5, 6, 7, 8, 9];
 
   const needleAngle = valueToAngle(clamped);
   const needleColor =
@@ -227,10 +230,50 @@ function RoasGauge({ roas }) {
     clamped >= 2 ? "#EAB308" :
     clamped >= 1 ? "#F59E0B" : "#EF4444";
 
+  // Tapered needle polygon — drawn pointing straight up from center, rotated at render time
+  const needlePoints = [
+    [cx - 6, cy + 8],
+    [cx + 6, cy + 8],
+    [cx + 1.5, cy - r * 0.80],
+    [cx - 1.5, cy - r * 0.80],
+  ].map(p => p.join(",")).join(" ");
+
   return (
-    <svg viewBox="0 0 320 220" style={{ width: "100%", maxWidth: 360, display: "block" }}>
+    <svg viewBox={`0 0 ${VB_W} ${VB_H}`} style={{ width: "100%", maxWidth: 400, display: "block" }}>
+      <defs>
+        {/* Glow filter for the needle */}
+        <filter id="roasNeedleGlow" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="2.5" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+
+        {/* Drop shadow for the hub */}
+        <filter id="roasHubShadow" x="-80%" y="-80%" width="260%" height="260%">
+          <feDropShadow dx="0" dy="3" stdDeviation="3" floodColor="#000" floodOpacity="0.55" />
+        </filter>
+
+        {/* Radial gradient hub — subtle 3D highlight */}
+        <radialGradient id="roasHubGrad" cx="50%" cy="30%" r="60%">
+          <stop offset="0%"   stopColor="#1E2A3A" />
+          <stop offset="100%" stopColor="#0B0F1A" />
+        </radialGradient>
+
+        {/* LCD readout gradient */}
+        <linearGradient id="roasLcdGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%"   stopColor="#0B0F1A" />
+          <stop offset="100%" stopColor="#131825" />
+        </linearGradient>
+      </defs>
+
+      {/* Outer bezel ring */}
+      <path d={arcPath(START - 7, END + 7, r + 22)} fill="none" stroke="#2A3447" strokeWidth={3} strokeLinecap="round" />
+      <path d={arcPath(START - 7, END + 7, r + 18)} fill="none" stroke="#0B0F1A" strokeWidth={6} strokeLinecap="butt" />
+
       {/* Background arc */}
-      <path d={arcPath(START, END)} fill="none" stroke="#1A2030" strokeWidth={26} strokeLinecap="butt" />
+      <path d={arcPath(START, END)} fill="none" stroke="#1A2030" strokeWidth={32} strokeLinecap="butt" />
 
       {/* Colored zones */}
       {zones.map((z, i) => (
@@ -239,41 +282,71 @@ function RoasGauge({ roas }) {
           d={arcPath(valueToAngle(z.from), valueToAngle(z.to))}
           fill="none"
           stroke={z.color}
-          strokeWidth={24}
+          strokeWidth={30}
           strokeLinecap="butt"
-          opacity={0.92}
+          opacity={0.95}
         />
       ))}
 
-      {/* Ticks + labels */}
-      {ticks.map(t => {
+      {/* Inner highlight on the arc band for depth */}
+      <path d={arcPath(START, END, r - 13)} fill="none" stroke="#000" strokeWidth={1.5} opacity={0.35} />
+      <path d={arcPath(START, END, r + 13)} fill="none" stroke="#FFF" strokeWidth={1}   opacity={0.08} />
+
+      {/* Minor ticks — thin black divider marks inside the band */}
+      {minorTicks.map(t => {
         const a = valueToAngle(t);
-        const [x1, y1] = polar(a, r - 16);
-        const [x2, y2] = polar(a, r + 16);
-        const [lx, ly] = polar(a, r + 30);
+        const [x1, y1] = polar(a, r - 13);
+        const [x2, y2] = polar(a, r + 13);
+        return <line key={t} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#0B0F1A" strokeWidth={1.5} opacity={0.6} />;
+      })}
+
+      {/* Major ticks + labels */}
+      {majorTicks.map(t => {
+        const a = valueToAngle(t);
+        const [x1, y1] = polar(a, r - 17);
+        const [x2, y2] = polar(a, r + 17);
+        const [lx, ly] = polar(a, r + 34);
         return (
           <g key={t}>
-            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#E8ECF4" strokeWidth={2.5} />
-            <text x={lx} y={ly} fill="#9CA3AF" fontSize={12} fontWeight={700} textAnchor="middle" dominantBaseline="middle" fontFamily="'JetBrains Mono',monospace">{t}x</text>
+            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#E8ECF4" strokeWidth={2.5} strokeLinecap="round" />
+            <text x={lx} y={ly} fill="#9CA3AF" fontSize={13} fontWeight={700} textAnchor="middle" dominantBaseline="middle" fontFamily="'JetBrains Mono',monospace">{t}x</text>
           </g>
         );
       })}
 
-      {/* Needle — pivots at center with smooth transition */}
-      <g style={{ transition: "transform 0.45s cubic-bezier(0.34, 1.3, 0.64, 1)", transformOrigin: `${cx}px ${cy}px`, transform: `rotate(${needleAngle}deg)` }}>
-        <line x1={cx} y1={cy + 10} x2={cx} y2={cy - r * 0.88} stroke={needleColor} strokeWidth={5} strokeLinecap="round" />
-        <circle cx={cx} cy={cy - r * 0.88} r={4} fill={needleColor} />
+      {/* Needle — tapered polygon with glow, pivots at center */}
+      <g style={{ transition: "transform 0.55s cubic-bezier(0.34, 1.35, 0.64, 1)", transformOrigin: `${cx}px ${cy}px`, transform: `rotate(${needleAngle}deg)` }}>
+        <polygon points={needlePoints} fill={needleColor} filter="url(#roasNeedleGlow)" />
+        <circle cx={cx} cy={cy - r * 0.80} r={3.5} fill="#FFFFFF" opacity={0.9} />
       </g>
 
-      {/* Center hub */}
-      <circle cx={cx} cy={cy} r={13} fill="#0B0F1A" stroke={needleColor} strokeWidth={3} />
-      <circle cx={cx} cy={cy} r={4} fill={needleColor} />
+      {/* Center hub — gradient fill, colored ring, drop shadow */}
+      <circle cx={cx} cy={cy} r={16} fill="url(#roasHubGrad)" stroke={needleColor} strokeWidth={3} filter="url(#roasHubShadow)" />
+      <circle cx={cx} cy={cy} r={5}  fill={needleColor} />
+      <circle cx={cx} cy={cy} r={2}  fill="#FFFFFF" opacity={0.5} />
 
-      {/* Digital readout */}
-      <text x={cx} y={cy + 52} fill={needleColor} fontSize={30} fontWeight={800} textAnchor="middle" fontFamily="'JetBrains Mono',monospace">
+      {/* LCD-style digital readout box */}
+      <rect
+        x={cx - 70} y={cy + 54} width={140} height={52} rx={8}
+        fill="url(#roasLcdGrad)"
+        stroke={needleColor}
+        strokeWidth={1.5}
+        opacity={0.95}
+      />
+      <text
+        x={cx} y={cy + 84}
+        fill={needleColor} fontSize={26} fontWeight={800}
+        textAnchor="middle" dominantBaseline="middle"
+        fontFamily="'JetBrains Mono',monospace"
+        filter="url(#roasNeedleGlow)"
+      >
         {safeRoas.toFixed(2)}x
       </text>
-      <text x={cx} y={cy + 72} fill="#5A6B85" fontSize={10} fontWeight={700} textAnchor="middle" letterSpacing="0.15em">
+      <text
+        x={cx} y={cy + 100}
+        fill="#5A6B85" fontSize={9} fontWeight={700}
+        textAnchor="middle" letterSpacing="0.22em"
+      >
         {pinned ? "ROAS · OFF CHART" : "ROAS"}
       </text>
     </svg>
