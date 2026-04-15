@@ -630,6 +630,15 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             {hasScripts && (
               <button onClick={handleExport} style={btnPrimary}>Export PDF</button>
             )}
+            <button
+              onClick={() => {
+                if (!window.confirm(`Delete "${p.companyName}" and all its scripts, transcripts and feedback? This cannot be undone.`)) return;
+                fbSet(`/preproduction/metaAds/${p.id}`, null);
+                setActiveProjectId(null);
+              }}
+              style={{ ...btnSecondary, borderColor: "rgba(239,68,68,0.4)", color: "#EF4444" }}
+              title="Delete project"
+            >Delete</button>
           </div>
         </div>
 
@@ -1016,12 +1025,23 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                   onClick={() => setActiveProjectId(p.id)}
                   style={{
                     background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10,
-                    padding: 16, cursor: "pointer", transition: "border-color 0.15s",
+                    padding: 16, cursor: "pointer", transition: "border-color 0.15s", position: "relative",
                   }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "var(--accent)"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      if (!window.confirm(`Delete "${p.companyName}" and all its scripts, transcripts and feedback? This cannot be undone.`)) return;
+                      fbSet(`/preproduction/metaAds/${p.id}`, null);
+                    }}
+                    title="Delete project"
+                    style={{ position: "absolute", top: 8, right: 8, background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 16, padding: "2px 8px", lineHeight: 1, borderRadius: 4 }}
+                    onMouseEnter={e => { e.currentTarget.style.color = "#EF4444"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = "#5A6B85"; e.currentTarget.style.background = "none"; }}
+                  >×</button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, paddingRight: 24 }}>
                     {getAccountLogo(p) && <img src={getAccountLogo(p)} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 2 }} />}
                     <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
                   </div>
