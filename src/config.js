@@ -63,7 +63,10 @@ export const QT = [
   { util: 0.95, wait: "19x" }, { util: 0.99, wait: "99x" }
 ];
 
-// ─── Default Editors (Capacity Grid) ───
+// ─── Default Team Roster ───
+// `role` controls whether they occupy an edit suite & appear in the Weekly Schedule
+//  - "editor" → needs a suite, counted toward computer capacity
+//  - "crew"   → no suite, doesn't show in weekly schedule (producers, founders, etc.)
 export const DEF_EDS = [
   { id: "ed-1", name: "Angus", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: false, fri: true } },
   { id: "ed-2", name: "David", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
@@ -72,6 +75,9 @@ export const DEF_EDS = [
   { id: "ed-5", name: "Mia", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: false, fri: false } },
   { id: "ed-6", name: "Matt", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: false } },
   { id: "ed-7", name: "Luke", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
+  { id: "ed-jeremy", name: "Jeremy", phone: "", email: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
+  { id: "ed-steve", name: "Steve", phone: "", email: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
+  { id: "ed-vish", name: "Vish", phone: "", email: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
 ];
 
 // ─── Default Inputs ───

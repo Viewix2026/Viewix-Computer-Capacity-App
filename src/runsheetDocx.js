@@ -131,7 +131,7 @@ export async function generateRunsheetDocx(runsheet, producer, director, clientL
     infoChildren.push(infoPair("Date", d.toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })));
   }
   if (firstDay?.location) infoChildren.push(infoPair("Location", firstDay.location));
-  if (director) infoChildren.push(infoPair("Director", `${director.name}${director.phone ? " - " + director.phone : ""}`));
+  if (director) infoChildren.push(infoPair("Shooter", `${director.name}${director.phone ? " - " + director.phone : ""}`));
   if (producer) infoChildren.push(infoPair("Producer", `${producer.name}${producer.phone ? " - " + producer.phone : ""}`));
   (runsheet.clientContacts || []).forEach(c => {
     infoChildren.push(infoPair(c.name || "Client", c.phone || ""));

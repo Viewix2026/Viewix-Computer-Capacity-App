@@ -374,7 +374,7 @@ export function Runsheets({ accounts, projects }) {
           </div>
         </div>
 
-        {/* Producer / Director selectors */}
+        {/* Producer / Shooter selectors */}
         <div style={{ display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Producer</label>
@@ -384,9 +384,9 @@ export function Runsheets({ accounts, projects }) {
             </select>
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>
-            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Director</label>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Shooter</label>
             <select value={activeRS.directorId || ""} onChange={e => patchRS(activeRS.id, { directorId: e.target.value })} style={{ ...inputSt }}>
-              <option value="">Select director...</option>
+              <option value="">Select shooter...</option>
               {editors.map(e => <option key={e.id} value={e.id}>{e.name}{e.phone ? ` — ${e.phone}` : ""}</option>)}
             </select>
           </div>
@@ -479,31 +479,39 @@ export function Runsheets({ accounts, projects }) {
                           </div>
                         </td>
                         {isMetaAds ? (
-                          /* Meta Ads: scene elements column */
+                          /* Meta Ads: scene elements column (or editable note for breaks) */
                           <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", minWidth: 280 }}
-                            onDragOver={e => { e.preventDefault(); setDragOverSlot({ dayIdx: activeDayIdx, slotIdx: si }); }}
-                            onDragLeave={() => setDragOverSlot(null)}
-                            onDrop={e => { e.preventDefault(); handleDropOnSlot(activeDayIdx, si); }}>
-                            <div style={{ display: "flex", gap: 3, flexWrap: "wrap", minHeight: 28 }}>
-                              {slotElements.map((el, ei) => {
-                                const v = (activeRS.videos || []).find(x => x.id === el.videoId);
-                                if (!v) return null;
-                                const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
-                                const sceneLabel = META_SCENE_TYPES.find(s => s.key === el.sceneType)?.label || el.sceneType;
-                                return (
-                                  <span key={`${el.videoId}-${el.sceneType}-${ei}`} draggable
-                                    onDragStart={() => handleDragStart({ videoId: el.videoId, sceneType: el.sceneType }, { dayIdx: activeDayIdx, slotIdx: si })}
-                                    title={`${v.videoName} — ${sceneLabel}`}
-                                    style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}33`, whiteSpace: "nowrap" }}>
-                                    <span style={{ opacity: 0.85 }}>{v.videoName}</span>
-                                    <span style={{ opacity: 0.6, margin: "0 4px" }}>·</span>
-                                    <span>{sceneLabel}</span>
-                                  </span>
-                                );
-                              })}
-                              {!slotElements.length && !isBreak && <span style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>Drop scene elements here</span>}
-                              {isBreak && <span style={{ fontStyle: "italic", color: "var(--muted)", fontSize: 11 }}>{slot.notes}</span>}
-                            </div>
+                            onDragOver={isBreak ? undefined : e => { e.preventDefault(); setDragOverSlot({ dayIdx: activeDayIdx, slotIdx: si }); }}
+                            onDragLeave={isBreak ? undefined : () => setDragOverSlot(null)}
+                            onDrop={isBreak ? undefined : e => { e.preventDefault(); handleDropOnSlot(activeDayIdx, si); }}>
+                            {isBreak ? (
+                              <input
+                                value={slot.notes || ""}
+                                onChange={e => updateSlotField(activeDayIdx, si, "notes", e.target.value)}
+                                placeholder="Break — type a label..."
+                                style={{ ...inputSt, padding: "4px 8px", fontSize: 12, fontWeight: 600, fontStyle: "italic", color: "#F59E0B", background: "rgba(251,191,36,0.06)", border: "1px dashed rgba(251,191,36,0.3)" }}
+                              />
+                            ) : (
+                              <div style={{ display: "flex", gap: 3, flexWrap: "wrap", minHeight: 28 }}>
+                                {slotElements.map((el, ei) => {
+                                  const v = (activeRS.videos || []).find(x => x.id === el.videoId);
+                                  if (!v) return null;
+                                  const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
+                                  const sceneLabel = META_SCENE_TYPES.find(s => s.key === el.sceneType)?.label || el.sceneType;
+                                  return (
+                                    <span key={`${el.videoId}-${el.sceneType}-${ei}`} draggable
+                                      onDragStart={() => handleDragStart({ videoId: el.videoId, sceneType: el.sceneType }, { dayIdx: activeDayIdx, slotIdx: si })}
+                                      title={`${v.videoName} — ${sceneLabel}`}
+                                      style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}33`, whiteSpace: "nowrap" }}>
+                                      <span style={{ opacity: 0.85 }}>{v.videoName}</span>
+                                      <span style={{ opacity: 0.6, margin: "0 4px" }}>·</span>
+                                      <span>{sceneLabel}</span>
+                                    </span>
+                                  );
+                                })}
+                                {!slotElements.length && <span style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>Drop scene elements here</span>}
+                              </div>
+                            )}
                           </td>
                         ) : (
                           /* Organic: Videos column with drag-and-drop */
@@ -686,7 +694,7 @@ export function Runsheets({ accounts, projects }) {
               </select>
             </div>
             <div style={{ flex: 1, minWidth: 160 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Director</label>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Shooter</label>
               <select value={createDirectorId} onChange={e => setCreateDirectorId(e.target.value)} style={inputSt}>
                 <option value="">Select...</option>
                 {editors.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
