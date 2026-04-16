@@ -125,12 +125,17 @@ export default function App(){
   // Firebase data listeners — gated on auth being ready so the root listener
   // doesn't attach before the auth token is available (prevents listener lockout
   // once security rules are applied).
+  // Re-attach the root listener whenever the role changes (null -> signed-in).
+  // Post-rules, an anonymous listener would be denied and never retry, so we
+  // defer the attach until the user is actually signed in with a role.
   useEffect(()=>{
+    if(!role)return;
     initFB();
     const fallback=setTimeout(()=>{setLoading(false);skipWrite.current=false;},3000);
-    onFB(()=>{onAuthReady(()=>{
+    let unsub=()=>{};
+    onFB(()=>{
       clearTimeout(fallback);
-      fbListen("/",(data)=>{
+      unsub=fbListen("/",(data)=>{
         if(skipRead.current)return;
         try{
           if(data){
@@ -190,8 +195,9 @@ export default function App(){
         setLoading(false);
         setTimeout(()=>{skipWrite.current=false;},500);
       });
-    });});
-  },[]);
+    });
+    return()=>{unsub();};
+  },[role]);
 
   const wt=useRef(null);
   const deletedPaths=useRef([]);
