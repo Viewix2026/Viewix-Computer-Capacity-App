@@ -95,7 +95,19 @@ export default async function handler(req, res) {
     const histData = await histResp.json();
 
     if (!histData.ok) {
-      return res.status(500).json({ error: "Slack API error", detail: histData.error || "unknown" });
+      const slackError = histData.error || "unknown";
+      const hints = {
+        not_in_channel: `The bot isn't a member of channel ${WIN_CHANNEL_ID}. In Slack, open the channel and run /invite @YourBotName.`,
+        channel_not_found: `Channel ${WIN_CHANNEL_ID} not found. Check the channel ID, and if it's a private channel the bot needs the groups:history scope (and to be invited).`,
+        missing_scope: `Bot token is missing a required scope. Needs: channels:history (public) or groups:history (private), reactions:read, users:read.`,
+        invalid_auth: `SLACK_BOT_TOKEN is invalid or expired. Re-copy from Slack OAuth & Permissions and update the Vercel env var.`,
+        token_revoked: `SLACK_BOT_TOKEN has been revoked. Reinstall the Slack app and update the env var.`,
+        not_authed: `SLACK_BOT_TOKEN env var is empty or malformed.`,
+      };
+      return res.status(500).json({
+        error: "Slack API error",
+        detail: slackError + (hints[slackError] ? ` — ${hints[slackError]}` : ""),
+      });
     }
 
     // Filter to messages with the target reaction

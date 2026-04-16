@@ -270,7 +270,7 @@ export function Runsheets({ accounts, projects }) {
     const [h, m] = nextStart.split(":").map(Number);
     const endMin = m + 60;
     const nextEnd = `${String(h + Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}`;
-    slots.push({ id: `ts-${Date.now()}`, startTime: nextStart, endTime: nextEnd, videoIds: [], location: "", props: "", people: "", notes: "Break for Lunch" });
+    slots.push({ id: `ts-${Date.now()}`, startTime: nextStart, endTime: nextEnd, videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "Break for Lunch", isBreak: true });
     day.timeSlots = slots;
     days[dayIdx] = day;
     patchRS(activeRS.id, { shootDays: days });
@@ -466,7 +466,8 @@ export function Runsheets({ accounts, projects }) {
                   {(day.timeSlots || []).map((slot, si) => {
                     const slotElements = slot.sceneElements || [];
                     const slotVideos = (slot.videoIds || []).map(vid => (activeRS.videos || []).find(v => v.id === vid)).filter(Boolean);
-                    const isBreak = slot.notes?.includes("Break") && !(slotVideos.length) && !(slotElements.length);
+                    // Prefer explicit isBreak flag; fall back to sniffing "Break" in legacy slots
+                    const isBreak = slot.isBreak === true || (slot.isBreak === undefined && slot.notes?.includes("Break") && !(slotVideos.length) && !(slotElements.length));
                     const isOver = dragOverSlot?.dayIdx === activeDayIdx && dragOverSlot?.slotIdx === si;
                     const cellCount = isMetaAds ? slotElements.length : slotVideos.length;
                     return (

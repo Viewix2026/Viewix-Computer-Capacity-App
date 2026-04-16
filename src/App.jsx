@@ -566,7 +566,7 @@ export default function App(){
                 try{
                   const r=await fetch("/api/sync-weekly-wins",{method:"GET"});
                   const d=await r.json();
-                  if(!r.ok)alert("Sync failed: "+(d.error||"Unknown"));
+                  if(!r.ok)alert("Sync failed: "+(d.error||"Unknown")+(d.detail?" — "+d.detail:""));
                   else alert(`Synced ${d.pooled||0} wins from Slack`);
                 }catch(e){alert("Sync failed: "+e.message);}
               }} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)",whiteSpace:"nowrap"}}>Sync now</button>
