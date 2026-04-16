@@ -133,9 +133,52 @@ export function logoBg(pref) {
   return "#fff";
 }
 
+// ─── Pretty Share URLs ───
+// URL-friendly slug from any string. "Woolcott St — Market Leader!" → "woolcott-st-market-leader"
+export function slugify(s) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // strip diacritics
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+// 6-character alphanumeric ID, ~36^6 = 2.2 billion combinations.
+// Used as the un-guessable prefix in pretty URLs.
+export function makeShortId() {
+  const chars = "abcdefghijkmnpqrstuvwxyz23456789"; // no 0/o/1/l for legibility
+  let out = "";
+  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+// Build a pretty share URL: /d/HASH/client-project or /p/HASH/client
+// Falls back to the legacy ?d=ID format if no shortId exists yet.
+export function deliveryShareUrl(d) {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  if (!d) return origin;
+  if (d.shortId) {
+    const slug = slugify(`${d.clientName || ""} ${d.projectName || ""}`);
+    return `${origin}/d/${d.shortId}${slug ? "/" + slug : ""}`;
+  }
+  return `${origin}/?d=${d.id}`;
+}
+
+export function preproductionShareUrl(p) {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  if (!p) return origin;
+  if (p.shortId) {
+    const slug = slugify(p.companyName || "");
+    return `${origin}/p/${p.shortId}${slug ? "/" + slug : ""}`;
+  }
+  return `${origin}/?p=${p.id}`;
+}
+
 // ─── Delivery Helpers ───
 export function newDelivery(clientName, projectName) {
-  return { id: `del-${Date.now()}`, clientName: clientName || "", projectName: projectName || "", logoUrl: "", videos: [], createdAt: new Date().toISOString() };
+  return { id: `del-${Date.now()}`, shortId: makeShortId(), clientName: clientName || "", projectName: projectName || "", logoUrl: "", videos: [], createdAt: new Date().toISOString() };
 }
 
 export function newVideo() {

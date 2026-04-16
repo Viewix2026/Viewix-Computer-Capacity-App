@@ -35,21 +35,34 @@ export function PreproductionPublicView() {
   const [accountLogoBg, setAccountLogoBg] = useState("white");
   const notifyTimer = useRef(null);
 
+  // Support both pretty paths (/p/HASH/slug) and legacy ?p=ID
   const projectId = new URLSearchParams(window.location.search).get("p");
+  const prettyMatch = window.location.pathname.match(/^\/p\/([a-z0-9]{4,12})/i);
+  const shortId = prettyMatch ? prettyMatch[1].toLowerCase() : null;
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId && !shortId) return;
     document.title = "Viewix - Script Review";
     initFB();
     onFB(async () => {
       try { await signInAnonymouslyForPublic(); }
       catch (e) { console.warn("Anonymous auth failed, continuing:", e.message); }
-      fbListen(`/preproduction/metaAds/${projectId}`, (data) => {
-        if (data) setProject(data);
-        setLoading(false);
-      });
+      if (projectId) {
+        fbListen(`/preproduction/metaAds/${projectId}`, (data) => {
+          if (data) setProject(data);
+          setLoading(false);
+        });
+      } else if (shortId) {
+        // Pretty /p/HASH path — find the matching project by shortId
+        fbListen(`/preproduction/metaAds`, (allProjects) => {
+          if (!allProjects) { setLoading(false); return; }
+          const match = Object.values(allProjects).find(p => p && p.shortId && p.shortId.toLowerCase() === shortId);
+          if (match) setProject(match);
+          setLoading(false);
+        });
+      }
     });
-  }, [projectId]);
+  }, [projectId, shortId]);
 
   // Resolve account logo
   useEffect(() => {
@@ -74,19 +87,20 @@ export function PreproductionPublicView() {
       fetch("/api/preproduction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "notifyFeedback", projectId }),
+        body: JSON.stringify({ action: "notifyFeedback", projectId: project?.id || projectId }),
       }).catch(() => {});
     }, 120000); // 2 minutes
   };
 
   const submitFeedback = () => {
-    if (!feedbackCell || !feedbackText.trim() || !projectId) return;
+    const pid = project?.id || projectId;
+    if (!feedbackCell || !feedbackText.trim() || !pid) return;
     setSaving(true);
     const key = feedbackCell.column === "_row"
       ? `${feedbackCell.cellId}__row`
       : `${feedbackCell.cellId}_${feedbackCell.column}`;
     const now = new Date().toISOString();
-    fbSet(`/preproduction/metaAds/${projectId}/clientFeedback/${key}`, {
+    fbSet(`/preproduction/metaAds/${pid}/clientFeedback/${key}`, {
       text: feedbackText.trim(),
       submittedAt: now,
       cellId: feedbackCell.cellId,
@@ -95,7 +109,7 @@ export function PreproductionPublicView() {
     // Log to central feedback log for prompt refinement
     fbSet(`/preproduction/feedbackLog/cf_${Date.now()}`, {
       type: "clientFeedback",
-      projectId,
+      projectId: pid,
       companyName: project?.companyName || "",
       cellId: feedbackCell.cellId,
       column: feedbackCell.column,

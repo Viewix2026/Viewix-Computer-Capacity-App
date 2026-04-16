@@ -12,27 +12,37 @@ export function DeliveryPublicView(){
   const[showInstructions,setShowInstructions]=useState(true);
   const[accountLogo,setAccountLogo]=useState(null);
   const[accountLogoBg,setAccountLogoBg]=useState("white");
+  // Support both pretty paths (/d/HASH/slug) and legacy ?d=ID
   const deliveryId=new URLSearchParams(window.location.search).get("d");
+  const prettyMatch=window.location.pathname.match(/^\/d\/([a-z0-9]{4,12})/i);
+  const shortId=prettyMatch?prettyMatch[1].toLowerCase():null;
   const pendingChanges=useRef([]);
   const batchTimer=useRef(null);
 
   useEffect(()=>{
-    if(!deliveryId)return;
+    if(!deliveryId&&!shortId)return;
     document.title="Viewix Dashboard";
     initFB();
     onFB(async()=>{
       try{await signInAnonymouslyForPublic();}
       catch(e){console.warn("Anonymous auth failed, continuing:",e.message);}
-      fbListen(`/deliveries/${deliveryId}`,(data)=>{
-        if(data)setDelivery(data);
-        setLoading(false);
-      });
-      fbListen("/accounts",(acctData)=>{
-        if(!acctData)return;
-        setAccountLogo(prev=>prev);
-      });
+      if(deliveryId){
+        // Legacy ?d=ID path — direct lookup
+        fbListen(`/deliveries/${deliveryId}`,(data)=>{
+          if(data)setDelivery(data);
+          setLoading(false);
+        });
+      }else if(shortId){
+        // Pretty /d/HASH path — find the matching delivery by shortId, then listen to it
+        fbListen("/deliveries",(allDeliveries)=>{
+          if(!allDeliveries){setLoading(false);return;}
+          const match=Object.values(allDeliveries).find(d=>d&&d.shortId&&d.shortId.toLowerCase()===shortId);
+          if(match)setDelivery(match);
+          setLoading(false);
+        });
+      }
     });
-  },[deliveryId]);
+  },[deliveryId,shortId]);
 
   // Resolve account logo when delivery or accounts change
   useEffect(()=>{
@@ -53,7 +63,7 @@ export function DeliveryPublicView(){
     const changes=[...pendingChanges.current];
     pendingChanges.current=[];
     const clientName=delivery?.clientName||"Unknown Client";
-    fetch("/api/notify-revision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clientName,deliveryId,changes})}).catch(e=>console.error("Notification error:",e));
+    fetch("/api/notify-revision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clientName,deliveryId:delivery?.id||deliveryId,changes})}).catch(e=>console.error("Notification error:",e));
   };
 
   const updateField=(videoId,field,value)=>{
@@ -62,7 +72,7 @@ export function DeliveryPublicView(){
     const updated={...delivery,videos:delivery.videos.map(v=>v.id===videoId?{...v,[field]:value}:v)};
     setDelivery(updated);
     setSaving(true);
-    fbSet(`/deliveries/${deliveryId}`,updated);
+    fbSet(`/deliveries/${delivery.id}`,updated);
     setTimeout(()=>setSaving(false),800);
     if(field==="revision1"||field==="revision2"){
       pendingChanges.current.push({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});

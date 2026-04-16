@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen } from "../firebase";
 import { Runsheets } from "./Runsheets";
-import { logoBg } from "../utils";
+import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 
 // ─── Constants ───
 const STATUS_COLORS = {
@@ -135,6 +135,19 @@ export function Preproduction() {
     onFB(() => {
       unsub1 = fbListen("/preproduction/metaAds", (data) => {
         setProjects(data || {});
+        // Backfill shortId on existing projects (one-time per record)
+        if (data) {
+          const used = new Set();
+          Object.values(data).forEach(p => { if (p?.shortId) used.add(p.shortId); });
+          Object.values(data).forEach(p => {
+            if (p && p.id && !p.shortId) {
+              let sid = makeShortId();
+              while (used.has(sid)) sid = makeShortId();
+              used.add(sid);
+              fbSet(`/preproduction/metaAds/${p.id}/shortId`, sid);
+            }
+          });
+        }
       });
       unsub2 = fbListen("/accounts", (data) => {
         setAccounts(data || {});
@@ -443,6 +456,7 @@ export function Preproduction() {
     const projectId = `meta_${Date.now()}`;
     fbSet(`/preproduction/metaAds/${projectId}`, {
       id: projectId,
+      shortId: makeShortId(),
       companyName: manualCompany.trim(),
       packageTier: manualTier,
       status: "draft",
@@ -610,6 +624,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                   const logo = getAccountLogo(p) || "";
                   fbSet(`/deliveries/${delId}`, {
                     id: delId,
+                    shortId: makeShortId(),
                     clientName: p.companyName,
                     projectName: `${p.companyName} Meta Ads`,
                     logoUrl: logo,
@@ -628,7 +643,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
               <option value="exported">Exported</option>
             </select>
             {hasScripts && (
-              <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}?p=${p.id}`); alert("Client link copied to clipboard"); }} style={btnSecondary}>Share with Client</button>
+              <button onClick={() => { navigator.clipboard.writeText(preproductionShareUrl(p)); alert("Client link copied to clipboard"); }} style={btnSecondary}>Share with Client</button>
             )}
             {hasScripts && (
               <button onClick={handleExport} style={btnPrimary}>Export PDF</button>

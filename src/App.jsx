@@ -12,7 +12,7 @@ import {
   todayKey, tomorrowKey, getMonday, wKey, fmtD, fmtRange, fmtLabel,
   dayDates, addW, fmtSecs, fmtSecsShort, categorizeContent,
   doCalc, pct, fmtCur, sCol, gSC, dayVal, nextState,
-  newDelivery, newVideo, logoBg
+  newDelivery, newVideo, logoBg, makeShortId, deliveryShareUrl
 } from "./utils";
 import { Logo } from "./components/Logo";
 import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./components/UIComponents";
@@ -224,6 +224,10 @@ export default function App(){
   useEffect(()=>{if(rosterAdding&&rosterAddRef.current)rosterAddRef.current.focus();},[rosterAdding]);
   useEffect(()=>{if(rosterEditId&&rosterEditRef.current)rosterEditRef.current.focus();},[rosterEditId]);
 
+  // Backfill shortId on existing deliveries (one-time per record). Also handles
+  // dedup if two records ever generate the same hash.
+  useEffect(()=>{if(!deliveries.length)return;const used=new Set();let changed=false;const next=deliveries.map(d=>{if(!d)return d;if(d.shortId&&!used.has(d.shortId)){used.add(d.shortId);return d;}let id=d.shortId||makeShortId();while(used.has(id))id=makeShortId();used.add(id);if(id!==d.shortId){changed=true;return{...d,shortId:id};}return d;});if(changed)setDeliveries(next);},[deliveries.length]);
+
   const isFounder=role==="founder"||role==="founders";
   const isFounders=role==="founders";
 
@@ -279,13 +283,16 @@ export default function App(){
 
   const activeQuote=quotes.find(q=>q.id===activeQuoteId);
 
-  // Check for public delivery link
+  // Check for public delivery link — supports both /d/HASH/slug (pretty) and ?d=ID (legacy)
+  const pathname=window.location.pathname;
+  const prettyDelivery=pathname.match(/^\/d\/([a-z0-9]{4,12})(?:\/|$)/i);
   const deliveryParam=new URLSearchParams(window.location.search).get("d");
-  if(deliveryParam)return(<><style>{CSS}</style><DeliveryPublicView/></>);
+  if(prettyDelivery||deliveryParam)return(<><style>{CSS}</style><DeliveryPublicView/></>);
 
-  // Check for public preproduction link
+  // Check for public preproduction link — supports both /p/HASH/slug and ?p=ID
+  const prettyPreprod=pathname.match(/^\/p\/([a-z0-9]{4,12})(?:\/|$)/i);
   const preprodParam=new URLSearchParams(window.location.search).get("p");
-  if(preprodParam)return(<><style>{CSS}</style><PreproductionPublicView/></>);
+  if(prettyPreprod||preprodParam)return(<><style>{CSS}</style><PreproductionPublicView/></>);
 
   // Check for public ROAS calculator link (no auth required, pure client-side state)
   const roasParam=new URLSearchParams(window.location.search).get("roas");
@@ -811,7 +818,7 @@ export default function App(){
       const createBlank=()=>{const d=newDelivery("New Client","New Project");setDeliveries(p=>[...p,d]);setActiveDeliveryId(d.id);setImportMode(false);};
       const updateDelivery=(updated)=>{setDeliveries(p=>p.map(d=>d.id===updated.id?updated:d));};
       const deleteDelivery=(id)=>{setDeliveries(p=>p.filter(d=>d.id!==id));if(activeDeliveryId===id)setActiveDeliveryId(null);};
-      const shareUrl=(id)=>`${window.location.origin}?d=${id}`;
+      const shareUrl=(id)=>{const d=deliveries.find(x=>x.id===id);return d?deliveryShareUrl(d):`${window.location.origin}?d=${id}`;};
       const copyLink=(id)=>{navigator.clipboard?.writeText(shareUrl(id));};
 
       if(activeDelivery){

@@ -8,6 +8,14 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = "viewix-webhook-2026";
 
+// Generate a 6-char unguessable short id for share URLs (matches frontend utils.makeShortId)
+function makeShortId() {
+  const chars = "abcdefghijkmnpqrstuvwxyz23456789";
+  let out = "";
+  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
 // Milestone gaps in days from signing date
 const GAPS = {
   preProductionMeeting: 3,
@@ -128,6 +136,7 @@ export default async function handler(req, res) {
       const delId = "del-" + Date.now();
       const newDelivery = {
         id: delId,
+        shortId: makeShortId(),
         clientName: companyName,
         logoUrl: "",
         notes: "",
@@ -186,6 +195,7 @@ export default async function handler(req, res) {
       const tier = metaAdsTiers.find(t => dealTypeLower.includes(t));
       await fbSet(`/preproduction/metaAds/${projectId}`, {
         id: projectId,
+        shortId: makeShortId(),
         companyName: companyName,
         packageTier: tier,
         status: "draft",
@@ -210,6 +220,7 @@ export default async function handler(req, res) {
       const tier = socialRetainerTiers.find(t => dealTypeLower.includes(t));
       await fbSet(`/preproduction/socialOrganic/${projectId}`, {
         id: projectId,
+        shortId: makeShortId(),
         companyName: companyName,
         packageTier: tier,
         status: "draft",
