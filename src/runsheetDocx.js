@@ -1,0 +1,282 @@
+import {
+  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
+  Header, AlignmentType, LevelFormat, BorderStyle, WidthType, ShadingType,
+  HeadingLevel, PageBreak,
+} from "docx";
+import { saveAs } from "file-saver";
+
+// ─── Brand colours ───
+const ORANGE = "F27A1A";
+const BLUE = "2C8DFF";
+const DARK = "1A1D23";
+const GREY = "5A6B85";
+const LIGHT_GREY = "F0F2F5";
+const BORDER_GREY = "D1D5DB";
+const WHITE = "FFFFFF";
+
+const border = { style: BorderStyle.SINGLE, size: 1, color: BORDER_GREY };
+const borders = { top: border, bottom: border, left: border, right: border };
+const noBorder = { style: BorderStyle.NONE, size: 0, color: WHITE };
+const noBorders = { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder };
+const cellMargins = { top: 60, bottom: 60, left: 100, right: 100 };
+
+// Content width for A4 portrait with 1" margins = 9026 DXA
+const PAGE_W = 11906;
+const MARGIN = 1440;
+const CONTENT_W = PAGE_W - MARGIN * 2;
+
+// ─── Helpers ───
+function headerCell(text, width) {
+  return new TableCell({
+    borders, width: { size: width, type: WidthType.DXA }, margins: cellMargins,
+    shading: { fill: DARK, type: ShadingType.CLEAR },
+    children: [new Paragraph({ children: [new TextRun({ text, bold: true, font: "Arial", size: 18, color: WHITE })] })],
+  });
+}
+function bodyCell(text, width, opts = {}) {
+  const runs = Array.isArray(text)
+    ? text.map(t => typeof t === "string" ? new TextRun({ text: t, font: "Arial", size: 18, color: DARK }) : t)
+    : [new TextRun({ text: text || "", font: "Arial", size: 18, color: DARK, ...(opts.bold ? { bold: true } : {}), ...(opts.italic ? { italics: true } : {}) })];
+  return new TableCell({
+    borders, width: { size: width, type: WidthType.DXA }, margins: cellMargins,
+    shading: opts.shading ? { fill: opts.shading, type: ShadingType.CLEAR } : undefined,
+    children: [new Paragraph({ children: runs })],
+  });
+}
+function infoPair(label, value) {
+  return new Paragraph({
+    spacing: { after: 60 },
+    children: [
+      new TextRun({ text: `${label}: `, bold: true, font: "Arial", size: 20, color: DARK }),
+      new TextRun({ text: value || "—", font: "Arial", size: 20, color: GREY }),
+    ],
+  });
+}
+
+async function fetchImageBuffer(url) {
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    return await resp.arrayBuffer();
+  } catch { return null; }
+}
+
+// ─── Main export function ───
+export async function generateRunsheetDocx(runsheet, producer, director, clientLogoUrl) {
+  // Load logos
+  let viewixLogoData = null;
+  try {
+    const resp = await fetch("/viewix-logo.png");
+    if (resp.ok) viewixLogoData = await resp.arrayBuffer();
+  } catch {}
+
+  let clientLogoData = null;
+  if (clientLogoUrl) clientLogoData = await fetchImageBuffer(clientLogoUrl);
+
+  // ─── Build logo header row ───
+  const logoChildren = [];
+  const logoCells = [];
+  if (viewixLogoData) {
+    logoCells.push(new TableCell({
+      borders: noBorders, width: { size: Math.floor(CONTENT_W / 2), type: WidthType.DXA },
+      children: [new Paragraph({
+        children: [new ImageRun({
+          type: "png", data: viewixLogoData,
+          transformation: { width: 140, height: 37 },
+          altText: { title: "Viewix", description: "Viewix Logo", name: "ViewixLogo" },
+        })],
+      })],
+    }));
+  } else {
+    logoCells.push(new TableCell({
+      borders: noBorders, width: { size: Math.floor(CONTENT_W / 2), type: WidthType.DXA },
+      children: [new Paragraph({ children: [new TextRun({ text: "Viewix", bold: true, font: "Arial", size: 28, color: BLUE })] })],
+    }));
+  }
+  if (clientLogoData) {
+    logoCells.push(new TableCell({
+      borders: noBorders, width: { size: Math.floor(CONTENT_W / 2), type: WidthType.DXA },
+      children: [new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        children: [new ImageRun({
+          type: "png", data: clientLogoData,
+          transformation: { width: 120, height: 40 },
+          altText: { title: "Client", description: "Client Logo", name: "ClientLogo" },
+        })],
+      })],
+    }));
+  } else {
+    logoCells.push(new TableCell({
+      borders: noBorders, width: { size: Math.floor(CONTENT_W / 2), type: WidthType.DXA },
+      children: [new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        children: [new TextRun({ text: runsheet.companyName || "", bold: true, font: "Arial", size: 24, color: DARK })],
+      })],
+    }));
+  }
+  if (logoCells.length) {
+    logoChildren.push(new Table({
+      width: { size: CONTENT_W, type: WidthType.DXA },
+      columnWidths: [Math.floor(CONTENT_W / 2), Math.floor(CONTENT_W / 2)],
+      rows: [new TableRow({ children: logoCells })],
+    }));
+    logoChildren.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
+  }
+
+  // ─── Info section ───
+  const infoChildren = [];
+  const firstDay = (runsheet.shootDays || [])[0];
+  if (firstDay?.date) {
+    const d = new Date(firstDay.date + "T00:00:00");
+    infoChildren.push(infoPair("Date", d.toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })));
+  }
+  if (firstDay?.location) infoChildren.push(infoPair("Location", firstDay.location));
+  if (director) infoChildren.push(infoPair("Director", `${director.name}${director.phone ? " - " + director.phone : ""}`));
+  if (producer) infoChildren.push(infoPair("Producer", `${producer.name}${producer.phone ? " - " + producer.phone : ""}`));
+  (runsheet.clientContacts || []).forEach(c => {
+    infoChildren.push(infoPair(c.name || "Client", c.phone || ""));
+  });
+  infoChildren.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
+
+  // ─── Schedule tables per shoot day ───
+  const scheduleChildren = [];
+  let grandTotalVideos = 0;
+
+  (runsheet.shootDays || []).forEach((day, dayIdx) => {
+    // Shoot heading
+    const dateStr = day.date
+      ? new Date(day.date + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })
+      : "";
+    scheduleChildren.push(new Paragraph({
+      spacing: { before: dayIdx > 0 ? 300 : 0, after: 120 },
+      children: [new TextRun({
+        text: `${day.label || "Shoot " + (dayIdx + 1)}${dateStr ? " — " + dateStr : ""}${day.location ? " — " + day.location : ""}`,
+        bold: true, font: "Arial", size: 24, color: DARK,
+      })],
+    }));
+
+    // Column widths: Time(1400) Videos(2600) Location(1500) Props(1500) People(1200) #(826)
+    const colW = [1400, 2600, 1500, 1500, 1200, 826];
+    const tableRows = [
+      new TableRow({
+        children: ["Time", "Videos", "Location", "Props", "People", "#"].map((h, i) => headerCell(h, colW[i])),
+      }),
+    ];
+
+    let dayVideoCount = 0;
+    (day.timeSlots || []).forEach(slot => {
+      const isBreak = slot.notes && !(slot.videoIds || []).length;
+      const slotVideos = (slot.videoIds || []).map(vid => (runsheet.videos || []).find(v => v.id === vid)).filter(Boolean);
+      const videoCount = slotVideos.length;
+      dayVideoCount += videoCount;
+      const timeStr = `${slot.startTime || ""} - ${slot.endTime || ""}`;
+      const videoNames = isBreak ? slot.notes : slotVideos.map(v => v.videoName).join("\n");
+
+      tableRows.push(new TableRow({
+        children: [
+          bodyCell(timeStr, colW[0], isBreak ? { italic: true, shading: "FEF3C7" } : {}),
+          bodyCell(videoNames, colW[1], isBreak ? { italic: true, shading: "FEF3C7" } : { bold: true }),
+          bodyCell(isBreak ? "" : (slot.location || day.location || ""), colW[2], isBreak ? { shading: "FEF3C7" } : {}),
+          bodyCell(isBreak ? "" : (slot.props || ""), colW[3], isBreak ? { shading: "FEF3C7" } : {}),
+          bodyCell(isBreak ? "" : (slot.people || ""), colW[4], isBreak ? { shading: "FEF3C7" } : {}),
+          bodyCell(isBreak ? "" : String(videoCount || ""), colW[5], isBreak ? { shading: "FEF3C7" } : {}),
+        ],
+      }));
+    });
+
+    grandTotalVideos += dayVideoCount;
+
+    // Total row
+    tableRows.push(new TableRow({
+      children: [
+        bodyCell("", colW[0]),
+        bodyCell("", colW[1]),
+        bodyCell("", colW[2]),
+        bodyCell("", colW[3]),
+        bodyCell("Total:", colW[4], { bold: true }),
+        bodyCell(String(dayVideoCount), colW[5], { bold: true }),
+      ],
+    }));
+
+    scheduleChildren.push(new Table({
+      width: { size: CONTENT_W, type: WidthType.DXA },
+      columnWidths: colW,
+      rows: tableRows,
+    }));
+    scheduleChildren.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
+  });
+
+  // ─── Video breakdowns ───
+  const breakdownChildren = [];
+  const videosWithDetails = (runsheet.videos || []).filter(v => v.contentStyle || v.hook || v.props || v.people);
+  if (videosWithDetails.length > 0) {
+    breakdownChildren.push(new Paragraph({ children: [new PageBreak()] }));
+    breakdownChildren.push(new Paragraph({
+      spacing: { after: 160 },
+      children: [new TextRun({ text: "Video Breakdown", bold: true, font: "Arial", size: 28, color: DARK })],
+    }));
+
+    const bdColW = [1200, 1600, 2200, 2200, 1826];
+    breakdownChildren.push(new Table({
+      width: { size: CONTENT_W, type: WidthType.DXA },
+      columnWidths: bdColW,
+      rows: [
+        new TableRow({
+          children: ["#", "Video", "Hook", "Description", "Props"].map((h, i) => headerCell(h, bdColW[i])),
+        }),
+        ...videosWithDetails.map((v, i) =>
+          new TableRow({
+            children: [
+              bodyCell(String(i + 1), bdColW[0]),
+              bodyCell(v.videoName || "", bdColW[1], { bold: true }),
+              bodyCell(v.hook || "", bdColW[2]),
+              bodyCell(v.contentStyle || v.explainThePain || "", bdColW[3]),
+              bodyCell(v.props || "", bdColW[4]),
+            ],
+          })
+        ),
+      ],
+    }));
+  }
+
+  // ─── Grand total ───
+  const totalChildren = [
+    new Paragraph({ spacing: { before: 300 }, children: [] }),
+    new Paragraph({
+      children: [
+        new TextRun({ text: "Total Videos: ", bold: true, font: "Arial", size: 24, color: DARK }),
+        new TextRun({ text: String(grandTotalVideos), bold: true, font: "Arial", size: 28, color: BLUE }),
+      ],
+    }),
+  ];
+
+  // ─── Assemble document ───
+  const doc = new Document({
+    styles: {
+      default: { document: { run: { font: "Arial", size: 20 } } },
+      paragraphStyles: [
+        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true,
+          run: { size: 32, bold: true, font: "Arial", color: DARK },
+          paragraph: { spacing: { before: 240, after: 120 } } },
+      ],
+    },
+    sections: [{
+      properties: {
+        page: {
+          size: { width: PAGE_W, height: 16838 },
+          margin: { top: MARGIN, right: MARGIN, bottom: MARGIN, left: MARGIN },
+        },
+      },
+      children: [
+        ...logoChildren,
+        ...infoChildren,
+        ...scheduleChildren,
+        ...breakdownChildren,
+        ...totalChildren,
+      ],
+    }],
+  });
+
+  const blob = await Packer.toBlob(doc);
+  saveAs(blob, `${runsheet.companyName || "Runsheet"} - Runsheet.docx`);
+}

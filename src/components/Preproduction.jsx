@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen } from "../firebase";
+import { Runsheets } from "./Runsheets";
 
 // ─── Constants ───
 const STATUS_COLORS = {
@@ -630,6 +631,10 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             {hasScripts && (
               <button onClick={handleExport} style={btnPrimary}>Export PDF</button>
             )}
+            {(p.status === "approved" || p.status === "exported") && hasScripts && (
+              <button onClick={() => { setActiveProjectId(null); setSubTab("runsheets"); }}
+                style={{ ...btnSecondary, borderColor: "rgba(34,197,94,0.4)", color: "#22C55E" }}>Create Runsheet</button>
+            )}
             <button
               onClick={() => {
                 if (!window.confirm(`Delete "${p.companyName}" and all its scripts, transcripts and feedback? This cannot be undone.`)) return;
@@ -951,9 +956,18 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 color: subTab === "socialOrganic" ? "#fff" : "var(--muted)",
               }}
             >Social Media Organic</button>
+            <button
+              onClick={() => setSubTab("runsheets")}
+              style={{
+                padding: "5px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", fontFamily: "inherit",
+                background: subTab === "runsheets" ? "var(--accent)" : "transparent",
+                color: subTab === "runsheets" ? "#fff" : "var(--muted)",
+              }}
+            >Runsheets</button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {subTab !== "runsheets" && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {/* Status filter */}
           <select
             value={statusFilter}
@@ -968,7 +982,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             <option value="exported">Exported</option>
           </select>
           <button onClick={() => setManualAddOpen(!manualAddOpen)} style={btnPrimary}>+ New Project</button>
-        </div>
+        </div>}
       </div>
 
       <div style={{ padding: "24px 28px" }}>
@@ -1008,6 +1022,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
           </div>
         )}
 
+        {subTab === "runsheets" && <Runsheets accounts={accounts} projects={projects} />}
 
         {/* Meta Ads project cards */}
         {subTab === "metaAds" && (
