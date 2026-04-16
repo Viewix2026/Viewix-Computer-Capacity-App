@@ -60,7 +60,7 @@ export function Runsheets({ accounts, projects }) {
   const [createProducerId, setCreateProducerId] = useState("");
   const [createDirectorId, setCreateDirectorId] = useState("");
   const [activeDayIdx, setActiveDayIdx] = useState(0);
-  const [dragVideoId, setDragVideoId] = useState(null);
+  const [dragItem, setDragItem] = useState(null); // { videoId, sceneType? } — sceneType present for Meta Ads
   const [dragSource, setDragSource] = useState(null); // { dayIdx, slotIdx } or null (from pool)
   const [dragOverSlot, setDragOverSlot] = useState(null);
   const [editingVideo, setEditingVideo] = useState(null);
@@ -117,47 +117,14 @@ export function Runsheets({ accounts, projects }) {
     const projectType = isMetaAds ? "metaAds" : "organic";
 
     const shootDays = [];
-    const allVideoIds = videos.map(v => v.id);
     for (let i = 0; i < Math.max(1, createDays); i++) {
-      let timeSlots;
-      if (isMetaAds && i === 0) {
-        // Auto-generate scene-based time slots for Meta Ads (first day gets all scenes)
-        let hour = 9, min = 0;
-        timeSlots = META_SCENE_TYPES.map((scene, si) => {
-          const startTime = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-          min += 45; if (min >= 60) { hour++; min -= 60; }
-          const endTime = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-          return {
-            id: `ts-${Date.now()}-${i}-${si}`, startTime, endTime,
-            sceneType: scene.key, videoIds: [...allVideoIds],
-            location: "", props: "", people: "", notes: `All ${scene.label} scenes`,
-          };
-        });
-        // Add a lunch break after the 3rd scene
-        const lunchStart = timeSlots[3].startTime;
-        const [lh, lm] = lunchStart.split(":").map(Number);
-        const lunchEnd = `${String(lh + 1).padStart(2, "0")}:${String(lm).padStart(2, "0")}`;
-        timeSlots.splice(3, 0, {
-          id: `ts-${Date.now()}-${i}-break`, startTime: lunchStart, endTime: lunchEnd,
-          sceneType: "", videoIds: [], location: "", props: "", people: "", notes: "Break for Lunch",
-        });
-        // Shift times after lunch
-        let curH = lh + 1, curM = lm;
-        for (let j = 4; j < timeSlots.length; j++) {
-          if (timeSlots[j].notes === "Break for Lunch") continue;
-          timeSlots[j].startTime = `${String(curH).padStart(2, "0")}:${String(curM).padStart(2, "0")}`;
-          curM += 45; if (curM >= 60) { curH++; curM -= 60; }
-          timeSlots[j].endTime = `${String(curH).padStart(2, "0")}:${String(curM).padStart(2, "0")}`;
-        }
-      } else {
-        // Organic or additional days — empty slots
-        timeSlots = [
-          { id: `ts-${Date.now()}-${i}-0`, startTime: "09:00", endTime: "09:30", sceneType: "", videoIds: [], location: "", props: "", people: "", notes: "" },
-        ];
-      }
+      // Empty slots for both Meta Ads and Organic — producer builds the schedule via drag-and-drop
       shootDays.push({
         id: `sd-${Date.now()}-${i}`, label: `Shoot ${i + 1}`, date: "",
-        location: "", startTime: "09:00", endTime: "17:00", timeSlots,
+        location: "", startTime: "09:00", endTime: "17:00",
+        timeSlots: [
+          { id: `ts-${Date.now()}-${i}-0`, startTime: "09:00", endTime: "09:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+        ],
       });
     }
     const rs = {
@@ -175,33 +142,58 @@ export function Runsheets({ accounts, projects }) {
     setCreateDirectorId("");
   };
 
-  // ─── Assigned video IDs (across all days) ───
+  // ─── Assigned tracking ───
+  // For organic: track which videoIds are assigned (full video in any slot)
+  // For Meta Ads: track which { videoId × sceneType } pairs are assigned
+  const rsIsMetaAds = activeRS?.projectType === "metaAds";
   const assignedVideoIds = new Set();
+  const assignedSceneElements = new Set(); // keys like "videoId::sceneType"
   if (activeRS) {
     (activeRS.shootDays || []).forEach(day => {
       (day.timeSlots || []).forEach(slot => {
         (slot.videoIds || []).forEach(vid => assignedVideoIds.add(vid));
+        (slot.sceneElements || []).forEach(el => assignedSceneElements.add(`${el.videoId}::${el.sceneType}`));
       });
     });
   }
   const unassignedVideos = activeRS ? (activeRS.videos || []).filter(v => !assignedVideoIds.has(v.id)) : [];
+  // For Meta Ads: generate all possible scene elements (video × scene type) not yet assigned
+  const unassignedSceneElements = [];
+  if (activeRS && rsIsMetaAds) {
+    (activeRS.videos || []).forEach(v => {
+      META_SCENE_TYPES.forEach(scene => {
+        const key = `${v.id}::${scene.key}`;
+        if (!assignedSceneElements.has(key)) {
+          unassignedSceneElements.push({ videoId: v.id, sceneType: scene.key, videoName: v.videoName, motivatorType: v.motivatorType });
+        }
+      });
+    });
+  }
 
   // ─── Drag handlers ───
-  const handleDragStart = (videoId, source) => {
-    setDragVideoId(videoId);
+  const handleDragStart = (item, source) => {
+    setDragItem(item);
     setDragSource(source);
   };
+  const elementKey = (el) => `${el.videoId}::${el.sceneType || ""}`;
+  const matches = (a, b) => rsIsMetaAds
+    ? (a.videoId === b.videoId && a.sceneType === b.sceneType)
+    : (a.videoId === b.videoId);
+
   const handleDropOnSlot = (dayIdx, slotIdx) => {
-    if (!dragVideoId || !activeRS) return;
-    const rs = { ...activeRS };
-    const days = [...(rs.shootDays || [])];
+    if (!dragItem || !activeRS) return;
+    const days = [...(activeRS.shootDays || [])];
 
     // Remove from source slot if moving between slots
     if (dragSource) {
       const srcDay = { ...days[dragSource.dayIdx] };
       const srcSlots = [...(srcDay.timeSlots || [])];
       const srcSlot = { ...srcSlots[dragSource.slotIdx] };
-      srcSlot.videoIds = (srcSlot.videoIds || []).filter(id => id !== dragVideoId);
+      if (rsIsMetaAds) {
+        srcSlot.sceneElements = (srcSlot.sceneElements || []).filter(el => !matches(el, dragItem));
+      } else {
+        srcSlot.videoIds = (srcSlot.videoIds || []).filter(id => id !== dragItem.videoId);
+      }
       srcSlots[dragSource.slotIdx] = srcSlot;
       srcDay.timeSlots = srcSlots;
       days[dragSource.dayIdx] = srcDay;
@@ -211,31 +203,41 @@ export function Runsheets({ accounts, projects }) {
     const tgtDay = { ...days[dayIdx] };
     const tgtSlots = [...(tgtDay.timeSlots || [])];
     const tgtSlot = { ...tgtSlots[slotIdx] };
-    if (!(tgtSlot.videoIds || []).includes(dragVideoId)) {
-      tgtSlot.videoIds = [...(tgtSlot.videoIds || []), dragVideoId];
+    if (rsIsMetaAds) {
+      const exists = (tgtSlot.sceneElements || []).some(el => matches(el, dragItem));
+      if (!exists) {
+        tgtSlot.sceneElements = [...(tgtSlot.sceneElements || []), { videoId: dragItem.videoId, sceneType: dragItem.sceneType }];
+      }
+    } else {
+      if (!(tgtSlot.videoIds || []).includes(dragItem.videoId)) {
+        tgtSlot.videoIds = [...(tgtSlot.videoIds || []), dragItem.videoId];
+      }
     }
     tgtSlots[slotIdx] = tgtSlot;
     tgtDay.timeSlots = tgtSlots;
     days[dayIdx] = tgtDay;
 
     patchRS(activeRS.id, { shootDays: days });
-    setDragVideoId(null);
+    setDragItem(null);
     setDragSource(null);
     setDragOverSlot(null);
   };
   const handleDropOnPool = () => {
-    if (!dragVideoId || !activeRS || !dragSource) return;
-    const rs = { ...activeRS };
-    const days = [...(rs.shootDays || [])];
+    if (!dragItem || !activeRS || !dragSource) return;
+    const days = [...(activeRS.shootDays || [])];
     const srcDay = { ...days[dragSource.dayIdx] };
     const srcSlots = [...(srcDay.timeSlots || [])];
     const srcSlot = { ...srcSlots[dragSource.slotIdx] };
-    srcSlot.videoIds = (srcSlot.videoIds || []).filter(id => id !== dragVideoId);
+    if (rsIsMetaAds) {
+      srcSlot.sceneElements = (srcSlot.sceneElements || []).filter(el => !matches(el, dragItem));
+    } else {
+      srcSlot.videoIds = (srcSlot.videoIds || []).filter(id => id !== dragItem.videoId);
+    }
     srcSlots[dragSource.slotIdx] = srcSlot;
     srcDay.timeSlots = srcSlots;
     days[dragSource.dayIdx] = srcDay;
     patchRS(activeRS.id, { shootDays: days });
-    setDragVideoId(null);
+    setDragItem(null);
     setDragSource(null);
     setDragOverSlot(null);
   };
@@ -450,7 +452,7 @@ export function Runsheets({ accounts, projects }) {
                 <thead>
                   <tr>
                     {(isMetaAds
-                      ? ["Time", "Scene", "Ads", "Location", "Props", "People", "Notes", "#", ""]
+                      ? ["Time", "Scene Elements", "Location", "Props", "People", "Notes", "#", ""]
                       : ["Time", "Videos", "Location", "Props", "People", "Notes", "#", ""]
                     ).map(h => (
                       <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "var(--muted)", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
@@ -459,10 +461,11 @@ export function Runsheets({ accounts, projects }) {
                 </thead>
                 <tbody>
                   {(day.timeSlots || []).map((slot, si) => {
-                    const isBreak = slot.notes?.includes("Break") && !(slot.videoIds?.length);
+                    const slotElements = slot.sceneElements || [];
                     const slotVideos = (slot.videoIds || []).map(vid => (activeRS.videos || []).find(v => v.id === vid)).filter(Boolean);
+                    const isBreak = slot.notes?.includes("Break") && !(slotVideos.length) && !(slotElements.length);
                     const isOver = dragOverSlot?.dayIdx === activeDayIdx && dragOverSlot?.slotIdx === si;
-                    const sceneLabel = isMetaAds ? (META_SCENE_TYPES.find(s => s.key === slot.sceneType)?.label || slot.sceneType || "") : "";
+                    const cellCount = isMetaAds ? slotElements.length : slotVideos.length;
                     return (
                       <tr key={slot.id} style={{ background: isBreak ? "rgba(251,191,36,0.06)" : isOver ? "rgba(59,130,246,0.08)" : "transparent" }}>
                         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap", width: 130 }}>
@@ -473,39 +476,32 @@ export function Runsheets({ accounts, projects }) {
                           </div>
                         </td>
                         {isMetaAds ? (
-                          <>
-                            {/* Scene type column */}
-                            <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", width: 140 }}>
-                              {isBreak ? <span style={{ fontStyle: "italic", color: "var(--muted)" }}>{slot.notes}</span> : (
-                                <select value={slot.sceneType || ""} onChange={e => updateSlotField(activeDayIdx, si, "sceneType", e.target.value)}
-                                  style={{ ...inputSt, padding: "3px 6px", fontSize: 11, fontWeight: 700 }}>
-                                  <option value="">Custom</option>
-                                  {META_SCENE_TYPES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                                </select>
-                              )}
-                            </td>
-                            {/* Ads in this scene */}
-                            <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", minWidth: 180 }}
-                              onDragOver={e => { e.preventDefault(); setDragOverSlot({ dayIdx: activeDayIdx, slotIdx: si }); }}
-                              onDragLeave={() => setDragOverSlot(null)}
-                              onDrop={e => { e.preventDefault(); handleDropOnSlot(activeDayIdx, si); }}>
-                              {isBreak ? null : (
-                                <div style={{ display: "flex", gap: 3, flexWrap: "wrap", minHeight: 24 }}>
-                                  {slotVideos.map(v => {
-                                    const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
-                                    return (
-                                      <span key={v.id} draggable onDragStart={() => handleDragStart(v.id, { dayIdx: activeDayIdx, slotIdx: si })}
-                                        title={v.videoName}
-                                        style={{ padding: "1px 6px", borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", whiteSpace: "nowrap" }}>
-                                        {v.videoName}
-                                      </span>
-                                    );
-                                  })}
-                                  {!slotVideos.length && <span style={{ color: "var(--muted)", fontSize: 10, fontStyle: "italic" }}>Drop ads here</span>}
-                                </div>
-                              )}
-                            </td>
-                          </>
+                          /* Meta Ads: scene elements column */
+                          <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", minWidth: 280 }}
+                            onDragOver={e => { e.preventDefault(); setDragOverSlot({ dayIdx: activeDayIdx, slotIdx: si }); }}
+                            onDragLeave={() => setDragOverSlot(null)}
+                            onDrop={e => { e.preventDefault(); handleDropOnSlot(activeDayIdx, si); }}>
+                            <div style={{ display: "flex", gap: 3, flexWrap: "wrap", minHeight: 28 }}>
+                              {slotElements.map((el, ei) => {
+                                const v = (activeRS.videos || []).find(x => x.id === el.videoId);
+                                if (!v) return null;
+                                const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
+                                const sceneLabel = META_SCENE_TYPES.find(s => s.key === el.sceneType)?.label || el.sceneType;
+                                return (
+                                  <span key={`${el.videoId}-${el.sceneType}-${ei}`} draggable
+                                    onDragStart={() => handleDragStart({ videoId: el.videoId, sceneType: el.sceneType }, { dayIdx: activeDayIdx, slotIdx: si })}
+                                    title={`${v.videoName} — ${sceneLabel}`}
+                                    style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}33`, whiteSpace: "nowrap" }}>
+                                    <span style={{ opacity: 0.85 }}>{v.videoName}</span>
+                                    <span style={{ opacity: 0.6, margin: "0 4px" }}>·</span>
+                                    <span>{sceneLabel}</span>
+                                  </span>
+                                );
+                              })}
+                              {!slotElements.length && !isBreak && <span style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>Drop scene elements here</span>}
+                              {isBreak && <span style={{ fontStyle: "italic", color: "var(--muted)", fontSize: 11 }}>{slot.notes}</span>}
+                            </div>
+                          </td>
                         ) : (
                           /* Organic: Videos column with drag-and-drop */
                           <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", minWidth: 200 }}
@@ -516,7 +512,7 @@ export function Runsheets({ accounts, projects }) {
                               {slotVideos.map(v => {
                                 const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
                                 return (
-                                  <span key={v.id} draggable onDragStart={() => handleDragStart(v.id, { dayIdx: activeDayIdx, slotIdx: si })}
+                                  <span key={v.id} draggable onDragStart={() => handleDragStart({ videoId: v.id }, { dayIdx: activeDayIdx, slotIdx: si })}
                                     onClick={() => setEditingVideo(v.id)}
                                     style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}22` }}>
                                     {v.videoName}
@@ -540,7 +536,7 @@ export function Runsheets({ accounts, projects }) {
                           <input value={slot.notes || ""} onChange={e => updateSlotField(activeDayIdx, si, "notes", e.target.value)} placeholder={isBreak ? "" : "Notes..."} style={{ ...inputSt, padding: "3px 6px", fontSize: 11, fontStyle: isBreak ? "italic" : "normal" }} />
                         </td>
                         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", textAlign: "center", fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", width: 30 }}>
-                          {slotVideos.length || ""}
+                          {cellCount || ""}
                         </td>
                         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", width: 30 }}>
                           <button onClick={() => removeTimeSlot(activeDayIdx, si)} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14 }}>×</button>
@@ -553,31 +549,12 @@ export function Runsheets({ accounts, projects }) {
             </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
               <button onClick={() => addTimeSlot(activeDayIdx)} style={{ ...btnSecondary, fontSize: 11 }}>+ Add Time Slot</button>
-              {isMetaAds && <button onClick={() => {
-                // Add a scene slot with a scene type not yet used in this day
-                if (!activeRS) return;
-                const usedScenes = new Set((day.timeSlots || []).map(s => s.sceneType).filter(Boolean));
-                const nextScene = META_SCENE_TYPES.find(s => !usedScenes.has(s.key));
-                const days = [...(activeRS.shootDays || [])];
-                const d = { ...days[activeDayIdx] };
-                const slots = [...(d.timeSlots || [])];
-                const lastSlot = slots[slots.length - 1];
-                const nextStart = lastSlot ? lastSlot.endTime : "09:00";
-                const [h, m] = nextStart.split(":").map(Number);
-                const endMin = m + 45;
-                const nextEnd = `${String(h + Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}`;
-                const allVids = (activeRS.videos || []).map(v => v.id);
-                slots.push({ id: `ts-${Date.now()}`, startTime: nextStart, endTime: nextEnd, sceneType: nextScene?.key || "", videoIds: [...allVids], location: "", props: "", people: "", notes: nextScene ? `All ${nextScene.label} scenes` : "" });
-                d.timeSlots = slots;
-                days[activeDayIdx] = d;
-                patchRS(activeRS.id, { shootDays: days });
-              }} style={{ ...btnSecondary, fontSize: 11 }}>+ Add Scene Slot</button>}
               <button onClick={() => addBreak(activeDayIdx)} style={{ ...btnSecondary, fontSize: 11 }}>+ Add Break</button>
             </div>
           </>
         )}
 
-        {/* Unassigned Videos Pool — only for Organic mode */}
+        {/* Unassigned Videos Pool — Organic mode */}
         {!isMetaAds && (
           <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}
             onDragOver={e => e.preventDefault()}
@@ -590,7 +567,7 @@ export function Runsheets({ accounts, projects }) {
               {unassignedVideos.map(v => {
                 const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
                 return (
-                  <span key={v.id} draggable onDragStart={() => handleDragStart(v.id, null)}
+                  <span key={v.id} draggable onDragStart={() => handleDragStart({ videoId: v.id }, null)}
                     onClick={() => setEditingVideo(v.id)}
                     style={{ padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}33` }}>
                     {v.videoName}
@@ -601,25 +578,47 @@ export function Runsheets({ accounts, projects }) {
           </div>
         )}
 
-        {/* Meta Ads: ad pool for dragging individual ads out of scene slots */}
-        {isMetaAds && unassignedVideos.length > 0 && (
+        {/* Meta Ads: scene element pool (ad × scene combinations, grouped by scene type) */}
+        {isMetaAds && (
           <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}
             onDragOver={e => e.preventDefault()}
             onDrop={e => { e.preventDefault(); handleDropOnPool(); }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 10 }}>
-              Ads not in any scene slot ({unassignedVideos.length})
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>
+                Unassigned Scene Elements ({unassignedSceneElements.length})
+              </div>
+              <div style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
+                Drag ad × scene tokens into time slots
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", minHeight: 40 }}>
-              {unassignedVideos.map(v => {
-                const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
+            {unassignedSceneElements.length === 0 ? (
+              <div style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>All scene elements assigned</div>
+            ) : (
+              META_SCENE_TYPES.map(scene => {
+                const elementsInScene = unassignedSceneElements.filter(el => el.sceneType === scene.key);
+                if (elementsInScene.length === 0) return null;
                 return (
-                  <span key={v.id} draggable onDragStart={() => handleDragStart(v.id, null)}
-                    style={{ padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}33` }}>
-                    {v.videoName}
-                  </span>
+                  <div key={scene.key} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
+                      {scene.label} ({elementsInScene.length})
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {elementsInScene.map(el => {
+                        const mc = MOTIVATOR_COLORS[el.motivatorType] || {};
+                        return (
+                          <span key={`${el.videoId}-${el.sceneType}`} draggable
+                            onDragStart={() => handleDragStart({ videoId: el.videoId, sceneType: el.sceneType }, null)}
+                            title={`${el.videoName} — ${scene.label}`}
+                            style={{ padding: "3px 10px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}33`, whiteSpace: "nowrap" }}>
+                            {el.videoName}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
                 );
-              })}
-            </div>
+              })
+            )}
           </div>
         )}
 

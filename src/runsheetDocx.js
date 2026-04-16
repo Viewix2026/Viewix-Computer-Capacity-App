@@ -164,9 +164,9 @@ export async function generateRunsheetDocx(runsheet, producer, director, clientL
 
     let colW, colHeaders;
     if (isMetaAds) {
-      // Meta Ads: Time | Scene | Ads | Location | Props | People | #
-      colW = [1200, 1400, 2000, 1300, 1300, 1000, 826];
-      colHeaders = ["Time", "Scene", "Ads", "Location", "Props", "People", "#"];
+      // Meta Ads: Time | Scene Elements | Location | Props | People | #
+      colW = [1200, 3400, 1300, 1300, 1000, 826];
+      colHeaders = ["Time", "Scene Elements", "Location", "Props", "People", "#"];
     } else {
       // Organic: Time | Videos | Location | Props | People | #
       colW = [1400, 2600, 1500, 1500, 1200, 826];
@@ -178,28 +178,40 @@ export async function generateRunsheetDocx(runsheet, producer, director, clientL
 
     let dayVideoCount = 0;
     (day.timeSlots || []).forEach(slot => {
-      const isBreak = slot.notes?.includes("Break") && !(slot.videoIds || []).length;
+      const slotElements = slot.sceneElements || [];
       const slotVideos = (slot.videoIds || []).map(vid => (runsheet.videos || []).find(v => v.id === vid)).filter(Boolean);
-      const videoCount = slotVideos.length;
-      dayVideoCount += videoCount;
-      const timeStr = `${slot.startTime || ""} - ${slot.endTime || ""}`;
+      const isBreak = slot.notes?.includes("Break") && !slotVideos.length && !slotElements.length;
       const breakStyle = { italic: true, shading: "FEF3C7" };
+      const timeStr = `${slot.startTime || ""} - ${slot.endTime || ""}`;
 
       if (isMetaAds) {
-        const sceneLabel = SCENE_LABELS[slot.sceneType] || slot.sceneType || "";
-        const adNames = slotVideos.map(v => v.videoName).join(", ");
+        // Group scene elements by scene type for readable display
+        const grouped = {};
+        slotElements.forEach(el => {
+          const v = (runsheet.videos || []).find(x => x.id === el.videoId);
+          if (!v) return;
+          if (!grouped[el.sceneType]) grouped[el.sceneType] = [];
+          grouped[el.sceneType].push(v.videoName);
+        });
+        const sceneLines = Object.entries(grouped)
+          .map(([sceneKey, names]) => `${SCENE_LABELS[sceneKey] || sceneKey}: ${names.join(", ")}`)
+          .join("\n");
+        const displayText = isBreak ? slot.notes : sceneLines;
+        const count = slotElements.length;
+        dayVideoCount += count;
         tableRows.push(new TableRow({
           children: [
             bodyCell(timeStr, colW[0], isBreak ? breakStyle : {}),
-            bodyCell(isBreak ? slot.notes : sceneLabel, colW[1], isBreak ? breakStyle : { bold: true }),
-            bodyCell(isBreak ? "" : adNames, colW[2], isBreak ? breakStyle : {}),
-            bodyCell(isBreak ? "" : (slot.location || day.location || ""), colW[3], isBreak ? breakStyle : {}),
-            bodyCell(isBreak ? "" : (slot.props || ""), colW[4], isBreak ? breakStyle : {}),
-            bodyCell(isBreak ? "" : (slot.people || ""), colW[5], isBreak ? breakStyle : {}),
-            bodyCell(isBreak ? "" : String(videoCount || ""), colW[6], isBreak ? breakStyle : {}),
+            bodyCell(displayText, colW[1], isBreak ? breakStyle : {}),
+            bodyCell(isBreak ? "" : (slot.location || day.location || ""), colW[2], isBreak ? breakStyle : {}),
+            bodyCell(isBreak ? "" : (slot.props || ""), colW[3], isBreak ? breakStyle : {}),
+            bodyCell(isBreak ? "" : (slot.people || ""), colW[4], isBreak ? breakStyle : {}),
+            bodyCell(isBreak ? "" : String(count || ""), colW[5], isBreak ? breakStyle : {}),
           ],
         }));
       } else {
+        const videoCount = slotVideos.length;
+        dayVideoCount += videoCount;
         const videoNames = isBreak ? slot.notes : slotVideos.map(v => v.videoName).join("\n");
         tableRows.push(new TableRow({
           children: [
