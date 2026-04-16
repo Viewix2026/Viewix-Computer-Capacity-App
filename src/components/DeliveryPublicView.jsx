@@ -81,7 +81,7 @@ export function DeliveryPublicView(){
     {/* Header */}
     <div style={{padding:"24px 40px",borderBottom:"1px solid #1E2A3A",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
       <div style={{display:"flex",alignItems:"center",gap:16}}>
-        {(accountLogo||delivery.logoUrl)&&<img src={accountLogo||delivery.logoUrl} alt="" onError={e=>{e.target.style.display="none";}} style={{height:40,borderRadius:6,objectFit:"contain",background:"#fff",padding:4}}/>}
+        {(()=>{const s=accountLogo||delivery.logoUrl;return s?<img key={s} src={s} alt="" onError={e=>{e.target.style.display="none";}} style={{height:40,borderRadius:6,objectFit:"contain",background:"#fff",padding:4}}/>:null;})()}
         <div>
           <div style={{fontSize:18,fontWeight:800,color:"#E8ECF4"}}>{delivery.projectName}</div>
           <div style={{fontSize:13,color:"#5A6B85"}}>{delivery.clientName}</div>

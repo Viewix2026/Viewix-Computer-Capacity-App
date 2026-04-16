@@ -581,7 +581,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => setActiveProjectId(null)} style={NB}>&larr; Back</button>
-            {getAccountLogo(p) && <img src={getAccountLogo(p)} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 32, borderRadius: 6, objectFit: "contain", background: "#fff", padding: 3 }} />}
+            {(()=>{const s=getAccountLogo(p);return s?<img key={s} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 32, borderRadius: 6, objectFit: "contain", background: "#fff", padding: 3 }} />:null;})()}
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
             <PBadge text={p.packageTier} colors={TIER_COLORS[p.packageTier] || TIER_COLORS.standard} />
             <PBadge text={STATUS_LABELS[p.status] || p.status} colors={STATUS_COLORS[p.status] || STATUS_COLORS.draft} />
@@ -1057,7 +1057,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     onMouseLeave={e => { e.currentTarget.style.color = "#5A6B85"; e.currentTarget.style.background = "none"; }}
                   >×</button>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, paddingRight: 24 }}>
-                    {getAccountLogo(p) && <img src={getAccountLogo(p)} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 2 }} />}
+                    {(()=>{const s=getAccountLogo(p);return s?<img key={s} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 2 }} />:null;})()}
                     <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>

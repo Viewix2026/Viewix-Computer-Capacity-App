@@ -793,7 +793,7 @@ export default function App(){
     {tool==="deliveries"&&isFounder&&(()=>{
       const activeDelivery=deliveries.find(d=>d.id===activeDeliveryId);
 
-      const getAcctLogo=(clientName)=>{if(!clientName)return null;const nameLC=clientName.toLowerCase();const match=Object.values(accounts).find(a=>a&&(a.companyName||"").toLowerCase()===nameLC);return match?.logoUrl||null;};
+      const getAcctLogo=(clientName)=>{if(!clientName)return null;const nameLC=clientName.trim().toLowerCase();const acctList=Object.values(accounts).filter(Boolean);const exact=acctList.find(a=>(a.companyName||"").trim().toLowerCase()===nameLC);if(exact?.logoUrl)return exact.logoUrl;const partial=acctList.find(a=>{const acn=(a.companyName||"").trim().toLowerCase();return acn&&(acn.includes(nameLC)||nameLC.includes(acn));});return partial?.logoUrl||null;};
 
       const startImport=()=>{setImportMode(true);setImportLoading(true);fetchInProgressParents().then(items=>{setImportProjects(items);setImportLoading(false);}).catch(()=>setImportLoading(false));};
       const importProject=(proj)=>{
@@ -911,7 +911,7 @@ export default function App(){
               return(<div key={d.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"16px 20px",cursor:"pointer",transition:"all 0.15s"}} onClick={()=>setActiveDeliveryId(d.id)}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    {(getAcctLogo(d.clientName)||d.logoUrl)&&<img src={getAcctLogo(d.clientName)||d.logoUrl} alt="" onError={e=>{e.target.style.display="none";}} style={{height:28,borderRadius:4,objectFit:"contain",background:"#fff",padding:3}}/>}
+                    {(()=>{const logoSrc=getAcctLogo(d.clientName)||d.logoUrl;return logoSrc?<img key={logoSrc} src={logoSrc} alt="" onError={e=>{e.target.style.display="none";}} style={{height:28,borderRadius:4,objectFit:"contain",background:"#fff",padding:3}}/>:null;})()}
                     <div>
                       <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{d.clientName}</div>
                       <div style={{fontSize:12,color:"var(--muted)"}}>{d.projectName} · {d.videos.length} video{d.videos.length!==1?"s":""}</div>

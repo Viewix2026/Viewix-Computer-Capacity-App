@@ -320,7 +320,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                     <tr key={acct.id}>
                       <td style={{ ...TD, position: "sticky", left: 0, zIndex: 5, background: "var(--card)", fontWeight: 700, color: "var(--fg)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          {acct.logoUrl && <img src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 3 }} />}
+                          {acct.logoUrl && <img key={acct.logoUrl} src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 3 }} />}
                           {acct.companyName}
                         </div>
                       </td>
