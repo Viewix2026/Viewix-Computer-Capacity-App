@@ -371,8 +371,36 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
   const logo = getAccountLogo(project.companyName, project.attioCompanyId);
   const lbg = logoBg(getAccountLogoBg(project.companyName, project.attioCompanyId));
   const linkedAccount = findAccount(project.companyName, project.attioCompanyId);
+  const [scraping, setScraping] = useState(false);
+  const [scrapeError, setScrapeError] = useState(null);
 
   const patchInputs = (patch) => onPatch({ inputs: { ...(project.inputs || {}), ...patch } });
+
+  const runScrape = async () => {
+    const handles = (project.inputs?.competitors || []).map(c => c.handle).filter(Boolean);
+    if (!handles.length) { alert("Add at least one competitor handle before scraping."); return; }
+    setScraping(true);
+    setScrapeError(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "scrape", projectId: project.id, inputs: project.inputs }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener will rehydrate the project with posts + handleStats automatically.
+      if (d.errors?.length) {
+        setScrapeError(`Scraped ${d.postsCollected} posts but ${d.errors.length} handle(s) failed: ` + d.errors.map(e => `${e.handle}: ${e.error}`).join(", "));
+      }
+    } catch (e) {
+      setScrapeError(e.message);
+    } finally {
+      setScraping(false);
+    }
+  };
+
+  const posts = Array.isArray(project.posts) ? project.posts : [];
 
   return (
     <div>
@@ -398,15 +426,565 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         onPatchInputs={patchInputs}
       />
 
-      {/* Results + Synthesis sections will be added in later slices */}
-      {Array.isArray(project.posts) && project.posts.length > 0 && (
-        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginTop: 16 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Results</div>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-            {project.posts.length} posts scraped. Format classification + synthesis coming in next slices.
+      {/* Scrape + classify action bar */}
+      <ActionBar
+        project={project}
+        scraping={scraping}
+        onScrape={runScrape}
+        scrapeError={scrapeError}
+      />
+
+      {posts.length > 0 && <PostsGrid posts={posts} handleStats={project.handleStats || {}} projectId={project.id} />}
+
+      {posts.length > 0 && posts.some(p => p.format) && (
+        <SynthesisSection project={project} />
+      )}
+    </div>
+  );
+}
+
+// Scrape + Classify buttons + status
+function ActionBar({ project, scraping, onScrape, scrapeError }) {
+  const posts = Array.isArray(project.posts) ? project.posts : [];
+  const classified = posts.filter(p => p.format).length;
+  const unclassified = posts.length - classified;
+
+  const [classifying, setClassifying] = useState(false);
+  const [fastClassify, setFastClassify] = useState(false);
+  const [classifyError, setClassifyError] = useState(null);
+  const [classifyInfo, setClassifyInfo] = useState(null);
+
+  const runClassify = async () => {
+    if (!posts.length) return;
+    setClassifying(true);
+    setClassifyError(null);
+    setClassifyInfo(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "classify", projectId: project.id, fast: fastClassify }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setClassifyInfo(`Classified ${d.classified} post${d.classified === 1 ? "" : "s"}${d.batchErrors?.length ? ` · ${d.batchErrors.length} batch error(s)` : ""}`);
+    } catch (e) {
+      setClassifyError(e.message);
+    } finally {
+      setClassifying(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          {posts.length > 0 ? (
+            <>
+              {posts.length} post{posts.length === 1 ? "" : "s"} on file.
+              {classified > 0 && <span style={{ marginLeft: 6, color: "var(--fg)" }}>{classified} classified</span>}
+              {unclassified > 0 && <span style={{ marginLeft: 6, color: "#F59E0B" }}>{unclassified} unclassified</span>}
+              {project.scrape?.hitCache && <span style={{ marginLeft: 8, color: "var(--accent)" }}>♻️ cache-served</span>}
+            </>
+          ) : "No posts scraped yet."}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {posts.length > 0 && unclassified > 0 && (
+            <>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--muted)", cursor: "pointer" }}>
+                <input type="checkbox" checked={fastClassify} onChange={e => setFastClassify(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+                Fast (caption-only)
+              </label>
+              <button onClick={runClassify} disabled={classifying} style={{ ...btnSecondary, background: "var(--accent-soft)", color: "var(--accent)", borderColor: "transparent", opacity: classifying ? 0.6 : 1 }}>
+                {classifying ? "Classifying…" : `Classify ${unclassified} post${unclassified === 1 ? "" : "s"}`}
+              </button>
+            </>
+          )}
+          <button onClick={onScrape} disabled={scraping} style={{ ...btnPrimary, opacity: scraping ? 0.6 : 1 }}>
+            {scraping ? "Scraping…" : posts.length > 0 ? "Re-scrape" : "Run scrape"}
+          </button>
+        </div>
+      </div>
+      {scrapeError && (
+        <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+          {scrapeError}
+        </div>
+      )}
+      {classifyError && (
+        <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+          Classification failed: {classifyError}
+        </div>
+      )}
+      {classifyInfo && !classifyError && (
+        <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(34,197,94,0.08)", borderRadius: 8, border: "1px solid rgba(34,197,94,0.3)", fontSize: 12, color: "#22C55E" }}>
+          {classifyInfo}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// POSTS GRID — Slice 3 + Slice 4 format buckets
+// ═══════════════════════════════════════════
+function PostsGrid({ posts, handleStats, projectId }) {
+  const [sortBy, setSortBy] = useState("overperformance");
+  const [filterHandle, setFilterHandle] = useState("all");
+  const [filterFormat, setFilterFormat] = useState("all");
+
+  const handles = Array.from(new Set(posts.map(p => p.handle)));
+
+  // Count + avg overperformance per format bucket, for tab labels
+  const formatBuckets = {};
+  posts.forEach(p => {
+    const k = p.format || "_unclassified";
+    if (!formatBuckets[k]) formatBuckets[k] = { count: 0, overSum: 0, overCount: 0 };
+    formatBuckets[k].count++;
+    if (p.overperformanceScore != null) {
+      formatBuckets[k].overSum += p.overperformanceScore;
+      formatBuckets[k].overCount++;
+    }
+  });
+  const tabs = Object.keys(formatBuckets)
+    .sort((a, b) => formatBuckets[b].count - formatBuckets[a].count);
+
+  let filtered = filterHandle === "all" ? posts : posts.filter(p => p.handle === filterHandle);
+  if (filterFormat !== "all") {
+    filtered = filtered.filter(p => (p.format || "_unclassified") === filterFormat);
+  }
+  const sorted = [...filtered].sort((a, b) => {
+    switch (sortBy) {
+      case "views":          return (b.views || 0) - (a.views || 0);
+      case "engagement":     return (b.engagementRate || 0) - (a.engagementRate || 0);
+      case "recent":         return (b.timestamp || "").localeCompare(a.timestamp || "");
+      case "overperformance":
+      default:               return (b.overperformanceScore || 0) - (a.overperformanceScore || 0);
+    }
+  });
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      {/* Controls */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>
+          Scraped posts ({sorted.length}{sorted.length !== posts.length ? ` of ${posts.length}` : ""})
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select value={filterHandle} onChange={e => setFilterHandle(e.target.value)} style={{ ...inputSt, width: "auto", fontSize: 11, padding: "5px 8px" }}>
+            <option value="all">All handles</option>
+            {handles.map(h => {
+              const stats = handleStats[h];
+              return (
+                <option key={h} value={h}>
+                  {h}{stats ? ` — ${stats.postCount} posts, avg ${formatBig(stats.avgViews)}` : ""}
+                </option>
+              );
+            })}
+          </select>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inputSt, width: "auto", fontSize: 11, padding: "5px 8px" }}>
+            <option value="overperformance">Overperformance</option>
+            <option value="views">Views</option>
+            <option value="engagement">Engagement rate</option>
+            <option value="recent">Most recent</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Format bucket tabs */}
+      {tabs.length > 1 && (
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14, padding: "4px 0", overflowX: "auto" }}>
+          <FormatTab label="All" count={posts.length} active={filterFormat === "all"} onClick={() => setFilterFormat("all")} />
+          {tabs.map(key => {
+            const bucket = formatBuckets[key];
+            const label = key === "_unclassified" ? "Unclassified" : (FORMAT_LABELS[key] || key);
+            const avgOver = bucket.overCount > 0 ? bucket.overSum / bucket.overCount : null;
+            return (
+              <FormatTab
+                key={key}
+                label={label}
+                count={bucket.count}
+                avgOver={avgOver}
+                active={filterFormat === key}
+                unclassified={key === "_unclassified"}
+                onClick={() => setFilterFormat(key)}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+        {sorted.map(p => <PostCard key={p.id} post={p} projectId={projectId} />)}
+      </div>
+    </div>
+  );
+}
+
+function FormatTab({ label, count, avgOver, active, unclassified, onClick }) {
+  const bg = active
+    ? "var(--accent)"
+    : unclassified
+      ? "rgba(245,158,11,0.15)"
+      : "var(--bg)";
+  const color = active ? "#fff" : unclassified ? "#F59E0B" : "var(--muted)";
+  return (
+    <button onClick={onClick} style={{
+      padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)",
+      background: bg, color, fontSize: 11, fontWeight: 700, cursor: "pointer",
+      fontFamily: "inherit", whiteSpace: "nowrap",
+      display: "flex", alignItems: "center", gap: 6,
+    }}>
+      {label}
+      <span style={{ fontSize: 10, opacity: 0.75, fontFamily: "'JetBrains Mono',monospace" }}>{count}</span>
+      {avgOver != null && (
+        <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: active ? "rgba(255,255,255,0.8)" : avgOver >= 2 ? "#22C55E" : avgOver >= 1 ? "#3B82F6" : "var(--muted)" }}>
+          {avgOver.toFixed(1)}×
+        </span>
+      )}
+    </button>
+  );
+}
+
+function PostCard({ post, projectId }) {
+  const over = post.overperformanceScore;
+  const overBadge = over != null ? (over >= 2 ? { bg: "rgba(34,197,94,0.15)", fg: "#22C55E" } : over >= 1 ? { bg: "rgba(59,130,246,0.12)", fg: "#3B82F6" } : { bg: "var(--bg)", fg: "var(--muted)" }) : null;
+  const [editing, setEditing] = useState(false);
+
+  const reclassify = async (newFormat) => {
+    try {
+      await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reclassify", projectId, postId: post.id, format: newFormat }),
+      });
+      setEditing(false);
+    } catch (e) {
+      console.error("Reclassify failed:", e);
+    }
+  };
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", transition: "border-color 0.15s", position: "relative" }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
+      <a href={post.url} target="_blank" rel="noopener noreferrer"
+        style={{ display: "block", textDecoration: "none" }}>
+        <div style={{ aspectRatio: "1 / 1", background: "#000", position: "relative", overflow: "hidden" }}>
+          {post.thumbnail ? (
+            <img src={post.thumbnail} alt="" loading="lazy" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color: "var(--muted)", fontSize: 11 }}>No thumbnail</div>
+          )}
+          {post.isVideo && (
+            <div style={{ position: "absolute", top: 6, right: 6, padding: "2px 6px", background: "rgba(0,0,0,0.6)", borderRadius: 4, fontSize: 9, fontWeight: 700, color: "#fff" }}>▶ video</div>
+          )}
+          {overBadge && over != null && (
+            <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: overBadge.bg, color: overBadge.fg }}>
+              {over >= 1 ? `${over.toFixed(1)}× avg` : `${(over * 100).toFixed(0)}% avg`}
+            </div>
+          )}
+        </div>
+        <div style={{ padding: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 3 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>{post.handle}</div>
+            {post.hookType && <div style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>{post.hookType}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 10, fontSize: 11, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>
+            {post.views != null && <span>👁 {formatBig(post.views)}</span>}
+            <span>❤ {formatBig(post.likes)}</span>
+            <span>💬 {formatBig(post.comments)}</span>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--fg)", lineHeight: 1.4, maxHeight: 44, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {(post.caption || "").slice(0, 140)}{(post.caption || "").length > 140 ? "…" : ""}
+          </div>
+          {post.timestamp && (
+            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>{formatDate(post.timestamp)}</div>
+          )}
+        </div>
+      </a>
+      {/* Format badge + reclassify — outside the <a> so clicking doesn't open the IG link */}
+      <div style={{ padding: "0 10px 10px" }}>
+        {editing ? (
+          <select autoFocus onChange={e => reclassify(e.target.value)} onBlur={() => setEditing(false)}
+            style={{ ...inputSt, fontSize: 11, padding: "4px 6px" }}>
+            <option value="">— pick format —</option>
+            {Object.entries(FORMAT_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        ) : post.format ? (
+          <button onClick={() => setEditing(true)} title={post.formatEvidence || ""}
+            style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--fg)", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", width: "100%" }}>
+            {FORMAT_LABELS[post.format] || post.format}
+            {post.formatConfidence != null && post.formatConfidence < 1 && (
+              <span style={{ marginLeft: 6, opacity: 0.6, fontFamily: "'JetBrains Mono',monospace" }}>{Math.round(post.formatConfidence * 100)}%</span>
+            )}
+          </button>
+        ) : (
+          <button onClick={() => setEditing(true)}
+            style={{ padding: "3px 8px", borderRadius: 4, border: "1px dashed var(--border)", background: "transparent", color: "var(--muted)", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", width: "100%" }}>
+            + classify
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// 1.2M, 54k, 812 — compact number formatting
+function formatBig(n) {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + "k";
+  return String(n);
+}
+
+// ═══════════════════════════════════════════
+// SYNTHESIS SECTION — Slice 5
+// Opus-generated markdown brief + "Regenerate with notes" affordance.
+// ═══════════════════════════════════════════
+function SynthesisSection({ project }) {
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState(null);
+  const [regenerateMode, setRegenerateMode] = useState(false);
+  const [regenerateNotes, setRegenerateNotes] = useState("");
+
+  const synthesis = project.synthesis;
+
+  const runSynthesis = async (notes = null) => {
+    setRunning(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "synthesise",
+          projectId: project.id,
+          regenerateNotes: notes || undefined,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      // Firebase listener rehydrates synthesis automatically
+      setRegenerateMode(false);
+      setRegenerateNotes("");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // Post-ID resolver — used by the tiny markdown renderer to linkify ig_XXXX refs
+  const postsById = Object.fromEntries((project.posts || []).map(p => [p.id, p]));
+
+  return (
+    <div style={{ marginTop: 24, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Synthesis</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+            {synthesis?.generatedAt
+              ? `Generated ${new Date(synthesis.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} · ${synthesis.modelUsed || "claude-opus-4-6"}`
+              : "Claude reads the classified posts and drafts a brief for the pre-production meeting."}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {synthesis && !regenerateMode && (
+            <button onClick={() => setRegenerateMode(true)} style={btnSecondary}>Regenerate with notes</button>
+          )}
+          <button onClick={() => runSynthesis()} disabled={running} style={{ ...btnPrimary, opacity: running ? 0.6 : 1 }}>
+            {running ? "Synthesising…" : synthesis ? "Regenerate" : "Generate synthesis"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444", marginBottom: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {regenerateMode && (
+        <div style={{ marginBottom: 14, padding: 14, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 6 }}>
+            What should Claude do differently?
+          </label>
+          <textarea
+            value={regenerateNotes}
+            onChange={e => setRegenerateNotes(e.target.value)}
+            placeholder="e.g. Focus more on tutorial formats. The client mentioned wanting to teach, not entertain."
+            rows={3}
+            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 10 }}>
+            <button onClick={() => { setRegenerateMode(false); setRegenerateNotes(""); }} style={btnSecondary}>Cancel</button>
+            <button onClick={() => runSynthesis(regenerateNotes)} disabled={running || !regenerateNotes.trim()}
+              style={{ ...btnPrimary, opacity: (running || !regenerateNotes.trim()) ? 0.6 : 1 }}>
+              {running ? "Regenerating…" : "Regenerate"}
+            </button>
           </div>
         </div>
       )}
+
+      {synthesis?.markdown ? (
+        <MarkdownView markdown={synthesis.markdown} postsById={postsById} />
+      ) : !running && (
+        <div style={{ padding: "30px 20px", textAlign: "center", color: "var(--muted)", background: "var(--bg)", borderRadius: 8, border: "1px dashed var(--border)" }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>No synthesis yet</div>
+          <div style={{ fontSize: 12 }}>Click "Generate synthesis" to have Claude read the classified posts and draft a brief.</div>
+        </div>
+      )}
+
+      {synthesis?.concepts?.length > 0 && (
+        <ConceptsGrid concepts={synthesis.concepts} postsById={postsById} />
+      )}
+    </div>
+  );
+}
+
+// Tiny markdown renderer. Handles only what the synthesis prompt produces:
+// # / ## / ### headings, - bullets, **bold**, *italic*, `code`, and ig_XXXX post refs.
+// No new dependency — keeps the bundle lean. Upgrade to react-markdown if we
+// ever need tables, nested lists, or arbitrary markdown.
+function MarkdownView({ markdown, postsById = {} }) {
+  // Strip the CONCEPTS_JSON sidecar comment — shown separately as a grid
+  const clean = (markdown || "").replace(/<!--\s*CONCEPTS_JSON:[\s\S]*?-->/g, "").trim();
+  const lines = clean.split("\n");
+
+  const renderInline = (text) => {
+    // Order matters: resolve post IDs → bold → italic → code
+    // ig_XXXX / ig-XXXX / so_XXXX (generic pattern: letters_alphanum at least 4 chars after underscore)
+    const tokens = [];
+    let remaining = text;
+    let key = 0;
+
+    const postIdRegex = /\b([a-z]+_[A-Za-z0-9]{4,})/g;
+    while (remaining.length) {
+      const match = postIdRegex.exec(remaining);
+      if (!match) { tokens.push(remaining); break; }
+      tokens.push(remaining.slice(0, match.index));
+      const id = match[1];
+      const post = postsById[id];
+      if (post?.url) {
+        tokens.push(
+          <a key={`p${key++}`} href={post.url} target="_blank" rel="noopener noreferrer"
+            style={{ color: "var(--accent)", textDecoration: "underline", fontFamily: "'JetBrains Mono',monospace", fontSize: "0.9em" }}>
+            {id}
+          </a>
+        );
+      } else if (post) {
+        tokens.push(
+          <a key={`p${key++}`} href="#" onClick={e => e.preventDefault()}
+            style={{ color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", fontSize: "0.9em" }}
+            title="Post not in current dataset">
+            {id}
+          </a>
+        );
+      } else {
+        tokens.push(<span key={`p${key++}`} style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "0.9em", color: "var(--muted)" }}>{id}</span>);
+      }
+      remaining = remaining.slice(match.index + match[0].length);
+      postIdRegex.lastIndex = 0;
+    }
+
+    // Bold/italic/code pass on string tokens only
+    return tokens.map((t, i) => {
+      if (typeof t !== "string") return t;
+      // Escape regex-sensitive chars in inline rendering
+      const parts = [];
+      let last = 0;
+      const inlineRx = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
+      let m;
+      while ((m = inlineRx.exec(t)) !== null) {
+        if (m.index > last) parts.push(t.slice(last, m.index));
+        const tok = m[0];
+        if (tok.startsWith("**")) parts.push(<strong key={i + "b" + m.index}>{tok.slice(2, -2)}</strong>);
+        else if (tok.startsWith("`")) parts.push(<code key={i + "c" + m.index} style={{ fontFamily: "'JetBrains Mono',monospace", background: "var(--bg)", padding: "1px 5px", borderRadius: 3, fontSize: "0.9em" }}>{tok.slice(1, -1)}</code>);
+        else parts.push(<em key={i + "i" + m.index}>{tok.slice(1, -1)}</em>);
+        last = m.index + tok.length;
+      }
+      if (last < t.length) parts.push(t.slice(last));
+      return <span key={i}>{parts}</span>;
+    });
+  };
+
+  const rendered = [];
+  let bulletBuffer = [];
+  const flushBullets = () => {
+    if (bulletBuffer.length) {
+      rendered.push(
+        <ul key={`ul-${rendered.length}`} style={{ margin: "4px 0 14px 20px", padding: 0, lineHeight: 1.6 }}>
+          {bulletBuffer.map((b, i) => <li key={i} style={{ fontSize: 13, color: "var(--fg)", marginBottom: 4 }}>{renderInline(b)}</li>)}
+        </ul>
+      );
+      bulletBuffer = [];
+    }
+  };
+
+  lines.forEach((raw, idx) => {
+    const line = raw;
+    if (line.startsWith("### ")) {
+      flushBullets();
+      rendered.push(<h4 key={idx} style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", margin: "14px 0 6px" }}>{renderInline(line.slice(4))}</h4>);
+    } else if (line.startsWith("## ")) {
+      flushBullets();
+      rendered.push(<h3 key={idx} style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)", margin: "20px 0 8px", paddingBottom: 4, borderBottom: "1px solid var(--border)" }}>{renderInline(line.slice(3))}</h3>);
+    } else if (line.startsWith("# ")) {
+      flushBullets();
+      rendered.push(<h2 key={idx} style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", margin: "0 0 14px" }}>{renderInline(line.slice(2))}</h2>);
+    } else if (line.match(/^\s*[-*]\s+/)) {
+      bulletBuffer.push(line.replace(/^\s*[-*]\s+/, ""));
+    } else if (line.trim()) {
+      flushBullets();
+      rendered.push(<p key={idx} style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.6, margin: "8px 0" }}>{renderInline(line)}</p>);
+    } else {
+      flushBullets();
+    }
+  });
+  flushBullets();
+
+  return <div>{rendered}</div>;
+}
+
+// Concepts from the CONCEPTS_JSON sidecar — these are the Stage 2 handoff,
+// rendered as cards at the bottom of the synthesis.
+function ConceptsGrid({ concepts, postsById }) {
+  return (
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Video concepts for Stage 2</div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
+        Ready-to-shoot concepts extracted from the synthesis. The pre-production builder (Stage 2) will consume these to seed its script table.
+      </div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {concepts.map((c, i) => (
+          <div key={i} style={{ padding: 14, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{c.title}</div>
+              {c.format && (
+                <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "var(--accent-soft)", color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  {FORMAT_LABELS[c.format] || c.format}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, marginBottom: 8 }}>{c.premise}</div>
+            {Array.isArray(c.refPostIds) && c.refPostIds.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {c.refPostIds.map(id => {
+                  const post = postsById[id];
+                  return post?.url ? (
+                    <a key={id} href={post.url} target="_blank" rel="noopener noreferrer" style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "var(--card)", color: "var(--accent)", textDecoration: "none", fontFamily: "'JetBrains Mono',monospace" }}>
+                      {id} ↗
+                    </a>
+                  ) : (
+                    <span key={id} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "var(--card)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+                      {id}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
