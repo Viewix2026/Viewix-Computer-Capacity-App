@@ -401,6 +401,117 @@ async function handleClassify(req, res) {
   });
 }
 
+// ─── Transcript extraction (Slice 6) ───
+// Pulls the transcript either from the request body (pasted text) or
+// from a Google Doc URL. Google Doc is fetched server-side via the
+// public export-to-txt endpoint — identical logic to api/preproduction.js.
+async function resolveTranscript({ transcript, googleDocUrl }) {
+  if (transcript && transcript.trim()) return transcript.trim();
+  if (!googleDocUrl) throw new Error("Provide either transcript text or a Google Doc URL");
+  const docIdMatch = googleDocUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (!docIdMatch) throw new Error("Couldn't parse a Google Doc ID from the URL");
+  const docId = docIdMatch[1];
+  const docResp = await fetch(`https://docs.google.com/document/d/${docId}/export?format=txt`);
+  if (!docResp.ok) {
+    throw new Error(`Google Doc fetch failed (${docResp.status}). Make sure the doc is set to "Anyone with the link can view".`);
+  }
+  const text = await docResp.text();
+  return text.trim();
+}
+
+function buildExtractionSystemPrompt({ companyName }) {
+  return `You extract competitor research signals from a pre-production meeting transcript for Viewix, a video production agency.
+
+The client is: ${companyName}
+
+Your job: read the transcript and return three lists:
+
+1. COMPETITORS — any brands, creators, or businesses the client mentioned as competitors, inspirations, peers, or reference points. Include the Instagram handle if the client stated one (format "@handle"); otherwise pass displayName and leave handle null.
+
+2. KEYWORDS — content topics, niches, or themes the client wants to explore or is known for. 1-5 word phrases, lowercase.
+
+3. FORMATS OF INTEREST — any format types the client expressed interest in or gravitated toward. Use these exact strings (pick any that apply):
+   talking_head, skit, tutorial, vo_broll, transformation, ugc_testimonial, listicle, trend, product_demo
+
+Return STRICTLY valid JSON, no prose, no markdown fences:
+
+{
+  "competitors": [{ "handle": "@brand" | null, "displayName": "Brand", "reason": "one-line why this was flagged" }],
+  "keywords": [{ "term": "men's suiting", "reason": "..." }],
+  "formatsOfInterest": ["talking_head", "tutorial"]
+}
+
+If any list is empty, return an empty array for it. Don't invent competitors — only include what the client actually mentioned.`;
+}
+
+// ─── Action: extractFromTranscript ───
+// Body: { projectId, transcript?, googleDocUrl? }
+async function handleExtractFromTranscript(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, transcript: rawTranscript, googleDocUrl } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  let transcriptText;
+  try {
+    transcriptText = await resolveTranscript({ transcript: rawTranscript, googleDocUrl });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (!transcriptText || transcriptText.length < 40) {
+    return res.status(400).json({ error: "Transcript is empty or too short" });
+  }
+
+  const systemPrompt = buildExtractionSystemPrompt({ companyName: project.companyName });
+  const raw = await callClaude({
+    model: "claude-sonnet-4-6",
+    systemPrompt,
+    userMessage: transcriptText.slice(0, 20000),  // cap at 20k chars to control cost
+    maxTokens: 2000,
+    apiKey: ANTHROPIC_KEY,
+  });
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) { return res.status(500).json({ error: "Failed to parse extraction response", raw: raw.slice(0, 500) }); }
+
+  const transcriptSuggestions = {
+    competitors: (parsed.competitors || []).map(c => ({
+      handle: c.handle || null,
+      displayName: c.displayName || c.handle || "(unnamed)",
+      reason: c.reason || "",
+      accepted: false,
+    })),
+    keywords: (parsed.keywords || []).map(k => ({
+      term: k.term || "",
+      reason: k.reason || "",
+      accepted: false,
+    })),
+    formatsOfInterest: Array.isArray(parsed.formatsOfInterest) ? parsed.formatsOfInterest : [],
+    generatedAt: new Date().toISOString(),
+  };
+
+  // Also persist the transcript on the project so it can be re-used / re-extracted
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    transcriptSuggestions,
+    inputs: {
+      ...(project.inputs || {}),
+      transcript: {
+        text: transcriptText,
+        source: googleDocUrl ? "googledoc" : "manual",
+        addedAt: new Date().toISOString(),
+      },
+    },
+    updatedAt: new Date().toISOString(),
+  });
+
+  return res.status(200).json({ success: true, transcriptSuggestions });
+}
+
 // ─── Synthesis helpers (Slice 5) ───
 function buildSynthesisSystemPrompt({ companyName, promptLearnings = [] }) {
   return `You are a senior creative strategist at Viewix, a video production agency. You have just been handed the output of a competitor research scrape for a client and you need to write the synthesis that our producer will read before (or during) the pre-production meeting.
@@ -724,6 +835,96 @@ async function handleScrape(req, res) {
   });
 }
 
+// ─── Action: runPipeline ───
+// Convenience wrapper: scrape → classify → synthesise, updating status between phases.
+// Each phase is skipped if the relevant artefact already exists, so re-runs are safe.
+// Body: { projectId, fast?: boolean, force?: boolean }
+//   fast=true  → uses caption-only Haiku for classification
+//   force=true → re-runs every phase even if results already exist
+async function handleRunPipeline(req, res) {
+  const { projectId, fast = false, force = false } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const result = { scrape: null, classify: null, synthesise: null };
+
+  // Phase 1: scrape (skipped if posts already exist and not forcing)
+  const initial = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!initial) return res.status(404).json({ error: "Project not found" });
+
+  const existingPosts = Array.isArray(initial.posts) ? initial.posts : [];
+  if (force || existingPosts.length === 0) {
+    const scrapeReq = { body: { projectId, inputs: initial.inputs } };
+    // Capture the JSON payload by swapping in a tiny shim res
+    let scrapePayload, scrapeStatus = 200;
+    const shimRes = {
+      status(code) { scrapeStatus = code; return this; },
+      json(body) { scrapePayload = body; return this; },
+      setHeader() { return this; },
+    };
+    await handleScrape(scrapeReq, shimRes);
+    result.scrape = { status: scrapeStatus, ...scrapePayload };
+    if (scrapeStatus >= 400) return res.status(scrapeStatus).json({ error: "Scrape phase failed", detail: scrapePayload });
+  } else {
+    result.scrape = { skipped: true, postCount: existingPosts.length };
+  }
+
+  // Phase 2: classify
+  const afterScrape = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  const unclassified = (afterScrape?.posts || []).filter(p => !p.format).length;
+  if (force || unclassified > 0) {
+    const classifyReq = { body: { projectId, fast } };
+    let classifyPayload, classifyStatus = 200;
+    const shimRes = {
+      status(code) { classifyStatus = code; return this; },
+      json(body) { classifyPayload = body; return this; },
+      setHeader() { return this; },
+    };
+    await handleClassify(classifyReq, shimRes);
+    result.classify = { status: classifyStatus, ...classifyPayload };
+    if (classifyStatus >= 400) return res.status(classifyStatus).json({ error: "Classify phase failed", detail: classifyPayload });
+  } else {
+    result.classify = { skipped: true };
+  }
+
+  // Phase 3: synthesise
+  const afterClassify = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (force || !afterClassify?.synthesis?.markdown) {
+    const synthReq = { body: { projectId } };
+    let synthPayload, synthStatus = 200;
+    const shimRes = {
+      status(code) { synthStatus = code; return this; },
+      json(body) { synthPayload = body; return this; },
+      setHeader() { return this; },
+    };
+    await handleSynthesise(synthReq, shimRes);
+    result.synthesise = { status: synthStatus, ...synthPayload };
+    if (synthStatus >= 400) return res.status(synthStatus).json({ error: "Synthesise phase failed", detail: synthPayload });
+  } else {
+    result.synthesise = { skipped: true };
+  }
+
+  // Slack notification on success — best-effort, don't fail the pipeline if it errors
+  const slackWebhook = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
+  if (slackWebhook) {
+    try {
+      const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+      const postCount = (project?.posts || []).length;
+      const conceptsCount = project?.synthesis?.concepts?.length || 0;
+      await fetch(slackWebhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: `:mag: Social organic research synthesised for *${project?.companyName}* — ${postCount} posts analysed, ${conceptsCount} concepts generated.`,
+        }),
+      });
+    } catch (e) {
+      console.warn("Slack notification failed:", e.message);
+    }
+  }
+
+  return res.status(200).json({ success: true, ...result });
+}
+
 // ─── Dispatcher ───
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -747,10 +948,10 @@ export default async function handler(req, res) {
         return await handleReclassify(req, res);
       case "synthesise":
         return await handleSynthesise(req, res);
-      // Other actions are stubbed until their respective slices land
       case "extractFromTranscript":
+        return await handleExtractFromTranscript(req, res);
       case "runPipeline":
-        return res.status(501).json({ error: `Action "${action}" not implemented yet` });
+        return await handleRunPipeline(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }

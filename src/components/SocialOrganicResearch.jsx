@@ -416,6 +416,11 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
           <Badge text={STATUS_LABELS[project.status] || project.status} colors={STATUS_COLORS[project.status]} />
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => onPatch({ status: "archived" })}
+            style={{ ...btnSecondary }}
+            title="Archive — hides this project from the list but preserves it">
+            Archive
+          </button>
           <button onClick={onDelete} style={{ ...btnSecondary, color: "#EF4444", borderColor: "rgba(239,68,68,0.3)" }}>Delete</button>
         </div>
       </div>
@@ -453,6 +458,38 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
   const [fastClassify, setFastClassify] = useState(false);
   const [classifyError, setClassifyError] = useState(null);
   const [classifyInfo, setClassifyInfo] = useState(null);
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [pipelineError, setPipelineError] = useState(null);
+  const [pipelineInfo, setPipelineInfo] = useState(null);
+
+  const runPipeline = async () => {
+    const handles = (project.inputs?.competitors || []).map(c => c.handle).filter(Boolean);
+    if (!handles.length) { alert("Add at least one competitor handle first."); return; }
+    setPipelineRunning(true);
+    setPipelineError(null);
+    setPipelineInfo(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "runPipeline", projectId: project.id, fast: fastClassify }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${JSON.stringify(d.detail).slice(0, 200)}` : ""));
+      const bits = [];
+      if (d.scrape?.postsCollected != null) bits.push(`${d.scrape.postsCollected} posts scraped`);
+      else if (d.scrape?.skipped) bits.push(`${d.scrape.postCount || 0} posts reused`);
+      if (d.classify?.classified != null) bits.push(`${d.classify.classified} classified`);
+      else if (d.classify?.skipped) bits.push("classify skipped");
+      if (d.synthesise?.success) bits.push("synthesis ✓");
+      else if (d.synthesise?.skipped) bits.push("synthesis skipped");
+      setPipelineInfo(`Pipeline done — ${bits.join(" · ")}`);
+    } catch (e) {
+      setPipelineError(e.message);
+    } finally {
+      setPipelineRunning(false);
+    }
+  };
 
   const runClassify = async () => {
     if (!posts.length) return;
@@ -500,8 +537,12 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
               </button>
             </>
           )}
-          <button onClick={onScrape} disabled={scraping} style={{ ...btnPrimary, opacity: scraping ? 0.6 : 1 }}>
+          <button onClick={onScrape} disabled={scraping || pipelineRunning} style={{ ...btnSecondary, opacity: (scraping || pipelineRunning) ? 0.6 : 1 }}>
             {scraping ? "Scraping…" : posts.length > 0 ? "Re-scrape" : "Run scrape"}
+          </button>
+          <button onClick={runPipeline} disabled={pipelineRunning || scraping || classifying}
+            style={{ ...btnPrimary, opacity: (pipelineRunning || scraping || classifying) ? 0.6 : 1 }}>
+            {pipelineRunning ? "Running pipeline…" : "Run full pipeline"}
           </button>
         </div>
       </div>
@@ -518,6 +559,16 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
       {classifyInfo && !classifyError && (
         <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(34,197,94,0.08)", borderRadius: 8, border: "1px solid rgba(34,197,94,0.3)", fontSize: 12, color: "#22C55E" }}>
           {classifyInfo}
+        </div>
+      )}
+      {pipelineError && (
+        <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+          Pipeline failed: {pipelineError}
+        </div>
+      )}
+      {pipelineInfo && !pipelineError && (
+        <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(34,197,94,0.08)", borderRadius: 8, border: "1px solid rgba(34,197,94,0.3)", fontSize: 12, color: "#22C55E" }}>
+          {pipelineInfo}
         </div>
       )}
     </div>
@@ -1205,10 +1256,209 @@ function InputsSection({ project, linkedAccount, onPatchInputs }) {
         </div>
       </div>
 
+      <TranscriptSection project={project} addCompetitor={addCompetitor} addKeyword={(term) => {
+        if (!term || keywords.includes(term)) return;
+        onPatchInputs({ keywords: [...keywords, term] });
+      }} />
+
       <CostEstimateBar
         handles={competitors.map(c => c.handle)}
         postsPerHandle={inputs.postsPerHandle ?? DEFAULTS.postsPerHandle}
       />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// TRANSCRIPT SECTION — Slice 6
+// Paste a meeting transcript (or Google Doc URL), run Claude extraction,
+// show competitor + keyword suggestions as accept/reject chips.
+// ═══════════════════════════════════════════
+function TranscriptSection({ project, addCompetitor, addKeyword }) {
+  const storedTranscript = project.inputs?.transcript?.text || "";
+  const storedSource = project.inputs?.transcript?.source || null;
+  const [transcriptText, setTranscriptText] = useState(storedTranscript);
+  const [docUrl, setDocUrl] = useState("");
+  const [expanded, setExpanded] = useState(!storedTranscript);
+  const [extracting, setExtracting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const suggestions = project.transcriptSuggestions;
+
+  // Keep the textarea in sync if the stored transcript changes
+  useEffect(() => {
+    setTranscriptText(project.inputs?.transcript?.text || "");
+  }, [project.inputs?.transcript?.text]);
+
+  const runExtract = async ({ useGoogleDoc }) => {
+    if (useGoogleDoc && !docUrl.trim()) { setError("Paste a Google Doc URL first"); return; }
+    if (!useGoogleDoc && !transcriptText.trim()) { setError("Paste a transcript first"); return; }
+    setExtracting(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "extractFromTranscript",
+          projectId: project.id,
+          transcript: useGoogleDoc ? undefined : transcriptText,
+          googleDocUrl: useGoogleDoc ? docUrl.trim() : undefined,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setDocUrl("");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const acceptCompetitor = (s, idx) => {
+    const handle = s.handle || normaliseHandle(s.displayName);
+    if (!handle) {
+      alert(`No handle for "${s.displayName}". Add it manually above.`);
+      return;
+    }
+    addCompetitor(handle, "transcript", s.displayName);
+    // Mark accepted so the chip visually updates
+    const updated = suggestions.competitors.map((x, i) => i === idx ? { ...x, accepted: true } : x);
+    fbSet(`/preproduction/socialOrganic/${project.id}/transcriptSuggestions/competitors`, updated);
+  };
+  const dismissCompetitor = (idx) => {
+    const updated = suggestions.competitors.filter((_, i) => i !== idx);
+    fbSet(`/preproduction/socialOrganic/${project.id}/transcriptSuggestions/competitors`, updated);
+  };
+  const acceptKeyword = (s, idx) => {
+    addKeyword(s.term);
+    const updated = suggestions.keywords.map((x, i) => i === idx ? { ...x, accepted: true } : x);
+    fbSet(`/preproduction/socialOrganic/${project.id}/transcriptSuggestions/keywords`, updated);
+  };
+  const dismissKeyword = (idx) => {
+    const updated = suggestions.keywords.filter((_, i) => i !== idx);
+    fbSet(`/preproduction/socialOrganic/${project.id}/transcriptSuggestions/keywords`, updated);
+  };
+
+  const pendingCompetitors = (suggestions?.competitors || []).filter(c => !c.accepted);
+  const pendingKeywords = (suggestions?.keywords || []).filter(k => !k.accepted);
+
+  return (
+    <div style={{ marginTop: 16, padding: 14, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>
+            Pre-production meeting transcript {storedTranscript && <span style={{ fontSize: 10, color: "var(--accent)", marginLeft: 6 }}>✓ saved</span>}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+            {storedTranscript
+              ? `Claude will extract competitor + keyword suggestions from this transcript. ${storedSource === "googledoc" ? "Pulled from Google Doc." : "Pasted manually."}`
+              : "Paste a transcript or Google Doc URL so Claude can suggest competitors to research."}
+          </div>
+        </div>
+        <button onClick={() => setExpanded(v => !v)} style={{ ...btnSecondary, padding: "5px 10px" }}>
+          {expanded ? "Collapse" : storedTranscript ? "Edit" : "Add"}
+        </button>
+      </div>
+
+      {expanded && (
+        <div>
+          <textarea
+            value={transcriptText}
+            onChange={e => setTranscriptText(e.target.value)}
+            placeholder="Paste the full meeting transcript here…"
+            rows={5}
+            style={{ ...inputSt, resize: "vertical", fontSize: 12, fontFamily: "inherit", marginBottom: 8 }} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+            <button onClick={() => runExtract({ useGoogleDoc: false })} disabled={extracting || !transcriptText.trim()}
+              style={{ ...btnPrimary, padding: "7px 14px", fontSize: 12, opacity: (extracting || !transcriptText.trim()) ? 0.6 : 1 }}>
+              {extracting ? "Extracting…" : "Extract suggestions"}
+            </button>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>or</span>
+            <input type="text" value={docUrl} onChange={e => setDocUrl(e.target.value)}
+              placeholder="Google Doc URL — make sure 'Anyone with the link can view'"
+              style={{ ...inputSt, fontSize: 12, flex: 1, minWidth: 200 }} />
+            <button onClick={() => runExtract({ useGoogleDoc: true })} disabled={extracting || !docUrl.trim()}
+              style={{ ...btnSecondary, padding: "7px 14px", opacity: (extracting || !docUrl.trim()) ? 0.6 : 1 }}>
+              {extracting ? "Fetching…" : "Extract from Doc"}
+            </button>
+          </div>
+          {error && (
+            <div style={{ padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444", marginBottom: 8 }}>
+              {error}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Suggestions chips — visible regardless of expanded state */}
+      {suggestions && (pendingCompetitors.length > 0 || pendingKeywords.length > 0) && (
+        <div style={{ marginTop: expanded ? 8 : 0, padding: 10, background: "var(--card)", borderRadius: 6, border: "1px dashed var(--accent)" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+            Suggestions from transcript {suggestions.generatedAt && (
+              <span style={{ color: "var(--muted)", fontWeight: 500, marginLeft: 6 }}>
+                {new Date(suggestions.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+
+          {pendingCompetitors.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase" }}>Competitors</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {pendingCompetitors.map((c, i) => {
+                  const origIdx = suggestions.competitors.findIndex(x => x === c);
+                  return (
+                    <div key={i} title={c.reason || ""}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 4px 4px 10px", borderRadius: 6, background: "var(--bg)", border: "1px solid var(--border)", fontSize: 11, color: "var(--fg)" }}>
+                      <span style={{ fontWeight: 600 }}>{c.handle || c.displayName}</span>
+                      {c.handle && c.displayName && c.displayName !== c.handle && (
+                        <span style={{ color: "var(--muted)", fontWeight: 400 }}>({c.displayName})</span>
+                      )}
+                      <button onClick={() => acceptCompetitor(c, origIdx)}
+                        style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "none", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                        ✓ Add
+                      </button>
+                      <button onClick={() => dismissCompetitor(origIdx)}
+                        style={{ background: "none", color: "var(--muted)", border: "none", padding: "2px 6px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>×</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {pendingKeywords.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase" }}>Keywords</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {pendingKeywords.map((k, i) => {
+                  const origIdx = suggestions.keywords.findIndex(x => x === k);
+                  return (
+                    <div key={i} title={k.reason || ""}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 4px 4px 10px", borderRadius: 6, background: "var(--bg)", border: "1px solid var(--border)", fontSize: 11, color: "var(--fg)" }}>
+                      <span style={{ fontWeight: 600 }}>{k.term}</span>
+                      <button onClick={() => acceptKeyword(k, origIdx)}
+                        style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "none", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                        ✓ Add
+                      </button>
+                      <button onClick={() => dismissKeyword(origIdx)}
+                        style={{ background: "none", color: "var(--muted)", border: "none", padding: "2px 6px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>×</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {suggestions.formatsOfInterest?.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--muted)" }}>
+              Formats of interest: <span style={{ color: "var(--fg)" }}>{suggestions.formatsOfInterest.map(f => FORMAT_LABELS[f] || f).join(", ")}</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
