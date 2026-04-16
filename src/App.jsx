@@ -119,7 +119,6 @@ export default function App(){
 
   // Home state
   const[teamLunch,setTeamLunch]=useState(null);
-  const[googleReviewData,setGoogleReviewData]=useState(null);
 
   // Founders state
   const[foundersData,setFoundersData]=useState({});
@@ -250,11 +249,6 @@ export default function App(){
     return()=>unsub();
   },[capTab]);
 
-  // Google Reviews auto-fetch
-  useEffect(()=>{
-    if(tool!=="home"||googleReviewData)return;
-    fetch("/api/google-reviews").then(r=>r.json()).then(data=>{if(data?.rating)setGoogleReviewData(data);}).catch(()=>{});
-  },[tool]);
 
   const login=resolvedRole=>{if(resolvedRole)setRole(resolvedRole);};
   const logout=async()=>{try{await signOutUser();}catch{}setRole(null);};
@@ -1205,29 +1199,53 @@ export default function App(){
           )}
         </div>
 
-        {/* Google Reviews */}
-        <a href="https://www.google.com/maps/place/?q=place_id:ChIJ87p3vJ9QRAIRRkX7FtSsJTo" target="_blank" rel="noopener noreferrer" style={{display:"block",marginBottom:20,padding:"20px 24px",background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,textDecoration:"none",cursor:"pointer"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <span style={{fontSize:28}}>⭐</span>
-              <div>
-                <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Google Reviews</div>
-                <div style={{fontSize:12,color:"var(--muted)"}}>Viewix Video Production</div>
+        {/* Weekly Win */}
+        <div style={{marginBottom:20,padding:"24px",background:"linear-gradient(135deg, rgba(245,158,11,0.08) 0%, rgba(139,92,246,0.08) 100%)",border:"1px solid var(--border)",borderRadius:12,position:"relative",overflow:"hidden"}}>
+          <div style={{position:"absolute",top:-20,right:-20,fontSize:120,opacity:0.06,pointerEvents:"none"}}>🎉</div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,position:"relative"}}>
+            <span style={{fontSize:24}}>🎉</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:17,fontWeight:800,color:"var(--fg)"}}>Weekly Win</div>
+              <div style={{fontSize:12,color:"var(--muted)"}}>
+                {foundersData.weeklyWinDate?`Posted ${new Date(foundersData.weeklyWinDate).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}`:"Big team wins, shoutouts and moments worth celebrating"}
               </div>
             </div>
-            <div style={{display:"flex",alignItems:"center",gap:16}}>
-              <div style={{textAlign:"center",padding:"8px 16px",background:"var(--bg)",borderRadius:8}}>
-                <div style={{fontSize:32,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:"#F59E0B"}}>{googleReviewData?.rating||foundersData.googleRating||"5.0"}</div>
-                <div style={{fontSize:10,color:"var(--muted)",fontWeight:600,marginTop:2}}>RATING</div>
-              </div>
-              <div style={{textAlign:"center",padding:"8px 16px",background:"var(--bg)",borderRadius:8}}>
-                <div style={{fontSize:32,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:"var(--fg)"}}>{googleReviewData?.reviewCount||foundersData.googleReviews||57}</div>
-                <div style={{fontSize:10,color:"var(--muted)",fontWeight:600,marginTop:2}}>REVIEWS</div>
-              </div>
-              <span style={{color:"var(--muted)",fontSize:14}}>↗</span>
-            </div>
+            {isFounders&&foundersData.weeklyWin&&(
+              <button onClick={()=>{if(window.confirm("Clear the current weekly win?"))setFoundersData(p=>({...p,weeklyWin:"",weeklyWinAuthor:"",weeklyWinDate:""}));}} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--muted)",fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Clear</button>
+            )}
           </div>
-        </a>
+          {isFounders?(
+            <div style={{position:"relative"}}>
+              <textarea
+                value={foundersData.weeklyWin||""}
+                onChange={e=>setFoundersData(p=>({...p,weeklyWin:e.target.value,weeklyWinAuthor:p.weeklyWinAuthor||"",weeklyWinDate:new Date().toISOString()}))}
+                placeholder="Post this week's shoutout, closed deal, milestone, or team moment..."
+                rows={3}
+                style={{width:"100%",padding:"14px 16px",fontSize:15,fontWeight:500,color:"var(--fg)",background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,outline:"none",resize:"vertical",fontFamily:"'DM Sans',sans-serif",lineHeight:1.6,boxSizing:"border-box"}}/>
+              <input
+                type="text"
+                value={foundersData.weeklyWinAuthor||""}
+                onChange={e=>setFoundersData(p=>({...p,weeklyWinAuthor:e.target.value}))}
+                placeholder="Shoutout from (optional — e.g. Jeremy, Brandon)"
+                style={{width:"100%",marginTop:8,padding:"8px 12px",fontSize:12,color:"var(--fg)",background:"var(--card)",border:"1px solid var(--border)",borderRadius:8,outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+              <div style={{fontSize:10,color:"var(--muted)",marginTop:8}}>Only founders can edit this — resets when cleared</div>
+            </div>
+          ):(
+            foundersData.weeklyWin?(
+              <div style={{padding:"18px 22px",background:"var(--card)",borderRadius:10,border:"1px solid var(--border)",position:"relative"}}>
+                <div style={{fontSize:16,fontWeight:600,color:"var(--fg)",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{foundersData.weeklyWin}</div>
+                {foundersData.weeklyWinAuthor&&(
+                  <div style={{fontSize:12,fontWeight:600,color:"var(--accent)",marginTop:10}}>— {foundersData.weeklyWinAuthor}</div>
+                )}
+              </div>
+            ):(
+              <div style={{padding:"30px 20px",textAlign:"center",color:"var(--muted)",background:"var(--card)",borderRadius:10,border:"1px dashed var(--border)"}}>
+                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>No win posted yet this week</div>
+                <div style={{fontSize:12}}>Check back soon — or send Jeremy / Brandon a shoutout idea</div>
+              </div>
+            )
+          )}
+        </div>
 
         {/* Quick Links */}
         <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
