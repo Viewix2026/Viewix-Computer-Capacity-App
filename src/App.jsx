@@ -539,22 +539,66 @@ export default function App(){
 
       {capTab==="weeklyWin"&&(
         <div style={{maxWidth:700,margin:"0 auto"}}>
-          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+          {/* Auto-pulled Slack pool */}
+          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px",marginBottom:16}}>
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12,gap:12}}>
               <div>
-                <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Weekly Win</div>
-                <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Shown on the home page for the whole team.{foundersData.weeklyWinDate?` Last posted ${new Date(foundersData.weeklyWinDate).toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"})}.`:""}</div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:18}}>🔥</span>
+                  <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Auto pool from #wins</div>
+                </div>
+                <div style={{fontSize:12,color:"var(--muted)",marginTop:4}}>
+                  Last 3 messages reacted with 🔥 in the wins channel. Rotates daily on the home page.
+                  {foundersData.weeklyWinSyncedAt&&` Last synced ${new Date(foundersData.weeklyWinSyncedAt).toLocaleString("en-AU",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"})}.`}
+                </div>
+              </div>
+              <button onClick={async()=>{
+                try{
+                  const r=await fetch("/api/sync-weekly-wins",{method:"GET"});
+                  const d=await r.json();
+                  if(!r.ok)alert("Sync failed: "+(d.error||"Unknown"));
+                  else alert(`Synced ${d.pooled||0} wins from Slack`);
+                }catch(e){alert("Sync failed: "+e.message);}
+              }} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)",whiteSpace:"nowrap"}}>Sync now</button>
+            </div>
+            {Array.isArray(foundersData.weeklyWinPool)&&foundersData.weeklyWinPool.length>0?(
+              <div style={{display:"grid",gap:10}}>
+                {foundersData.weeklyWinPool.map((w,i)=>(
+                  <div key={i} style={{padding:"14px 16px",background:"var(--bg)",borderRadius:8,border:"1px solid var(--border)"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                      <span style={{fontSize:11,fontWeight:700,color:"var(--muted)",textTransform:"uppercase"}}>#{i+1}</span>
+                      {w.reactionCount&&<span style={{fontSize:11,color:"var(--muted)"}}>🔥 {w.reactionCount}</span>}
+                      {w.author&&<span style={{fontSize:11,color:"var(--accent)",fontWeight:600}}>{w.author}</span>}
+                      {w.postedAt&&<span style={{fontSize:11,color:"var(--muted)",marginLeft:"auto"}}>{new Date(w.postedAt).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}</span>}
+                    </div>
+                    <div style={{fontSize:13,color:"var(--fg)",lineHeight:1.5,whiteSpace:"pre-wrap"}}>{w.text||"(no text)"}</div>
+                  </div>
+                ))}
+              </div>
+            ):(
+              <div style={{padding:"24px 16px",textAlign:"center",color:"var(--muted)",background:"var(--bg)",borderRadius:8,border:"1px dashed var(--border)",fontSize:13}}>
+                No 🔥-reacted messages yet. React to messages in #wins with 🔥 to feature them here.
+              </div>
+            )}
+          </div>
+
+          {/* Manual override */}
+          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Manual override</div>
+                <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>If set, this replaces the auto-pulled pool until cleared.</div>
               </div>
               {foundersData.weeklyWin&&(
-                <button onClick={()=>{if(window.confirm("Clear the current weekly win?"))setFoundersData(p=>({...p,weeklyWin:"",weeklyWinAuthor:"",weeklyWinDate:""}));}} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--muted)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>Clear</button>
+                <button onClick={()=>{if(window.confirm("Clear manual override and resume auto pool?"))setFoundersData(p=>({...p,weeklyWin:"",weeklyWinAuthor:"",weeklyWinDate:""}));}} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--muted)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>Clear override</button>
               )}
             </div>
-            <div>
+            <div style={{marginTop:14}}>
               <label style={{fontSize:11,fontWeight:700,color:"var(--muted)",display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Win message</label>
               <textarea
                 value={foundersData.weeklyWin||""}
                 onChange={e=>setFoundersData(p=>({...p,weeklyWin:e.target.value,weeklyWinAuthor:p.weeklyWinAuthor||"",weeklyWinDate:new Date().toISOString()}))}
-                placeholder="Post this week's shoutout, closed deal, milestone, or team moment..."
+                placeholder="Post a manual win to override the auto pool..."
                 rows={4}
                 style={{width:"100%",padding:"12px 14px",fontSize:14,fontWeight:500,color:"var(--fg)",background:"var(--input-bg)",border:"1px solid var(--border)",borderRadius:8,outline:"none",resize:"vertical",fontFamily:"'DM Sans',sans-serif",lineHeight:1.6,boxSizing:"border-box"}}/>
             </div>
@@ -567,7 +611,7 @@ export default function App(){
                 placeholder="e.g. Jeremy, Brandon, Push"
                 style={{width:"100%",padding:"8px 12px",fontSize:13,color:"var(--fg)",background:"var(--input-bg)",border:"1px solid var(--border)",borderRadius:8,outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
             </div>
-            <div style={{fontSize:10,color:"var(--muted)",marginTop:10}}>Saves automatically as you type.</div>
+            <div style={{fontSize:10,color:"var(--muted)",marginTop:10}}>Saves automatically.</div>
           </div>
         </div>
       )}
@@ -1234,32 +1278,46 @@ export default function App(){
           )}
         </div>
 
-        {/* Weekly Win */}
-        <div style={{marginBottom:20,padding:"24px",background:"linear-gradient(135deg, rgba(245,158,11,0.08) 0%, rgba(139,92,246,0.08) 100%)",border:"1px solid var(--border)",borderRadius:12,position:"relative",overflow:"hidden"}}>
-          <div style={{position:"absolute",top:-20,right:-20,fontSize:120,opacity:0.06,pointerEvents:"none"}}>🎉</div>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,position:"relative"}}>
-            <span style={{fontSize:24}}>🎉</span>
-            <div style={{flex:1}}>
-              <div style={{fontSize:17,fontWeight:800,color:"var(--fg)"}}>Weekly Win</div>
-              <div style={{fontSize:12,color:"var(--muted)"}}>
-                {foundersData.weeklyWinDate?`Posted ${new Date(foundersData.weeklyWinDate).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}`:"Big team wins, shoutouts and moments worth celebrating"}
+        {/* Weekly Win — manual override OR rotated from Slack :fire: pool */}
+        {(()=>{
+          const pool=Array.isArray(foundersData.weeklyWinPool)?foundersData.weeklyWinPool:[];
+          const hasManual=!!foundersData.weeklyWin;
+          // Rotate through pool by day-of-year so it changes daily but is stable per-day
+          const dayOfYear=Math.floor((Date.now()-new Date(new Date().getFullYear(),0,0).getTime())/86400000);
+          const fromPool=pool.length>0?pool[dayOfYear%pool.length]:null;
+          const winText=hasManual?foundersData.weeklyWin:(fromPool?.text||"");
+          const winAuthor=hasManual?foundersData.weeklyWinAuthor:(fromPool?.author||"");
+          const winDate=hasManual?foundersData.weeklyWinDate:(fromPool?.postedAt||"");
+          const isFromSlack=!hasManual&&!!fromPool;
+          return(<div style={{marginBottom:20,padding:"24px",background:"linear-gradient(135deg, rgba(245,158,11,0.08) 0%, rgba(139,92,246,0.08) 100%)",border:"1px solid var(--border)",borderRadius:12,position:"relative",overflow:"hidden"}}>
+            <div style={{position:"absolute",top:-20,right:-20,fontSize:120,opacity:0.06,pointerEvents:"none"}}>🎉</div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,position:"relative"}}>
+              <span style={{fontSize:24}}>🎉</span>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                  <div style={{fontSize:17,fontWeight:800,color:"var(--fg)"}}>Weekly Win</div>
+                  {isFromSlack&&pool.length>1&&<span style={{fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"rgba(245,158,11,0.15)",color:"#F59E0B"}}>🔥 {(dayOfYear%pool.length)+1} of {pool.length}</span>}
+                </div>
+                <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>
+                  {winDate?`Posted ${new Date(winDate).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}${isFromSlack?" · auto-pulled from #wins":""}`:"Big team wins, shoutouts and moments worth celebrating"}
+                </div>
               </div>
             </div>
-          </div>
-          {foundersData.weeklyWin?(
-            <div style={{padding:"18px 22px",background:"var(--card)",borderRadius:10,border:"1px solid var(--border)",position:"relative"}}>
-              <div style={{fontSize:16,fontWeight:600,color:"var(--fg)",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{foundersData.weeklyWin}</div>
-              {foundersData.weeklyWinAuthor&&(
-                <div style={{fontSize:12,fontWeight:600,color:"var(--accent)",marginTop:10}}>— {foundersData.weeklyWinAuthor}</div>
-              )}
-            </div>
-          ):(
-            <div style={{padding:"30px 20px",textAlign:"center",color:"var(--muted)",background:"var(--card)",borderRadius:10,border:"1px dashed var(--border)"}}>
-              <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>No win posted yet this week</div>
-              <div style={{fontSize:12}}>{isFounder?"Post one from the Capacity → Weekly Win tab":"Check back soon — or send a shoutout idea to the team"}</div>
-            </div>
-          )}
-        </div>
+            {winText?(
+              <div style={{padding:"18px 22px",background:"var(--card)",borderRadius:10,border:"1px solid var(--border)",position:"relative"}}>
+                <div style={{fontSize:16,fontWeight:600,color:"var(--fg)",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{winText}</div>
+                {winAuthor&&(
+                  <div style={{fontSize:12,fontWeight:600,color:"var(--accent)",marginTop:10}}>— {winAuthor}</div>
+                )}
+              </div>
+            ):(
+              <div style={{padding:"30px 20px",textAlign:"center",color:"var(--muted)",background:"var(--card)",borderRadius:10,border:"1px dashed var(--border)"}}>
+                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>No wins yet</div>
+                <div style={{fontSize:12}}>React with 🔥 in #wins on Slack to feature a message here{isFounder?", or post one manually from Capacity → Weekly Win":""}</div>
+              </div>
+            )}
+          </div>);
+        })()}
 
         {/* Quick Links */}
         <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
