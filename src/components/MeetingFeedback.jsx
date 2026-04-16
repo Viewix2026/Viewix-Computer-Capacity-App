@@ -303,35 +303,31 @@ export function MeetingFeedback() {
           const rc = ratingColor(a?.rating);
           return (
             <div key={item.id} onClick={() => setActiveId(item.id)}
-              style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 16, transition: "border-color 0.15s" }}
+              style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}
               onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
-              <div style={{ minWidth: 72, textAlign: "center", padding: "10px 12px", borderRadius: 10, background: rc.bg, border: `1px solid ${rc.fg}22` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{item.clientName}</span>
                 {item.status === "analysing" ? (
-                  <div style={{ fontSize: 11, color: "var(--muted)", padding: "4px 0" }}>...</div>
+                  <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: rc.bg, color: rc.fg }}>Analysing...</span>
                 ) : a?.rating !== undefined ? (
-                  <div style={{ fontSize: 24, fontWeight: 800, color: rc.fg, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1 }}>
-                    {a.rating}<span style={{ fontSize: 12, opacity: 0.6 }}>/10</span>
-                  </div>
+                  <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 14, fontWeight: 800, background: rc.bg, color: rc.fg, fontFamily: "'JetBrains Mono',monospace" }}>
+                    {a.rating}<span style={{ fontSize: 11, opacity: 0.7 }}>/10</span>
+                  </span>
                 ) : (
-                  <div style={{ fontSize: 11, color: rc.fg }}>N/A</div>
+                  <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: rc.bg, color: rc.fg }}>N/A</span>
                 )}
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>·</span>
+                <span style={{ fontSize: 13, color: "var(--muted)" }}>{item.meetingName}</span>
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-                  <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{item.clientName}</span>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>·</span>
-                  <span style={{ fontSize: 12, color: "var(--muted)" }}>{item.meetingName}</span>
-                </div>
-                <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                  {item.salesperson} · {item.createdAt ? new Date(item.createdAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : ""}
-                </div>
-                {a?.summary && (
-                  <div style={{ fontSize: 12, color: "var(--fg)", marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                    {a.summary}
-                  </div>
-                )}
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                {item.salesperson} · {item.createdAt ? new Date(item.createdAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : ""}
               </div>
+              {a?.summary && (
+                <div style={{ fontSize: 12, color: "var(--fg)", marginTop: 8, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                  {a.summary}
+                </div>
+              )}
             </div>
           );
         })}

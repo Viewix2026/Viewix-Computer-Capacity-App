@@ -966,10 +966,35 @@ export default function App(){
           </div>
           <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
             {/* Video embed */}
-            {activeMod.videoUrl&&(<div style={{marginBottom:24,borderRadius:12,overflow:"hidden",background:"#000",aspectRatio:"16/9"}}>
-              <iframe src={activeMod.videoUrl.includes("frame.io")||activeMod.videoUrl.includes("f.io")?activeMod.videoUrl:activeMod.videoUrl} style={{width:"100%",height:"100%",border:"none"}} allow="fullscreen" allowFullScreen/>
-            </div>)}
-            {!activeMod.videoUrl&&isAdmin&&(<div style={{marginBottom:24,padding:"40px 20px",textAlign:"center",background:"var(--card)",borderRadius:12,border:"1px dashed var(--border)",color:"var(--muted)"}}><div style={{fontSize:13}}>No video added. Edit this module to add a Frame.io link.</div></div>)}
+            {activeMod.videoUrl&&(()=>{
+              const url=activeMod.videoUrl.trim();
+              // YouTube: convert watch/short URLs to embed format
+              const ytMatch=url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([\w-]{11})/);
+              const ytPlaylist=url.match(/[?&]list=([\w-]+)/);
+              const ytStart=url.match(/[?&]t=(\d+)/);
+              let embedUrl=url;
+              if(ytMatch){
+                const vid=ytMatch[1];
+                const params=[];
+                if(ytPlaylist)params.push(`list=${ytPlaylist[1]}`);
+                if(ytStart)params.push(`start=${ytStart[1]}`);
+                embedUrl=`https://www.youtube.com/embed/${vid}${params.length?"?"+params.join("&"):""}`;
+              }
+              // Vimeo: convert vimeo.com/ID to player.vimeo.com/video/ID
+              const vimeoMatch=url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+              if(vimeoMatch&&!url.includes("player.vimeo.com")){
+                embedUrl=`https://player.vimeo.com/video/${vimeoMatch[1]}`;
+              }
+              // Loom: convert loom.com/share/ID to loom.com/embed/ID
+              const loomMatch=url.match(/loom\.com\/share\/([\w-]+)/);
+              if(loomMatch){
+                embedUrl=`https://www.loom.com/embed/${loomMatch[1]}`;
+              }
+              return(<div style={{marginBottom:24,borderRadius:12,overflow:"hidden",background:"#000",aspectRatio:"16/9"}}>
+                <iframe src={embedUrl} style={{width:"100%",height:"100%",border:"none"}} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowFullScreen/>
+              </div>);
+            })()}
+            {!activeMod.videoUrl&&isAdmin&&(<div style={{marginBottom:24,padding:"40px 20px",textAlign:"center",background:"var(--card)",borderRadius:12,border:"1px dashed var(--border)",color:"var(--muted)"}}><div style={{fontSize:13}}>No video added. Edit this module to add a video link (Frame.io, YouTube, Vimeo, or Loom).</div></div>)}
 
             {/* Description */}
             {activeMod.description&&(<div style={{marginBottom:24,padding:"20px",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}>
@@ -982,7 +1007,7 @@ export default function App(){
               <div style={{fontSize:12,fontWeight:700,color:"var(--fg)",marginBottom:12}}>Edit Module</div>
               <div style={{display:"grid",gap:10}}>
                 <input value={activeMod.name} onChange={e=>updateMod(activeCat.id,activeMod.id,{name:e.target.value})} placeholder="Module name..." style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
-                <input value={activeMod.videoUrl||""} onChange={e=>updateMod(activeCat.id,activeMod.id,{videoUrl:e.target.value})} placeholder="Frame.io link (e.g. https://f.io/HVX4NtTD)..." style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
+                <input value={activeMod.videoUrl||""} onChange={e=>updateMod(activeCat.id,activeMod.id,{videoUrl:e.target.value})} placeholder="Video URL — Frame.io, YouTube, Vimeo, or Loom..." style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
                 <textarea value={activeMod.description||""} onChange={e=>updateMod(activeCat.id,activeMod.id,{description:e.target.value})} placeholder="Module description..." rows={4} style={{padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",resize:"vertical",fontFamily:"'DM Sans',sans-serif"}}/>
               </div>
               <button onClick={()=>setTrainingEditMode(false)} style={{...BTN,background:"#10B981",color:"white",marginTop:10}}>Done Editing</button>
