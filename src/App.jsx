@@ -1010,6 +1010,8 @@ export default function App(){
       // Training list view
       const visibleTraining=role==="trial"
         ?trainingData.filter(c=>(c.name||"").toLowerCase().includes("trial"))
+        :role==="closer"
+        ?trainingData.filter(c=>(c.name||"").toLowerCase().includes("sales"))
         :trainingData;
 
       return(<>
