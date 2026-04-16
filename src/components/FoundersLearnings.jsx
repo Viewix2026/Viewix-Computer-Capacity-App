@@ -114,13 +114,19 @@ export function FoundersLearnings() {
                 {entry.text && <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 4 }}><strong>Feedback:</strong> {entry.text}</div>}
                 {entry.previousValue && <div style={{ fontSize: 11, color: "var(--muted)" }}>Was: {entry.previousValue.substring(0, 100)}{entry.previousValue.length > 100 ? "..." : ""}</div>}
                 {entry.newValue && <div style={{ fontSize: 11, color: "var(--accent)" }}>Now: {entry.newValue.substring(0, 100)}{entry.newValue.length > 100 ? "..." : ""}</div>}
-                <button
-                  onClick={() => {
-                    const rule = window.prompt("Create a learning from this feedback:", entry.instruction || entry.text || "");
-                    if (rule) fbSet(`/preproduction/promptLearnings/pl_${Date.now()}`, { rule, active: true, createdAt: new Date().toISOString(), sourceLogId: id });
-                  }}
-                  style={{ ...NB2, fontSize: 10, padding: "3px 8px", marginTop: 6 }}
-                >Promote to Learning</button>
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <button
+                    onClick={() => {
+                      const rule = window.prompt("Create a learning from this feedback:", entry.instruction || entry.text || "");
+                      if (rule) fbSet(`/preproduction/promptLearnings/pl_${Date.now()}`, { rule, active: true, createdAt: new Date().toISOString(), sourceLogId: id });
+                    }}
+                    style={{ ...NB2, fontSize: 10, padding: "3px 8px" }}
+                  >Promote to Learning</button>
+                  <button
+                    onClick={() => { if (window.confirm("Delete this feedback log entry?")) fbSet(`/preproduction/feedbackLog/${id}`, null); }}
+                    style={{ ...NB2, fontSize: 10, padding: "3px 8px", color: "#EF4444", borderColor: "rgba(239,68,68,0.3)" }}
+                  >Delete</button>
+                </div>
               </div>
             );
           })}

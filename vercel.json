@@ -2,6 +2,9 @@
   "functions": {
     "api/preproduction.js": {
       "maxDuration": 300
+    },
+    "api/meeting-feedback.js": {
+      "maxDuration": 120
     }
   },
   "crons": [

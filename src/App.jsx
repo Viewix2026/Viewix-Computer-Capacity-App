@@ -23,6 +23,7 @@ import { BuyerJourney } from "./components/BuyerJourney";
 import { AccountsDashboard } from "./components/AccountsDashboard";
 import { FoundersData } from "./components/FoundersData";
 import { FoundersLearnings } from "./components/FoundersLearnings";
+import { MeetingFeedback } from "./components/MeetingFeedback";
 import { DeliveryPublicView } from "./components/DeliveryPublicView";
 import { Preproduction } from "./components/Preproduction";
 import { PreproductionPublicView } from "./components/PreproductionPublicView";
@@ -96,6 +97,7 @@ export default function App(){
   const[trainingData,setTrainingData]=useState(DEFAULT_TRAINING);
   const[trainingSuggestions,setTrainingSuggestions]=useState([]);
   const[activeModuleId,setActiveModuleId]=useState(null);
+  const[trainingSubTab,setTrainingSubTab]=useState("modules"); // "modules" | "meetingFeedback"
   const[trainingEditMode,setTrainingEditMode]=useState(false);
   const[trainingCommentText,setTrainingCommentText]=useState("");
   const[sugType,setSugType]=useState("new");
@@ -1014,14 +1016,30 @@ export default function App(){
         ?trainingData.filter(c=>(c.name||"").toLowerCase().includes("sales"))
         :trainingData;
 
+      const canSeeMeetingFeedback=isFounder||role==="closer";
+
       return(<>
         <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
-          <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Training</span>
+          <div style={{display:"flex",alignItems:"center",gap:16}}>
+            <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Training</span>
+            {canSeeMeetingFeedback&&(
+              <div style={{display:"flex",gap:2,background:"var(--bg)",borderRadius:6,padding:2}}>
+                <button onClick={()=>{setTrainingSubTab("modules");setActiveModuleId(null);}} style={{padding:"5px 12px",borderRadius:4,border:"none",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:trainingSubTab==="modules"?"var(--accent)":"transparent",color:trainingSubTab==="modules"?"#fff":"var(--muted)"}}>Modules</button>
+                <button onClick={()=>{setTrainingSubTab("meetingFeedback");setActiveModuleId(null);}} style={{padding:"5px 12px",borderRadius:4,border:"none",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:trainingSubTab==="meetingFeedback"?"var(--accent)":"transparent",color:trainingSubTab==="meetingFeedback"?"#fff":"var(--muted)"}}>Meeting Feedback</button>
+              </div>
+            )}
+          </div>
           <div style={{display:"flex",gap:8}}>
-            {!isAdmin&&<button onClick={()=>setSugOpen(!sugOpen)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>{sugOpen?"Cancel":"Suggest"}</button>}
-            {isAdmin&&<button onClick={addCategory} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Category</button>}
+            {trainingSubTab==="modules"&&!isAdmin&&<button onClick={()=>setSugOpen(!sugOpen)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>{sugOpen?"Cancel":"Suggest"}</button>}
+            {trainingSubTab==="modules"&&isAdmin&&<button onClick={addCategory} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Category</button>}
           </div>
         </div>
+        {trainingSubTab==="meetingFeedback"&&canSeeMeetingFeedback&&(
+          <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
+            <MeetingFeedback/>
+          </div>
+        )}
+        {trainingSubTab==="modules"&&(
         <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
 
           {/* Suggestion form (non-admin) */}
@@ -1111,6 +1129,7 @@ export default function App(){
             </div>}
           </div>);})}
         </div>
+        )}
       </>);
     })()}
 
