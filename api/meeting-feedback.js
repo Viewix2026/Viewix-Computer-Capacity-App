@@ -202,8 +202,9 @@ ${transcript}`;
       analysedAt: new Date().toISOString(),
     };
 
-    // Merge analysis into the existing feedback entry
+    // Write analysis AND flip the top-level status so the UI stops showing "Analysing..."
     await fbSet(`/meetingFeedback/${feedbackId}/analysis`, updated);
+    await fbSet(`/meetingFeedback/${feedbackId}/status`, "analysed");
 
     return res.status(200).json({ success: true, analysis: updated });
   } catch (err) {

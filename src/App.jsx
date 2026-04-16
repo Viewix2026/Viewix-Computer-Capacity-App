@@ -323,7 +323,7 @@ export default function App(){
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
         <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Capacity Planner</span>
         <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3}}>
-          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"},{key:"lunch",label:"Team Lunch"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
+          {[{key:"dashboard",label:"Dashboard"},{key:"roster",label:"Team Roster"},{key:"schedule",label:"Weekly Schedule"},{key:"forecast",label:"Forecast"},{key:"timelogs",label:"Time Logs"},{key:"lunch",label:"Team Lunch"},{key:"weeklyWin",label:"Weekly Win"}].map(t=>(<button key={t.key} onClick={()=>setCapTab(t.key)} style={{padding:"7px 14px",borderRadius:6,border:"none",background:capTab===t.key?"var(--card)":"transparent",color:capTab===t.key?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.label}</button>))}
         </div>
       </div>
 
@@ -533,6 +533,41 @@ export default function App(){
                 <div style={{padding:30,textAlign:"center",color:"var(--muted)",fontSize:13}}>No team lunch scheduled. Founders can set one.</div>
               )
             )}
+          </div>
+        </div>
+      )}
+
+      {capTab==="weeklyWin"&&(
+        <div style={{maxWidth:700,margin:"0 auto"}}>
+          <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"24px"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Weekly Win</div>
+                <div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Shown on the home page for the whole team.{foundersData.weeklyWinDate?` Last posted ${new Date(foundersData.weeklyWinDate).toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"})}.`:""}</div>
+              </div>
+              {foundersData.weeklyWin&&(
+                <button onClick={()=>{if(window.confirm("Clear the current weekly win?"))setFoundersData(p=>({...p,weeklyWin:"",weeklyWinAuthor:"",weeklyWinDate:""}));}} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--muted)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>Clear</button>
+              )}
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"var(--muted)",display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Win message</label>
+              <textarea
+                value={foundersData.weeklyWin||""}
+                onChange={e=>setFoundersData(p=>({...p,weeklyWin:e.target.value,weeklyWinAuthor:p.weeklyWinAuthor||"",weeklyWinDate:new Date().toISOString()}))}
+                placeholder="Post this week's shoutout, closed deal, milestone, or team moment..."
+                rows={4}
+                style={{width:"100%",padding:"12px 14px",fontSize:14,fontWeight:500,color:"var(--fg)",background:"var(--input-bg)",border:"1px solid var(--border)",borderRadius:8,outline:"none",resize:"vertical",fontFamily:"'DM Sans',sans-serif",lineHeight:1.6,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginTop:12}}>
+              <label style={{fontSize:11,fontWeight:700,color:"var(--muted)",display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Shoutout from (optional)</label>
+              <input
+                type="text"
+                value={foundersData.weeklyWinAuthor||""}
+                onChange={e=>setFoundersData(p=>({...p,weeklyWinAuthor:e.target.value}))}
+                placeholder="e.g. Jeremy, Brandon, Push"
+                style={{width:"100%",padding:"8px 12px",fontSize:13,color:"var(--fg)",background:"var(--input-bg)",border:"1px solid var(--border)",borderRadius:8,outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{fontSize:10,color:"var(--muted)",marginTop:10}}>Saves automatically as you type.</div>
           </div>
         </div>
       )}
@@ -1210,40 +1245,19 @@ export default function App(){
                 {foundersData.weeklyWinDate?`Posted ${new Date(foundersData.weeklyWinDate).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}`:"Big team wins, shoutouts and moments worth celebrating"}
               </div>
             </div>
-            {isFounders&&foundersData.weeklyWin&&(
-              <button onClick={()=>{if(window.confirm("Clear the current weekly win?"))setFoundersData(p=>({...p,weeklyWin:"",weeklyWinAuthor:"",weeklyWinDate:""}));}} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--muted)",fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Clear</button>
-            )}
           </div>
-          {isFounders?(
-            <div style={{position:"relative"}}>
-              <textarea
-                value={foundersData.weeklyWin||""}
-                onChange={e=>setFoundersData(p=>({...p,weeklyWin:e.target.value,weeklyWinAuthor:p.weeklyWinAuthor||"",weeklyWinDate:new Date().toISOString()}))}
-                placeholder="Post this week's shoutout, closed deal, milestone, or team moment..."
-                rows={3}
-                style={{width:"100%",padding:"14px 16px",fontSize:15,fontWeight:500,color:"var(--fg)",background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,outline:"none",resize:"vertical",fontFamily:"'DM Sans',sans-serif",lineHeight:1.6,boxSizing:"border-box"}}/>
-              <input
-                type="text"
-                value={foundersData.weeklyWinAuthor||""}
-                onChange={e=>setFoundersData(p=>({...p,weeklyWinAuthor:e.target.value}))}
-                placeholder="Shoutout from (optional — e.g. Jeremy, Brandon)"
-                style={{width:"100%",marginTop:8,padding:"8px 12px",fontSize:12,color:"var(--fg)",background:"var(--card)",border:"1px solid var(--border)",borderRadius:8,outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
-              <div style={{fontSize:10,color:"var(--muted)",marginTop:8}}>Only founders can edit this — resets when cleared</div>
+          {foundersData.weeklyWin?(
+            <div style={{padding:"18px 22px",background:"var(--card)",borderRadius:10,border:"1px solid var(--border)",position:"relative"}}>
+              <div style={{fontSize:16,fontWeight:600,color:"var(--fg)",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{foundersData.weeklyWin}</div>
+              {foundersData.weeklyWinAuthor&&(
+                <div style={{fontSize:12,fontWeight:600,color:"var(--accent)",marginTop:10}}>— {foundersData.weeklyWinAuthor}</div>
+              )}
             </div>
           ):(
-            foundersData.weeklyWin?(
-              <div style={{padding:"18px 22px",background:"var(--card)",borderRadius:10,border:"1px solid var(--border)",position:"relative"}}>
-                <div style={{fontSize:16,fontWeight:600,color:"var(--fg)",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{foundersData.weeklyWin}</div>
-                {foundersData.weeklyWinAuthor&&(
-                  <div style={{fontSize:12,fontWeight:600,color:"var(--accent)",marginTop:10}}>— {foundersData.weeklyWinAuthor}</div>
-                )}
-              </div>
-            ):(
-              <div style={{padding:"30px 20px",textAlign:"center",color:"var(--muted)",background:"var(--card)",borderRadius:10,border:"1px dashed var(--border)"}}>
-                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>No win posted yet this week</div>
-                <div style={{fontSize:12}}>Check back soon — or send Jeremy / Brandon a shoutout idea</div>
-              </div>
-            )
+            <div style={{padding:"30px 20px",textAlign:"center",color:"var(--muted)",background:"var(--card)",borderRadius:10,border:"1px dashed var(--border)"}}>
+              <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>No win posted yet this week</div>
+              <div style={{fontSize:12}}>{isFounder?"Post one from the Capacity → Weekly Win tab":"Check back soon — or send a shoutout idea to the team"}</div>
+            </div>
           )}
         </div>
 

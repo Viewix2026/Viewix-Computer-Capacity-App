@@ -167,7 +167,7 @@ export function MeetingFeedback() {
             )}
           </div>
 
-          {activeItem.status === "analysing" && (
+          {activeItem.status === "analysing" && !a && (
             <div style={{ padding: 20, textAlign: "center", color: "var(--muted)" }}>
               <div style={{ fontSize: 14 }}>Analysing transcript...</div>
               <div style={{ fontSize: 12, marginTop: 4 }}>This can take up to 60 seconds.</div>
@@ -308,7 +308,7 @@ export function MeetingFeedback() {
               onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{item.clientName}</span>
-                {item.status === "analysing" ? (
+                {item.status === "analysing" && !a ? (
                   <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: rc.bg, color: rc.fg }}>Analysing...</span>
                 ) : a?.rating !== undefined ? (
                   <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 14, fontWeight: 800, background: rc.bg, color: rc.fg, fontFamily: "'JetBrains Mono',monospace" }}>
