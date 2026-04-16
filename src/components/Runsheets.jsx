@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen } from "../firebase";
 import { generateRunsheetDocx } from "../runsheetDocx";
+import { logoBg } from "../utils";
 
 // ─── Constants ───
 const RS_STATUS_COLORS = {
@@ -91,6 +92,7 @@ export function Runsheets({ accounts, projects }) {
     ) || null;
   };
   const getLogoUrl = (companyName) => findAccount(companyName)?.logoUrl || null;
+  const getLogoBgPref = (companyName) => findAccount(companyName)?.logoBg;
   const getEditorById = (id) => editors.find(e => e.id === id) || null;
 
   // ─── Save helper ───
@@ -348,6 +350,7 @@ export function Runsheets({ accounts, projects }) {
     const producer = getEditorById(activeRS.producerId);
     const director = getEditorById(activeRS.directorId);
     const logo = getLogoUrl(activeRS.companyName);
+    const logoBackground = logoBg(getLogoBgPref(activeRS.companyName));
     const isMetaAds = activeRS.projectType === "metaAds";
 
     return (
@@ -356,7 +359,7 @@ export function Runsheets({ accounts, projects }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => { setActiveId(null); setActiveDayIdx(0); }} style={{ ...btnSecondary, padding: "5px 10px" }}>&larr; Back</button>
-            {logo && <img key={logo} src={logo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 2 }} />}
+            {logo && <img key={logo+logoBackground} src={logo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: logoBackground, padding: 2 }} />}
             <span style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>{activeRS.companyName}</span>
             <Badge text={RS_STATUS_LABELS[activeRS.status] || activeRS.status} colors={RS_STATUS_COLORS[activeRS.status]} />
           </div>
@@ -711,6 +714,7 @@ export function Runsheets({ accounts, projects }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 14 }}>
         {rsList.map(rs => {
           const logo = getLogoUrl(rs.companyName);
+          const lbg = logoBg(getLogoBgPref(rs.companyName));
           const producer = getEditorById(rs.producerId);
           const totalVideos = (rs.videos || []).length;
           const shootDates = (rs.shootDays || []).filter(d => d.date).map(d =>
@@ -726,7 +730,7 @@ export function Runsheets({ accounts, projects }) {
               onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                {logo && <img key={logo} src={logo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 2 }} />}
+                {logo && <img key={logo+lbg} src={logo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: lbg, padding: 2 }} />}
                 <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{rs.companyName}</span>
               </div>
               <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>

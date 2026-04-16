@@ -3,6 +3,7 @@ import { VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_
 import { initFB, onFB, fbSet, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { StatusSelect } from "./UIComponents";
 import { Logo } from "./Logo";
+import { logoBg } from "../utils";
 
 export function DeliveryPublicView(){
   const[delivery,setDelivery]=useState(null);
@@ -10,6 +11,7 @@ export function DeliveryPublicView(){
   const[saving,setSaving]=useState(false);
   const[showInstructions,setShowInstructions]=useState(true);
   const[accountLogo,setAccountLogo]=useState(null);
+  const[accountLogoBg,setAccountLogoBg]=useState("white");
   const deliveryId=new URLSearchParams(window.location.search).get("d");
   const pendingChanges=useRef([]);
   const batchTimer=useRef(null);
@@ -41,6 +43,7 @@ export function DeliveryPublicView(){
         const nameLC=delivery.clientName.toLowerCase();
         const match=Object.values(acctData).find(a=>a&&(a.companyName||"").toLowerCase()===nameLC);
         setAccountLogo(match?.logoUrl||null);
+        setAccountLogoBg(match?.logoBg||"white");
       });
     });
   },[delivery?.clientName]);
@@ -81,7 +84,7 @@ export function DeliveryPublicView(){
     {/* Header */}
     <div style={{padding:"24px 40px",borderBottom:"1px solid #1E2A3A",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
       <div style={{display:"flex",alignItems:"center",gap:16}}>
-        {(()=>{const s=accountLogo||delivery.logoUrl;return s?<img key={s} src={s} alt="" onError={e=>{e.target.style.display="none";}} style={{height:40,borderRadius:6,objectFit:"contain",background:"#fff",padding:4}}/>:null;})()}
+        {(()=>{const s=accountLogo||delivery.logoUrl;const bg=logoBg(accountLogoBg);return s?<img key={s+bg} src={s} alt="" onError={e=>{e.target.style.display="none";}} style={{height:40,borderRadius:6,objectFit:"contain",background:bg,padding:4}}/>:null;})()}
         <div>
           <div style={{fontSize:18,fontWeight:800,color:"#E8ECF4"}}>{delivery.projectName}</div>
           <div style={{fontSize:13,color:"#5A6B85"}}>{delivery.clientName}</div>

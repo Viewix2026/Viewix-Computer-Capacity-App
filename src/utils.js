@@ -123,6 +123,16 @@ export function nextState(v) {
   return "in";
 }
 
+// ─── Logo Background ───
+// Returns the background colour to render behind a client logo, based on the
+// account's logoBg preference. "white" (default) suits dark/colourful logos,
+// "dark" suits white-on-transparent logos, "transparent" lets the card show through.
+export function logoBg(pref) {
+  if (pref === "dark") return "#1A1D23";
+  if (pref === "transparent") return "transparent";
+  return "#fff";
+}
+
 // ─── Delivery Helpers ───
 export function newDelivery(clientName, projectName) {
   return { id: `del-${Date.now()}`, clientName: clientName || "", projectName: projectName || "", logoUrl: "", videos: [], createdAt: new Date().toISOString() };

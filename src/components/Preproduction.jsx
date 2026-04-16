@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen } from "../firebase";
 import { Runsheets } from "./Runsheets";
+import { logoBg } from "../utils";
 
 // ─── Constants ───
 const STATUS_COLORS = {
@@ -160,6 +161,7 @@ export function Preproduction() {
   };
   const getProjectLead = (proj) => findAccount(proj)?.projectLead || null;
   const getAccountLogo = (proj) => findAccount(proj)?.logoUrl || null;
+  const getAccountLogoBg = (proj) => findAccount(proj)?.logoBg;
 
   // ─── Process transcript ───
   async function handleProcess() {
@@ -581,7 +583,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => setActiveProjectId(null)} style={NB}>&larr; Back</button>
-            {(()=>{const s=getAccountLogo(p);return s?<img key={s} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 32, borderRadius: 6, objectFit: "contain", background: "#fff", padding: 3 }} />:null;})()}
+            {(()=>{const s=getAccountLogo(p);const bg=logoBg(getAccountLogoBg(p));return s?<img key={s+bg} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 32, borderRadius: 6, objectFit: "contain", background: bg, padding: 3 }} />:null;})()}
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
             <PBadge text={p.packageTier} colors={TIER_COLORS[p.packageTier] || TIER_COLORS.standard} />
             <PBadge text={STATUS_LABELS[p.status] || p.status} colors={STATUS_COLORS[p.status] || STATUS_COLORS.draft} />
@@ -1057,7 +1059,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     onMouseLeave={e => { e.currentTarget.style.color = "#5A6B85"; e.currentTarget.style.background = "none"; }}
                   >×</button>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, paddingRight: 24 }}>
-                    {(()=>{const s=getAccountLogo(p);return s?<img key={s} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 2 }} />:null;})()}
+                    {(()=>{const s=getAccountLogo(p);const bg=logoBg(getAccountLogoBg(p));return s?<img key={s+bg} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: bg, padding: 2 }} />:null;})()}
                     <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>

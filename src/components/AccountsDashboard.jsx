@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { fbSet } from "../firebase";
 import { BTN, TH, TD } from "../config";
+import { logoBg } from "../utils";
 
 const MILESTONE_DEFS = [
   { key: "signing", label: "Signing" },
@@ -320,7 +321,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                     <tr key={acct.id}>
                       <td style={{ ...TD, position: "sticky", left: 0, zIndex: 5, background: "var(--card)", fontWeight: 700, color: "var(--fg)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          {acct.logoUrl && <img key={acct.logoUrl} src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: "#fff", padding: 3 }} />}
+                          {acct.logoUrl && <img key={acct.logoUrl + (acct.logoBg || "")} src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: logoBg(acct.logoBg), padding: 3 }} />}
                           {acct.companyName}
                         </div>
                       </td>
@@ -343,7 +344,14 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                         </select>
                       </td>
                       <td style={{ ...TD }}>
-                        <input type="text" value={acct.logoUrl || ""} onChange={e => updateAccount(acct.id, { logoUrl: e.target.value })} placeholder="https://..." style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 11, outline: "none", width: "100%", fontFamily: "inherit" }} />
+                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <input type="text" value={acct.logoUrl || ""} onChange={e => updateAccount(acct.id, { logoUrl: e.target.value })} placeholder="https://..." style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 11, outline: "none", flex: 1, fontFamily: "inherit", minWidth: 0 }} />
+                          <select value={acct.logoBg || "white"} onChange={e => updateAccount(acct.id, { logoBg: e.target.value })} title="Logo background" style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 10, outline: "none", fontFamily: "inherit", cursor: "pointer" }}>
+                            <option value="white">⬜ White</option>
+                            <option value="dark">⬛ Dark</option>
+                            <option value="transparent">▢ Transparent</option>
+                          </select>
+                        </div>
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>

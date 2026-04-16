@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initFB, onFB, fbSet, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
+import { logoBg } from "../utils";
 
 const MOTIVATOR_COLORS = {
   toward: { bg: "rgba(34,197,94,0.10)", border: "rgba(34,197,94,0.25)", fg: "#22C55E", label: "Toward" },
@@ -31,6 +32,7 @@ export function PreproductionPublicView() {
   const [feedbackText, setFeedbackText] = useState("");
   const [saving, setSaving] = useState(false);
   const [accountLogo, setAccountLogo] = useState(null);
+  const [accountLogoBg, setAccountLogoBg] = useState("white");
   const notifyTimer = useRef(null);
 
   const projectId = new URLSearchParams(window.location.search).get("p");
@@ -59,6 +61,7 @@ export function PreproductionPublicView() {
         const nameLC = project.companyName.toLowerCase();
         const match = Object.values(acctData).find(a => a && (a.companyName || "").toLowerCase() === nameLC);
         setAccountLogo(match?.logoUrl || null);
+        setAccountLogoBg(match?.logoBg || "white");
       });
     });
     return () => unsub();
@@ -133,7 +136,7 @@ export function PreproductionPublicView() {
       {/* Header */}
       <div style={{ padding: "24px 40px", borderBottom: "1px solid #1E2A3A", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          {accountLogo && <img key={accountLogo} src={accountLogo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 40, borderRadius: 6, objectFit: "contain", background: "#fff", padding: 4 }} />}
+          {accountLogo && <img key={accountLogo+accountLogoBg} src={accountLogo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 40, borderRadius: 6, objectFit: "contain", background: logoBg(accountLogoBg), padding: 4 }} />}
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: "#E8ECF4" }}>{p.companyName}</div>
             <div style={{ fontSize: 13, color: "#5A6B85" }}>Meta Ads Script Review</div>
