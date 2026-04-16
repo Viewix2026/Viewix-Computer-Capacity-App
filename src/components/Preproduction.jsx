@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen } from "../firebase";
 import { Runsheets } from "./Runsheets";
+import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 
 // ─── Constants ───
@@ -984,7 +985,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             >Runsheets</button>
           </div>
         </div>
-        {subTab !== "runsheets" && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {subTab === "metaAds" && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {/* Status filter */}
           <select
             value={statusFilter}
@@ -1003,8 +1004,8 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
       </div>
 
       <div style={{ padding: "24px 28px" }}>
-        {/* Manual add form */}
-        {manualAddOpen && (
+        {/* Manual add form (Meta Ads only) */}
+        {manualAddOpen && subTab === "metaAds" && (
           <div style={{ marginBottom: 20, padding: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", gap: 10, alignItems: "flex-end" }}>
             <div style={{ flex: 1 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Company Name</label>
@@ -1030,14 +1031,8 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
           </div>
         )}
 
-        {/* Social Organic placeholder */}
-        {subTab === "socialOrganic" && (
-          <div style={{ textAlign: "center", padding: 60, color: "var(--muted)" }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>&#128196;</div>
-            <div style={{ fontSize: 14 }}>Social Media Organic</div>
-            <div style={{ fontSize: 12, marginTop: 4 }}>Coming soon</div>
-          </div>
-        )}
+        {/* Social Media Organic — competitor research, Stage 1 of social pre-prod flow */}
+        {subTab === "socialOrganic" && <SocialOrganicResearch accounts={accounts} />}
 
         {subTab === "runsheets" && <Runsheets accounts={accounts} projects={projects} />}
 

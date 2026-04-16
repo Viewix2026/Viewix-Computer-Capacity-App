@@ -5,6 +5,9 @@
     },
     "api/meeting-feedback.js": {
       "maxDuration": 120
+    },
+    "api/social-organic.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
