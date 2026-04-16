@@ -47,7 +47,7 @@ async function fbGet(path) {
 // Resolve a user ID to a display name via Slack users.info
 async function resolveUserName(userId, token, cache) {
   if (!userId) return "";
-  if (cache[userId]) return cache[userId];
+  if (cache[userId] !== undefined) return cache[userId];
   try {
     const r = await fetch(`https://slack.com/api/users.info?user=${userId}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -63,12 +63,50 @@ async function resolveUserName(userId, token, cache) {
   return "";
 }
 
-// Strip Slack formatting: <@U123|name> → @name, <#C123|chan> → #chan, <url|text> → text
-function cleanText(text) {
+// Resolve a bot ID to its name via Slack bots.info (for messages posted by bots/integrations)
+async function resolveBotName(botId, token, cache) {
+  if (!botId) return "";
+  const k = `bot:${botId}`;
+  if (cache[k] !== undefined) return cache[k];
+  try {
+    const r = await fetch(`https://slack.com/api/bots.info?bot=${botId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await r.json();
+    if (data.ok) {
+      const name = data.bot?.name || "";
+      cache[k] = name;
+      return name;
+    }
+  } catch {}
+  cache[k] = "";
+  return "";
+}
+
+// Pre-fetch all <@USERID> mentions referenced in the messages so we can resolve
+// them in cleanText without making one API call per mention inside a sync loop.
+async function prewarmMentionedUsers(messages, token, cache) {
+  const ids = new Set();
+  for (const m of messages) {
+    if (!m.text) continue;
+    const matches = m.text.match(/<@([UW][A-Z0-9]+)/g) || [];
+    matches.forEach(s => ids.add(s.slice(2)));
+  }
+  await Promise.all([...ids].map(id => resolveUserName(id, token, cache)));
+}
+
+// Strip Slack formatting: <@U123|name> → @name (or resolved name from cache),
+// <#C123|chan> → #chan, <url|text> → text
+function cleanText(text, userCache = {}) {
   if (!text) return "";
   return text
-    .replace(/<@[UW][A-Z0-9]+\|([^>]+)>/g, "@$1")
-    .replace(/<@[UW][A-Z0-9]+>/g, "@user")
+    // Mention with explicit display name: <@U123|alex> → @alex
+    .replace(/<@([UW][A-Z0-9]+)\|([^>]+)>/g, (_, _id, name) => `@${name}`)
+    // Mention without display name: <@U123> → @<resolved name> or @user fallback
+    .replace(/<@([UW][A-Z0-9]+)>/g, (_, id) => {
+      const name = userCache[id];
+      return name ? `@${name}` : "@user";
+    })
     .replace(/<#C[A-Z0-9]+\|([^>]+)>/g, "#$1")
     .replace(/<#C[A-Z0-9]+>/g, "#channel")
     .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/g, "$2")
@@ -77,6 +115,26 @@ function cleanText(text) {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .trim();
+}
+
+// Pull image URLs from Slack message files. Slack hosts them but they require
+// auth — for client display we'll proxy via slack's permalink_public for now,
+// or fall back to the original (signed) URL.
+function extractImage(msg) {
+  const files = Array.isArray(msg.files) ? msg.files : [];
+  // Find the first image attachment
+  const img = files.find(f => f && (f.mimetype || "").startsWith("image/"));
+  if (!img) return null;
+  // Public-facing URL for client display. Authenticated bots get signed URLs;
+  // for unauth display, prefer the public permalink if Slack made the file public.
+  return {
+    url: img.url_private || img.thumb_360 || img.thumb_480 || img.thumb_720 || null,
+    thumb: img.thumb_360 || img.thumb_480 || null,
+    width: img.original_w || img.thumb_360_w || null,
+    height: img.original_h || img.thumb_360_h || null,
+    name: img.name || "",
+    mimetype: img.mimetype || "",
+  };
 }
 
 export default async function handler(req, res) {
@@ -116,18 +174,28 @@ export default async function handler(req, res) {
       .sort((a, b) => parseFloat(b.ts) - parseFloat(a.ts))
       .slice(0, POOL_SIZE);
 
-    // Resolve author names
+    // Pre-resolve every user mentioned in any message body so cleanText can render
+    // real names instead of "@user" fallbacks.
     const userCache = {};
+    await prewarmMentionedUsers(fireMessages, SLACK_TOKEN, userCache);
+
     const pool = [];
     for (const msg of fireMessages) {
-      const author = await resolveUserName(msg.user, SLACK_TOKEN, userCache);
+      // Resolve author: prefer real user, fall back to bot name, fall back to empty.
+      let author = await resolveUserName(msg.user, SLACK_TOKEN, userCache);
+      if (!author && msg.bot_id) {
+        author = await resolveBotName(msg.bot_id, SLACK_TOKEN, userCache);
+      }
+      if (!author && msg.username) author = msg.username; // raw bot username on legacy posts
       const fireReaction = msg.reactions.find(r => r.name === TARGET_REACTION);
+      const image = extractImage(msg);
       pool.push({
-        text: cleanText(msg.text),
+        text: cleanText(msg.text, userCache),
         author,
         ts: msg.ts,
         reactionCount: fireReaction?.count || 0,
         postedAt: new Date(parseFloat(msg.ts) * 1000).toISOString(),
+        image: image || null,
       });
     }
 

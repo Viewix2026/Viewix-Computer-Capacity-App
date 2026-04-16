@@ -579,9 +579,15 @@ export default function App(){
                       <span style={{fontSize:11,fontWeight:700,color:"var(--muted)",textTransform:"uppercase"}}>#{i+1}</span>
                       {w.reactionCount&&<span style={{fontSize:11,color:"var(--muted)"}}>🔥 {w.reactionCount}</span>}
                       {w.author&&<span style={{fontSize:11,color:"var(--accent)",fontWeight:600}}>{w.author}</span>}
+                      {w.image&&<span style={{fontSize:11,color:"var(--muted)"}}>📷 image</span>}
                       {w.postedAt&&<span style={{fontSize:11,color:"var(--muted)",marginLeft:"auto"}}>{new Date(w.postedAt).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}</span>}
                     </div>
                     <div style={{fontSize:13,color:"var(--fg)",lineHeight:1.5,whiteSpace:"pre-wrap"}}>{w.text||"(no text)"}</div>
+                    {w.image?.url&&(
+                      <div style={{marginTop:8,borderRadius:6,overflow:"hidden",border:"1px solid var(--border)",maxHeight:160,display:"inline-block"}}>
+                        <img src={`/api/slack-image?url=${encodeURIComponent(w.image.url)}`} alt="" onError={e=>{e.target.parentElement.style.display="none";}} style={{display:"block",maxHeight:160,width:"auto",objectFit:"contain"}}/>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1300,7 +1306,10 @@ export default function App(){
           const winText=hasManual?foundersData.weeklyWin:(fromPool?.text||"");
           const winAuthor=hasManual?foundersData.weeklyWinAuthor:(fromPool?.author||"");
           const winDate=hasManual?foundersData.weeklyWinDate:(fromPool?.postedAt||"");
+          const winImage=!hasManual?fromPool?.image:null;
           const isFromSlack=!hasManual&&!!fromPool;
+          // Slack file URLs need auth — proxy through our endpoint
+          const proxiedImg=winImage?.url?`/api/slack-image?url=${encodeURIComponent(winImage.url)}`:null;
           return(<div style={{marginBottom:20,padding:"24px",background:"linear-gradient(135deg, rgba(245,158,11,0.08) 0%, rgba(139,92,246,0.08) 100%)",border:"1px solid var(--border)",borderRadius:12,position:"relative",overflow:"hidden"}}>
             <div style={{position:"absolute",top:-20,right:-20,fontSize:120,opacity:0.06,pointerEvents:"none"}}>🎉</div>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,position:"relative"}}>
@@ -1315,11 +1324,16 @@ export default function App(){
                 </div>
               </div>
             </div>
-            {winText?(
+            {(winText||proxiedImg)?(
               <div style={{padding:"18px 22px",background:"var(--card)",borderRadius:10,border:"1px solid var(--border)",position:"relative"}}>
-                <div style={{fontSize:16,fontWeight:600,color:"var(--fg)",lineHeight:1.6,whiteSpace:"pre-wrap"}}>{winText}</div>
+                {winText&&<div style={{fontSize:16,fontWeight:600,color:"var(--fg)",lineHeight:1.6,whiteSpace:"pre-wrap",marginBottom:proxiedImg?14:0}}>{winText}</div>}
+                {proxiedImg&&(
+                  <div style={{borderRadius:8,overflow:"hidden",border:"1px solid var(--border)",background:"var(--bg)",maxHeight:400}}>
+                    <img src={proxiedImg} alt="" onError={e=>{e.target.parentElement.style.display="none";}} style={{display:"block",maxWidth:"100%",maxHeight:400,width:"auto",height:"auto",margin:"0 auto",objectFit:"contain"}}/>
+                  </div>
+                )}
                 {winAuthor&&(
-                  <div style={{fontSize:12,fontWeight:600,color:"var(--accent)",marginTop:10}}>— {winAuthor}</div>
+                  <div style={{fontSize:12,fontWeight:600,color:"var(--accent)",marginTop:proxiedImg?12:10}}>— {winAuthor}</div>
                 )}
               </div>
             ):(
