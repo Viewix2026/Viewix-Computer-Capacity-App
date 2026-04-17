@@ -572,17 +572,12 @@ export const TABS = [
   { key: "script",         label: "Scripting",       num: 7, prev: "select" },
 ];
 
-// A tab is reachable iff its prerequisite approval key is set OR the
-// producer has already visited it (free to revisit once seen). The visit
-// bit is the UX fix: producers were funnelled forward through the "→ Next"
-// buttons and couldn't hop back to older tabs without that flow.
-export function isTabReachable(project, tabKey) {
-  const tab = TABS.find(t => t.key === tabKey);
-  if (!tab) return false;
-  if (!tab.prev) return true;
-  if (!!project?.approvals?.[tab.prev]) return true;
-  if (Array.isArray(project?.visitedTabs) && project.visitedTabs.includes(tabKey)) return true;
-  return false;
+// Legacy helper — kept because it's exported from this module and may be
+// referenced elsewhere. Always returns true now: the tab bar is purely a
+// navigation aid; forward approval gates are enforced by each tab's
+// Approve button, not by hiding tabs.
+export function isTabReachable() {
+  return true;
 }
 
 function TabBar({ project, onChange }) {
@@ -594,24 +589,24 @@ function TabBar({ project, onChange }) {
     <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, overflowX: "auto" }}>
       {TABS.map((s, idx) => {
         const isActive = idx === currentIdx;
-        // Tab 2 has two sub-approvals (research_a + research_b) instead of
-        // a single approvals.research key — mark it done when both are set.
+        // Tab 2 has two sub-approvals (research_a + research_b) — mark it
+        // done when both are set. Everything else maps 1:1 to its approvals
+        // key.
         const isDone = s.key === "research"
           ? (!!approvals.research_a && !!approvals.research_b)
           : !!approvals[s.key];
-        const canReach = isTabReachable(project, s.key);
         return (
           <button
             key={s.key}
-            onClick={() => canReach && onChange(s.key)}
-            disabled={!canReach}
-            title={!canReach ? `Approve ${TABS.find(t => t.key === s.prev)?.label} first` : `Go to ${s.label}`}
+            onClick={() => onChange(s.key)}
+            title={`Go to ${s.label}`}
             style={{
               flex: 1, minWidth: 100, padding: "8px 12px", borderRadius: 6,
-              border: "none", background: isActive ? "var(--accent)" : "transparent",
-              color: isActive ? "#fff" : isDone ? "#22C55E" : canReach ? "var(--fg)" : "var(--muted)",
-              fontSize: 12, fontWeight: 700, cursor: canReach ? "pointer" : "not-allowed",
-              fontFamily: "inherit", opacity: canReach ? 1 : 0.5,
+              border: "none",
+              background: isActive ? "var(--accent)" : "transparent",
+              color: isActive ? "#fff" : isDone ? "#22C55E" : "var(--fg)",
+              fontSize: 12, fontWeight: 700, cursor: "pointer",
+              fontFamily: "inherit", opacity: 1,
               display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               whiteSpace: "nowrap",
             }}>
