@@ -1479,6 +1479,101 @@ async function handleStartCompetitorScrape(req, res) {
   return res.status(200).json({ success: true, runId, handles: handles.length, perHandle });
 }
 
+// Ask Claude to guess the client's Instagram handle from the transcript +
+// brand truth + Sherpa. Fires on Brand Truth approval (Tab 1 → Tab 2) so
+// Stage A opens pre-filled. Producer can still edit before approving.
+async function handleSuggestClientHandle(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  // Sherpa lookup — website URL is a strong signal (handle often matches
+  // domain), saved competitors sometimes include the client itself.
+  let website = "", sherpaNotes = "";
+  if (project.attioCompanyId) {
+    const accounts = await fbGet("/accounts");
+    if (accounts) {
+      const acct = Object.values(accounts).find(a => a?.attioId === project.attioCompanyId);
+      if (acct) {
+        website = acct.websiteUrl || acct.website || "";
+        sherpaNotes = acct.notes || "";
+      }
+    }
+  }
+
+  const bt = project.brandTruth?.fields || {};
+  const transcript = project.brandTruth?.transcript || "";
+
+  const systemPrompt = `You extract a client's Instagram handle from preproduction context. Return JSON only — no markdown, no code fences.
+
+RULES:
+- If the transcript explicitly mentions a handle (e.g. "@brandname" or "our instagram is ___"), return exactly that.
+- If there's a clear website domain, infer the most likely handle (usually the second-level domain).
+- Otherwise guess based on the company name — strip spaces, lowercase.
+- Set confidence: "high" if the transcript is explicit, "medium" if inferred from a clear signal, "low" if it's a pure guess from the company name.
+- If you genuinely can't tell, return handle: null.
+
+STRUCTURE:
+{
+  "handle": "@example",
+  "confidence": "high"|"medium"|"low",
+  "reason": "one short sentence"
+}`;
+
+  const userMessage = `CLIENT NAME: ${project.companyName}
+WEBSITE: ${website || "(unknown)"}
+SHERPA NOTES: ${sherpaNotes || "(none)"}
+BRAND TRUTHS: ${bt.brandTruths || "(none)"}
+
+PREPRODUCTION TRANSCRIPT (first 6000 chars):
+"""
+${transcript.slice(0, 6000) || "(none)"}
+"""
+
+What's the client's Instagram handle?`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-sonnet-4-6",
+      systemPrompt, userMessage,
+      maxTokens: 500,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch {
+    // Tolerant fallback — if Claude returned raw text, try to pull a handle out.
+    const m = raw.match(/@[a-zA-Z0-9_.]+/);
+    parsed = { handle: m ? m[0] : null, confidence: "low", reason: "parsed from non-JSON response" };
+  }
+
+  let handle = (parsed.handle || "").trim();
+  if (handle && !handle.startsWith("@")) handle = "@" + handle.replace(/^@+/, "");
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/research`, {
+    // Only overwrite if no manual handle exists yet — never clobber producer edits.
+    ...(project.research?.clientHandle ? {} : { clientHandle: handle }),
+    handleSuggestion: {
+      handle: handle || null,
+      confidence: parsed.confidence || "low",
+      reason: parsed.reason || "",
+      suggestedAt: new Date().toISOString(),
+    },
+  });
+
+  return res.status(200).json({ success: true, handle, confidence: parsed.confidence, reason: parsed.reason });
+}
+
 // Fire TikTok / YouTube profile scrapes for Tab 3. Producers supply handles
 // here because Fathom/Attio don't reliably know them. Each triggers its own
 // Apify actor; results land under clientScrape.profile.followers.{tiktok,youtube}
@@ -1841,6 +1936,8 @@ export default async function handler(req, res) {
         return await handleSuggestCompetitors(req, res);
       case "startProfileScrape":
         return await handleStartProfileScrape(req, res);
+      case "suggestClientHandle":
+        return await handleSuggestClientHandle(req, res);
       case "suggestFormats":
         return await handleSuggestFormats(req, res);
       case "pushToDeliveries":

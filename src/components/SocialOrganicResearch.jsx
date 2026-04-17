@@ -520,16 +520,17 @@ function effectiveTab(project) {
   return project?.tab || "brandTruth";
 }
 
-// `prev` is the approval key that must be set to unlock this tab. Most match
-// tab keys 1:1, but Tab 2 (Format Research) has TWO sub-approvals —
-// `research_a` (client handle approved → client scrape kicked off) and
-// `research_b` (competitors approved → 120-video scrape kicked off). Tab 3
-// gates on research_a so producers can move on while Stage B is still
-// scraping; Tab 4 gates on research_b.
+// `prev` is the approval key that must be set to unlock this tab. Tab 2
+// (Format Research) has two sub-approvals — `research_a` (client handle
+// approved → client scrape kicked off) and `research_b` (competitors
+// approved → 120-video scrape kicked off). Tab 3 requires research_b so
+// both scrapes are running before the producer moves on; the 120-video
+// scrape then happens in parallel to Tab 3's client review, which is the
+// whole point of the async model.
 export const TABS = [
   { key: "brandTruth",     label: "Brand Truth",     num: 1, prev: null },
   { key: "research",       label: "Format Research", num: 2, prev: "brandTruth" },
-  { key: "clientResearch", label: "Client Research", num: 3, prev: "research_a" },
+  { key: "clientResearch", label: "Client Research", num: 3, prev: "research_b" },
   { key: "videoReview",    label: "Video Review",    num: 4, prev: "research_b" },
   { key: "shortlist",      label: "Shortlist",       num: 5, prev: "videoReview" },
   { key: "select",         label: "Selection",       num: 6, prev: "shortlist" },
@@ -553,7 +554,11 @@ function TabBar({ project, onChange }) {
     <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, overflowX: "auto" }}>
       {TABS.map((s, idx) => {
         const isActive = idx === currentIdx;
-        const isDone = !!approvals[s.key];
+        // Tab 2 has two sub-approvals (research_a + research_b) instead of
+        // a single approvals.research key — mark it done when both are set.
+        const isDone = s.key === "research"
+          ? (!!approvals.research_a && !!approvals.research_b)
+          : !!approvals[s.key];
         const canReach = isTabReachable(project, s.key);
         return (
           <button
@@ -2430,6 +2435,20 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
 
   const approve = () => {
     fbSet(`/preproduction/socialOrganic/${project.id}/approvals/brandTruth`, new Date().toISOString());
+    // Fire-and-forget Claude calls to pre-fill Tab 2 so it opens with
+    // everything already populated. Producers edit if the suggestions miss.
+    //  - suggestClientHandle → Stage A's @handle input
+    //  - suggestCompetitors  → Stage B's competitor + keyword chips
+    fetch("/api/social-organic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "suggestClientHandle", projectId: project.id }),
+    }).catch(() => {});
+    fetch("/api/social-organic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
+    }).catch(() => {});
     onPatch({ tab: "research" });
   };
 
@@ -2545,9 +2564,9 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
   const competitorScrape = project.competitorScrape || {};
   const approvals = project.approvals || {};
 
-  // Stage A: client handle. Default from the linked account's saved IG handle
-  // (accounts store competitors — the first entry often is the client itself
-  // in current practice; fall back to a derived handle from companyName).
+  // Stage A: client handle. Claude pre-fills this when Brand Truth is
+  // approved (via suggestClientHandle). Fall back to the linked account's
+  // saved handle or a manual prompt if Claude didn't land.
   const defaultHandle = research.clientHandle
     || linkedAccount?.instagramHandle
     || (linkedAccount?.competitors || []).find(c => c.isClient)?.handle
@@ -2555,6 +2574,53 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
   const [clientHandle, setClientHandle] = useState(defaultHandle);
   const [starting, setStarting] = useState({ a: false, b: false });
   const [err, setErr] = useState({ a: null, b: null });
+  const [suggestingHandle, setSuggestingHandle] = useState(false);
+  const handleSuggestion = research.handleSuggestion || null;
+
+  // Keep local handle in sync when the background suggestClientHandle
+  // call lands after Tab 2 is open.
+  useEffect(() => {
+    if (research.clientHandle && research.clientHandle !== clientHandle) {
+      setClientHandle(research.clientHandle);
+    }
+  }, [research.clientHandle]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fallback: if we arrive at Tab 2 with no handle and no prior suggestion
+  // attempt, run one now. Covers producers who opened Tab 2 before the
+  // Tab 1-approve fire-and-forget landed, or whose network dropped it.
+  useEffect(() => {
+    if (clientHandle) return;
+    if (handleSuggestion) return;
+    if (suggestingHandle) return;
+    setSuggestingHandle(true);
+    fetch("/api/social-organic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "suggestClientHandle", projectId: project.id }),
+    }).finally(() => setSuggestingHandle(false));
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Same fallback for Stage B: if no AI competitor suggestion has run yet
+  // and the producer hasn't already added entries manually, fire one.
+  useEffect(() => {
+    if (research.aiSuggestedAt) return;
+    if ((research.competitors || []).length > 0) return;
+    if ((research.keywords || []).length > 0) return;
+    fetch("/api/social-organic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
+    }).catch(() => {});
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const resuggest = () => {
+    setSuggestingHandle(true);
+    fetch("/api/social-organic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "suggestClientHandle", projectId: project.id }),
+    }).finally(() => setSuggestingHandle(false));
+  };
 
   useEffect(() => {
     if (clientHandle === (research.clientHandle || "")) return;
@@ -2679,15 +2745,24 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
       <StageCard
         stageLabel="Stage A"
         title="Client Instagram"
-        hint="The client's own handle, prefilled from their account. Approving kicks off an async scrape of their reels + Instagram follower count."
+        hint="Claude pre-fills the client's handle from the transcript + Brand Truth. Update if it got it wrong. Approving kicks off an async scrape of their reels + Instagram follower count."
         done={stageADone}
         doneText={`Approved ${stageADone ? new Date(approvals.research_a).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}`}
         error={err.a}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input type="text" value={clientHandle} onChange={e => setClientHandle(e.target.value)}
             disabled={stageADone}
-            placeholder="@client_handle"
+            placeholder={suggestingHandle ? "Claude is finding the handle…" : "@client_handle"}
             style={{ ...inputSt, maxWidth: 280, fontSize: 13, opacity: stageADone ? 0.6 : 1 }} />
+          {!stageADone && !clientHandle && suggestingHandle && (
+            <span style={{ fontSize: 11, color: "var(--accent)", fontStyle: "italic" }}>Finding handle…</span>
+          )}
+          {!stageADone && !suggestingHandle && (
+            <button onClick={resuggest} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 11 }}
+              title="Ask Claude to re-guess the handle">
+              {handleSuggestion ? "↻ Re-suggest" : "Suggest with AI"}
+            </button>
+          )}
           {!stageADone && (
             <button onClick={approveStageA} disabled={starting.a || !clientHandle.trim()}
               style={{ ...btnPrimary, opacity: (starting.a || !clientHandle.trim()) ? 0.5 : 1 }}>
@@ -2695,6 +2770,21 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
             </button>
           )}
         </div>
+        {!stageADone && handleSuggestion?.handle && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "var(--muted)" }}>
+            <span style={{
+              display: "inline-block", padding: "1px 6px", borderRadius: 3, marginRight: 6,
+              background: handleSuggestion.confidence === "high" ? "rgba(34,197,94,0.15)"
+                : handleSuggestion.confidence === "medium" ? "rgba(245,158,11,0.15)"
+                : "rgba(90,107,133,0.15)",
+              color: handleSuggestion.confidence === "high" ? "#22C55E"
+                : handleSuggestion.confidence === "medium" ? "#F59E0B"
+                : "#5A6B85",
+              fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em",
+            }}>{handleSuggestion.confidence || "low"} confidence</span>
+            {handleSuggestion.reason}
+          </div>
+        )}
         {stageADone && <ScrapeStatusPill scrape={clientScrape} label="Client scrape" />}
       </StageCard>
 
@@ -2704,21 +2794,22 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
         <StageCard
           stageLabel="Stage B"
           title="Competitors & Keywords"
-          hint="AI suggests competitor handles and hashtag keywords from the approved Brand Truth + transcript + Sherpa. Edit freely before approving."
+          hint="Pre-filled from the approved Brand Truth + transcript + Sherpa. Edit freely before approving — add or remove handles and keywords as needed."
           done={stageBDone}
           doneText={`Approved ${stageBDone ? new Date(approvals.research_b).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}`}
           error={err.b}>
 
           {!stageBDone && (
-            <div style={{ marginBottom: 12 }}>
-              <button onClick={runSuggest} disabled={suggesting} style={{ ...btnSecondary, opacity: suggesting ? 0.5 : 1 }}>
-                {suggesting ? "Thinking…" : research.aiSuggestedAt ? "Re-suggest" : "Suggest with AI"}
-              </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, fontSize: 11, color: "var(--muted)" }}>
               {research.aiSuggestedAt && (
-                <span style={{ marginLeft: 10, fontSize: 11, color: "var(--muted)" }}>
-                  Suggested {new Date(research.aiSuggestedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
-                </span>
+                <span>Suggested {new Date(research.aiSuggestedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
               )}
+              {!research.aiSuggestedAt && suggesting && <span style={{ color: "var(--accent)" }}>Suggesting…</span>}
+              <button onClick={runSuggest} disabled={suggesting}
+                title="Ask Claude to re-suggest competitors and keywords"
+                style={{ ...btnSecondary, padding: "4px 10px", fontSize: 10, marginLeft: "auto", opacity: suggesting ? 0.5 : 1 }}>
+                {suggesting ? "…" : "↻ Re-suggest"}
+              </button>
             </div>
           )}
 
@@ -2781,11 +2872,12 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
         </StageCard>
       </div>
 
-      {/* Forward button: Tab 3 unlocks on research_a; Tab 4 unlocks on research_b.
-          Most producers will want to move on to Tab 3 while Stage B is still scraping. */}
-      {stageADone && (
+      {/* Forward button: only appears once BOTH stages are approved. The 120-
+          video Stage B scrape runs in the background while the producer works
+          through Tab 3 — that's the reason we require Stage B first, not last. */}
+      {stageADone && stageBDone && (
         <div style={{ marginTop: 14, padding: "10px 14px", background: "var(--accent-soft)", borderRadius: 8, border: "1px solid var(--accent)", fontSize: 12, color: "var(--fg)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span>Stage A approved. You can move to Tab 3 while {stageBDone ? "the competitor scrape runs" : "setting up Stage B"}.</span>
+          <span>Both scrapes running. Move to Client Research — the 120-video scrape will keep running in the background.</span>
           <button onClick={() => onPatch({ tab: "clientResearch" })} style={btnPrimary}>→ Client Research</button>
         </div>
       )}
