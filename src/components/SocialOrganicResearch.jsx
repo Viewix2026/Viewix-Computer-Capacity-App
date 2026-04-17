@@ -3075,6 +3075,10 @@ function ClientResearchStep({ project, onPatch }) {
   const clientScrape = project.clientScrape || {};
   const profile = clientScrape.profile || {};
   const followers = profile.followers || {};
+  // Live ref onto the latest followers object so async loops can observe
+  // Firebase updates without re-registering on every render.
+  const followersRef = useRef(followers);
+  useEffect(() => { followersRef.current = followers; }, [followers]);
   const posts = Array.isArray(clientScrape.posts) ? clientScrape.posts : [];
   const topIds = Array.isArray(clientScrape.topByViews) ? clientScrape.topByViews : [];
   const topPosts = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 5);
@@ -3111,6 +3115,28 @@ function ClientResearchStep({ project, onPatch }) {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+
+      // TT/YT profile scrapes don't flip clientScrape.status to "running"
+      // (that's reserved for the main reels scrape), so the project-level
+      // auto-poll doesn't catch them. Poll locally — every 5s, up to 90s
+      // — and exit early once Firebase reflects the follower count we're
+      // waiting on.
+      const deadline = Date.now() + 90000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 5000));
+        try {
+          await fetch("/api/social-organic", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "refreshScrapes", projectId: project.id }),
+          });
+        } catch { /* silent — try again next tick */ }
+        // Bail early the moment the scrape has landed.
+        if (followersRef.current?.[platform] != null) break;
+      }
+      if (followersRef.current?.[platform] == null) {
+        setErr(err => ({ ...err, [key]: "Timed out waiting for Apify — handle may not exist or be private" }));
+      }
     } catch (e) {
       setErr(err => ({ ...err, [key]: e.message }));
     } finally {
@@ -3178,22 +3204,22 @@ function ClientResearchStep({ project, onPatch }) {
             {scrapeRunning ? "Waiting on scrape…" : "No reels yet — waiting on the client scrape."}
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+          {/* Wider tiles + taller aspect ratio so the Instagram embed has
+              room to render the full reel frame without cropping the
+              player chrome. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
             {topPosts.map(p => (
-              <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
-                style={{ display: "block", background: "var(--bg)", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)", textDecoration: "none" }}>
-                <div style={{ aspectRatio: "9 / 16", background: "#000" }}>
-                  {p.thumbnail && <img src={p.thumbnail} alt="" loading="lazy" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
-                </div>
-                <div style={{ padding: 8 }}>
+              <div key={p.id} style={{ background: "var(--bg)", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+                <ReelPreview shortCode={p.shortCode} url={p.url} thumbnail={p.thumbnail} aspectRatio="9 / 14" />
+                <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", textDecoration: "none", padding: 8 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", fontFamily: "'JetBrains Mono',monospace" }}>
                     👁 {formatBig(p.views)}
                   </div>
                   <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {(p.caption || "").slice(0, 60)}
                   </div>
-                </div>
-              </a>
+                </a>
+              </div>
             ))}
           </div>
         )}

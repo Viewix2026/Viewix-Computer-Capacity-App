@@ -11,10 +11,13 @@ import { useState } from "react";
 
 export function ReelPreview({ shortCode, url, thumbnail, aspectRatio = "1 / 1" }) {
   const [iframeErrored, setIframeErrored] = useState(false);
-  const embedUrl = shortCode ? `https://www.instagram.com/p/${shortCode}/embed/captioned` : null;
+  // `/embed` (no /captioned) is Instagram's more compact embed — shows the
+  // media + a small top bar. /captioned tacks on the full caption which
+  // eats more vertical space and is usually unwanted in a tile grid.
+  const embedUrl = shortCode ? `https://www.instagram.com/p/${shortCode}/embed` : null;
 
   return (
-    <div style={{ aspectRatio, background: "#000", position: "relative", overflow: "hidden" }}>
+    <div style={{ aspectRatio, background: "#fff", position: "relative", overflow: "hidden" }}>
       {embedUrl && !iframeErrored ? (
         <iframe
           src={embedUrl}
@@ -25,10 +28,8 @@ export function ReelPreview({ shortCode, url, thumbnail, aspectRatio = "1 / 1" }
           allow="encrypted-media"
           onError={() => setIframeErrored(true)}
           style={{
-            width: "100%", height: "100%", border: 0,
-            // Instagram's embed has its own padding that we'd rather not see
-            // inside our small tiles — translate up a bit so the media fills.
-            transform: "scale(1.02)", transformOrigin: "center",
+            // Fill the tile exactly — no transform cropping.
+            position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0,
           }}
         />
       ) : thumbnail ? (
