@@ -1395,6 +1395,7 @@ async function handleStartClientScrape(req, res) {
     });
   } catch (e) {
     errors.posts = e.message;
+    console.error(`[startClientScrape] posts run failed:`, e);
   }
 
   // 2. IG profile scrape (for follower count).
@@ -1408,10 +1409,28 @@ async function handleStartClientScrape(req, res) {
     });
   } catch (e) {
     errors.profileIG = e.message;
+    console.error(`[startClientScrape] profileIG run failed:`, e);
   }
 
   // TikTok + YouTube scrapes deferred to Phase D — they need the producer
   // to supply the platform handles, which happens in Tab 3.
+
+  const anyRunStarted = Object.keys(runIds).length > 0;
+
+  if (!anyRunStarted) {
+    // Everything failed. Roll back the approval so the producer's UI goes
+    // straight back to the approve button with the error visible — no
+    // manual reset needed. Surface the Apify error so we can fix the
+    // input schema / actor name if that's the cause.
+    const msg = Object.entries(errors).map(([k, v]) => `${k}: ${v}`).join(" · ");
+    await fbSet(`/preproduction/socialOrganic/${projectId}/clientScrape`, null);
+    await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/research_a`, null);
+    return res.status(502).json({
+      error: "Apify wouldn't accept the run",
+      detail: msg || "All Apify runs failed to start",
+      errors,
+    });
+  }
 
   await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape`, {
     apifyRunIds: runIds,
@@ -1464,12 +1483,12 @@ async function handleStartCompetitorScrape(req, res) {
       purpose: "competitorPosts",
     });
   } catch (e) {
-    await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, {
-      status: "error",
-      error: e.message,
-      finishedAt: new Date().toISOString(),
-    });
-    return res.status(502).json({ error: "Failed to start Apify run", detail: e.message });
+    console.error(`[startCompetitorScrape] failed:`, e);
+    // Roll back so the producer's UI goes back to the approve button
+    // with the Apify error surfaced.
+    await fbSet(`/preproduction/socialOrganic/${projectId}/competitorScrape`, null);
+    await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/research_b`, null);
+    return res.status(502).json({ error: "Apify wouldn't accept the run", detail: e.message });
   }
 
   await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, {
@@ -1829,6 +1848,36 @@ Rank them. Return JSON.`;
 // cold-start misses, secret mismatches during env-var rotations, etc.
 // Safe to call repeatedly — it's idempotent (sidecar deleted on success).
 // ═══════════════════════════════════════════════════════════════════
+// Wipe a stuck scrape bundle so the producer can re-approve. Used when the
+// refresh fallback found no in-flight runs but status is still "running" —
+// means the run never started at Apify in the first place (e.g. actor-input
+// schema mismatch). Clears the relevant approval gate + scrape state so
+// Stage A or Stage B goes back to "not approved".
+async function handleResetScrape(req, res) {
+  const { projectId, which } = req.body || {};
+  if (!projectId || !which) return res.status(400).json({ error: "Missing projectId or which" });
+  if (which !== "client" && which !== "competitor") return res.status(400).json({ error: "which must be 'client' or 'competitor'" });
+
+  const sidecars = (await fbGet(`/preproduction/socialOrganic/_apifyRuns`)) || {};
+  // Best-effort sidecar cleanup — orphans are only diagnostic but they
+  // shouldn't persist once the producer has explicitly reset.
+  const wantPurpose = which === "client"
+    ? new Set(["clientPosts", "clientProfileIG", "clientProfileTT", "clientProfileYT"])
+    : new Set(["competitorPosts"]);
+  for (const [runId, meta] of Object.entries(sidecars)) {
+    if (meta?.projectId === projectId && wantPurpose.has(meta?.purpose)) {
+      await fbSet(`/preproduction/socialOrganic/_apifyRuns/${runId}`, null);
+    }
+  }
+
+  const scrapeField = which === "client" ? "clientScrape" : "competitorScrape";
+  const approvalKey = which === "client" ? "research_a" : "research_b";
+  await fbSet(`/preproduction/socialOrganic/${projectId}/${scrapeField}`, null);
+  await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/${approvalKey}`, null);
+
+  return res.status(200).json({ success: true });
+}
+
 async function handleRefreshScrapes(req, res) {
   const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
   const SECRET = process.env.APIFY_WEBHOOK_SECRET;
@@ -1842,7 +1891,27 @@ async function handleRefreshScrapes(req, res) {
   const mine = Object.entries(sidecars).filter(([, meta]) => meta?.projectId === projectId);
 
   if (mine.length === 0) {
-    return res.status(200).json({ success: true, checked: 0, note: "No in-flight runs for this project." });
+    // No runs exist but the status bundle might still say "running" —
+    // that's the "run never actually started" failure mode. Roll both
+    // bundles + approvals back so the producer can just re-approve.
+    const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+    const recovered = [];
+    if (project?.clientScrape?.status === "running") {
+      await fbSet(`/preproduction/socialOrganic/${projectId}/clientScrape`, null);
+      await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/research_a`, null);
+      recovered.push("clientScrape");
+    }
+    if (project?.competitorScrape?.status === "running") {
+      await fbSet(`/preproduction/socialOrganic/${projectId}/competitorScrape`, null);
+      await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/research_b`, null);
+      recovered.push("competitorScrape");
+    }
+    return res.status(200).json({
+      success: true, checked: 0, recovered,
+      note: recovered.length
+        ? `Rolled back ${recovered.join(" + ")} — the Apify run never started. Retry to see the underlying error.`
+        : "No in-flight runs for this project.",
+    });
   }
 
   const webhookUrl = `${apifyWebhookBase()}/api/apify-webhook?secret=${encodeURIComponent(SECRET)}`;
@@ -2001,6 +2070,8 @@ export default async function handler(req, res) {
         return await handlePushToDeliveries(req, res);
       case "refreshScrapes":
         return await handleRefreshScrapes(req, res);
+      case "resetScrape":
+        return await handleResetScrape(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }
