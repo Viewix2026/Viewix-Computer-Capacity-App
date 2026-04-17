@@ -3040,19 +3040,41 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
       {refreshResults && refreshResults.length > 0 && (
         <div style={{ width: "100%", marginTop: 6, padding: 10, background: "var(--bg)", borderRadius: 6, border: "1px solid var(--border)", fontSize: 10, fontFamily: "'JetBrains Mono',monospace" }}>
           {refreshResults.map((r, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: i ? 4 : 0 }}>
-              <span style={{ color: "var(--muted)" }}>{r.purpose}:</span>
-              <span style={{
-                color: r.apifyStatus === "RUNNING" ? "#3B82F6"
-                  : r.apifyStatus === "SUCCEEDED" ? "#22C55E"
-                  : r.apifyStatus === "FAILED" || r.apifyStatus === "ABORTED" || r.apifyStatus?.startsWith("TIMED") ? "#EF4444"
-                  : "var(--fg)",
-                fontWeight: 700,
-              }}>{r.apifyStatus || r.outcome}</span>
-              {r.runningForSec != null && <span style={{ color: "var(--muted)" }}>{r.runningForSec}s elapsed</span>}
-              {r.durationMs != null && <span style={{ color: "var(--muted)" }}>ran {Math.round(r.durationMs / 1000)}s</span>}
-              {r.exitCode != null && r.exitCode !== 0 && <span style={{ color: "#EF4444" }}>exit {r.exitCode}</span>}
-              {r.consoleUrl && <a href={r.consoleUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none", marginLeft: "auto" }}>Apify console ↗</a>}
+            <div key={i} style={{ marginTop: i ? 6 : 0 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ color: "var(--muted)" }}>{r.purpose}:</span>
+                <span style={{
+                  color: r.apifyStatus === "RUNNING" ? "#3B82F6"
+                    : r.apifyStatus === "SUCCEEDED" ? "#22C55E"
+                    : r.apifyStatus === "FAILED" || r.apifyStatus === "ABORTED" || r.apifyStatus?.startsWith("TIMED") ? "#EF4444"
+                    : "var(--fg)",
+                  fontWeight: 700,
+                }}>Apify: {r.apifyStatus || "?"}</span>
+                {/* OUR replay outcome — this is the key signal for debugging
+                    stuck scrapes. "replayed" = we wrote to Firebase.
+                    "replay_failed" = webhook endpoint rejected our call. */}
+                <span style={{
+                  color: r.outcome === "replayed" ? "#22C55E"
+                    : r.outcome === "replay_failed" ? "#EF4444"
+                    : r.outcome === "still_running" ? "#3B82F6"
+                    : "var(--muted)",
+                  fontWeight: 700,
+                }}>Replay: {r.outcome}</span>
+                {r.runningForSec != null && <span style={{ color: "var(--muted)" }}>{r.runningForSec}s elapsed</span>}
+                {r.durationMs != null && <span style={{ color: "var(--muted)" }}>ran {Math.round(r.durationMs / 1000)}s</span>}
+                {r.exitCode != null && r.exitCode !== 0 && <span style={{ color: "#EF4444" }}>exit {r.exitCode}</span>}
+                {r.consoleUrl && <a href={r.consoleUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none", marginLeft: "auto" }}>Apify console ↗</a>}
+              </div>
+              {r.replayDetail && (
+                <div style={{ marginTop: 4, padding: "4px 8px", background: "rgba(239,68,68,0.08)", borderRadius: 4, color: "#EF4444", fontSize: 10, whiteSpace: "pre-wrap" }}>
+                  Replay error: {r.replayDetail}
+                </div>
+              )}
+              {r.detail && (
+                <div style={{ marginTop: 4, padding: "4px 8px", background: "rgba(239,68,68,0.08)", borderRadius: 4, color: "#EF4444", fontSize: 10, whiteSpace: "pre-wrap" }}>
+                  Apify error: {r.detail}
+                </div>
+              )}
             </div>
           ))}
         </div>
