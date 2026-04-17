@@ -1,29 +1,30 @@
-// Social Media Organic — Competitor Intelligence Research
-// Producers research overperforming Instagram content in a client's niche
-// before (or after) a pre-production meeting. Scrapes via Apify, classifies
-// by format via Claude vision, synthesises patterns into a markdown brief
-// that Stage 2 (full pre-prod builder) will consume.
+// Social Media Organic — Competitor Intelligence Research + Producer Workflow
+// Producers research overperforming Instagram content in a client's niche,
+// then walk the project through five stages: Scrape → Review → Shortlist →
+// Select → Script. The final Script stage produces a Picup-Media-style
+// pre-production doc with per-cell AI rewrite affordances.
 //
 // Lives inside the Pre-Production tab's "Social Media Organic" sub-tab.
-// Mirrors the Meta Ads list → detail pattern but with its own data shape
-// at /preproduction/socialOrganic/{projectId}.
+// Data shape at /preproduction/socialOrganic/{projectId}. The legacy
+// `synthesis` field on old projects is preserved but unused.
 
-import { useState, useEffect } from "react";
-import { onFB, fbSet, fbListen } from "../firebase";
+import { useState, useEffect, useRef } from "react";
+import { onFB, fbSet, fbListen, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId } from "../utils";
+import { useAudioRecorder } from "../hooks/useAudioRecorder";
+import { SocialOrganicSelect } from "./SocialOrganicSelect";
 
 // ─── Constants ───
 const STATUS_COLORS = {
   draft:        { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85" },
   scraping:     { bg: "rgba(59,130,246,0.15)",  fg: "#3B82F6" },
   classifying:  { bg: "rgba(139,92,246,0.15)",  fg: "#8B5CF6" },
-  synthesising: { bg: "rgba(251,191,36,0.15)",  fg: "#F59E0B" },
   review:       { bg: "rgba(34,197,94,0.15)",   fg: "#22C55E" },
   archived:     { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85" },
 };
 const STATUS_LABELS = {
   draft: "Draft", scraping: "Scraping", classifying: "Classifying",
-  synthesising: "Synthesising", review: "Review", archived: "Archived",
+  review: "Review", archived: "Archived",
 };
 
 const FORMAT_LABELS = {
@@ -197,7 +198,7 @@ export function SocialOrganicResearch({ accounts }) {
           <div>
             <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>Competitor Research</div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-              Research overperforming social content in a client's niche, then synthesise patterns for the pre-production brief.
+              Research overperforming social content in a client's niche, review the winners, then build the pre-production brief.
             </div>
           </div>
           <button onClick={() => setCreating(true)} style={btnPrimary}>+ New Research Project</button>
@@ -239,7 +240,12 @@ export function SocialOrganicResearch({ accounts }) {
                 <Badge text={STATUS_LABELS[p.status] || p.status} colors={STATUS_COLORS[p.status]} />
                 {handleCount > 0 && <Badge text={`${handleCount} handle${handleCount === 1 ? "" : "s"}`} colors={{ bg: "rgba(59,130,246,0.12)", fg: "#3B82F6" }} />}
                 {postCount > 0 && <Badge text={`${postCount} posts`} colors={{ bg: "rgba(139,92,246,0.12)", fg: "#8B5CF6" }} />}
-                {p.synthesis?.markdown && <Badge text="✓ synthesised" colors={{ bg: "rgba(34,197,94,0.12)", fg: "#22C55E" }} />}
+                {(() => {
+                  const s = effectiveStage(p);
+                  if (s === "scrape") return null;
+                  const stageLabel = { review: "In review", shortlist: "Shortlisting", select: "Selecting", script: "Script" }[s] || s;
+                  return <Badge text={stageLabel} colors={{ bg: "rgba(34,197,94,0.12)", fg: "#22C55E" }} />;
+                })()}
               </div>
               {p.inputs?.competitors?.length > 0 && (
                 <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -303,7 +309,11 @@ function CreateProjectModal({ accounts, onCancel, onCreate }) {
       scrape: null,
       posts: [],
       handleStats: {},
-      synthesis: null,
+      // Producer-driven 5-stage workflow (Phase 1+). Legacy projects without
+      // `stage` fall back to effectiveStage() derived from posts state.
+      stage: "scrape",
+      performanceMultiplier: 2,
+      videoReviews: {},
     };
     onCreate(project);
   };
@@ -401,6 +411,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
   };
 
   const posts = Array.isArray(project.posts) ? project.posts : [];
+  const stage = effectiveStage(project);
 
   return (
     <div>
@@ -425,25 +436,128 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         </div>
       </div>
 
-      <InputsSection
-        project={project}
-        linkedAccount={linkedAccount}
-        onPatchInputs={patchInputs}
-      />
+      {/* Five-stage stepper (Phase 1 of the producer-driven workflow).
+          For legacy projects with no `stage` field we infer it from posts length. */}
+      <StepperBar project={project} onChange={(stage) => onPatch({ stage })} />
 
-      {/* Scrape + classify action bar */}
-      <ActionBar
-        project={project}
-        scraping={scraping}
-        onScrape={runScrape}
-        scrapeError={scrapeError}
-      />
-
-      {posts.length > 0 && <PostsGrid posts={posts} handleStats={project.handleStats || {}} projectId={project.id} />}
-
-      {posts.length > 0 && posts.some(p => p.format) && (
-        <SynthesisSection project={project} />
+      {stage === "scrape" && (
+        <>
+          <InputsSection
+            project={project}
+            linkedAccount={linkedAccount}
+            onPatchInputs={patchInputs}
+          />
+          <ActionBar
+            project={project}
+            scraping={scraping}
+            onScrape={runScrape}
+            scrapeError={scrapeError}
+          />
+          {posts.length > 0 && <PostsGrid posts={posts} handleStats={project.handleStats || {}} projectId={project.id} />}
+          {posts.length > 0 && posts.some(p => p.format) && (
+            <div style={{ marginTop: 16, padding: "12px 14px", background: "var(--accent-soft)", borderRadius: 8, border: "1px solid var(--accent)", fontSize: 12, color: "var(--fg)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span>Scrape + classify complete. Move to Review to tick the videos worth shortlisting.</span>
+              <button onClick={() => onPatch({ stage: "review" })} style={btnPrimary}>Go to Review →</button>
+            </div>
+          )}
+        </>
       )}
+
+      {stage === "review" && (
+        <ReviewStep project={project} onPatch={onPatch} />
+      )}
+
+      {stage === "shortlist" && (
+        <ShortlistStep project={project} onPatch={onPatch} />
+      )}
+
+      {stage === "select" && (
+        <SocialOrganicSelect project={project} onPatch={onPatch} />
+      )}
+
+      {stage === "script" && (
+        <ScriptBuilderStep project={project} onPatch={onPatch} />
+      )}
+    </div>
+  );
+}
+
+// Stage is stored on the project. Legacy projects have no `stage` field —
+// derive one from the posts state so the UI doesn't strand them on a blank page.
+function effectiveStage(project) {
+  if (project?.stage) return project.stage;
+  const posts = Array.isArray(project?.posts) ? project.posts : [];
+  if (posts.length > 0 && posts.some(p => p.format)) return "review";
+  return "scrape";
+}
+
+const STAGES = [
+  { key: "scrape",    label: "Scrape",    num: 1 },
+  { key: "review",    label: "Review",    num: 2 },
+  { key: "shortlist", label: "Shortlist", num: 3 },
+  { key: "select",    label: "Select",    num: 4 },
+  { key: "script",    label: "Script",    num: 5 },
+];
+
+function StepperBar({ project, onChange }) {
+  const current = effectiveStage(project);
+  const currentIdx = STAGES.findIndex(s => s.key === current);
+  const posts = Array.isArray(project?.posts) ? project.posts : [];
+  const hasClassified = posts.some(p => p.format);
+  const reviewCount = Object.values(project?.videoReviews || {}).filter(r => r?.status === "ticked").length;
+  const shortlistCount = Object.values(project?.shortlistedFormats || {}).filter(Boolean).length;
+  const selectedCount = Array.isArray(project?.selectedFormats) ? project.selectedFormats.length : 0;
+
+  // A stage is reachable iff the user has cleared the prerequisite.
+  // Prevents jumping to "Select" before anything is shortlisted.
+  const reachable = (idx) => {
+    if (idx === 0) return true;  // always can go back to scrape
+    if (idx === 1) return hasClassified;
+    if (idx === 2) return hasClassified && reviewCount > 0;
+    if (idx === 3) return shortlistCount > 0;
+    if (idx === 4) return selectedCount > 0 || !!project?.preproductionDoc;
+    return false;
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, overflowX: "auto" }}>
+      {STAGES.map((s, idx) => {
+        const isActive = idx === currentIdx;
+        const isDone = idx < currentIdx;
+        const canReach = reachable(idx);
+        return (
+          <button
+            key={s.key}
+            onClick={() => canReach && onChange(s.key)}
+            disabled={!canReach}
+            title={!canReach ? "Complete the previous stage first" : `Go to ${s.label}`}
+            style={{
+              flex: 1, minWidth: 100, padding: "8px 12px", borderRadius: 6,
+              border: "none", background: isActive ? "var(--accent)" : "transparent",
+              color: isActive ? "#fff" : isDone ? "var(--accent)" : canReach ? "var(--fg)" : "var(--muted)",
+              fontSize: 12, fontWeight: 700, cursor: canReach ? "pointer" : "not-allowed",
+              fontFamily: "inherit", opacity: canReach ? 1 : 0.5,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              whiteSpace: "nowrap",
+            }}>
+            <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", opacity: 0.7 }}>
+              {isDone ? "✓" : s.num}
+            </span>
+            {s.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ComingSoonStep({ title, hint, onBack }) {
+  return (
+    <div style={{ padding: 40, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
+      <div style={{ fontSize: 28, marginBottom: 10 }}>🚧</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>{title} — coming soon</div>
+      <div style={{ fontSize: 12, color: "var(--muted)", maxWidth: 520, margin: "0 auto 16px", lineHeight: 1.5 }}>{hint}</div>
+      <button onClick={onBack} style={btnSecondary}>← Back</button>
     </div>
   );
 }
@@ -481,8 +595,7 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
       else if (d.scrape?.skipped) bits.push(`${d.scrape.postCount || 0} posts reused`);
       if (d.classify?.classified != null) bits.push(`${d.classify.classified} classified`);
       else if (d.classify?.skipped) bits.push("classify skipped");
-      if (d.synthesise?.success) bits.push("synthesis ✓");
-      else if (d.synthesise?.skipped) bits.push("synthesis skipped");
+      // Synthesis step removed — producer drives review → shortlist → select → script.
       setPipelineInfo(`Pipeline done — ${bits.join(" · ")}`);
     } catch (e) {
       setPipelineError(e.message);
@@ -631,7 +744,10 @@ function PostsGrid({ posts, handleStats, projectId }) {
           <select value={filterHandle} onChange={e => setFilterHandle(e.target.value)} style={{ ...inputSt, width: "auto", fontSize: 11, padding: "5px 8px" }}>
             <option value="all">All handles</option>
             {handles.map(h => {
-              const stats = handleStats[h];
+              // handleStats keys are Firebase-safe (dots replaced with _) to
+              // accommodate handles like @mannix.squiers. Match by both the
+              // sanitised key and the original handle field.
+              const stats = handleStats[h] || Object.values(handleStats).find(s => s?.handle === h);
               return (
                 <option key={h} value={h}>
                   {h}{stats ? ` — ${stats.postCount} posts, avg ${formatBig(stats.avgViews)}` : ""}
@@ -793,258 +909,6 @@ function formatBig(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + "k";
   return String(n);
-}
-
-// ═══════════════════════════════════════════
-// SYNTHESIS SECTION — Slice 5
-// Opus-generated markdown brief + "Regenerate with notes" affordance.
-// ═══════════════════════════════════════════
-function SynthesisSection({ project }) {
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState(null);
-  const [regenerateMode, setRegenerateMode] = useState(false);
-  const [regenerateNotes, setRegenerateNotes] = useState("");
-
-  const synthesis = project.synthesis;
-
-  const runSynthesis = async (notes = null) => {
-    setRunning(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/social-organic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "synthesise",
-          projectId: project.id,
-          regenerateNotes: notes || undefined,
-        }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      // Firebase listener rehydrates synthesis automatically
-      setRegenerateMode(false);
-      setRegenerateNotes("");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  // Post-ID resolver — used by the tiny markdown renderer to linkify ig_XXXX refs
-  const postsById = Object.fromEntries((project.posts || []).map(p => [p.id, p]));
-
-  return (
-    <div style={{ marginTop: 24, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Synthesis</div>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-            {synthesis?.generatedAt
-              ? `Generated ${new Date(synthesis.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} · ${synthesis.modelUsed || "claude-opus-4-6"}`
-              : "Claude reads the classified posts and drafts a brief for the pre-production meeting."}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {synthesis && !regenerateMode && (
-            <button onClick={() => setRegenerateMode(true)} style={btnSecondary}>Regenerate with notes</button>
-          )}
-          <button onClick={() => runSynthesis()} disabled={running} style={{ ...btnPrimary, opacity: running ? 0.6 : 1 }}>
-            {running ? "Synthesising…" : synthesis ? "Regenerate" : "Generate synthesis"}
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div style={{ padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444", marginBottom: 12 }}>
-          {error}
-        </div>
-      )}
-
-      {regenerateMode && (
-        <div style={{ marginBottom: 14, padding: 14, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
-          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 6 }}>
-            What should Claude do differently?
-          </label>
-          <textarea
-            value={regenerateNotes}
-            onChange={e => setRegenerateNotes(e.target.value)}
-            placeholder="e.g. Focus more on tutorial formats. The client mentioned wanting to teach, not entertain."
-            rows={3}
-            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 10 }}>
-            <button onClick={() => { setRegenerateMode(false); setRegenerateNotes(""); }} style={btnSecondary}>Cancel</button>
-            <button onClick={() => runSynthesis(regenerateNotes)} disabled={running || !regenerateNotes.trim()}
-              style={{ ...btnPrimary, opacity: (running || !regenerateNotes.trim()) ? 0.6 : 1 }}>
-              {running ? "Regenerating…" : "Regenerate"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {synthesis?.markdown ? (
-        <MarkdownView markdown={synthesis.markdown} postsById={postsById} />
-      ) : !running && (
-        <div style={{ padding: "30px 20px", textAlign: "center", color: "var(--muted)", background: "var(--bg)", borderRadius: 8, border: "1px dashed var(--border)" }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>No synthesis yet</div>
-          <div style={{ fontSize: 12 }}>Click "Generate synthesis" to have Claude read the classified posts and draft a brief.</div>
-        </div>
-      )}
-
-      {synthesis?.concepts?.length > 0 && (
-        <ConceptsGrid concepts={synthesis.concepts} postsById={postsById} />
-      )}
-    </div>
-  );
-}
-
-// Tiny markdown renderer. Handles only what the synthesis prompt produces:
-// # / ## / ### headings, - bullets, **bold**, *italic*, `code`, and ig_XXXX post refs.
-// No new dependency — keeps the bundle lean. Upgrade to react-markdown if we
-// ever need tables, nested lists, or arbitrary markdown.
-function MarkdownView({ markdown, postsById = {} }) {
-  // Strip the CONCEPTS_JSON sidecar comment — shown separately as a grid
-  const clean = (markdown || "").replace(/<!--\s*CONCEPTS_JSON:[\s\S]*?-->/g, "").trim();
-  const lines = clean.split("\n");
-
-  const renderInline = (text) => {
-    // Order matters: resolve post IDs → bold → italic → code
-    // ig_XXXX / ig-XXXX / so_XXXX (generic pattern: letters_alphanum at least 4 chars after underscore)
-    const tokens = [];
-    let remaining = text;
-    let key = 0;
-
-    const postIdRegex = /\b([a-z]+_[A-Za-z0-9]{4,})/g;
-    while (remaining.length) {
-      const match = postIdRegex.exec(remaining);
-      if (!match) { tokens.push(remaining); break; }
-      tokens.push(remaining.slice(0, match.index));
-      const id = match[1];
-      const post = postsById[id];
-      if (post?.url) {
-        tokens.push(
-          <a key={`p${key++}`} href={post.url} target="_blank" rel="noopener noreferrer"
-            style={{ color: "var(--accent)", textDecoration: "underline", fontFamily: "'JetBrains Mono',monospace", fontSize: "0.9em" }}>
-            {id}
-          </a>
-        );
-      } else if (post) {
-        tokens.push(
-          <a key={`p${key++}`} href="#" onClick={e => e.preventDefault()}
-            style={{ color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", fontSize: "0.9em" }}
-            title="Post not in current dataset">
-            {id}
-          </a>
-        );
-      } else {
-        tokens.push(<span key={`p${key++}`} style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "0.9em", color: "var(--muted)" }}>{id}</span>);
-      }
-      remaining = remaining.slice(match.index + match[0].length);
-      postIdRegex.lastIndex = 0;
-    }
-
-    // Bold/italic/code pass on string tokens only
-    return tokens.map((t, i) => {
-      if (typeof t !== "string") return t;
-      // Escape regex-sensitive chars in inline rendering
-      const parts = [];
-      let last = 0;
-      const inlineRx = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g;
-      let m;
-      while ((m = inlineRx.exec(t)) !== null) {
-        if (m.index > last) parts.push(t.slice(last, m.index));
-        const tok = m[0];
-        if (tok.startsWith("**")) parts.push(<strong key={i + "b" + m.index}>{tok.slice(2, -2)}</strong>);
-        else if (tok.startsWith("`")) parts.push(<code key={i + "c" + m.index} style={{ fontFamily: "'JetBrains Mono',monospace", background: "var(--bg)", padding: "1px 5px", borderRadius: 3, fontSize: "0.9em" }}>{tok.slice(1, -1)}</code>);
-        else parts.push(<em key={i + "i" + m.index}>{tok.slice(1, -1)}</em>);
-        last = m.index + tok.length;
-      }
-      if (last < t.length) parts.push(t.slice(last));
-      return <span key={i}>{parts}</span>;
-    });
-  };
-
-  const rendered = [];
-  let bulletBuffer = [];
-  const flushBullets = () => {
-    if (bulletBuffer.length) {
-      rendered.push(
-        <ul key={`ul-${rendered.length}`} style={{ margin: "4px 0 14px 20px", padding: 0, lineHeight: 1.6 }}>
-          {bulletBuffer.map((b, i) => <li key={i} style={{ fontSize: 13, color: "var(--fg)", marginBottom: 4 }}>{renderInline(b)}</li>)}
-        </ul>
-      );
-      bulletBuffer = [];
-    }
-  };
-
-  lines.forEach((raw, idx) => {
-    const line = raw;
-    if (line.startsWith("### ")) {
-      flushBullets();
-      rendered.push(<h4 key={idx} style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", margin: "14px 0 6px" }}>{renderInline(line.slice(4))}</h4>);
-    } else if (line.startsWith("## ")) {
-      flushBullets();
-      rendered.push(<h3 key={idx} style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)", margin: "20px 0 8px", paddingBottom: 4, borderBottom: "1px solid var(--border)" }}>{renderInline(line.slice(3))}</h3>);
-    } else if (line.startsWith("# ")) {
-      flushBullets();
-      rendered.push(<h2 key={idx} style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", margin: "0 0 14px" }}>{renderInline(line.slice(2))}</h2>);
-    } else if (line.match(/^\s*[-*]\s+/)) {
-      bulletBuffer.push(line.replace(/^\s*[-*]\s+/, ""));
-    } else if (line.trim()) {
-      flushBullets();
-      rendered.push(<p key={idx} style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.6, margin: "8px 0" }}>{renderInline(line)}</p>);
-    } else {
-      flushBullets();
-    }
-  });
-  flushBullets();
-
-  return <div>{rendered}</div>;
-}
-
-// Concepts from the CONCEPTS_JSON sidecar — these are the Stage 2 handoff,
-// rendered as cards at the bottom of the synthesis.
-function ConceptsGrid({ concepts, postsById }) {
-  return (
-    <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Video concepts for Stage 2</div>
-      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
-        Ready-to-shoot concepts extracted from the synthesis. The pre-production builder (Stage 2) will consume these to seed its script table.
-      </div>
-      <div style={{ display: "grid", gap: 10 }}>
-        {concepts.map((c, i) => (
-          <div key={i} style={{ padding: 14, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, gap: 10, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{c.title}</div>
-              {c.format && (
-                <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "var(--accent-soft)", color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                  {FORMAT_LABELS[c.format] || c.format}
-                </span>
-              )}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, marginBottom: 8 }}>{c.premise}</div>
-            {Array.isArray(c.refPostIds) && c.refPostIds.length > 0 && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {c.refPostIds.map(id => {
-                  const post = postsById[id];
-                  return post?.url ? (
-                    <a key={id} href={post.url} target="_blank" rel="noopener noreferrer" style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "var(--card)", color: "var(--accent)", textDecoration: "none", fontFamily: "'JetBrains Mono',monospace" }}>
-                      {id} ↗
-                    </a>
-                  ) : (
-                    <span key={id} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "var(--card)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
-                      {id}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 // ═══════════════════════════════════════════
@@ -1539,7 +1403,6 @@ function CostEstimateBar({ handles, postsPerHandle }) {
           <MetricChip label="Posts" value={estimate.estPosts} />
           <MetricChip label="Scrape" value={`$${estimate.estApifyCost.toFixed(2)}`} />
           <MetricChip label="Classify" value={`$${estimate.estClassifyCost.toFixed(2)}`} muted />
-          <MetricChip label="Synthesis" value={`$${estimate.estSynthesisCost.toFixed(2)}`} muted />
           <MetricChip label="Total" value={`$${estimate.estTotalCost.toFixed(2)}`} accent />
           <MetricChip label="Runtime" value={`~${estimate.estRuntimeSec}s`} muted />
         </div>
@@ -1556,7 +1419,7 @@ function CostEstimateBar({ handles, postsPerHandle }) {
       )}
       {expensive && !overBudget && (
         <div style={{ fontSize: 11, color: "#F59E0B", marginTop: 8, fontWeight: 500 }}>
-          Heads up — this is a larger-than-usual run. Scrape + classify + synthesise actions land in the next slices.
+          Heads up — this is a larger-than-usual run. Scrape + classify will process every post.
         </div>
       )}
     </div>
@@ -1568,6 +1431,1087 @@ function MetricChip({ label, value, accent, muted }) {
     <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
       <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
       <span style={{ fontSize: accent ? 15 : 13, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: accent ? "var(--accent)" : muted ? "var(--muted)" : "var(--fg)" }}>{value}</span>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// REVIEW STEP — producer ticks/crosses outperforming videos
+// Phase 1 of the new workflow. Only videos are surfaced (images are out of
+// scope for reels). The multiplier slider defines "outperforming" live — the
+// default is 2× the handle's baseline. The current scrape uses handle-level
+// baselines only (keyword/hashtag baselines flagged as out of scope).
+// ═══════════════════════════════════════════
+function ReviewStep({ project, onPatch }) {
+  const posts = Array.isArray(project.posts) ? project.posts : [];
+  const reviews = project.videoReviews || {};
+
+  // Slider value lives locally for responsiveness; debounced 300ms write to Firebase.
+  const storedMultiplier = typeof project.performanceMultiplier === "number" ? project.performanceMultiplier : 2;
+  const [mult, setMult] = useState(storedMultiplier);
+  useEffect(() => { setMult(storedMultiplier); }, [storedMultiplier]);
+  useEffect(() => {
+    if (mult === storedMultiplier) return;
+    const t = setTimeout(() => {
+      onPatch({ performanceMultiplier: mult });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [mult]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [filter, setFilter] = useState("all");  // all | ticked | crossed | unreviewed
+
+  // Videos only, classified, above the multiplier.
+  const videos = posts.filter(p => p.isVideo);
+  const qualifying = videos.filter(p =>
+    p.format && p.overperformanceScore != null && p.overperformanceScore >= mult
+  );
+
+  const tickedIds = Object.entries(reviews).filter(([, r]) => r?.status === "ticked").map(([k]) => k);
+  const crossedIds = Object.entries(reviews).filter(([, r]) => r?.status === "crossed").map(([k]) => k);
+
+  let filtered = qualifying;
+  if (filter === "ticked")     filtered = qualifying.filter(p => reviews[p.id]?.status === "ticked");
+  else if (filter === "crossed")   filtered = qualifying.filter(p => reviews[p.id]?.status === "crossed");
+  else if (filter === "unreviewed") filtered = qualifying.filter(p => !reviews[p.id]);
+
+  const setStatus = (postId, status) => {
+    const current = reviews[postId]?.status;
+    const next = current === status ? null : status;  // toggle off if clicking the same button
+    const updated = { ...reviews };
+    if (next === null) {
+      delete updated[postId];
+    } else {
+      updated[postId] = { status: next, reviewedAt: new Date().toISOString() };
+    }
+    onPatch({ videoReviews: updated });
+  };
+
+  const reviewedCount = tickedIds.length + crossedIds.length;
+  const canAdvance = tickedIds.length > 0;
+
+  return (
+    <div>
+      {/* Multiplier slider */}
+      <div style={{ marginBottom: 14, padding: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>Outperforming filter</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              Only show videos that outperform their handle's median by at least this multiplier.
+            </div>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--accent)" }}>{mult.toFixed(2)}×</div>
+        </div>
+        <input type="range" min={1} max={5} step={0.25} value={mult}
+          onChange={e => setMult(parseFloat(e.target.value))}
+          style={{ width: "100%", accentColor: "var(--accent)" }} />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+          <span>1.00×</span><span>2.00× (default)</span><span>5.00×</span>
+        </div>
+      </div>
+
+      {/* Filter chips + progress counter */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <FilterChip label={`All (${qualifying.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterChip label={`✓ Ticked (${tickedIds.length})`} active={filter === "ticked"} colour="#22C55E" onClick={() => setFilter("ticked")} />
+          <FilterChip label={`✗ Crossed (${crossedIds.length})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
+          <FilterChip label={`Unreviewed (${qualifying.length - reviewedCount})`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+          {reviewedCount}/{qualifying.length} reviewed
+          {canAdvance && (
+            <button onClick={() => onPatch({ stage: "shortlist" })} style={{ ...btnPrimary, marginLeft: 10, padding: "6px 14px" }}>
+              → Shortlist ({tickedIds.length})
+            </button>
+          )}
+        </div>
+      </div>
+
+      {qualifying.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
+            {videos.length === 0 ? "No video posts in this scrape" : `No videos above ${mult.toFixed(2)}× baseline`}
+          </div>
+          <div style={{ fontSize: 11 }}>
+            {videos.length === 0
+              ? "Only classified videos appear here — images are skipped for reels."
+              : "Drop the multiplier slider above to surface more videos."}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+          {filtered.map(p => (
+            <ReviewCard key={p.id} post={p}
+              status={reviews[p.id]?.status || null}
+              onTick={() => setStatus(p.id, "ticked")}
+              onCross={() => setStatus(p.id, "crossed")}
+            />
+          ))}
+          {filtered.length === 0 && (
+            <div style={{ gridColumn: "1 / -1", padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+              No videos match this filter.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterChip({ label, active, colour, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border)",
+      background: active ? (colour || "var(--accent)") : "var(--bg)",
+      color: active ? "#fff" : colour || "var(--muted)",
+      fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+    }}>{label}</button>
+  );
+}
+
+// Ticked → green border. Crossed → dimmed + strikethrough. Unreviewed → neutral.
+function ReviewCard({ post, status, onTick, onCross }) {
+  const isTicked = status === "ticked";
+  const isCrossed = status === "crossed";
+  const border = isTicked ? "2px solid #22C55E" : isCrossed ? "1px solid var(--border)" : "1px solid var(--border)";
+  const opacity = isCrossed ? 0.45 : 1;
+  const textDeco = isCrossed ? "line-through" : "none";
+
+  return (
+    <div style={{ background: "var(--card)", border, borderRadius: 10, overflow: "hidden", opacity, transition: "opacity 0.15s, border 0.15s", position: "relative" }}>
+      <a href={post.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", textDecoration: "none" }}>
+        <div style={{ aspectRatio: "1 / 1", background: "#000", position: "relative", overflow: "hidden" }}>
+          {post.thumbnail ? (
+            <img src={post.thumbnail} alt="" loading="lazy" onError={e => { e.target.style.display = "none"; }}
+              style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color: "var(--muted)", fontSize: 11 }}>No thumbnail</div>
+          )}
+          <div style={{ position: "absolute", top: 6, right: 6, padding: "2px 6px", background: "rgba(0,0,0,0.6)", borderRadius: 4, fontSize: 9, fontWeight: 700, color: "#fff" }}>▶ video</div>
+          {post.overperformanceScore != null && (
+            <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: "rgba(34,197,94,0.85)", color: "#fff" }}>
+              {post.overperformanceScore.toFixed(1)}× avg
+            </div>
+          )}
+        </div>
+        <div style={{ padding: 10, textDecoration: textDeco }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 3 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>{post.handle}</div>
+            {post.format && <div style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>{FORMAT_LABELS[post.format] || post.format}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 10, fontSize: 11, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>
+            {post.views != null && <span>👁 {formatBig(post.views)}</span>}
+            <span>❤ {formatBig(post.likes)}</span>
+            <span>💬 {formatBig(post.comments)}</span>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--fg)", lineHeight: 1.4, maxHeight: 44, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {(post.caption || "").slice(0, 140)}{(post.caption || "").length > 140 ? "…" : ""}
+          </div>
+        </div>
+      </a>
+      {/* Tick/cross bar — outside the <a> so clicks don't open the IG link */}
+      <div style={{ display: "flex", gap: 0, borderTop: "1px solid var(--border)" }}>
+        <button onClick={onTick} title="Tick — keep for shortlist"
+          style={{
+            flex: 1, padding: "8px 0", border: "none", borderRight: "1px solid var(--border)",
+            background: isTicked ? "rgba(34,197,94,0.15)" : "transparent",
+            color: isTicked ? "#22C55E" : "var(--muted)",
+            fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+          }}>✓</button>
+        <button onClick={onCross} title="Cross — not a fit"
+          style={{
+            flex: 1, padding: "8px 0", border: "none",
+            background: isCrossed ? "rgba(239,68,68,0.15)" : "transparent",
+            color: isCrossed ? "#EF4444" : "var(--muted)",
+            fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+          }}>✗</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// SHORTLIST STEP — per-video form writes to the global Format Library
+// Two-column layout: left = ticked videos (click to select), right = the
+// edit form. Saving creates /formatLibrary/{id} (new) or appends a new
+// example to an existing library entry. The project's
+// shortlistedFormats/{sl_<videoId>} record links the two together so re-
+// opening the project restores edits.
+// ═══════════════════════════════════════════
+function ShortlistStep({ project, onPatch }) {
+  const posts = Array.isArray(project.posts) ? project.posts : [];
+  const reviews = project.videoReviews || {};
+  const shortlisted = project.shortlistedFormats || {};
+
+  // Only ticked videos are candidates for shortlisting.
+  const tickedVideos = posts.filter(p => p.isVideo && reviews[p.id]?.status === "ticked");
+
+  // Global format library + categories — both listened to live so the
+  // form's category dropdown and "Add as example to" search stay in sync
+  // with what other projects have contributed.
+  const [library, setLibrary] = useState({});
+  const [categories, setCategories] = useState({});
+  useEffect(() => {
+    let unsubL = () => {}, unsubC = () => {};
+    onFB(() => {
+      unsubL = fbListen("/formatLibrary", (d) => setLibrary(d || {}));
+      unsubC = fbListen("/formatCategories", (d) => setCategories(d || {}));
+    });
+    return () => { unsubL(); unsubC(); };
+  }, []);
+
+  // Which video is active in the right-hand form. Default to the first
+  // ticked video that hasn't been shortlisted yet.
+  const [activeId, setActiveId] = useState(null);
+  useEffect(() => {
+    if (activeId) return;
+    const unshortlisted = tickedVideos.find(v => !shortlisted[`sl_${v.id}`]);
+    setActiveId((unshortlisted || tickedVideos[0])?.id || null);
+  }, [activeId, tickedVideos, shortlisted]);
+
+  const activeVideo = tickedVideos.find(v => v.id === activeId) || null;
+  const existingShortlist = activeVideo ? shortlisted[`sl_${activeVideo.id}`] || null : null;
+
+  const allShortlisted = Object.values(shortlisted || {}).filter(Boolean);
+  const canAdvance = allShortlisted.length > 0;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Shortlist</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+            Each ticked video becomes an entry in the global Format Library — or gets added as a new example to an existing format.
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+          {allShortlisted.length}/{tickedVideos.length} shortlisted
+          {canAdvance && (
+            <button onClick={() => onPatch({ stage: "select" })} style={{ ...btnPrimary, marginLeft: 10, padding: "6px 14px" }}>
+              → Select ({allShortlisted.length})
+            </button>
+          )}
+        </div>
+      </div>
+
+      {tickedVideos.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>No ticked videos yet</div>
+          <div style={{ fontSize: 11 }}>Go back to Review and tick the videos worth shortlisting.</div>
+          <button onClick={() => onPatch({ stage: "review" })} style={{ ...btnSecondary, marginTop: 12 }}>← Back to Review</button>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) 1fr", gap: 16 }}>
+          {/* Left: ticked videos list */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "70vh", overflowY: "auto" }}>
+            {tickedVideos.map(v => {
+              const hasEntry = !!shortlisted[`sl_${v.id}`];
+              const isActive = activeId === v.id;
+              return (
+                <button key={v.id}
+                  onClick={() => setActiveId(v.id)}
+                  style={{
+                    textAlign: "left", padding: 8, borderRadius: 8,
+                    border: isActive ? "2px solid var(--accent)" : "1px solid var(--border)",
+                    background: "var(--card)", cursor: "pointer", fontFamily: "inherit",
+                    display: "flex", gap: 10, alignItems: "center",
+                  }}>
+                  <div style={{ width: 56, height: 56, flexShrink: 0, background: "#000", borderRadius: 4, overflow: "hidden" }}>
+                    {v.thumbnail && <img src={v.thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", marginBottom: 2 }}>{v.handle}</div>
+                    <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {(v.caption || "").slice(0, 50) || "(no caption)"}
+                    </div>
+                    {hasEntry && <div style={{ fontSize: 9, color: "#22C55E", fontWeight: 700, marginTop: 3 }}>✓ Saved</div>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Right: edit form */}
+          <div>
+            {activeVideo ? (
+              <ShortlistForm
+                key={activeVideo.id}
+                video={activeVideo}
+                project={project}
+                library={library}
+                categories={categories}
+                existing={existingShortlist}
+                onSaved={() => {
+                  // Auto-advance to the next unshortlisted video on save.
+                  const next = tickedVideos.find(v => !shortlisted[`sl_${v.id}`] && v.id !== activeVideo.id);
+                  if (next) setActiveId(next.id);
+                }}
+              />
+            ) : (
+              <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+                Pick a video on the left to start describing it.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The actual form. Split out so that choosing a new video fully remounts it
+// via key={activeVideo.id} (no stale field state when switching).
+function ShortlistForm({ video, project, library, categories, existing, onSaved }) {
+  const mode = existing?.addedAsExampleTo ? "example" : existing?.formatLibraryId ? "new" : "new";
+  const [saveMode, setSaveMode] = useState(mode);  // "new" | "example"
+  const [formatName, setFormatName] = useState(existing?.formatName || "");
+  const [category, setCategory] = useState(existing?.category || "");
+  const [newCategory, setNewCategory] = useState("");
+  const [tags, setTags] = useState(existing?.tags || []);
+  const [tagInput, setTagInput] = useState("");
+  const [description, setDescription] = useState(existing?.description || "");
+  const [filming, setFilming] = useState(existing?.filmingInstructions || "");
+  const [structure, setStructure] = useState(existing?.structureInstructions || "");
+  const [addTargetId, setAddTargetId] = useState(existing?.addedAsExampleTo || "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  const categoryList = Object.entries(categories || {})
+    .map(([k, v]) => ({ key: k, label: v?.label || k }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  const libraryList = Object.values(library || {})
+    .filter(f => f && f.id && !f.archived)
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+  const addTag = (raw) => {
+    const t = (raw || "").trim().replace(/^#/, "");
+    if (!t) return;
+    if (tags.includes(t)) return;
+    setTags([...tags, t]);
+    setTagInput("");
+  };
+
+  const effectiveCategory = newCategory.trim() || category;
+
+  const save = async () => {
+    setSaveError(null);
+    try {
+      if (saveMode === "example") {
+        if (!addTargetId) { setSaveError("Pick a format to add this example to."); return; }
+      } else {
+        if (!formatName.trim()) { setSaveError("Give the format a name."); return; }
+      }
+      setSaving(true);
+
+      const now = new Date().toISOString();
+      const createdBy = getCurrentRole() || "unknown";
+
+      let libraryId;
+      if (saveMode === "example") {
+        // Append to existing format's examples[] (read-modify-write — accept
+        // the mild race window; worst case is a duplicate example entry).
+        libraryId = addTargetId;
+        const existingFmt = library[libraryId] || null;
+        if (!existingFmt) { setSaveError("Target format not found (it may have been archived)."); setSaving(false); return; }
+        const examples = Array.isArray(existingFmt.examples) ? existingFmt.examples : [];
+        const alreadyIn = examples.some(e => e.videoId === video.id || e.url === video.url);
+        if (!alreadyIn) {
+          const newExamples = [
+            ...examples,
+            {
+              videoId: video.id,
+              url: video.url,
+              thumbnail: video.thumbnail || null,
+              viewCount: video.views || null,
+              sourceAccount: video.handle,
+              sourceProjectId: project.id,
+              sourceClient: project.companyName,
+              addedAt: now,
+              addedBy: createdBy,
+            },
+          ];
+          fbSet(`/formatLibrary/${libraryId}/examples`, newExamples);
+          // Bump usageCount best-effort (read-modify-write; fine for cosmetic counter).
+          fbSet(`/formatLibrary/${libraryId}/usageCount`, (existingFmt.usageCount || 0) + 1);
+        }
+      } else {
+        // Create or update a library entry scoped to this shortlist. If the
+        // user saves twice on the same video, we reuse the same libraryId so
+        // we never orphan entries.
+        libraryId = existing?.formatLibraryId || `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const libEntry = {
+          id: libraryId,
+          name: formatName.trim(),
+          videoAnalysis: description,
+          filmingInstructions: filming,
+          structureInstructions: structure,
+          category: effectiveCategory || null,
+          tags,
+          examples: [
+            {
+              videoId: video.id,
+              url: video.url,
+              thumbnail: video.thumbnail || null,
+              viewCount: video.views || null,
+              sourceAccount: video.handle,
+              sourceProjectId: project.id,
+              sourceClient: project.companyName,
+              addedAt: now,
+              addedBy: createdBy,
+            },
+          ],
+          sourceProjectId: project.id,
+          sourceClient: project.companyName,
+          createdAt: existing?.libraryCreatedAt || now,
+          createdBy,
+          usageCount: library[libraryId]?.usageCount || 0,
+          archived: false,
+        };
+        fbSet(`/formatLibrary/${libraryId}`, libEntry);
+
+        // Register new category if user created one inline.
+        if (newCategory.trim()) {
+          const catKey = newCategory.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+          if (catKey) {
+            fbSet(`/formatCategories/${catKey}`, { label: newCategory.trim(), createdAt: now });
+          }
+        }
+      }
+
+      // Write the project-side shortlist record.
+      const shortlistId = `sl_${video.id}`;
+      fbSet(`/preproduction/socialOrganic/${project.id}/shortlistedFormats/${shortlistId}`, {
+        videoId: video.id,
+        formatName: saveMode === "new" ? formatName.trim() : (library[libraryId]?.name || ""),
+        description,
+        filmingInstructions: filming,
+        structureInstructions: structure,
+        category: effectiveCategory || null,
+        tags,
+        formatLibraryId: libraryId,
+        addedAsExampleTo: saveMode === "example" ? libraryId : null,
+        libraryCreatedAt: existing?.libraryCreatedAt || now,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        createdBy,
+      });
+
+      setSaving(false);
+      onSaved?.();
+    } catch (e) {
+      console.error(e);
+      setSaveError(e.message || "Save failed");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
+      {/* Header: video preview */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
+        <a href={video.url} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0 }}>
+          <div style={{ width: 80, height: 80, background: "#000", borderRadius: 6, overflow: "hidden" }}>
+            {video.thumbnail && <img src={video.thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+          </div>
+        </a>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)" }}>{video.handle}</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
+            {video.views != null && `${formatBig(video.views)} views · `}
+            {video.overperformanceScore != null && `${video.overperformanceScore.toFixed(1)}× baseline`}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--fg)", lineHeight: 1.4, marginTop: 4, maxHeight: 36, overflow: "hidden" }}>
+            {(video.caption || "").slice(0, 200)}
+          </div>
+        </div>
+      </div>
+
+      {/* Mode toggle */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, padding: 4, background: "var(--bg)", borderRadius: 6 }}>
+        <ModeToggle label="New format" active={saveMode === "new"} onClick={() => setSaveMode("new")} />
+        <ModeToggle label="Add as example" active={saveMode === "example"} onClick={() => setSaveMode("example")} disabled={libraryList.length === 0} />
+      </div>
+
+      {saveMode === "example" ? (
+        <div>
+          <Label>Add as example to</Label>
+          <select value={addTargetId} onChange={e => setAddTargetId(e.target.value)} style={inputSt}>
+            <option value="">— pick a format —</option>
+            {libraryList.map(f => (
+              <option key={f.id} value={f.id}>
+                {f.name}{f.category ? ` · ${categories[f.category]?.label || f.category}` : ""}
+                {Array.isArray(f.examples) && f.examples.length > 0 && ` (${f.examples.length} example${f.examples.length === 1 ? "" : "s"})`}
+              </option>
+            ))}
+          </select>
+          {addTargetId && library[addTargetId] && (
+            <div style={{ marginTop: 10, padding: 10, background: "var(--bg)", borderRadius: 6, fontSize: 11, color: "var(--muted)" }}>
+              <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>{library[addTargetId].name}</div>
+              <div style={{ lineHeight: 1.5 }}>{(library[addTargetId].videoAnalysis || "").slice(0, 200)}{(library[addTargetId].videoAnalysis || "").length > 200 ? "…" : ""}</div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <div style={{ marginBottom: 10 }}>
+            <Label>Format name</Label>
+            <input type="text" value={formatName} onChange={e => setFormatName(e.target.value)}
+              placeholder="e.g. Subject Matter Expert Ranks X"
+              style={inputSt} />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <div>
+              <Label>Category</Label>
+              <select value={category} onChange={e => { setCategory(e.target.value); setNewCategory(""); }} style={inputSt}>
+                <option value="">— pick or create below —</option>
+                {categoryList.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+              <input type="text" value={newCategory} onChange={e => setNewCategory(e.target.value)}
+                placeholder="+ or type a new category"
+                style={{ ...inputSt, fontSize: 11, marginTop: 4 }} />
+            </div>
+            <div>
+              <Label>Tags</Label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4, minHeight: 24 }}>
+                {tags.map(t => (
+                  <span key={t} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {t}
+                    <button onClick={() => setTags(tags.filter(x => x !== t))} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>
+                  </span>
+                ))}
+              </div>
+              <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagInput); } }}
+                onBlur={() => tagInput.trim() && addTag(tagInput)}
+                placeholder="Press enter to add"
+                style={{ ...inputSt, fontSize: 11 }} />
+            </div>
+          </div>
+
+          <DescriptionField
+            label="Video analysis"
+            hint="What's happening in the video? Why does it work? (Dictation supported — click the mic.)"
+            value={description}
+            onChange={setDescription}
+          />
+
+          <DescriptionField
+            label="Filming instructions"
+            hint="How would you shoot this? Lighting, camera set-up, wardrobe, location cues."
+            value={filming}
+            onChange={setFilming}
+          />
+
+          <DescriptionField
+            label="Structure"
+            hint="Hook → beats → close. What happens in what order?"
+            value={structure}
+            onChange={setStructure}
+          />
+        </div>
+      )}
+
+      {saveError && (
+        <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+          {saveError}
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+        <button onClick={save} disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }}>
+          {saving ? "Saving…" : existing ? "Update" : saveMode === "example" ? "Add example" : "Save to library"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Label({ children }) {
+  return (
+    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 5 }}>
+      {children}
+    </label>
+  );
+}
+
+function ModeToggle({ label, active, onClick, disabled }) {
+  return (
+    <button onClick={onClick} disabled={disabled}
+      style={{
+        flex: 1, padding: "6px 10px", borderRadius: 4, border: "none",
+        background: active ? "var(--accent)" : "transparent",
+        color: active ? "#fff" : disabled ? "var(--muted)" : "var(--fg)",
+        fontSize: 11, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer",
+        fontFamily: "inherit", opacity: disabled ? 0.5 : 1,
+      }}>
+      {label}
+    </button>
+  );
+}
+
+// Textarea with a mic button that hits /api/whisper for voice-to-text.
+// Separate component so Video analysis / Filming / Structure each have
+// their own recorder state.
+function DescriptionField({ label, hint, value, onChange }) {
+  const { status, elapsed, blob, error, start, stop, reset, softCapSeconds } = useAudioRecorder();
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribeError, setTranscribeError] = useState(null);
+
+  // Auto-transcribe as soon as the recorder finishes — the producer's
+  // mental model is "hit mic, speak, hit mic again, see text appear".
+  // We deliberately don't auto-fire if the blob is < 500B (usually means
+  // they tapped mic twice by accident).
+  const handledBlobRef = useRef(null);
+  useEffect(() => {
+    if (!blob || blob === handledBlobRef.current) return;
+    if (blob.size < 500) { reset(); return; }
+    handledBlobRef.current = blob;
+    (async () => {
+      setTranscribing(true);
+      setTranscribeError(null);
+      try {
+        const form = new FormData();
+        // OpenAI requires a filename — .webm is what MediaRecorder gives us.
+        form.append("file", blob, "audio.webm");
+        form.append("model", "whisper-1");
+        const r = await fetch("/api/whisper", { method: "POST", body: form });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+        if (d.text) {
+          // Append to existing text rather than replace — supports "record a
+          // follow-up thought" UX.
+          const join = value && !value.endsWith(" ") ? " " : "";
+          onChange(`${value}${join}${d.text}`.trim());
+        }
+      } catch (e) {
+        setTranscribeError(e.message);
+      } finally {
+        setTranscribing(false);
+        reset();
+      }
+    })();
+  }, [blob]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+  const ss = String(elapsed % 60).padStart(2, "0");
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <Label>{label}</Label>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {transcribing && <span style={{ fontSize: 10, color: "var(--accent)" }}>Transcribing…</span>}
+          {status === "recording" && (
+            <span style={{ fontSize: 10, color: "#EF4444", fontFamily: "'JetBrains Mono',monospace" }}>
+              ● REC {mm}:{ss} / {Math.floor(softCapSeconds / 60)}:00
+            </span>
+          )}
+          <button
+            onClick={() => status === "recording" ? stop() : start()}
+            disabled={transcribing}
+            title={status === "recording" ? "Stop recording" : "Record voice memo"}
+            style={{
+              width: 28, height: 28, borderRadius: "50%",
+              border: "1px solid var(--border)",
+              background: status === "recording" ? "#EF4444" : "var(--bg)",
+              color: status === "recording" ? "#fff" : "var(--fg)",
+              fontSize: 13, cursor: transcribing ? "wait" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+            {status === "recording" ? "■" : "🎤"}
+          </button>
+        </div>
+      </div>
+      <textarea
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={hint}
+        rows={3}
+        style={{ ...inputSt, resize: "vertical", fontFamily: "inherit", fontSize: 12 }} />
+      {error && (
+        <div style={{ fontSize: 10, color: "#EF4444", marginTop: 3 }}>Mic error: {error}</div>
+      )}
+      {transcribeError && (
+        <div style={{ fontSize: 10, color: "#EF4444", marginTop: 3 }}>Whisper error: {transcribeError}</div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// SCRIPT BUILDER STEP (Phase 5)
+// Claude generates a structured preproduction doc from the selected formats;
+// every cell opens the AI / manual rewrite modal. Mirrors the Meta Ads
+// per-cell UX exactly (src/components/Preproduction.jsx:413-480).
+// ═══════════════════════════════════════════
+const SCRIPT_COLUMNS = [
+  { key: "formatName",   label: "Format",        width: 140, editable: false },
+  { key: "contentStyle", label: "Content Style", width: 180 },
+  { key: "hook",         label: "Hook (spoken)", width: 200 },
+  { key: "textHook",     label: "Text Hook",     width: 140 },
+  { key: "visualHook",   label: "Visual Hook",   width: 160 },
+  { key: "scriptNotes",  label: "Script / Notes",width: 260 },
+  { key: "props",        label: "Props",         width: 100 },
+];
+
+function ScriptBuilderStep({ project, onPatch }) {
+  const doc = project.preproductionDoc || null;
+  const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState(null);
+  const [rewriteTarget, setRewriteTarget] = useState(null);
+  // {path: "clientContext.brandTruths" | "scriptTable.0.hook", label, currentValue}
+
+  // Detect "selected formats changed since last generation" — we don't auto-
+  // regenerate (that would clobber producer edits) but we do banner it so
+  // the producer knows their edits are stale.
+  const lastGenFormatIds = (doc?.formats || []).map(f => f.formatLibraryId).join("|");
+  const currentFormatIds = selected.map(s => s.formatLibraryId).join("|");
+  const formatsChanged = doc && lastGenFormatIds !== currentFormatIds;
+
+  const generate = async () => {
+    setGenError(null);
+    setGenerating(true);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "generateScript", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener rehydrates preproductionDoc automatically.
+    } catch (e) {
+      setGenError(e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  if (!doc && !generating) {
+    return (
+      <div>
+        <div style={{ padding: 40, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
+          <div style={{ fontSize: 28, marginBottom: 10 }}>📝</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>Generate preproduction brief</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", maxWidth: 520, margin: "0 auto 16px", lineHeight: 1.5 }}>
+            Claude Opus reads the selected formats, your classified research, and any meeting transcript, then produces a structured brief. Every field is editable afterwards — click any cell to rewrite it with AI or manually.
+          </div>
+          <button onClick={generate} style={btnPrimary}>Generate brief</button>
+          {genError && (
+            <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+              {genError}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (generating) {
+    return (
+      <div style={{ padding: 60, textAlign: "center", color: "var(--muted)" }}>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Generating brief…</div>
+        <div style={{ fontSize: 12 }}>This usually takes 30-60s on Opus.</div>
+      </div>
+    );
+  }
+
+  const openRewrite = (path, label, currentValue) => {
+    setRewriteTarget({ path, label, currentValue: currentValue || "" });
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Preproduction brief</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+            Generated {doc.generatedAt ? new Date(doc.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "—"} · {doc.modelUsed || "claude-opus-4-6"}. Click any cell to edit.
+          </div>
+        </div>
+        <button onClick={generate} style={btnSecondary}>Regenerate</button>
+      </div>
+
+      {formatsChanged && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(245,158,11,0.08)", borderRadius: 8, border: "1px solid rgba(245,158,11,0.3)", fontSize: 12, color: "#F59E0B" }}>
+          Selected formats have changed since this brief was generated. Regenerate to pick up the new selection (your per-cell edits will be replaced).
+        </div>
+      )}
+
+      {genError && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+          {genError}
+        </div>
+      )}
+
+      {/* Sections */}
+      <SectionCard title="Client context">
+        <EditableField label="Brand truths" path="clientContext.brandTruths" value={doc.clientContext?.brandTruths} onEdit={openRewrite} />
+        <EditableField label="Brand ambitions" path="clientContext.brandAmbitions" value={doc.clientContext?.brandAmbitions} onEdit={openRewrite} />
+        <EditableField label="Overall client goals" path="clientContext.clientGoals" value={doc.clientContext?.clientGoals} onEdit={openRewrite} multi />
+        <EditableField label="Key considerations" path="clientContext.keyConsiderations" value={doc.clientContext?.keyConsiderations} onEdit={openRewrite} multi />
+      </SectionCard>
+
+      <SectionCard title="Social snapshot">
+        <EditableField label="Average performance" path="socialSnapshot.averagePerformance" value={doc.socialSnapshot?.averagePerformance} onEdit={openRewrite} />
+        <EditableField label="Highest performing" path="socialSnapshot.highestPerforming" value={doc.socialSnapshot?.highestPerforming} onEdit={openRewrite} />
+        <EditableField label="Key takeaways" path="socialSnapshot.takeaways" value={doc.socialSnapshot?.takeaways} onEdit={openRewrite} multi />
+      </SectionCard>
+
+      <SectionCard title="Target viewer">
+        <EditableField label="Demographic" path="targetViewer.demographic" value={doc.targetViewer?.demographic} onEdit={openRewrite} />
+        <EditableField label="Pain points & language" path="targetViewer.painPoints" value={doc.targetViewer?.painPoints} onEdit={openRewrite} multi />
+      </SectionCard>
+
+      <SectionCard title="Formats">
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10, fontStyle: "italic" }}>
+          Rendered directly from the Select step (not AI-generated) to prevent hallucinated format descriptions.
+        </div>
+        {(doc.formats || []).length === 0 ? (
+          <div style={{ padding: 16, color: "var(--muted)", fontSize: 12 }}>No formats attached.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {(doc.formats || []).map((f, i) => (
+              <div key={f.formatLibraryId || i} style={{ padding: 12, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
+                  {i + 1}. {f.name}
+                </div>
+                {f.videoAnalysis && <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, marginBottom: 6 }}>{f.videoAnalysis}</div>}
+                {f.filmingInstructions && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}><strong>Filming:</strong> {f.filmingInstructions}</div>}
+                {f.structureInstructions && <div style={{ fontSize: 11, color: "var(--muted)" }}><strong>Structure:</strong> {f.structureInstructions}</div>}
+                {Array.isArray(f.examples) && f.examples.length > 0 && (
+                  <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+                    {f.examples.map((ex, j) => (
+                      <a key={j} href={ex.url} target="_blank" rel="noopener noreferrer"
+                        style={{ fontSize: 10, padding: "2px 8px", background: "var(--card)", color: "var(--accent)", borderRadius: 4, textDecoration: "none", border: "1px solid var(--border)" }}>
+                        {ex.sourceAccount || "example"} ↗
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Script table">
+        {(doc.scriptTable || []).length === 0 ? (
+          <div style={{ padding: 16, color: "var(--muted)", fontSize: 12 }}>No script rows generated.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "var(--bg)" }}>
+                  <th style={{ ...thStyle, width: 32 }}>#</th>
+                  {SCRIPT_COLUMNS.map(c => (
+                    <th key={c.key} style={{ ...thStyle, minWidth: c.width }}>{c.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(doc.scriptTable || []).map((row, i) => (
+                  <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={tdStyle}>{row.videoNumber || i + 1}</td>
+                    {SCRIPT_COLUMNS.map(c => (
+                      <td key={c.key} style={tdStyle}>
+                        {c.editable === false ? (
+                          <div style={{ padding: "4px 6px", color: "var(--fg)", fontWeight: 600 }}>{row[c.key] || "—"}</div>
+                        ) : (
+                          <Clickable
+                            value={row[c.key]}
+                            onClick={() => openRewrite(`scriptTable.${i}.${c.key}`, c.label, row[c.key])}
+                          />
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+
+      {rewriteTarget && (
+        <RewriteModal
+          target={rewriteTarget}
+          projectId={project.id}
+          onClose={() => setRewriteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+const thStyle = {
+  textAlign: "left",
+  padding: "8px 10px",
+  fontSize: 10,
+  fontWeight: 700,
+  color: "var(--muted)",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  whiteSpace: "nowrap",
+};
+
+const tdStyle = {
+  verticalAlign: "top",
+  padding: "4px 4px",
+  fontSize: 12,
+  color: "var(--fg)",
+};
+
+function SectionCard({ title, children }) {
+  return (
+    <div style={{ marginBottom: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function EditableField({ label, path, value, onEdit, multi }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
+        {label}
+      </div>
+      <Clickable value={value} onClick={() => onEdit(path, label, value)} multi={multi} />
+    </div>
+  );
+}
+
+// A "cell" that looks like static text but opens the rewrite modal on click.
+// Deliberately no border so the doc reads like a brief, not a form. Hover
+// adds a subtle outline as the affordance.
+function Clickable({ value, onClick, multi }) {
+  const [hover, setHover] = useState(false);
+  const empty = !value || !value.toString().trim();
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: "6px 8px", borderRadius: 4,
+        background: hover ? "var(--bg)" : "transparent",
+        outline: hover ? "1px solid var(--accent)" : "1px solid transparent",
+        cursor: "pointer",
+        fontSize: 12, color: empty ? "var(--muted)" : "var(--fg)",
+        lineHeight: 1.5,
+        whiteSpace: multi ? "pre-wrap" : "normal",
+        minHeight: 20,
+        fontStyle: empty ? "italic" : "normal",
+        transition: "outline 0.1s, background 0.1s",
+      }}>
+      {empty ? "(empty — click to fill)" : value}
+    </div>
+  );
+}
+
+// Two-mode modal: AI rewrite with an instruction, or manual edit. Mirrors
+// Preproduction.jsx:413-480 verbatim so the producer muscle-memory from
+// Meta Ads transfers straight across.
+function RewriteModal({ target, projectId, onClose }) {
+  const [mode, setMode] = useState("ai");  // "ai" | "manual"
+  const [instruction, setInstruction] = useState("");
+  const [manualValue, setManualValue] = useState(Array.isArray(target.currentValue) ? target.currentValue.join("\n") : (target.currentValue || ""));
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState(null);
+
+  const aiSubmit = async () => {
+    if (!instruction.trim()) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rewriteScriptSection",
+          projectId,
+          path: target.path,
+          instruction,
+          currentValue: Array.isArray(target.currentValue) ? target.currentValue.join("\n") : (target.currentValue || ""),
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      onClose();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const manualSubmit = () => {
+    // Write the same path directly. We reuse the same rewriteHistory entry
+    // shape so the audit trail is consistent with AI rewrites.
+    const fbPath = `/preproduction/socialOrganic/${projectId}/preproductionDoc/${target.path.replace(/\./g, "/")}`;
+    fbSet(fbPath, manualValue);
+    fbSet(`/preproduction/socialOrganic/${projectId}/updatedAt`, new Date().toISOString());
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "var(--card)", borderRadius: 12, padding: 22, maxWidth: 720, width: "92%", maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{target.label}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer" }}>×</button>
+        </div>
+
+        {/* Current value preview */}
+        <div style={{ marginBottom: 12, padding: "10px 14px", background: "var(--bg)", borderRadius: 6, fontSize: 12, color: "var(--muted)", maxHeight: 120, overflow: "auto" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, textTransform: "uppercase" }}>Current</div>
+          {target.currentValue ? (Array.isArray(target.currentValue) ? target.currentValue.join("\n") : target.currentValue) : "(empty)"}
+        </div>
+
+        <div style={{ display: "flex", gap: 2, marginBottom: 12, background: "var(--bg)", borderRadius: 6, padding: 3, width: "fit-content" }}>
+          <button onClick={() => setMode("ai")} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "ai" ? "var(--accent)" : "transparent", color: mode === "ai" ? "#fff" : "var(--muted)" }}>AI rewrite</button>
+          <button onClick={() => setMode("manual")} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "manual" ? "var(--accent)" : "transparent", color: mode === "manual" ? "#fff" : "var(--muted)" }}>Manual edit</button>
+        </div>
+
+        {mode === "ai" ? (
+          <>
+            <textarea value={instruction} onChange={e => setInstruction(e.target.value)}
+              placeholder={`e.g. "Make this more direct, no fluff" or "Tie this back to the client's subject-matter expertise"`}
+              rows={3} autoFocus
+              style={{ ...inputSt, fontSize: 13, marginBottom: 10, resize: "vertical" }} />
+            {error && (
+              <div style={{ marginBottom: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+                {error}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={btnSecondary}>Cancel</button>
+              <button onClick={aiSubmit} disabled={working || !instruction.trim()}
+                style={{ ...btnPrimary, opacity: (working || !instruction.trim()) ? 0.6 : 1 }}>
+                {working ? "Rewriting…" : "Rewrite"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <textarea value={manualValue} onChange={e => setManualValue(e.target.value)}
+              rows={6} autoFocus
+              style={{ ...inputSt, fontSize: 13, marginBottom: 10, resize: "vertical", minHeight: 140, fontFamily: "inherit" }} />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={btnSecondary}>Cancel</button>
+              <button onClick={manualSubmit} style={btnPrimary}>Save</button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

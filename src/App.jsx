@@ -434,7 +434,7 @@ export default function App(){
     </>)}
 
     {/* ═══ PREPRODUCTION ═══ */}
-    {tool==="preproduction"&&(isFounder||role==="lead")&&(<Preproduction/>)}
+    {tool==="preproduction"&&(isFounder||role==="lead")&&(<Preproduction role={role} isFounder={isFounder}/>)}
 
     {/* ═══ RESOURCES ═══ */}
     {tool==="resources"&&(isFounder||role==="closer")&&(<>

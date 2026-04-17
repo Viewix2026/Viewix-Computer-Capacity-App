@@ -7,8 +7,10 @@
 //   extractFromTranscript — Claude Sonnet pulls competitor handles + keywords from a transcript.
 //   scrape                — Calls Apify apidojo/instagram-scraper, normalises, caches, writes posts[].
 //   classify              — Batches posts to Claude Sonnet vision; writes format + hookType per post.
-//   synthesise            — Opus pass: reads classified posts; writes synthesis.markdown + concepts.
-//   runPipeline           — Sequentially runs scrape → classify → synthesise.
+//   runPipeline           — Sequentially runs scrape → classify. Synthesis was removed:
+//                           the producer-driven review → shortlist → select → script workflow
+//                           replaces it, because AI-synthesised briefs tended to hallucinate
+//                           formats and producers rewrote the output anyway.
 //
 // Env vars required:
 //   ANTHROPIC_API_KEY
@@ -181,6 +183,14 @@ function normaliseInstagramPost(raw, handleHint) {
   };
 }
 
+// Handles like @mannix.squiers contain periods, which Firebase rejects as
+// a key character (along with # $ / [ ]). Sanitise for storage only — the
+// original handle is preserved inside the value so display sites don't
+// need to reverse-decode.
+export function fbSafeHandleKey(handle) {
+  return String(handle || "").replace(/[.#$/\[\]]/g, "_");
+}
+
 // Compute { avgViews, avgLikes, medianViews, postCount } per handle from the scraped posts,
 // then fill each post's overperformanceScore = views / handleMedianViews.
 function computeHandleStatsAndScore(posts) {
@@ -197,7 +207,8 @@ function computeHandleStatsAndScore(posts) {
     const avgViews = views.length ? views.reduce((s, v) => s + v, 0) / views.length : 0;
     const avgLikes = likes.reduce((s, v) => s + v, 0) / (likes.length || 1);
     const medianViews = views.length ? views[Math.floor(views.length / 2)] : 0;
-    stats[handle] = {
+    stats[fbSafeHandleKey(handle)] = {
+      handle,  // original, unsanitised — use this for display
       avgViews: Math.round(avgViews),
       avgLikes: Math.round(avgLikes),
       medianViews: Math.round(medianViews),
@@ -536,184 +547,12 @@ async function handleExtractFromTranscript(req, res) {
   return res.status(200).json({ success: true, transcriptSuggestions });
 }
 
-// ─── Synthesis helpers (Slice 5) ───
-function buildSynthesisSystemPrompt({ companyName, promptLearnings = [] }) {
-  return `You are a senior creative strategist at Viewix, a video production agency. You have just been handed the output of a competitor research scrape for a client and you need to write the synthesis that our producer will read before (or during) the pre-production meeting.
-
-The client is: ${companyName}
-
-The synthesis MUST be markdown with these exact section headings, in this order:
-
-# Synthesis for ${companyName}
-
-## 1. Overperformance signals
-3-6 bullets. For each, identify a concrete trait shared by posts that outperformed the handle's median (overperformanceScore >= 1.5). Reference post IDs inline as \`ig_XXXX\`. Be specific: "First 3 seconds hold on a close-up face" not "strong hooks".
-
-## 2. Hook patterns
-3-5 bullets. Each is a specific hook archetype that works in this niche. Examples:
-- "Contrarian claim that inverts a category assumption"
-- "Question that implies the viewer is doing something wrong"
-Include 2-3 example post IDs per pattern.
-
-## 3. Format recommendations
-Rank 3-5 format buckets the client should produce, strongest ROI first. For each:
-- Format name (e.g. talking_head, skit, tutorial)
-- One-sentence rationale tied to what's working in this specific niche
-- 3-5 reference post IDs
-
-## 4. Visual motifs
-Recurring visual/editing/pacing patterns across overperformers (lighting, shot types, cut cadence, text overlays, colour grading).
-
-## 5. Caption & CTA patterns
-What's working in the copy alongside the video — hook lines in captions, CTA phrasings, hashtag strategy.
-
-## 6. What NOT to do
-Patterns that underperform, feel saturated, or clash with ${companyName}'s likely positioning.
-
-## 7. Five concrete video concepts for ${companyName}
-Give the producer 5 ready-to-shoot concepts. For each:
-- **Title** — short, punchy
-- **Premise** — one sentence: what happens in the video
-- **Format** — from the bucket list above
-- **Reference post IDs** — 2-3 examples
-
-After section 7, add a single HTML comment line with the same 5 concepts as parseable JSON for programmatic handoff:
-<!-- CONCEPTS_JSON: [{"title":"...","premise":"...","format":"talking_head","refPostIds":["ig_x","ig_y"]}, ...] -->
-
-RULES:
-- No preamble before the heading. Start with "# Synthesis for..."
-- Reference post IDs inline using the exact id string from the data (e.g. \`ig_CxyZ\`). The renderer turns these into clickable links.
-- Be specific, evidence-based, and opinionated. Avoid generic agency-speak ("engagement", "authentic storytelling").
-- Do not wrap the response in a code fence.
-${promptLearnings.length ? `\nPROMPT LEARNINGS (apply these rules):\n${promptLearnings.map(l => "- " + l).join("\n")}\n` : ""}`;
-}
-
-function buildSynthesisUserMessage({ project }) {
-  const posts = project.posts || [];
-  const handleStats = project.handleStats || {};
-  const transcript = project.inputs?.transcript?.text || null;
-
-  // Sort posts by overperformance so Claude sees the winners first
-  const sorted = [...posts]
-    .filter(p => p.format)  // drop unclassified for cleaner synthesis
-    .sort((a, b) => (b.overperformanceScore || 0) - (a.overperformanceScore || 0));
-
-  const statsBlock = Object.entries(handleStats).map(([h, s]) =>
-    `${h}: ${s.postCount} posts, avg views ${s.avgViews}, median views ${s.medianViews}`
-  ).join("\n");
-
-  const postsBlock = sorted.map(p => {
-    return [
-      `${p.id} · ${p.handle} · ${p.format}${p.hookType ? `/${p.hookType}` : ""} · views ${p.views ?? "n/a"} · over ${p.overperformanceScore ?? "n/a"}x · eng ${p.engagementRate}`,
-      `  Caption: ${(p.caption || "").slice(0, 500).replace(/\n+/g, " ")}`,
-      p.formatEvidence ? `  Evidence: ${p.formatEvidence}` : null,
-    ].filter(Boolean).join("\n");
-  }).join("\n\n");
-
-  return `Classified competitor posts for ${project.companyName}:
-
-HANDLE STATS:
-${statsBlock || "(none)"}
-
-POSTS (sorted by overperformance):
-${postsBlock || "(none)"}
-
-${transcript ? `\nPRE-PRODUCTION MEETING TRANSCRIPT (use to tailor recommendations to what the client actually wants):\n${transcript.slice(0, 8000)}\n` : ""}
-Write the synthesis.`;
-}
-
-// ─── Action: synthesise ───
-// Body: { projectId, regenerateNotes? }
-async function handleSynthesise(req, res) {
-  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
-
-  const { projectId, regenerateNotes } = req.body || {};
-  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
-
-  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
-  if (!project) return res.status(404).json({ error: "Project not found" });
-
-  const posts = Array.isArray(project.posts) ? project.posts : [];
-  if (!posts.length) return res.status(400).json({ error: "No posts to synthesise. Run scrape first." });
-
-  // Guard against synthesising from zero classified posts. If we don't require
-  // classification, Claude receives only handle-level metrics and hallucinates
-  // the hook / format / visual sections from its training data rather than
-  // from the actual scrape. Producer-useful output requires real post data.
-  const classifiedCount = posts.filter(p => p.format).length;
-  if (classifiedCount === 0) {
-    return res.status(400).json({
-      error: "No classified posts — synthesis would be hallucinated",
-      detail: `All ${posts.length} scraped post(s) are unclassified. Run Classify first (or use the Fast caption-only toggle if Vision is failing) so the synthesis is grounded in actual post data.`,
-    });
-  }
-  if (classifiedCount < 5 && posts.length >= 10) {
-    // Soft warning — still run, but let the caller know
-    console.warn(`[synthesise] Only ${classifiedCount} of ${posts.length} posts classified — synthesis quality will be limited.`);
-  }
-
-  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
-    status: "synthesising",
-    updatedAt: new Date().toISOString(),
-  });
-
-  // Pull any accumulated prompt learnings for this feature
-  const learningsData = await fbGet("/preproduction/socialOrganicLearnings");
-  const promptLearnings = learningsData
-    ? Object.values(learningsData).filter(l => l && l.active && l.rule).map(l => l.rule)
-    : [];
-
-  const systemPrompt = buildSynthesisSystemPrompt({ companyName: project.companyName, promptLearnings });
-  let userMessage = buildSynthesisUserMessage({ project });
-  if (regenerateNotes) {
-    userMessage = `The producer is regenerating this synthesis with extra instructions:\n\n"""${regenerateNotes.slice(0, 2000)}"""\n\nUse those instructions alongside the data below.\n\n${userMessage}`;
-  }
-
-  const markdown = await callClaude({
-    model: "claude-opus-4-6",
-    systemPrompt,
-    userMessage,
-    maxTokens: 8000,
-    apiKey: ANTHROPIC_KEY,
-  });
-
-  // Parse the CONCEPTS_JSON sidecar — best effort, not a hard failure
-  let concepts = [];
-  const conceptsMatch = markdown.match(/<!--\s*CONCEPTS_JSON:\s*(\[[\s\S]*?\])\s*-->/);
-  if (conceptsMatch) {
-    try {
-      const parsed = JSON.parse(conceptsMatch[1]);
-      if (Array.isArray(parsed)) concepts = parsed;
-    } catch (e) {
-      console.warn("Failed to parse CONCEPTS_JSON sidecar:", e.message);
-    }
-  }
-
-  // Extract topOverperformers from the post list directly (cheaper than asking Claude)
-  const topOverperformers = [...posts]
-    .filter(p => p.overperformanceScore != null)
-    .sort((a, b) => b.overperformanceScore - a.overperformanceScore)
-    .slice(0, 10)
-    .map(p => p.id);
-
-  const synthesis = {
-    markdown,
-    concepts,
-    topOverperformers,
-    generatedAt: new Date().toISOString(),
-    modelUsed: "claude-opus-4-6",
-    regenerateNotes: regenerateNotes || null,
-  };
-
-  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
-    synthesis,
-    status: "review",
-    updatedAt: new Date().toISOString(),
-  });
-
-  return res.status(200).json({ success: true, synthesis });
-}
+// ─── Synthesis helpers + handler removed in the producer-driven restructure.
+// The old flow wrote /preproduction/socialOrganic/{id}/synthesis with an
+// Opus-generated markdown brief. Legacy `synthesis` field on existing
+// projects is preserved (harmless) but no longer read or written.
+// Replacement: ReviewGrid → ShortlistStep → SelectStep → ScriptBuilderStep
+// producer-driven, with a global /formatLibrary/ for cross-project reuse.
 
 // ─── Action: manual reclassify ───
 // Body: { projectId, postId, format, hookType? }
@@ -881,7 +720,8 @@ async function handleScrape(req, res) {
 }
 
 // ─── Action: runPipeline ───
-// Convenience wrapper: scrape → classify → synthesise, updating status between phases.
+// Convenience wrapper: scrape → classify, updating status between phases.
+// After classify, producer picks up in the Review UI (Phase 1 of the rebuild).
 // Each phase is skipped if the relevant artefact already exists, so re-runs are safe.
 // Body: { projectId, fast?: boolean, force?: boolean }
 //   fast=true  → uses caption-only Haiku for classification
@@ -890,7 +730,7 @@ async function handleRunPipeline(req, res) {
   const { projectId, fast = false, force = false } = req.body || {};
   if (!projectId) return res.status(400).json({ error: "Missing projectId" });
 
-  const result = { scrape: null, classify: null, synthesise: null };
+  const result = { scrape: null, classify: null };
 
   // Phase 1: scrape (skipped if posts already exist and not forcing)
   const initial = await fbGet(`/preproduction/socialOrganic/${projectId}`);
@@ -910,14 +750,14 @@ async function handleRunPipeline(req, res) {
     result.scrape = { status: scrapeStatus, ...scrapePayload };
     if (scrapeStatus >= 400) return res.status(scrapeStatus).json({ error: "Scrape phase failed", detail: scrapePayload });
 
-    // Zero-post scrape → bail with a clear message. The classify + synthesise
-    // phases have nothing to work with and would fail more opaquely.
+    // Zero-post scrape → bail with a clear message. The classify phase has
+    // nothing to work with and would fail more opaquely.
     if (!scrapePayload?.postsCollected || scrapePayload.postsCollected === 0) {
       const errDetail = scrapePayload?.errors?.length
         ? `Apify returned these errors: ${scrapePayload.errors.map(e => `${e.handle}: ${e.error}`).join("; ")}`
         : "Apify returned 0 posts. The actor may not be finding the handles, or they may be private/banned/restricted. Check the Vercel function logs for the raw Apify response.";
       return res.status(422).json({
-        error: "Scrape returned 0 posts — nothing to classify or synthesise",
+        error: "Scrape returned 0 posts — nothing to classify",
         detail: errDetail,
         scrape: scrapePayload,
       });
@@ -944,22 +784,13 @@ async function handleRunPipeline(req, res) {
     result.classify = { skipped: true };
   }
 
-  // Phase 3: synthesise
-  const afterClassify = await fbGet(`/preproduction/socialOrganic/${projectId}`);
-  if (force || !afterClassify?.synthesis?.markdown) {
-    const synthReq = { body: { projectId } };
-    let synthPayload, synthStatus = 200;
-    const shimRes = {
-      status(code) { synthStatus = code; return this; },
-      json(body) { synthPayload = body; return this; },
-      setHeader() { return this; },
-    };
-    await handleSynthesise(synthReq, shimRes);
-    result.synthesise = { status: synthStatus, ...synthPayload };
-    if (synthStatus >= 400) return res.status(synthStatus).json({ error: "Synthesise phase failed", detail: synthPayload });
-  } else {
-    result.synthesise = { skipped: true };
-  }
+  // Phase 3 (synthesise) removed — producers now drive review → shortlist → select → script.
+  // Move the project to "review" stage so the Phase 1 UI kicks in automatically.
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    stage: "review",
+    status: "review",
+    updatedAt: new Date().toISOString(),
+  });
 
   // Slack notification on success — best-effort, don't fail the pipeline if it errors
   const slackWebhook = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
@@ -967,12 +798,12 @@ async function handleRunPipeline(req, res) {
     try {
       const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
       const postCount = (project?.posts || []).length;
-      const conceptsCount = project?.synthesis?.concepts?.length || 0;
+      const classifiedCount = (project?.posts || []).filter(p => p.format).length;
       await fetch(slackWebhook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          text: `:mag: Social organic research synthesised for *${project?.companyName}* — ${postCount} posts analysed, ${conceptsCount} concepts generated.`,
+          text: `:mag: Social organic research ready for review — *${project?.companyName}* — ${postCount} posts scraped, ${classifiedCount} classified.`,
         }),
       });
     } catch (e) {
@@ -981,6 +812,291 @@ async function handleRunPipeline(req, res) {
   }
 
   return res.status(200).json({ success: true, ...result });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SCRIPT BUILDER (Phase 5) — producer-driven preproduction doc
+// generateScript:     full-doc generation from the picked formats + research
+// rewriteScriptSection: small single-field Claude call, cell-level edits
+// ═══════════════════════════════════════════════════════════════════
+
+// Default preproduction brief prompt. Founders can override live at
+// /preproductionTemplates/socialOrganicPrompt without a redeploy. Modelled
+// on Picup Media's Social Retainer Video Sheet template:
+//   Brand Truths → Brand Ambitions → Client Goals → Key Considerations →
+//   Social Snapshot → Target Viewer Persona → Key Takeaways → Formats (from
+//   selected) → Script Table (per video: content style, hook, text hook,
+//   visual hook, script/notes, props).
+const DEFAULT_SOCIAL_ORGANIC_PROMPT = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. A producer has gathered research on a client's niche, shortlisted high-performing competitor videos, and picked the exact formats they want to shoot. Your job is to produce a single structured preproduction document the producer can take into the shoot.
+
+RULES:
+- Be specific, opinionated, and evidence-based. Do not reach for generic agency-speak.
+- Every section should feel like a smart colleague who watched the reference videos, not a template.
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
+
+STRUCTURE TO RETURN:
+{
+  "clientContext": {
+    "brandTruths": "2-4 sentences on what the brand is known for, what it does best, and what makes it credible.",
+    "brandAmbitions": "2-3 sentences on where this content should take the brand — not a mission statement, a pointed direction.",
+    "clientGoals": "3-5 bullet-style lines, one per line, on what the client explicitly wants this content to achieve.",
+    "keyConsiderations": "3-5 bullet-style lines on constraints or preferences: what they will not do, who they will not speak to, tone rules."
+  },
+  "socialSnapshot": {
+    "averagePerformance": "One sentence summarising typical post performance on the client's handles (views, engagement cadence).",
+    "highestPerforming": "One sentence describing the client's best-performing piece of content to date.",
+    "takeaways": "3-5 bullet-style lines on what is working and what is not, grounded in the research data."
+  },
+  "targetViewer": {
+    "demographic": "2-4 sentences on age, gender skew, consumption habits.",
+    "painPoints": "3-5 bullet-style lines. Include direct viewer-voice quotes where the research supports it."
+  },
+  "scriptTable": [
+    {
+      "videoNumber": 1,
+      "formatName": "Matches one of the selected formats exactly.",
+      "contentStyle": "One-sentence description of what the final video looks like.",
+      "hook": "The spoken opening line (verbatim or template with __client__ placeholders).",
+      "textHook": "The on-screen text at the opening.",
+      "visualHook": "What the viewer sees in frame for the first 2-3 seconds.",
+      "scriptNotes": "Question prompts or talking-point bullets the producer should walk the client through on set.",
+      "props": "Physical props, outfits, or location cues. Use 'N/A' if none."
+    }
+    // one entry per selected format
+  ]
+}
+
+IMPORTANT:
+- The scriptTable must have EXACTLY one entry per format in the "Selected Formats" list below, in the same order. Do not invent extra formats.
+- Use formatName values verbatim from the Selected Formats input.
+- Hook, textHook and visualHook should be concrete enough that a producer can read them aloud on set.`;
+
+async function getPromptOverride() {
+  // Live prompt override — falls back to the hardcoded default if empty.
+  const p = await fbGet("/preproductionTemplates/socialOrganicPrompt");
+  return (typeof p === "string" && p.trim()) ? p : DEFAULT_SOCIAL_ORGANIC_PROMPT;
+}
+
+async function getFantasticExample() {
+  const ex = await fbGet("/preproductionTemplates/fantasticExample");
+  return (typeof ex === "string" && ex.trim()) ? ex : null;
+}
+
+function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample }) {
+  const posts = project.posts || [];
+  const tickedPosts = Object.entries(project.videoReviews || {})
+    .filter(([, r]) => r?.status === "ticked")
+    .map(([id]) => posts.find(p => p.id === id))
+    .filter(Boolean);
+  const handleStats = project.handleStats || {};
+  const transcript = project.inputs?.transcript?.text || null;
+
+  const formatsBlock = selectedFormatObjects.map((fmt, i) => {
+    const ex = Array.isArray(fmt.examples) ? fmt.examples : [];
+    return [
+      `FORMAT ${i + 1}: ${fmt.name}`,
+      fmt.category ? `Category: ${fmt.category}` : null,
+      fmt.videoAnalysis ? `Analysis: ${fmt.videoAnalysis}` : null,
+      fmt.filmingInstructions ? `Filming: ${fmt.filmingInstructions}` : null,
+      fmt.structureInstructions ? `Structure: ${fmt.structureInstructions}` : null,
+      ex.length ? `Examples: ${ex.map(e => e.url).filter(Boolean).slice(0, 3).join(", ")}` : null,
+    ].filter(Boolean).join("\n");
+  }).join("\n\n");
+
+  const tickedBlock = tickedPosts.slice(0, 20).map(p =>
+    `${p.handle} · ${p.overperformanceScore ? p.overperformanceScore.toFixed(1) + "× baseline" : ""}\n  Caption: ${(p.caption || "").slice(0, 220).replace(/\n+/g, " ")}`
+  ).join("\n\n");
+
+  const statsBlock = Object.entries(handleStats).map(([h, s]) =>
+    `${s.handle || h}: avg ${s.avgViews} views, median ${s.medianViews}`
+  ).join("\n");
+
+  return `CLIENT: ${project.companyName}
+${project.videoType ? `DEAL TYPE: ${project.videoType}` : ""}
+${project.numberOfVideos ? `TOTAL VIDEOS TO SHOOT THIS ROUND: ${project.numberOfVideos}` : ""}
+
+HANDLE STATS:
+${statsBlock || "(none)"}
+
+TICKED REFERENCE VIDEOS (producer hand-picked these during review — use them to ground the script table):
+${tickedBlock || "(none)"}
+
+${transcript ? `\nPRE-PRODUCTION MEETING TRANSCRIPT:\n${transcript.slice(0, 6000)}\n` : ""}
+
+SELECTED FORMATS (render one scriptTable entry per format, in order):
+${formatsBlock}
+
+${fantasticExample ? `\nEXAMPLE OF A FANTASTIC PAST PREPRODUCTION DOC (same JSON shape; use it as a quality bar, do not copy verbatim):\n${fantasticExample.slice(0, 4000)}\n` : ""}
+
+Produce the preproduction JSON now.`;
+}
+
+async function handleGenerateScript(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
+  if (selected.length === 0) {
+    return res.status(400).json({ error: "No selected formats. Drag at least one into the selected queue first." });
+  }
+
+  // Resolve each selected format to the full library entry so we have the
+  // analysis / filming / structure / examples available to Claude.
+  const selectedFormatObjects = [];
+  for (const s of selected) {
+    const fmt = await fbGet(`/formatLibrary/${s.formatLibraryId}`);
+    if (fmt) selectedFormatObjects.push(fmt);
+  }
+
+  const systemPrompt = await getPromptOverride();
+  const fantasticExample = await getFantasticExample();
+  const userMessage = buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample });
+
+  const runId = `script_${Date.now()}_${crypto.randomBytes(2).toString("hex")}`;
+  const startedAt = Date.now();
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 16000,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
+  }
+
+  // Build the `formats` section from the selectedFormatObjects themselves
+  // rather than letting Claude invent format descriptions. This is the
+  // anti-hallucination guard the plan calls out.
+  const formatsSection = selectedFormatObjects.map((fmt, i) => ({
+    order: i,
+    formatLibraryId: fmt.id,
+    name: fmt.name,
+    videoAnalysis: fmt.videoAnalysis || "",
+    filmingInstructions: fmt.filmingInstructions || "",
+    structureInstructions: fmt.structureInstructions || "",
+    examples: (fmt.examples || []).slice(0, 3).map(e => ({
+      url: e.url, thumbnail: e.thumbnail || null, sourceAccount: e.sourceAccount || null,
+    })),
+  }));
+
+  const preproductionDoc = {
+    clientContext: parsed.clientContext || {},
+    socialSnapshot: parsed.socialSnapshot || {},
+    targetViewer: parsed.targetViewer || {},
+    formats: formatsSection,
+    scriptTable: Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [],
+    generatedAt: new Date().toISOString(),
+    modelUsed: "claude-opus-4-6",
+    runId,
+    rewriteHistory: project.preproductionDoc?.rewriteHistory || [],
+  };
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    preproductionDoc,
+    stage: "script",
+    status: "review",
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Cost log — Opus is the expensive call, so worth tracking.
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    await fbSet(`/preproduction/socialOrganic/_costLog/${today}/${runId}`, {
+      type: "script",
+      projectId,
+      durationMs: Date.now() - startedAt,
+      model: "claude-opus-4-6",
+      createdAt: new Date().toISOString(),
+    });
+  } catch { /* noop */ }
+
+  return res.status(200).json({ success: true, preproductionDoc });
+}
+
+// Translate a JS dot-path ("clientContext.brandTruths") into a Firebase
+// slash-path. Kept simple on purpose — the incoming paths are all from a
+// known set defined in the client-side renderer.
+function pathToFbPath(jsPath) {
+  return jsPath.replace(/\./g, "/");
+}
+
+async function handleRewriteScriptSection(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, path, instruction, currentValue } = req.body || {};
+  if (!projectId || !path || !instruction) {
+    return res.status(400).json({ error: "Missing projectId, path, or instruction" });
+  }
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const systemPrompt = `You rewrite a single field of a social video preproduction doc for Viewix. Return ONLY the rewritten value as plain text. No markdown, no preamble, no code fences. Never use em dashes; use commas or full stops instead. Keep length comparable to the current value unless the instruction asks otherwise.`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+FIELD PATH: ${path}
+
+CURRENT VALUE:
+"""
+${currentValue || ""}
+"""
+
+REWRITE INSTRUCTION:
+"""
+${instruction}
+"""
+
+Return only the rewritten value.`;
+
+  let newValue;
+  try {
+    const raw = await callClaude({
+      model: "claude-sonnet-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 2000,
+      apiKey: ANTHROPIC_KEY,
+    });
+    newValue = raw.trim();
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  const fbPath = `/preproduction/socialOrganic/${projectId}/preproductionDoc/${pathToFbPath(path)}`;
+  await fbSet(fbPath, newValue);
+
+  // Append to rewriteHistory — mirrors api/preproduction.js:351-361.
+  const historyEntry = {
+    timestamp: new Date().toISOString(),
+    path,
+    instruction,
+    previousValue: currentValue || "",
+    newValue,
+  };
+  const history = Array.isArray(project.preproductionDoc?.rewriteHistory) ? project.preproductionDoc.rewriteHistory : [];
+  history.push(historyEntry);
+  await fbSet(`/preproduction/socialOrganic/${projectId}/preproductionDoc/rewriteHistory`, history);
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, newValue });
 }
 
 // ─── Dispatcher ───
@@ -1004,12 +1120,14 @@ export default async function handler(req, res) {
         return await handleClassify(req, res);
       case "reclassify":
         return await handleReclassify(req, res);
-      case "synthesise":
-        return await handleSynthesise(req, res);
       case "extractFromTranscript":
         return await handleExtractFromTranscript(req, res);
       case "runPipeline":
         return await handleRunPipeline(req, res);
+      case "generateScript":
+        return await handleGenerateScript(req, res);
+      case "rewriteScriptSection":
+        return await handleRewriteScriptSection(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }

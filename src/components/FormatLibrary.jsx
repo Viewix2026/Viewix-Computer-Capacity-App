@@ -1,0 +1,609 @@
+// Format Library — global, cross-project library of social video formats.
+// Producers drop entries in here during Phase 2 (Shortlist); this tab lets
+// anyone browse, edit, archive, and (founders only) seed-import from a
+// pasted tabular document or run prompt-template overrides for the Script
+// Builder (Phase 5).
+//
+// Data at /formatLibrary/{id}, categories at /formatCategories/{key},
+// prompt overrides at /preproductionTemplates/.
+//
+// Lives inside the Pre-Production tab as its own sub-tab. Meant to grow
+// into Viewix's institutional knowledge of what filming styles work.
+
+import { useEffect, useState } from "react";
+import { onFB, fbSet, fbListen, getCurrentRole } from "../firebase";
+
+// Shared with other preproduction surfaces so the look-and-feel matches.
+const inputSt = {
+  padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)",
+  background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none",
+  fontFamily: "inherit", width: "100%", boxSizing: "border-box",
+};
+const btnPrimary = {
+  padding: "8px 18px", borderRadius: 8, border: "none", background: "var(--accent)",
+  color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+};
+const btnSecondary = {
+  padding: "7px 14px", borderRadius: 8, border: "1px solid var(--border)",
+  background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 600,
+  cursor: "pointer", fontFamily: "inherit",
+};
+
+export function FormatLibrary({ role, isFounder }) {
+  const [library, setLibrary] = useState({});
+  const [categories, setCategories] = useState({});
+  const [activeId, setActiveId] = useState(null);
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useState([]);
+  const [showArchived, setShowArchived] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+
+  useEffect(() => {
+    let u1 = () => {}, u2 = () => {};
+    onFB(() => {
+      u1 = fbListen("/formatLibrary", d => setLibrary(d || {}));
+      u2 = fbListen("/formatCategories", d => setCategories(d || {}));
+    });
+    return () => { u1(); u2(); };
+  }, []);
+
+  const list = Object.values(library || {}).filter(f => f && f.id);
+
+  // Derive the tag cloud from all non-archived formats.
+  const allTags = Array.from(new Set(
+    list.flatMap(f => f.archived ? [] : (f.tags || []))
+  )).sort();
+
+  const filtered = list
+    .filter(f => (showArchived ? true : !f.archived))
+    .filter(f => categoryFilter === "all" ? true : f.category === categoryFilter)
+    .filter(f => tagFilter.length === 0 ? true : tagFilter.every(t => (f.tags || []).includes(t)))
+    .filter(f => {
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
+      return (f.name || "").toLowerCase().includes(q)
+        || (f.videoAnalysis || "").toLowerCase().includes(q)
+        || (f.filmingInstructions || "").toLowerCase().includes(q)
+        || (f.structureInstructions || "").toLowerCase().includes(q)
+        || (f.tags || []).some(t => t.toLowerCase().includes(q));
+    })
+    .sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0) || (a.name || "").localeCompare(b.name || ""));
+
+  const active = activeId ? library[activeId] : null;
+
+  if (active) {
+    return (
+      <FormatDetail
+        format={active}
+        categories={categories}
+        onBack={() => setActiveId(null)}
+        onSave={(patch) => {
+          fbSet(`/formatLibrary/${active.id}`, { ...active, ...patch, updatedAt: new Date().toISOString() });
+        }}
+        onArchiveToggle={() => {
+          fbSet(`/formatLibrary/${active.id}`, { ...active, archived: !active.archived, updatedAt: new Date().toISOString() });
+        }}
+        onDelete={isFounder ? () => {
+          if (!window.confirm(`Delete "${active.name}" from the library permanently?`)) return;
+          fbSet(`/formatLibrary/${active.id}`, null);
+          setActiveId(null);
+        } : null}
+      />
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>Format Library</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+            Cross-project library of social video formats. Producers add entries from the Shortlist step; anyone can browse and reuse them.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {isFounder && (
+            <>
+              <button onClick={() => setPromptEditorOpen(true)} style={btnSecondary}>Edit Script prompts</button>
+              <button onClick={() => setImportOpen(true)} style={btnSecondary}>Seed import</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Filter bar */}
+      <FormatFilterBar
+        search={search} setSearch={setSearch}
+        categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
+        categories={categories}
+        tagFilter={tagFilter} setTagFilter={setTagFilter}
+        allTags={allTags}
+        showArchived={showArchived} setShowArchived={setShowArchived}
+      />
+
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>📚</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>{list.length === 0 ? "Empty library" : "No formats match your filters"}</div>
+          <div style={{ fontSize: 12, marginTop: 6 }}>
+            {list.length === 0
+              ? "Shortlist a video in any Social Media Organic project to add the first entry."
+              : "Clear filters to see everything."}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+          {filtered.map(f => (
+            <FormatCard key={f.id} format={f} categories={categories} onClick={() => setActiveId(f.id)} />
+          ))}
+        </div>
+      )}
+
+      {importOpen && (
+        <SeedImporter
+          existing={library}
+          categories={categories}
+          onClose={() => setImportOpen(false)}
+        />
+      )}
+      {promptEditorOpen && (
+        <PromptEditor onClose={() => setPromptEditorOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+// Filter bar is exported so the Phase 4 Select UI can reuse it verbatim.
+export function FormatFilterBar({ search, setSearch, categoryFilter, setCategoryFilter, categories, tagFilter, setTagFilter, allTags, showArchived, setShowArchived }) {
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+      <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+        placeholder="Search name, analysis, tags…"
+        style={{ ...inputSt, width: 240, fontSize: 12, padding: "6px 10px" }} />
+      <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+        style={{ ...inputSt, width: "auto", fontSize: 12, padding: "6px 10px" }}>
+        <option value="all">All categories</option>
+        {Object.entries(categories || {})
+          .sort((a, b) => (a[1].label || a[0]).localeCompare(b[1].label || b[0]))
+          .map(([k, v]) => <option key={k} value={k}>{v?.label || k}</option>)}
+      </select>
+      {allTags.length > 0 && (
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+          {allTags.slice(0, 12).map(t => {
+            const active = tagFilter.includes(t);
+            return (
+              <button key={t}
+                onClick={() => setTagFilter(active ? tagFilter.filter(x => x !== t) : [...tagFilter, t])}
+                style={{
+                  padding: "3px 9px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                  border: "1px solid var(--border)",
+                  background: active ? "var(--accent)" : "var(--bg)",
+                  color: active ? "#fff" : "var(--muted)",
+                  cursor: "pointer", fontFamily: "inherit",
+                }}>{t}</button>
+            );
+          })}
+        </div>
+      )}
+      {setShowArchived && (
+        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--muted)", cursor: "pointer", marginLeft: "auto" }}>
+          <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} style={{ accentColor: "var(--accent)" }} />
+          Show archived
+        </label>
+      )}
+    </div>
+  );
+}
+
+function FormatCard({ format, categories, onClick }) {
+  const examples = Array.isArray(format.examples) ? format.examples : [];
+  const thumb = examples.find(e => e.thumbnail)?.thumbnail || null;
+  const cat = format.category ? (categories[format.category]?.label || format.category) : null;
+
+  return (
+    <button onClick={onClick} style={{
+      textAlign: "left", background: "var(--card)", border: "1px solid var(--border)",
+      borderRadius: 10, padding: 0, cursor: "pointer", fontFamily: "inherit",
+      overflow: "hidden", opacity: format.archived ? 0.6 : 1, display: "flex", flexDirection: "column",
+    }}>
+      <div style={{ aspectRatio: "16 / 9", background: "#000", position: "relative", overflow: "hidden" }}>
+        {thumb ? (
+          <img src={thumb} alt="" onError={e => { e.target.style.display = "none"; }}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color: "var(--muted)", fontSize: 24 }}>📼</div>
+        )}
+        {format.archived && (
+          <div style={{ position: "absolute", top: 6, left: 6, padding: "2px 8px", background: "rgba(90,107,133,0.85)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3 }}>ARCHIVED</div>
+        )}
+        {examples.length > 0 && (
+          <div style={{ position: "absolute", bottom: 6, right: 6, padding: "2px 8px", background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 3 }}>
+            {examples.length} example{examples.length === 1 ? "" : "s"}
+          </div>
+        )}
+      </div>
+      <div style={{ padding: 12, flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{format.name}</div>
+        {cat && <div style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{cat}</div>}
+        <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4, overflow: "hidden", maxHeight: 40 }}>
+          {(format.videoAnalysis || "").slice(0, 120)}{(format.videoAnalysis || "").length > 120 ? "…" : ""}
+        </div>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: "auto" }}>
+          {(format.tags || []).slice(0, 3).map(t => (
+            <span key={t} style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "var(--bg)", color: "var(--muted)" }}>{t}</span>
+          ))}
+          {(format.usageCount || 0) > 0 && (
+            <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 3, background: "var(--accent-soft)", color: "var(--accent)", marginLeft: "auto" }}>
+              used {format.usageCount}×
+            </span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function FormatDetail({ format, categories, onBack, onSave, onArchiveToggle, onDelete }) {
+  const [editing, setEditing] = useState(null);  // field key
+  const [name, setName] = useState(format.name || "");
+  const [videoAnalysis, setVideoAnalysis] = useState(format.videoAnalysis || "");
+  const [filming, setFilming] = useState(format.filmingInstructions || "");
+  const [structure, setStructure] = useState(format.structureInstructions || "");
+  const [category, setCategory] = useState(format.category || "");
+  const [tags, setTags] = useState(Array.isArray(format.tags) ? format.tags : []);
+  const [tagInput, setTagInput] = useState("");
+
+  useEffect(() => {
+    setName(format.name || "");
+    setVideoAnalysis(format.videoAnalysis || "");
+    setFilming(format.filmingInstructions || "");
+    setStructure(format.structureInstructions || "");
+    setCategory(format.category || "");
+    setTags(Array.isArray(format.tags) ? format.tags : []);
+  }, [format.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const dirty =
+    name !== (format.name || "") ||
+    videoAnalysis !== (format.videoAnalysis || "") ||
+    filming !== (format.filmingInstructions || "") ||
+    structure !== (format.structureInstructions || "") ||
+    category !== (format.category || "") ||
+    JSON.stringify(tags) !== JSON.stringify(Array.isArray(format.tags) ? format.tags : []);
+
+  const save = () => {
+    onSave({
+      name: name.trim() || format.name,
+      videoAnalysis, filmingInstructions: filming, structureInstructions: structure,
+      category: category || null, tags,
+    });
+  };
+
+  const examples = Array.isArray(format.examples) ? format.examples : [];
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={onBack} style={{ ...btnSecondary, padding: "5px 10px" }}>&larr; Back</button>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>{format.name}</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>
+              {format.sourceClient && `Originally from ${format.sourceClient}`}
+              {(format.usageCount || 0) > 0 && ` · Used ${format.usageCount}× in briefs`}
+              {format.archived && " · Archived"}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {dirty && <button onClick={save} style={btnPrimary}>Save</button>}
+          <button onClick={onArchiveToggle} style={btnSecondary}>{format.archived ? "Unarchive" : "Archive"}</button>
+          {onDelete && <button onClick={onDelete} style={{ ...btnSecondary, color: "#EF4444", borderColor: "rgba(239,68,68,0.3)" }}>Delete</button>}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
+          <FieldRow label="Name">
+            <input value={name} onChange={e => setName(e.target.value)} style={inputSt} />
+          </FieldRow>
+
+          <FieldRow label="Category">
+            <select value={category} onChange={e => setCategory(e.target.value)} style={inputSt}>
+              <option value="">— none —</option>
+              {Object.entries(categories || {}).map(([k, v]) => <option key={k} value={k}>{v?.label || k}</option>)}
+            </select>
+          </FieldRow>
+
+          <FieldRow label="Tags">
+            <div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                {tags.map(t => (
+                  <span key={t} style={{ padding: "3px 9px", borderRadius: 4, fontSize: 11, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {t}
+                    <button onClick={() => setTags(tags.filter(x => x !== t))} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 13, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>
+                  </span>
+                ))}
+                {tags.length === 0 && <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>No tags</span>}
+              </div>
+              <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); const t = tagInput.trim().replace(/^#/, ""); if (t && !tags.includes(t)) { setTags([...tags, t]); setTagInput(""); } } }}
+                placeholder="Add tag + Enter"
+                style={{ ...inputSt, fontSize: 11 }} />
+            </div>
+          </FieldRow>
+
+          <FieldRow label="Video analysis" hint="The 'why it works' breakdown.">
+            <textarea value={videoAnalysis} onChange={e => setVideoAnalysis(e.target.value)} rows={5}
+              style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+          </FieldRow>
+
+          <FieldRow label="Filming instructions" hint="How the crew should shoot it.">
+            <textarea value={filming} onChange={e => setFilming(e.target.value)} rows={3}
+              style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+          </FieldRow>
+
+          <FieldRow label="Structure" hint="Hook → beats → close.">
+            <textarea value={structure} onChange={e => setStructure(e.target.value)} rows={3}
+              style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+          </FieldRow>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>Examples ({examples.length})</div>
+          {examples.length === 0 ? (
+            <div style={{ padding: 16, background: "var(--bg)", border: "1px dashed var(--border)", borderRadius: 8, fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
+              No examples yet. Shortlist a video in a project and pick "Add as example" to append one here.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {examples.map((ex, i) => (
+                <a key={i} href={ex.url} target="_blank" rel="noopener noreferrer"
+                  style={{ display: "flex", gap: 10, padding: 8, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, textDecoration: "none" }}>
+                  <div style={{ width: 56, height: 56, background: "#000", borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
+                    {ex.thumbnail && <img src={ex.thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>{ex.sourceAccount}</div>
+                    <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                      {ex.viewCount != null && `${formatBigLocal(ex.viewCount)} views`}
+                      {ex.sourceClient && ` · ${ex.sourceClient}`}
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FieldRow({ label, hint, children }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 5 }}>
+        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</label>
+        {hint && <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function formatBigLocal(n) {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+  return String(n);
+}
+
+// ═══════════════════════════════════════════
+// SEED IMPORTER — paste structured content, preview, commit
+// Founders-only. The parser is intentionally forgiving: it accepts either
+// a simple table (tab-separated) or double-newline-separated blocks and
+// tries to extract { name, structure, examples }.  A preview step is
+// mandatory because the parser will get things wrong on edge cases.
+// Flags every imported format with seedImported: true so dedupe is easy.
+// ═══════════════════════════════════════════
+function SeedImporter({ existing, categories, onClose }) {
+  const [raw, setRaw] = useState("");
+  const [parsed, setParsed] = useState(null);
+  const [importing, setImporting] = useState(false);
+
+  const parse = () => {
+    // Simple heuristic: blocks are separated by 2+ newlines. Each block's
+    // first non-empty line is the format name. Lines starting with "http"
+    // become examples. Everything else is lumped into the video analysis.
+    const blocks = raw.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
+    const out = blocks.map(block => {
+      const lines = block.split(/\n/).map(l => l.trim());
+      const name = lines[0] || "(unnamed)";
+      const rest = lines.slice(1);
+      const examples = [];
+      const analysisLines = [];
+      const structureLines = [];
+      const filmingLines = [];
+      let mode = "analysis";
+      for (const l of rest) {
+        if (/^https?:\/\//.test(l)) {
+          examples.push({ url: l });
+          continue;
+        }
+        if (/^filming[:\s]/i.test(l) || l.toLowerCase().startsWith("filming:")) { mode = "filming"; continue; }
+        if (/^structure[:\s]/i.test(l) || l.toLowerCase().startsWith("structure:")) { mode = "structure"; continue; }
+        if (mode === "filming") filmingLines.push(l);
+        else if (mode === "structure") structureLines.push(l);
+        else analysisLines.push(l);
+      }
+      return {
+        name,
+        videoAnalysis: analysisLines.join("\n").trim(),
+        filmingInstructions: filmingLines.join("\n").trim(),
+        structureInstructions: structureLines.join("\n").trim(),
+        examples,
+      };
+    });
+    setParsed(out);
+  };
+
+  const commit = async () => {
+    if (!parsed || parsed.length === 0) return;
+    setImporting(true);
+    const now = new Date().toISOString();
+    const createdBy = getCurrentRole() || "founder";
+    try {
+      for (const p of parsed) {
+        // Dedupe by name (case-insensitive) against existing seed imports.
+        const dupe = Object.values(existing || {}).find(f =>
+          f && f.seedImported && (f.name || "").trim().toLowerCase() === (p.name || "").trim().toLowerCase()
+        );
+        const id = dupe?.id || `fmt_seed_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        fbSet(`/formatLibrary/${id}`, {
+          id, name: p.name,
+          videoAnalysis: p.videoAnalysis,
+          filmingInstructions: p.filmingInstructions,
+          structureInstructions: p.structureInstructions,
+          examples: (p.examples || []).map(e => ({ ...e, addedAt: now })),
+          category: null, tags: [],
+          sourceProjectId: null, sourceClient: "Seed import",
+          createdAt: dupe?.createdAt || now,
+          createdBy,
+          usageCount: dupe?.usageCount || 0,
+          archived: false,
+          seedImported: true,
+          updatedAt: now,
+        });
+      }
+      setImporting(false);
+      onClose();
+    } catch (e) {
+      console.error(e);
+      alert("Seed import failed: " + e.message);
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "var(--card)", borderRadius: 12, padding: 22, maxWidth: 820, width: "90%", maxHeight: "86vh", overflowY: "auto", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Seed import</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              Paste the "2026 Social Reels Formats" doc. Each format should be separated by a blank line. Preview before committing.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer" }}>×</button>
+        </div>
+
+        {!parsed ? (
+          <>
+            <textarea value={raw} onChange={e => setRaw(e.target.value)}
+              placeholder={`Format Name\nFilming: …\nStructure: …\nGeneral analysis…\nhttps://instagram.com/reel/…\n\nNext Format\n…`}
+              rows={16}
+              style={{ ...inputSt, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }} />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+              <button onClick={onClose} style={btnSecondary}>Cancel</button>
+              <button onClick={parse} disabled={!raw.trim()} style={{ ...btnPrimary, opacity: raw.trim() ? 1 : 0.5 }}>Preview</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>
+              Preview — {parsed.length} format{parsed.length === 1 ? "" : "s"} detected
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 400, overflowY: "auto", marginBottom: 12 }}>
+              {parsed.map((p, i) => (
+                <div key={i} style={{ padding: 12, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{p.name}</div>
+                  {p.videoAnalysis && <div style={{ fontSize: 11, color: "var(--fg)", marginTop: 4, lineHeight: 1.5 }}>{p.videoAnalysis}</div>}
+                  {p.filmingInstructions && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}><strong>Filming:</strong> {p.filmingInstructions}</div>}
+                  {p.structureInstructions && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}><strong>Structure:</strong> {p.structureInstructions}</div>}
+                  {p.examples.length > 0 && <div style={{ fontSize: 10, color: "var(--accent)", marginTop: 6 }}>{p.examples.length} example URL{p.examples.length === 1 ? "" : "s"}</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <button onClick={() => setParsed(null)} style={btnSecondary}>← Edit raw</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={onClose} style={btnSecondary}>Cancel</button>
+                <button onClick={commit} disabled={importing} style={{ ...btnPrimary, opacity: importing ? 0.6 : 1 }}>
+                  {importing ? "Importing…" : `Import ${parsed.length}`}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Founders-only editor for the Script Builder prompt + fantastic example.
+// We store both under /preproductionTemplates/ so they survive deploys and
+// the Phase-5 generator picks them up live without a redeploy.
+function PromptEditor({ onClose }) {
+  const [prompt, setPrompt] = useState("");
+  const [example, setExample] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let u1 = () => {}, u2 = () => {};
+    onFB(() => {
+      u1 = fbListen("/preproductionTemplates/socialOrganicPrompt", d => setPrompt(typeof d === "string" ? d : ""));
+      u2 = fbListen("/preproductionTemplates/fantasticExample", d => setExample(typeof d === "string" ? d : ""));
+      setLoading(false);
+    });
+    return () => { u1(); u2(); };
+  }, []);
+
+  const save = () => {
+    setSaving(true);
+    fbSet("/preproductionTemplates/socialOrganicPrompt", prompt);
+    fbSet("/preproductionTemplates/fantasticExample", example);
+    setTimeout(() => { setSaving(false); onClose(); }, 200);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "var(--card)", borderRadius: 12, padding: 22, maxWidth: 960, width: "92%", maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Script Builder prompts</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              Overrides the hardcoded default prompt in /api/social-organic.js. Takes effect on the next "Generate brief" without a redeploy.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer" }}>×</button>
+        </div>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>Loading…</div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 5 }}>System prompt</label>
+              <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={12}
+                style={{ ...inputSt, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, resize: "vertical" }}
+                placeholder="Leave empty to use the hardcoded default in api/social-organic.js." />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 5 }}>Fantastic example (few-shot)</label>
+              <textarea value={example} onChange={e => setExample(e.target.value)} rows={10}
+                style={{ ...inputSt, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, resize: "vertical" }}
+                placeholder="Paste a known-great past preproduction doc here; it is included as a few-shot example." />
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={onClose} style={btnSecondary}>Cancel</button>
+              <button onClick={save} disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : "Save"}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

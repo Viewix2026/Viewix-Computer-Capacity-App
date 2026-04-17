@@ -68,7 +68,7 @@ export function onFB(cb) {
 }
 
 export function fbSet(p, v) {
-  if (db) db.ref(p).set(v);
+  if (db) db.ref(p).set(v).catch(e => console.error("Firebase set failed", p, e));
 }
 
 export function fbListen(p, cb) {

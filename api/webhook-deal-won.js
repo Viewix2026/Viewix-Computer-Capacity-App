@@ -218,6 +218,11 @@ export default async function handler(req, res) {
     if (socialRetainerTiers.some(t => dealTypeLower.includes(t))) {
       const projectId = `social_${Date.now()}`;
       const tier = socialRetainerTiers.find(t => dealTypeLower.includes(t));
+      // Persist deal-level fields mirror of the Meta Ads branch (above):
+      // numberOfVideos drives the target count in the Select step (Phase 4),
+      // videoType/dealValue/attioCompanyId feed the Phase 5 Script Builder
+      // context. Legacy projects without these fields fall back to an
+      // in-app videoCountOverride input.
       await fbSet(`/preproduction/socialOrganic/${projectId}`, {
         id: projectId,
         shortId: makeShortId(),
@@ -225,6 +230,17 @@ export default async function handler(req, res) {
         packageTier: tier,
         status: "draft",
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        attioCompanyId: companyId || null,
+        dealValue: dealValue || null,
+        videoType: videoType || null,
+        numberOfVideos: parseInt(numberOfVideos) || null,
+        stage: "scrape",
+        performanceMultiplier: 2,
+        videoReviews: {},
+        shortlistedFormats: {},
+        selectedFormats: [],
+        videoCountOverride: null,
       });
       results.preproduction = "socialOrganic created";
     }

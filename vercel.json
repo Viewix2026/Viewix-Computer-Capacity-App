@@ -11,6 +11,9 @@
     },
     "api/fathom-webhook.js": {
       "maxDuration": 120
+    },
+    "api/whisper.js": {
+      "maxDuration": 60
     }
   },
   "crons": [

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen } from "../firebase";
 import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
+import { FormatLibrary } from "./FormatLibrary";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 
 // ─── Constants ───
@@ -100,7 +101,7 @@ function EditModal({ title, onClose, children }) {
 }
 
 // ─── Main Component ───
-export function Preproduction() {
+export function Preproduction({ role, isFounder } = {}) {
   const [subTab, setSubTab] = useState("metaAds");
   const [projects, setProjects] = useState({});
   const [activeProjectId, setActiveProjectId] = useState(null);
@@ -983,6 +984,15 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 color: subTab === "runsheets" ? "#fff" : "var(--muted)",
               }}
             >Runsheets</button>
+            <button
+              onClick={() => setSubTab("formatLibrary")}
+              style={{
+                padding: "5px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", fontFamily: "inherit",
+                background: subTab === "formatLibrary" ? "var(--accent)" : "transparent",
+                color: subTab === "formatLibrary" ? "#fff" : "var(--muted)",
+              }}
+            >Format Library</button>
           </div>
         </div>
         {subTab === "metaAds" && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -1035,6 +1045,9 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         {subTab === "socialOrganic" && <SocialOrganicResearch accounts={accounts} />}
 
         {subTab === "runsheets" && <Runsheets accounts={accounts} projects={projects} />}
+
+        {/* Format Library — global, cross-project. Producers contribute during Phase 2 shortlisting. */}
+        {subTab === "formatLibrary" && <FormatLibrary role={role} isFounder={isFounder} />}
 
         {/* Meta Ads project cards */}
         {subTab === "metaAds" && (
