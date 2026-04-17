@@ -13,6 +13,8 @@ import { onFB, fbSet, fbListen, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
+import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewriteModal";
+import { DescriptionField } from "./shared/DescriptionField";
 
 // ─── Constants ───
 const STATUS_COLORS = {
@@ -241,10 +243,10 @@ export function SocialOrganicResearch({ accounts }) {
                 {handleCount > 0 && <Badge text={`${handleCount} handle${handleCount === 1 ? "" : "s"}`} colors={{ bg: "rgba(59,130,246,0.12)", fg: "#3B82F6" }} />}
                 {postCount > 0 && <Badge text={`${postCount} posts`} colors={{ bg: "rgba(139,92,246,0.12)", fg: "#8B5CF6" }} />}
                 {(() => {
-                  const s = effectiveStage(p);
-                  if (s === "scrape") return null;
-                  const stageLabel = { review: "In review", shortlist: "Shortlisting", select: "Selecting", script: "Script" }[s] || s;
-                  return <Badge text={stageLabel} colors={{ bg: "rgba(34,197,94,0.12)", fg: "#22C55E" }} />;
+                  const t = p.tab || (p.stage ? "legacy" : null);
+                  if (!t || t === "brandTruth" || t === "legacy") return null;
+                  const label = { research: "Researching", clientResearch: "Client research", videoReview: "Reviewing", shortlist: "Shortlisting", select: "Selecting", script: "Scripting", done: "Delivered" }[t] || t;
+                  return <Badge text={label} colors={{ bg: "rgba(34,197,94,0.12)", fg: "#22C55E" }} />;
                 })()}
               </div>
               {p.inputs?.competitors?.length > 0 && (
@@ -410,8 +412,35 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
     }
   };
 
-  const posts = Array.isArray(project.posts) ? project.posts : [];
-  const stage = effectiveStage(project);
+  // One-shot migration: legacy projects (5-stage flow) have no `tab` field.
+  // Per the approved plan, we keep the project card but wipe all stage-
+  // specific data and land the producer on Tab 1 (Brand Truth) to restart.
+  // Fires once per legacy project the first time it's opened in the new UI.
+  const migrated = useRef(false);
+  useEffect(() => {
+    if (migrated.current) return;
+    if (project.tab) return;  // already on new schema
+    migrated.current = true;
+    const preserved = {
+      id: project.id,
+      shortId: project.shortId,
+      companyName: project.companyName,
+      attioCompanyId: project.attioCompanyId || null,
+      packageTier: project.packageTier || null,
+      videoType: project.videoType || null,
+      numberOfVideos: project.numberOfVideos || null,
+      dealValue: project.dealValue || null,
+      createdAt: project.createdAt,
+      // Fresh 7-tab state:
+      tab: "brandTruth",
+      approvals: {},
+      status: "draft",
+      updatedAt: new Date().toISOString(),
+    };
+    fbSet(`/preproduction/socialOrganic/${project.id}`, preserved);
+  }, [project.id, project.tab]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tab = effectiveTab(project);
 
   return (
     <div>
@@ -422,7 +451,10 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
           {logo && <img key={logo + lbg} src={logo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 30, borderRadius: 4, objectFit: "contain", background: lbg, padding: 3 }} />}
           <div>
             <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>{project.companyName}</div>
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>Competitor research · {project.createdAt ? formatDate(project.createdAt) : ""}</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>
+              Social Organic preproduction · {project.createdAt ? formatDate(project.createdAt) : ""}
+              {project.numberOfVideos ? ` · ${project.numberOfVideos} videos` : ""}
+            </div>
           </div>
           <Badge text={STATUS_LABELS[project.status] || project.status} colors={STATUS_COLORS[project.status]} />
         </div>
@@ -436,105 +468,105 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         </div>
       </div>
 
-      {/* Five-stage stepper (Phase 1 of the producer-driven workflow).
-          For legacy projects with no `stage` field we infer it from posts length. */}
-      <StepperBar project={project} onChange={(stage) => onPatch({ stage })} />
+      {/* 7-tab producer workflow. Each tab unlocks only once the previous
+          one has an approval timestamp in `project.approvals`. */}
+      <TabBar project={project} onChange={(nextTab) => onPatch({ tab: nextTab })} />
 
-      {stage === "scrape" && (
-        <>
-          <InputsSection
-            project={project}
-            linkedAccount={linkedAccount}
-            onPatchInputs={patchInputs}
-          />
-          <ActionBar
-            project={project}
-            scraping={scraping}
-            onScrape={runScrape}
-            scrapeError={scrapeError}
-          />
-          {posts.length > 0 && <PostsGrid posts={posts} handleStats={project.handleStats || {}} projectId={project.id} />}
-          {posts.length > 0 && posts.some(p => p.format) && (
-            <div style={{ marginTop: 16, padding: "12px 14px", background: "var(--accent-soft)", borderRadius: 8, border: "1px solid var(--accent)", fontSize: 12, color: "var(--fg)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span>Scrape + classify complete. Move to Review to tick the videos worth shortlisting.</span>
-              <button onClick={() => onPatch({ stage: "review" })} style={btnPrimary}>Go to Review →</button>
-            </div>
-          )}
-        </>
+      {tab === "brandTruth" && (
+        <TabPlaceholder tabNum={1} title="Brand Truth"
+          hint="Phase B — paste the preproduction meeting transcript + producer notes. Claude generates Brand Truth / Ambitions / Goals / Key Considerations / Target Viewer / Pain Points / Language. Each field is editable with AI rewrite or manual edit." />
       )}
-
-      {stage === "review" && (
-        <ReviewStep project={project} onPatch={onPatch} />
+      {tab === "research" && (
+        <TabPlaceholder tabNum={2} title="Format Research"
+          hint="Phase C — two approval gates. Stage A kicks off an async scrape of the client's own Instagram reels + follower counts for IG/TikTok/YouTube. Stage B asks Claude to suggest competitor handles + keywords, then triggers an async 120-video scrape." />
       )}
-
-      {stage === "shortlist" && (
-        <ShortlistStep project={project} onPatch={onPatch} />
+      {tab === "clientResearch" && (
+        <TabPlaceholder tabNum={3} title="Client Research"
+          hint="Phase D — top 5 client videos by views, follower counts, average views. Producer fills a mandatory key-takeaways text area before approving." />
       )}
-
-      {stage === "select" && (
-        <SocialOrganicSelect project={project} onPatch={onPatch} />
+      {tab === "videoReview" && (
+        <TabPlaceholder tabNum={4} title="Video Format Review"
+          hint="Phase E — top 25 over-performing videos from the 120-video scrape. Tick / cross, optionally add extra video links, then approve to move to Shortlist." />
       )}
-
-      {stage === "script" && (
-        <ScriptBuilderStep project={project} onPatch={onPatch} />
+      {tab === "shortlist" && (
+        <TabPlaceholder tabNum={5} title="Format Shortlist"
+          hint="Phase E — ticked videos each get a format definition via Whisper + text. Saves into the global Format Library." />
+      )}
+      {tab === "select" && (
+        <TabPlaceholder tabNum={6} title="Format Selection"
+          hint="Phase F — AI pre-selects formats based on brand truth, ticked videos, and total video count. Producer drags between panels to refine. Category filter: Suggested / Recently Added / Over Performers." />
+      )}
+      {tab === "script" && (
+        <TabPlaceholder tabNum={7} title="Scripting"
+          hint="Phase G — Claude generates the script table per video. Cell-level AI rewrite + manual edit. Clients can view and leave feedback via a share URL. Push to Deliveries when approved." />
+      )}
+      {tab === "done" && (
+        <TabPlaceholder tabNum={8} title="Done"
+          hint="Project pushed to Deliveries." />
       )}
     </div>
   );
 }
 
-// Stage is stored on the project. Legacy projects have no `stage` field —
-// derive one from the posts state so the UI doesn't strand them on a blank page.
-function effectiveStage(project) {
-  if (project?.stage) return project.stage;
-  const posts = Array.isArray(project?.posts) ? project.posts : [];
-  if (posts.length > 0 && posts.some(p => p.format)) return "review";
-  return "scrape";
+function TabPlaceholder({ tabNum, title, hint }) {
+  return (
+    <div style={{ padding: 40, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.08em", marginBottom: 8 }}>TAB {tabNum}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: "var(--fg)", marginBottom: 10 }}>{title}</div>
+      <div style={{ fontSize: 12, color: "var(--muted)", maxWidth: 560, margin: "0 auto", lineHeight: 1.6 }}>{hint}</div>
+    </div>
+  );
 }
 
-const STAGES = [
-  { key: "scrape",    label: "Scrape",    num: 1 },
-  { key: "review",    label: "Review",    num: 2 },
-  { key: "shortlist", label: "Shortlist", num: 3 },
-  { key: "select",    label: "Select",    num: 4 },
-  { key: "script",    label: "Script",    num: 5 },
+// Project's current tab. Projects that haven't been migrated yet (legacy
+// 5-stage `stage` field but no `tab`) trigger the migration in ResearchDetail
+// and land on brandTruth; before the migration fires we default to brandTruth
+// so the first render doesn't crash.
+function effectiveTab(project) {
+  return project?.tab || "brandTruth";
+}
+
+export const TABS = [
+  { key: "brandTruth",     label: "Brand Truth",     num: 1, prev: null },
+  { key: "research",       label: "Format Research", num: 2, prev: "brandTruth" },
+  { key: "clientResearch", label: "Client Research", num: 3, prev: "research" },
+  { key: "videoReview",    label: "Video Review",    num: 4, prev: "clientResearch" },
+  { key: "shortlist",      label: "Shortlist",       num: 5, prev: "videoReview" },
+  { key: "select",         label: "Selection",       num: 6, prev: "shortlist" },
+  { key: "script",         label: "Scripting",       num: 7, prev: "select" },
 ];
 
-function StepperBar({ project, onChange }) {
-  const current = effectiveStage(project);
-  const currentIdx = STAGES.findIndex(s => s.key === current);
-  const posts = Array.isArray(project?.posts) ? project.posts : [];
-  const hasClassified = posts.some(p => p.format);
-  const reviewCount = Object.values(project?.videoReviews || {}).filter(r => r?.status === "ticked").length;
-  const shortlistCount = Object.values(project?.shortlistedFormats || {}).filter(Boolean).length;
-  const selectedCount = Array.isArray(project?.selectedFormats) ? project.selectedFormats.length : 0;
+// A tab is reachable iff the previous tab has an approval timestamp.
+// Tab 1 is always reachable. This enforces the producer-approval gate without
+// tracking per-tab reachability logic in each component.
+export function isTabReachable(project, tabKey) {
+  const tab = TABS.find(t => t.key === tabKey);
+  if (!tab) return false;
+  if (!tab.prev) return true;
+  return !!project?.approvals?.[tab.prev];
+}
 
-  // A stage is reachable iff the user has cleared the prerequisite.
-  // Prevents jumping to "Select" before anything is shortlisted.
-  const reachable = (idx) => {
-    if (idx === 0) return true;  // always can go back to scrape
-    if (idx === 1) return hasClassified;
-    if (idx === 2) return hasClassified && reviewCount > 0;
-    if (idx === 3) return shortlistCount > 0;
-    if (idx === 4) return selectedCount > 0 || !!project?.preproductionDoc;
-    return false;
-  };
+function TabBar({ project, onChange }) {
+  const current = effectiveTab(project);
+  const currentIdx = TABS.findIndex(s => s.key === current);
+  const approvals = project?.approvals || {};
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 6, overflowX: "auto" }}>
-      {STAGES.map((s, idx) => {
+      {TABS.map((s, idx) => {
         const isActive = idx === currentIdx;
-        const isDone = idx < currentIdx;
-        const canReach = reachable(idx);
+        const isDone = !!approvals[s.key];
+        const canReach = isTabReachable(project, s.key);
         return (
           <button
             key={s.key}
             onClick={() => canReach && onChange(s.key)}
             disabled={!canReach}
-            title={!canReach ? "Complete the previous stage first" : `Go to ${s.label}`}
+            title={!canReach ? `Approve ${TABS.find(t => t.key === s.prev)?.label} first` : `Go to ${s.label}`}
             style={{
               flex: 1, minWidth: 100, padding: "8px 12px", borderRadius: 6,
               border: "none", background: isActive ? "var(--accent)" : "transparent",
-              color: isActive ? "#fff" : isDone ? "var(--accent)" : canReach ? "var(--fg)" : "var(--muted)",
+              color: isActive ? "#fff" : isDone ? "#22C55E" : canReach ? "var(--fg)" : "var(--muted)",
               fontSize: 12, fontWeight: 700, cursor: canReach ? "pointer" : "not-allowed",
               fontFamily: "inherit", opacity: canReach ? 1 : 0.5,
               display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
@@ -547,17 +579,6 @@ function StepperBar({ project, onChange }) {
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function ComingSoonStep({ title, hint, onBack }) {
-  return (
-    <div style={{ padding: 40, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
-      <div style={{ fontSize: 28, marginBottom: 10 }}>🚧</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>{title} — coming soon</div>
-      <div style={{ fontSize: 12, color: "var(--muted)", maxWidth: 520, margin: "0 auto 16px", lineHeight: 1.5 }}>{hint}</div>
-      <button onClick={onBack} style={btnSecondary}>← Back</button>
     </div>
   );
 }
@@ -2052,95 +2073,6 @@ function ModeToggle({ label, active, onClick, disabled }) {
   );
 }
 
-// Textarea with a mic button that hits /api/whisper for voice-to-text.
-// Separate component so Video analysis / Filming / Structure each have
-// their own recorder state.
-function DescriptionField({ label, hint, value, onChange }) {
-  const { status, elapsed, blob, error, start, stop, reset, softCapSeconds } = useAudioRecorder();
-  const [transcribing, setTranscribing] = useState(false);
-  const [transcribeError, setTranscribeError] = useState(null);
-
-  // Auto-transcribe as soon as the recorder finishes — the producer's
-  // mental model is "hit mic, speak, hit mic again, see text appear".
-  // We deliberately don't auto-fire if the blob is < 500B (usually means
-  // they tapped mic twice by accident).
-  const handledBlobRef = useRef(null);
-  useEffect(() => {
-    if (!blob || blob === handledBlobRef.current) return;
-    if (blob.size < 500) { reset(); return; }
-    handledBlobRef.current = blob;
-    (async () => {
-      setTranscribing(true);
-      setTranscribeError(null);
-      try {
-        const form = new FormData();
-        // OpenAI requires a filename — .webm is what MediaRecorder gives us.
-        form.append("file", blob, "audio.webm");
-        form.append("model", "whisper-1");
-        const r = await fetch("/api/whisper", { method: "POST", body: form });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
-        if (d.text) {
-          // Append to existing text rather than replace — supports "record a
-          // follow-up thought" UX.
-          const join = value && !value.endsWith(" ") ? " " : "";
-          onChange(`${value}${join}${d.text}`.trim());
-        }
-      } catch (e) {
-        setTranscribeError(e.message);
-      } finally {
-        setTranscribing(false);
-        reset();
-      }
-    })();
-  }, [blob]);  // eslint-disable-line react-hooks/exhaustive-deps
-
-  const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
-  const ss = String(elapsed % 60).padStart(2, "0");
-
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <Label>{label}</Label>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {transcribing && <span style={{ fontSize: 10, color: "var(--accent)" }}>Transcribing…</span>}
-          {status === "recording" && (
-            <span style={{ fontSize: 10, color: "#EF4444", fontFamily: "'JetBrains Mono',monospace" }}>
-              ● REC {mm}:{ss} / {Math.floor(softCapSeconds / 60)}:00
-            </span>
-          )}
-          <button
-            onClick={() => status === "recording" ? stop() : start()}
-            disabled={transcribing}
-            title={status === "recording" ? "Stop recording" : "Record voice memo"}
-            style={{
-              width: 28, height: 28, borderRadius: "50%",
-              border: "1px solid var(--border)",
-              background: status === "recording" ? "#EF4444" : "var(--bg)",
-              color: status === "recording" ? "#fff" : "var(--fg)",
-              fontSize: 13, cursor: transcribing ? "wait" : "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
-            {status === "recording" ? "■" : "🎤"}
-          </button>
-        </div>
-      </div>
-      <textarea
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={hint}
-        rows={3}
-        style={{ ...inputSt, resize: "vertical", fontFamily: "inherit", fontSize: 12 }} />
-      {error && (
-        <div style={{ fontSize: 10, color: "#EF4444", marginTop: 3 }}>Mic error: {error}</div>
-      )}
-      {transcribeError && (
-        <div style={{ fontSize: 10, color: "#EF4444", marginTop: 3 }}>Whisper error: {transcribeError}</div>
-      )}
-    </div>
-  );
-}
-
 // ═══════════════════════════════════════════
 // SCRIPT BUILDER STEP (Phase 5)
 // Claude generates a structured preproduction doc from the selected formats;
@@ -2339,9 +2271,12 @@ function ScriptBuilderStep({ project, onPatch }) {
       </SectionCard>
 
       {rewriteTarget && (
-        <RewriteModal
+        <CellRewriteModal
           target={rewriteTarget}
-          projectId={project.id}
+          fbPathPrefix={`/preproduction/socialOrganic/${project.id}/preproductionDoc`}
+          apiAction="rewriteScriptSection"
+          extraPayload={{ projectId: project.id }}
+          updatedAtPath={`/preproduction/socialOrganic/${project.id}/updatedAt`}
           onClose={() => setRewriteTarget(null)}
         />
       )}
@@ -2378,140 +2313,3 @@ function SectionCard({ title, children }) {
   );
 }
 
-function EditableField({ label, path, value, onEdit, multi }) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
-        {label}
-      </div>
-      <Clickable value={value} onClick={() => onEdit(path, label, value)} multi={multi} />
-    </div>
-  );
-}
-
-// A "cell" that looks like static text but opens the rewrite modal on click.
-// Deliberately no border so the doc reads like a brief, not a form. Hover
-// adds a subtle outline as the affordance.
-function Clickable({ value, onClick, multi }) {
-  const [hover, setHover] = useState(false);
-  const empty = !value || !value.toString().trim();
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        padding: "6px 8px", borderRadius: 4,
-        background: hover ? "var(--bg)" : "transparent",
-        outline: hover ? "1px solid var(--accent)" : "1px solid transparent",
-        cursor: "pointer",
-        fontSize: 12, color: empty ? "var(--muted)" : "var(--fg)",
-        lineHeight: 1.5,
-        whiteSpace: multi ? "pre-wrap" : "normal",
-        minHeight: 20,
-        fontStyle: empty ? "italic" : "normal",
-        transition: "outline 0.1s, background 0.1s",
-      }}>
-      {empty ? "(empty — click to fill)" : value}
-    </div>
-  );
-}
-
-// Two-mode modal: AI rewrite with an instruction, or manual edit. Mirrors
-// Preproduction.jsx:413-480 verbatim so the producer muscle-memory from
-// Meta Ads transfers straight across.
-function RewriteModal({ target, projectId, onClose }) {
-  const [mode, setMode] = useState("ai");  // "ai" | "manual"
-  const [instruction, setInstruction] = useState("");
-  const [manualValue, setManualValue] = useState(Array.isArray(target.currentValue) ? target.currentValue.join("\n") : (target.currentValue || ""));
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState(null);
-
-  const aiSubmit = async () => {
-    if (!instruction.trim()) return;
-    setWorking(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/social-organic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "rewriteScriptSection",
-          projectId,
-          path: target.path,
-          instruction,
-          currentValue: Array.isArray(target.currentValue) ? target.currentValue.join("\n") : (target.currentValue || ""),
-        }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      onClose();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  const manualSubmit = () => {
-    // Write the same path directly. We reuse the same rewriteHistory entry
-    // shape so the audit trail is consistent with AI rewrites.
-    const fbPath = `/preproduction/socialOrganic/${projectId}/preproductionDoc/${target.path.replace(/\./g, "/")}`;
-    fbSet(fbPath, manualValue);
-    fbSet(`/preproduction/socialOrganic/${projectId}/updatedAt`, new Date().toISOString());
-    onClose();
-  };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
-      <div style={{ background: "var(--card)", borderRadius: 12, padding: 22, maxWidth: 720, width: "92%", maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{target.label}</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer" }}>×</button>
-        </div>
-
-        {/* Current value preview */}
-        <div style={{ marginBottom: 12, padding: "10px 14px", background: "var(--bg)", borderRadius: 6, fontSize: 12, color: "var(--muted)", maxHeight: 120, overflow: "auto" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 4, textTransform: "uppercase" }}>Current</div>
-          {target.currentValue ? (Array.isArray(target.currentValue) ? target.currentValue.join("\n") : target.currentValue) : "(empty)"}
-        </div>
-
-        <div style={{ display: "flex", gap: 2, marginBottom: 12, background: "var(--bg)", borderRadius: 6, padding: 3, width: "fit-content" }}>
-          <button onClick={() => setMode("ai")} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "ai" ? "var(--accent)" : "transparent", color: mode === "ai" ? "#fff" : "var(--muted)" }}>AI rewrite</button>
-          <button onClick={() => setMode("manual")} style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "manual" ? "var(--accent)" : "transparent", color: mode === "manual" ? "#fff" : "var(--muted)" }}>Manual edit</button>
-        </div>
-
-        {mode === "ai" ? (
-          <>
-            <textarea value={instruction} onChange={e => setInstruction(e.target.value)}
-              placeholder={`e.g. "Make this more direct, no fluff" or "Tie this back to the client's subject-matter expertise"`}
-              rows={3} autoFocus
-              style={{ ...inputSt, fontSize: 13, marginBottom: 10, resize: "vertical" }} />
-            {error && (
-              <div style={{ marginBottom: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
-                {error}
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={onClose} style={btnSecondary}>Cancel</button>
-              <button onClick={aiSubmit} disabled={working || !instruction.trim()}
-                style={{ ...btnPrimary, opacity: (working || !instruction.trim()) ? 0.6 : 1 }}>
-                {working ? "Rewriting…" : "Rewrite"}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <textarea value={manualValue} onChange={e => setManualValue(e.target.value)}
-              rows={6} autoFocus
-              style={{ ...inputSt, fontSize: 13, marginBottom: 10, resize: "vertical", minHeight: 140, fontFamily: "inherit" }} />
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={onClose} style={btnSecondary}>Cancel</button>
-              <button onClick={manualSubmit} style={btnPrimary}>Save</button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}

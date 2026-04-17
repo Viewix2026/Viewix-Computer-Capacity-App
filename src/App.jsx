@@ -260,7 +260,7 @@ export default function App(){
       {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
-      {(isFounder||role==="lead")&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
+      {isFounder&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
@@ -434,7 +434,7 @@ export default function App(){
     </>)}
 
     {/* ═══ PREPRODUCTION ═══ */}
-    {tool==="preproduction"&&(isFounder||role==="lead")&&(<Preproduction role={role} isFounder={isFounder}/>)}
+    {tool==="preproduction"&&isFounder&&(<Preproduction role={role} isFounder={isFounder}/>)}
 
     {/* ═══ RESOURCES ═══ */}
     {tool==="resources"&&(isFounder||role==="closer")&&(<>
