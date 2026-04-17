@@ -19,7 +19,6 @@ import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./co
 import { Grid } from "./components/Grid";
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { EditorDashboard } from "./components/EditorDashboard";
-import { BuyerJourney } from "./components/BuyerJourney";
 import { AccountsDashboard } from "./components/AccountsDashboard";
 import { Founders } from "./components/Founders";
 import { Home } from "./components/Home";
@@ -259,7 +258,6 @@ export default function App(){
       {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
-      {isFounder&&<SideIcon icon="🧭" label="Buyer Journey" active={tool==="buyerjourney"} onClick={()=>setTool("buyerjourney")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
       {(isFounder||role==="lead")&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
@@ -454,11 +452,8 @@ export default function App(){
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}
 
-    {/* ═══ BUYER JOURNEY ═══ */}
-    {tool==="buyerjourney"&&isFounder&&(<BuyerJourney data={buyerJourney} onChange={setBuyerJourney}/>)}
-
-    {/* ═══ ACCOUNTS ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {/* ═══ ACCOUNTS (includes Buyer Journey sub-tab) ═══ */}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} buyerJourney={buyerJourney} setBuyerJourney={setBuyerJourney} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ DELIVERIES ═══ */}
     {tool==="deliveries"&&isFounder&&(<Deliveries deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>)}

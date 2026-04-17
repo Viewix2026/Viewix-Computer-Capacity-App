@@ -2,6 +2,7 @@ import { useState } from "react";
 import { fbSet } from "../firebase";
 import { BTN, TH, TD } from "../config";
 import { logoBg } from "../utils";
+import { BuyerJourney } from "./BuyerJourney";
 
 const MILESTONE_DEFS = [
   { key: "signing", label: "Signing" },
@@ -79,7 +80,7 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors, clients, setClients, onDeletePath }) {
+export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors, clients, setClients, onDeletePath, buyerJourney, setBuyerJourney }) {
   const [tab, setTab] = useState("clients");
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -220,6 +221,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
           <button onClick={() => setTab("clients")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: tab === "clients" ? "var(--card)" : "transparent", color: tab === "clients" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Clients</button>
           <button onClick={() => setTab("turnaround")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: tab === "turnaround" ? "var(--card)" : "transparent", color: tab === "turnaround" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Turnaround</button>
+          <button onClick={() => setTab("buyerjourney")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: tab === "buyerjourney" ? "var(--card)" : "transparent", color: tab === "buyerjourney" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Buyer Journey</button>
         </div>
         {tab === "clients" && (<div style={{ display: "flex", gap: 6 }}>
           <button onClick={doSync} disabled={syncing} style={{ ...BTN, background: "transparent", color: "var(--accent)", border: "1px solid var(--border)" }}>{syncing ? "Syncing..." : "Sync from Attio"}</button>
@@ -258,6 +260,11 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
           </div>
         </div>
       </div>
+    )}
+
+    {/* ═══ BUYER JOURNEY TAB ═══ */}
+    {tab === "buyerjourney" && (
+      <BuyerJourney data={buyerJourney || {}} onChange={setBuyerJourney} />
     )}
 
     {/* ═══ CLIENTS TAB ═══ */}
