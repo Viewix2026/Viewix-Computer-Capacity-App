@@ -2,17 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { signInWithRole } from "../firebase";
 import { Logo } from "./Logo";
 
-// Temporary fallback map — used if /api/auth is unreachable (e.g. FIREBASE_SERVICE_ACCOUNT
-// env var not yet set on Vercel). Remove once Firebase auth setup is confirmed working.
-const FALLBACK_PW_TO_ROLE = {
-  "Sanpel": "founders",
-  "Push": "founder",
-  "Close": "closer",
-  "Letsgo": "editor",
-  "Lead": "lead",
-  "Trial": "trial",
-};
-
 export function Login({ onLogin }) {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState(false);
@@ -29,15 +18,7 @@ export function Login({ onLogin }) {
       setErr(false);
       onLogin(role);
     } catch (e) {
-      // Fallback: if Firebase auth isn't configured yet, use the old role map
-      const fallbackRole = FALLBACK_PW_TO_ROLE[pw];
-      if (fallbackRole) {
-        console.warn("Firebase auth unavailable, using fallback:", e.message);
-        setErr(false);
-        onLogin(fallbackRole);
-        setBusy(false);
-        return;
-      }
+      console.warn("Login failed:", e.message);
       setErr(true);
       setShake(true);
       setTimeout(() => setShake(false), 500);
