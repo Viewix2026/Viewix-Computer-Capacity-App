@@ -443,6 +443,17 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
 
   const tab = effectiveTab(project);
 
+  // Track every tab the producer has landed on. Any visited tab stays
+  // clickable in the TabBar forever — so jumping back to check Tab 2's
+  // scrape status or Tab 3's key takeaways doesn't require bouncing
+  // through the "→ Next" buttons at the bottom of each step.
+  useEffect(() => {
+    if (!tab) return;
+    const visited = Array.isArray(project.visitedTabs) ? project.visitedTabs : [];
+    if (visited.includes(tab)) return;
+    fbSet(`/preproduction/socialOrganic/${project.id}/visitedTabs`, [...visited, tab]);
+  }, [tab, project.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Project-wide scrape auto-poll. Runs at the ResearchDetail level (NOT
   // inside the StatusPill) so it keeps firing when the producer navigates
   // to Tab 3+ while a scrape is still running. Silent — the backend flips
@@ -562,12 +573,17 @@ export const TABS = [
   { key: "script",         label: "Scripting",       num: 7, prev: "select" },
 ];
 
-// A tab is reachable iff its prerequisite approval key is set.
+// A tab is reachable iff its prerequisite approval key is set OR the
+// producer has already visited it (free to revisit once seen). The visit
+// bit is the UX fix: producers were funnelled forward through the "→ Next"
+// buttons and couldn't hop back to older tabs without that flow.
 export function isTabReachable(project, tabKey) {
   const tab = TABS.find(t => t.key === tabKey);
   if (!tab) return false;
   if (!tab.prev) return true;
-  return !!project?.approvals?.[tab.prev];
+  if (!!project?.approvals?.[tab.prev]) return true;
+  if (Array.isArray(project?.visitedTabs) && project.visitedTabs.includes(tabKey)) return true;
+  return false;
 }
 
 function TabBar({ project, onChange }) {
