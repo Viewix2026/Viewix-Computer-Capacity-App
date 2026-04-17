@@ -413,6 +413,29 @@ function SeedImporter({ existing, categories, onClose }) {
   const [raw, setRaw] = useState("");
   const [parsed, setParsed] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [opusParsing, setOpusParsing] = useState(false);
+  const [opusError, setOpusError] = useState(null);
+
+  // Opus-powered parse — hands the raw text to the smartParseFormats API
+  // action, which runs Claude Opus against a structured extraction prompt.
+  // Works much better than the heuristic on loose / unstructured docs.
+  const parseWithOpus = async () => {
+    setOpusError(null); setOpusParsing(true);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "smartParseFormats", rawText: raw }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      setParsed(d.formats || []);
+    } catch (e) {
+      setOpusError(e.message);
+    } finally {
+      setOpusParsing(false);
+    }
+  };
 
   const parse = () => {
     // Simple heuristic: blocks are separated by 2+ newlines. Each block's
@@ -468,7 +491,8 @@ function SeedImporter({ existing, categories, onClose }) {
           filmingInstructions: p.filmingInstructions,
           structureInstructions: p.structureInstructions,
           examples: (p.examples || []).map(e => ({ ...e, addedAt: now })),
-          category: null, tags: [],
+          category: null,
+          tags: Array.isArray(p.tags) ? p.tags : [],
           sourceProjectId: null, sourceClient: "Seed import",
           createdAt: dupe?.createdAt || now,
           createdBy,
@@ -503,12 +527,27 @@ function SeedImporter({ existing, categories, onClose }) {
         {!parsed ? (
           <>
             <textarea value={raw} onChange={e => setRaw(e.target.value)}
-              placeholder={`Format Name\nFilming: …\nStructure: …\nGeneral analysis…\nhttps://instagram.com/reel/…\n\nNext Format\n…`}
+              placeholder={`Paste the full "2026 Social Reels Formats" doc here. Claude Opus handles unstructured content well — Filming: and Structure: labels aren't required.`}
               rows={16}
               style={{ ...inputSt, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }} />
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+            {opusError && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+                {opusError}
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
               <button onClick={onClose} style={btnSecondary}>Cancel</button>
-              <button onClick={parse} disabled={!raw.trim()} style={{ ...btnPrimary, opacity: raw.trim() ? 1 : 0.5 }}>Preview</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={parse} disabled={!raw.trim()} style={{ ...btnSecondary, opacity: raw.trim() ? 1 : 0.5 }}
+                  title="Quick heuristic parser — works if the doc uses 'Filming:' / 'Structure:' section labels.">
+                  Heuristic preview
+                </button>
+                <button onClick={parseWithOpus} disabled={!raw.trim() || opusParsing}
+                  style={{ ...btnPrimary, opacity: (raw.trim() && !opusParsing) ? 1 : 0.5 }}
+                  title="Claude Opus reads the doc, pulls out each format, infers tags. Best for loose or verbose docs.">
+                  {opusParsing ? "Parsing with Opus…" : "Parse with Opus"}
+                </button>
+              </div>
             </div>
           </>
         ) : (

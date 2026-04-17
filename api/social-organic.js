@@ -2033,6 +2033,82 @@ async function handlePushToDeliveries(req, res) {
   return res.status(200).json({ success: true, deliveryId, videoCount: videos.length });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// FORMAT LIBRARY — Opus-powered seed import
+// Takes raw text from the Seed Importer modal, asks Claude Opus to
+// extract structured format entries, returns them for preview. The
+// frontend commits to /formatLibrary on user approval (same path the
+// heuristic parser uses, so nothing downstream changes).
+// ═══════════════════════════════════════════════════════════════════
+async function handleSmartParseFormats(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { rawText } = req.body || {};
+  if (!rawText || rawText.trim().length < 20) {
+    return res.status(400).json({ error: "Paste the raw format text first (min 20 chars)" });
+  }
+
+  const systemPrompt = `You structure social video format documentation for Viewix's format library. The producer has pasted raw text from a Google Doc / Notion / Word doc describing many formats. Extract each one into a JSON object.
+
+RULES:
+- Return a JSON array, one object per distinct format. No markdown, no preamble, no code fences.
+- Each format has these fields (every field required, empty string if unknown):
+  - "name": the format's title, exactly as written.
+  - "videoAnalysis": the "why it works" / "what is it" breakdown. Use the doc's existing prose verbatim where possible.
+  - "filmingInstructions": how the crew shoots it (camera setup, clothing cues, lighting, location). Pull from "Filming:" sections if present.
+  - "structureInstructions": hook → beats → close. Pull from "Structure:" sections if present.
+  - "examples": array of URLs referenced for this format (instagram.com, tiktok.com, youtube.com). Strip query strings where reasonable but keep the post path.
+  - "tags": 2-5 short lowercase tags you infer from the format (no #, no spaces ideally, use hyphens).
+- If a format's description has sections labelled "Filming:" and "Structure:", split them. If it's a single prose block, put it in videoAnalysis and leave filmingInstructions / structureInstructions empty.
+- Preserve the doc's voice — don't paraphrase away specifics.
+- Never use em dashes. Use commas or full stops.`;
+
+  const userMessage = `RAW DOC:
+"""
+${rawText.slice(0, 40000)}
+"""
+
+Return the JSON array now.`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt, userMessage,
+      maxTokens: 16000,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
+  }
+
+  if (!Array.isArray(parsed)) {
+    return res.status(422).json({ error: "Expected an array", rawPreview: JSON.stringify(parsed).slice(0, 500) });
+  }
+
+  // Normalise — guarantee every field exists and is the right shape so the
+  // UI preview doesn't have to defensively handle missing fields.
+  const normalised = parsed.map(f => ({
+    name: (f.name || "").toString().trim(),
+    videoAnalysis: (f.videoAnalysis || "").toString().trim(),
+    filmingInstructions: (f.filmingInstructions || "").toString().trim(),
+    structureInstructions: (f.structureInstructions || "").toString().trim(),
+    examples: Array.isArray(f.examples)
+      ? f.examples.map(e => (typeof e === "string" ? { url: e.trim() } : { url: (e?.url || "").toString().trim() })).filter(e => e.url)
+      : [],
+    tags: Array.isArray(f.tags) ? f.tags.map(t => (t || "").toString().trim()).filter(Boolean) : [],
+  })).filter(f => f.name);
+
+  return res.status(200).json({ success: true, formats: normalised });
+}
+
 // ─── Dispatcher ───
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -2080,6 +2156,8 @@ export default async function handler(req, res) {
         return await handleSuggestFormats(req, res);
       case "pushToDeliveries":
         return await handlePushToDeliveries(req, res);
+      case "smartParseFormats":
+        return await handleSmartParseFormats(req, res);
       case "refreshScrapes":
         return await handleRefreshScrapes(req, res);
       case "resetScrape":
