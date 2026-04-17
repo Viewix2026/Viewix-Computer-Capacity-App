@@ -21,7 +21,11 @@ import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
-const APIFY_ACTOR = "apidojo~instagram-scraper";  // pay-per-result, cheaper than apify/instagram-scraper
+// Official Apify Instagram scraper — the input schema matches what we send
+// (directUrls + resultsLimit). The apidojo version is cheaper but uses a
+// different schema (usernames + limit); if cost becomes an issue we can
+// swap back with a matching input translator.
+const APIFY_ACTOR = "apify~instagram-scraper";
 const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000;  // 14 days
 
 // Hard caps (per plan §Cost control)
@@ -755,6 +759,11 @@ async function handleScrape(req, res) {
     try {
       const startedAt = new Date().toISOString();
       const rawItems = await apifyScrape({ handles: [handle], postsPerHandle, from, to, token: APIFY_TOKEN });
+      console.log(`[social-organic] Apify returned ${rawItems.length} raw items for ${handle}`);
+      if (rawItems.length === 0) {
+        // Capture a hint so the producer sees SOMETHING in the UI error
+        errors.push({ handle, error: "Apify returned 0 items. Check the account is public and spelled correctly." });
+      }
       const normalised = rawItems.map(r => normaliseInstagramPost(r, handle));
       const thisCost = +(normalised.length * APIFY_COST_PER_POST).toFixed(4);
       actualCost += thisCost;
@@ -864,6 +873,19 @@ async function handleRunPipeline(req, res) {
     await handleScrape(scrapeReq, shimRes);
     result.scrape = { status: scrapeStatus, ...scrapePayload };
     if (scrapeStatus >= 400) return res.status(scrapeStatus).json({ error: "Scrape phase failed", detail: scrapePayload });
+
+    // Zero-post scrape → bail with a clear message. The classify + synthesise
+    // phases have nothing to work with and would fail more opaquely.
+    if (!scrapePayload?.postsCollected || scrapePayload.postsCollected === 0) {
+      const errDetail = scrapePayload?.errors?.length
+        ? `Apify returned these errors: ${scrapePayload.errors.map(e => `${e.handle}: ${e.error}`).join("; ")}`
+        : "Apify returned 0 posts. The actor may not be finding the handles, or they may be private/banned/restricted. Check the Vercel function logs for the raw Apify response.";
+      return res.status(422).json({
+        error: "Scrape returned 0 posts — nothing to classify or synthesise",
+        detail: errDetail,
+        scrape: scrapePayload,
+      });
+    }
   } else {
     result.scrape = { skipped: true, postCount: existingPosts.length };
   }
