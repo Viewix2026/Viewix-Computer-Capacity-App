@@ -2914,18 +2914,41 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
   const status = scrape?.status || "queued";
   const colour = {
     queued:  { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85", text: "Queued" },
-    running: { bg: "rgba(59,130,246,0.15)",  fg: "#3B82F6", text: "Scraping… (async, you can move on)" },
+    running: { bg: "rgba(59,130,246,0.15)",  fg: "#3B82F6", text: "Scraping…" },
     done:    { bg: "rgba(34,197,94,0.15)",   fg: "#22C55E", text: "Complete" },
     error:   { bg: "rgba(239,68,68,0.15)",   fg: "#EF4444", text: scrape?.error || "Error" },
   }[status] || { bg: "var(--bg)", fg: "var(--muted)", text: status };
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState(null);
-  const [expanded, setExpanded] = useState(false);
 
-  // Refresh is a manual escape hatch — if the Apify webhook drops or
-  // Vercel misses the callback, the producer can force a status check
-  // by polling Apify directly.
+  // Background poll — fires `refreshScrapes` every 20 seconds while status
+  // is "running". This is the core failsafe: if Apify's webhook drops (cold
+  // start, network, secret rotation, anything), the UI still catches the
+  // finished run and flips status to "done" without the producer touching
+  // anything. Completely silent — no spinner, no message.
+  useEffect(() => {
+    if (!projectId) return;
+    if (status !== "running") return;
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        await fetch("/api/social-organic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "refreshScrapes", projectId }),
+        });
+      } catch { /* silent — it retries next tick */ }
+    };
+    // First poll at 30s (typical Apify run time), then every 20s.
+    const initialDelay = setTimeout(poll, 30000);
+    const interval = setInterval(poll, 20000);
+    return () => { cancelled = true; clearTimeout(initialDelay); clearInterval(interval); };
+  }, [projectId, status]);
+
+  // Manual refresh — kept for the rare case the producer wants to force
+  // a check immediately rather than wait for the next auto-poll tick.
   const doRefresh = async () => {
     if (!projectId) return;
     setRefreshing(true); setRefreshMsg(null);
@@ -2941,6 +2964,7 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
       const stillRunning = (d.results || []).filter(x => x.outcome === "still_running").length;
       if (replayed > 0) setRefreshMsg(`Pulled ${replayed} completed run${replayed === 1 ? "" : "s"}.`);
       else if (stillRunning > 0) setRefreshMsg(`Still running at Apify (${stillRunning} run${stillRunning === 1 ? "" : "s"}).`);
+      else if (d.recovered?.length) setRefreshMsg(`Rolled back — retry Approve.`);
       else setRefreshMsg("No in-flight runs to refresh.");
     } catch (e) {
       setRefreshMsg(`Refresh failed: ${e.message}`);
@@ -2950,9 +2974,9 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
     }
   };
 
-  // Running over 90 seconds is our signal to surface the refresh option.
+  // "Taking a while" is a softer nudge — after 120s, not 90s.
   const startedMs = scrape?.startedAt ? new Date(scrape.startedAt).getTime() : 0;
-  const stalled = status === "running" && startedMs && (Date.now() - startedMs) > 90 * 1000;
+  const stalled = status === "running" && startedMs && (Date.now() - startedMs) > 120 * 1000;
 
   return (
     <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -2981,7 +3005,7 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
       )}
       {stalled && !refreshMsg && (
         <span style={{ fontSize: 10, color: "#F59E0B" }}>
-          Running longer than usual — click ↻ Refresh to check Apify directly.
+          Taking longer than usual — still auto-checking in the background.
         </span>
       )}
     </div>
