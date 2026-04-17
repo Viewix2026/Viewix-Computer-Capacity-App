@@ -19,6 +19,7 @@
 //   FIREBASE_SERVICE_ACCOUNT (for admin SDK; falls back to REST if unset)
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { processApifyRun } from "./_apifyProcess.js";
 import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -1902,7 +1903,6 @@ async function handleRefreshScrapes(req, res) {
     });
   }
 
-  const webhookUrl = `${apifyWebhookBase()}/api/apify-webhook?secret=${encodeURIComponent(SECRET)}`;
   const results = [];
 
   for (const [runId, meta] of mine) {
@@ -1922,17 +1922,25 @@ async function handleRefreshScrapes(req, res) {
       const durationMs = startedAt && finishedAt ? (new Date(finishedAt).getTime() - new Date(startedAt).getTime()) : null;
 
       if (apifyStatus === "SUCCEEDED" || apifyStatus === "FAILED" || apifyStatus === "ABORTED" || apifyStatus === "TIMED-OUT" || apifyStatus === "TIMED_OUT") {
-        const wr = await fetch(webhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runId, status: apifyStatus, datasetId }),
-        });
-        const wrText = wr.ok ? null : await wr.text();
+        // Process the run in-process (no HTTP loopback). Previously we fetched
+        // our own /api/apify-webhook which got blocked by Vercel Deployment
+        // Protection — returning an "Authentication Required" HTML page.
+        // Calling the helper directly bypasses all of that.
+        let processResult;
+        let processError = null;
+        try {
+          processResult = await processApifyRun({
+            runId, status: apifyStatus, datasetId, apifyToken: APIFY_TOKEN,
+          });
+        } catch (e) {
+          processError = e.message || String(e);
+        }
         results.push({
           runId, purpose: meta.purpose,
-          outcome: wr.ok ? "replayed" : "replay_failed",
+          outcome: processError ? "replay_failed" : "replayed",
           apifyStatus, exitCode, durationMs,
-          replayDetail: wrText?.slice(0, 200) || null,
+          replayDetail: processError,
+          processOutcome: processResult?.outcome,
           consoleUrl: `https://console.apify.com/actors/runs/${runId}`,
         });
       } else {
