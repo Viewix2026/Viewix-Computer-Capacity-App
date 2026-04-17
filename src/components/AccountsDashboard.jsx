@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { fbSet } from "../firebase";
 import { BTN, TH, TD } from "../config";
 import { logoBg } from "../utils";
@@ -86,6 +86,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
   const [newName, setNewName] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [filterManager, setFilterManager] = useState("all");
+  const [expandedClientId, setExpandedClientId] = useState(null);
 
   const gaps = { ...DEFAULT_GAPS, ...(turnaround || {}) };
   const offsets = computeOffsets(gaps);
@@ -312,7 +313,6 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                   <th style={{ ...TH, position: "sticky", left: 160, zIndex: 10, background: "var(--card)", minWidth: 90, textAlign: "center" }}>Manager</th>
                   <th style={{ ...TH, position: "sticky", left: 250, zIndex: 10, background: "var(--card)", minWidth: 110, textAlign: "center" }}>Project Lead</th>
                   <th style={{ ...TH, minWidth: 130, textAlign: "center" }}>Partnership</th>
-                  <th style={{ ...TH, minWidth: 160, textAlign: "center" }}>Logo</th>
                   <th style={{ ...TH, minWidth: 100, textAlign: "center" }}>Last Contact</th>
                   {MILESTONE_DEFS.map(m => (
                     <th key={m.key} style={{ ...TH, minWidth: 130, textAlign: "center" }}>{m.label}</th>
@@ -324,10 +324,20 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                 {sorted.map(acct => {
                   const cc = contactColor(acct.lastContact);
                   const mc = MANAGER_COLORS[acct.accountManager] || { bg: "var(--bg)", color: "var(--muted)" };
+                  const isExpanded = expandedClientId === acct.id;
+                  // Columns = 3 sticky (client/manager/lead) + partnership + lastContact + milestones + action
+                  const totalCols = 5 + MILESTONE_DEFS.length + 1;
                   return (
-                    <tr key={acct.id}>
+                    <React.Fragment key={acct.id}>
+                    <tr>
                       <td style={{ ...TD, position: "sticky", left: 0, zIndex: 5, background: "var(--card)", fontWeight: 700, color: "var(--fg)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <button
+                            onClick={() => setExpandedClientId(isExpanded ? null : acct.id)}
+                            title={isExpanded ? "Hide details" : "Show details"}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 11, padding: "2px 4px", lineHeight: 1, transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
+                            ▸
+                          </button>
                           {acct.logoUrl && <img key={acct.logoUrl + (acct.logoBg || "")} src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: logoBg(acct.logoBg), padding: 3 }} />}
                           {acct.companyName}
                         </div>
@@ -349,16 +359,6 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                           <option value="">Select</option>
                           {PARTNERSHIP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
-                      </td>
-                      <td style={{ ...TD }}>
-                        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                          <input type="text" value={acct.logoUrl || ""} onChange={e => updateAccount(acct.id, { logoUrl: e.target.value })} placeholder="https://..." style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 11, outline: "none", flex: 1, fontFamily: "inherit", minWidth: 0 }} />
-                          <select value={acct.logoBg || "white"} onChange={e => updateAccount(acct.id, { logoBg: e.target.value })} title="Logo background" style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 10, outline: "none", fontFamily: "inherit", cursor: "pointer" }}>
-                            <option value="white">⬜ White</option>
-                            <option value="dark">⬛ Dark</option>
-                            <option value="transparent">▢ Transparent</option>
-                          </select>
-                        </div>
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
@@ -389,6 +389,48 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                         <button onClick={() => removeClient(acct.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14, padding: "2px 6px" }}>x</button>
                       </td>
                     </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={totalCols} style={{ padding: 0, background: "var(--bg)", borderBottom: "1px solid var(--border)" }}>
+                          <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+                            {/* Logo section */}
+                            <div>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Client Logo</div>
+                              <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                                {/* Preview */}
+                                <div style={{ width: 72, height: 72, borderRadius: 8, border: "1px solid var(--border)", background: logoBg(acct.logoBg), display: "flex", alignItems: "center", justifyContent: "center", padding: 6, flexShrink: 0, overflow: "hidden" }}>
+                                  {acct.logoUrl ? (
+                                    <img key={acct.logoUrl + (acct.logoBg || "")} src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                                  ) : (
+                                    <span style={{ fontSize: 10, color: "var(--muted)", textAlign: "center" }}>No logo</span>
+                                  )}
+                                </div>
+                                <div style={{ flex: 1, display: "grid", gap: 6, minWidth: 0 }}>
+                                  <div>
+                                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 3 }}>URL</label>
+                                    <input type="text" value={acct.logoUrl || ""} onChange={e => updateAccount(acct.id, { logoUrl: e.target.value })} placeholder="https://..." style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", width: "100%", fontFamily: "inherit", boxSizing: "border-box" }} />
+                                  </div>
+                                  <div>
+                                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 3 }}>Background</label>
+                                    <select value={acct.logoBg || "white"} onChange={e => updateAccount(acct.id, { logoBg: e.target.value })} style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit", cursor: "pointer", width: "100%" }}>
+                                      <option value="white">⬜ White</option>
+                                      <option value="dark">⬛ Dark</option>
+                                      <option value="transparent">▢ Transparent</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            {/* Room for future details — Attio ID, notes, etc. */}
+                            <div>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Attio ID</div>
+                              <input type="text" value={acct.attioId || ""} onChange={e => updateAccount(acct.id, { attioId: e.target.value })} placeholder="(not linked)" style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", width: "100%", fontFamily: "'JetBrains Mono',monospace", boxSizing: "border-box" }} />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
