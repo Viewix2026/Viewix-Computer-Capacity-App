@@ -171,7 +171,18 @@ export function MeetingFeedback() {
         <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 24, marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 20, marginBottom: 16 }}>
             <div>
-              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{activeItem.salesperson}</div>
+              <div style={{ fontSize: 11, color: activeItem.salesperson ? "var(--muted)" : "#F59E0B", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
+                {activeItem.salesperson || (
+                  <select
+                    defaultValue=""
+                    onChange={e => { if (e.target.value) fbSet(`/meetingFeedback/${activeItem.id}/salesperson`, e.target.value); }}
+                    onClick={e => e.stopPropagation()}
+                    style={{ background: "rgba(245,158,11,0.15)", border: "1px dashed #F59E0B", color: "#F59E0B", fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4, fontFamily: "inherit", cursor: "pointer" }}>
+                    <option value="">(assign salesperson)</option>
+                    {SALESPEOPLE.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                )}
+              </div>
               <div style={{ fontSize: 20, fontWeight: 800, color: "var(--fg)" }}>{activeItem.clientName}</div>
               <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
                 {activeItem.meetingType && (() => {
@@ -204,7 +215,11 @@ export function MeetingFeedback() {
 
           {activeItem.status === "error" && (
             <div style={{ padding: 16, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, color: "#EF4444", fontSize: 13 }}>
-              Analysis failed. Click "Re-analyse" to try again.
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Analysis failed</div>
+              {activeItem.analyseError && (
+                <div style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5, opacity: 0.85 }}>{activeItem.analyseError}</div>
+              )}
+              <div style={{ fontSize: 12 }}>Click "Re-analyse" above to try again.</div>
             </div>
           )}
 
@@ -385,7 +400,9 @@ export function MeetingFeedback() {
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>{item.meetingName}</span>
               </div>
               <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                {item.salesperson} · {item.createdAt ? new Date(item.createdAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : ""}
+                {item.salesperson || <span style={{ color: "#F59E0B", fontStyle: "italic" }}>unassigned</span>}
+                {" · "}
+                {item.createdAt ? new Date(item.createdAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : ""}
               </div>
               {a?.summary && (
                 <div style={{ fontSize: 12, color: "var(--fg)", marginTop: 8, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>

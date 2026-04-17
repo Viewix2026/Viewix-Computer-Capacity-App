@@ -44,7 +44,10 @@ async function fbGet(path) {
   return r.json();
 }
 
-// Resolve a user ID to a display name via Slack users.info
+// Resolve a user ID to a display name via Slack users.info. We also track the
+// first error reason so the sync response can surface scope/auth issues —
+// otherwise silent fallbacks to "@user" are impossible to debug.
+const __resolveErrors = new Set();
 async function resolveUserName(userId, token, cache) {
   if (!userId) return "";
   if (cache[userId] !== undefined) return cache[userId];
@@ -58,7 +61,12 @@ async function resolveUserName(userId, token, cache) {
       cache[userId] = name;
       return name;
     }
-  } catch {}
+    // Record the first non-ok response so the handler can surface it.
+    if (data.error) __resolveErrors.add(data.error);
+    console.warn(`[sync-weekly-wins] users.info for ${userId} failed: ${data.error || "unknown"}`);
+  } catch (e) {
+    __resolveErrors.add(e.message || "fetch-failed");
+  }
   cache[userId] = "";
   return "";
 }
@@ -117,24 +125,51 @@ function cleanText(text, userCache = {}) {
     .trim();
 }
 
-// Pull image URLs from Slack message files. Slack hosts them but they require
-// auth — for client display we'll proxy via slack's permalink_public for now,
-// or fall back to the original (signed) URL.
+// Pull image URLs from Slack message files first, falling back to legacy
+// msg.attachments (old-style image_url / thumb_url) and newer msg.blocks
+// (image blocks). Without files:read scope, msg.files is omitted entirely
+// from conversations.history responses, so blocks / attachments are the
+// only remaining signal.
 function extractImage(msg) {
   const files = Array.isArray(msg.files) ? msg.files : [];
-  // Find the first image attachment
   const img = files.find(f => f && (f.mimetype || "").startsWith("image/"));
-  if (!img) return null;
-  // Public-facing URL for client display. Authenticated bots get signed URLs;
-  // for unauth display, prefer the public permalink if Slack made the file public.
-  return {
-    url: img.url_private || img.thumb_360 || img.thumb_480 || img.thumb_720 || null,
-    thumb: img.thumb_360 || img.thumb_480 || null,
-    width: img.original_w || img.thumb_360_w || null,
-    height: img.original_h || img.thumb_360_h || null,
-    name: img.name || "",
-    mimetype: img.mimetype || "",
-  };
+  if (img) {
+    return {
+      url: img.url_private || img.thumb_360 || img.thumb_480 || img.thumb_720 || null,
+      thumb: img.thumb_360 || img.thumb_480 || null,
+      width: img.original_w || img.thumb_360_w || null,
+      height: img.original_h || img.thumb_360_h || null,
+      name: img.name || "",
+      mimetype: img.mimetype || "",
+      source: "file",
+    };
+  }
+
+  // Blocks-based image (newer Slack messages with rich content)
+  const blocks = Array.isArray(msg.blocks) ? msg.blocks : [];
+  for (const b of blocks) {
+    if (b?.type === "image" && b.image_url) {
+      return { url: b.image_url, thumb: b.image_url, name: b.alt_text || "", mimetype: "image/unknown", source: "block" };
+    }
+    // Rich-text blocks can contain nested image elements
+    if (b?.type === "rich_text" && Array.isArray(b.elements)) {
+      for (const el of b.elements) {
+        if (Array.isArray(el?.elements)) {
+          const imgEl = el.elements.find(x => x?.type === "image" && x.image_url);
+          if (imgEl) return { url: imgEl.image_url, thumb: imgEl.image_url, name: imgEl.alt_text || "", mimetype: "image/unknown", source: "rich_text" };
+        }
+      }
+    }
+  }
+
+  // Legacy attachments (used when a link unfurls, or older integrations)
+  const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+  for (const a of attachments) {
+    const u = a?.image_url || a?.thumb_url;
+    if (u) return { url: u, thumb: a?.thumb_url || u, name: a?.title || "", mimetype: "image/unknown", source: "attachment" };
+  }
+
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -157,7 +192,7 @@ export default async function handler(req, res) {
       const hints = {
         not_in_channel: `The bot isn't a member of channel ${WIN_CHANNEL_ID}. In Slack, open the channel and run /invite @YourBotName.`,
         channel_not_found: `Channel ${WIN_CHANNEL_ID} not found. Check the channel ID, and if it's a private channel the bot needs the groups:history scope (and to be invited).`,
-        missing_scope: `Bot token is missing a required scope. Needs: channels:history (public) or groups:history (private), reactions:read, users:read.`,
+        missing_scope: `Bot token is missing a required scope. Needs: channels:history (public) or groups:history (private), reactions:read, users:read, files:read.`,
         invalid_auth: `SLACK_BOT_TOKEN is invalid or expired. Re-copy from Slack OAuth & Permissions and update the Vercel env var.`,
         token_revoked: `SLACK_BOT_TOKEN has been revoked. Reinstall the Slack app and update the env var.`,
         not_authed: `SLACK_BOT_TOKEN env var is empty or malformed.`,
@@ -205,10 +240,27 @@ export default async function handler(req, res) {
       weeklyWinSyncedAt: new Date().toISOString(),
     });
 
+    // Surface user/bot lookup failures so we can tell the difference between
+    // "nobody posted wins" and "auth missing scope, @user fallback silently firing".
+    const resolveIssues = [...__resolveErrors];
+    __resolveErrors.clear();
+    const hint = resolveIssues.includes("missing_scope")
+      ? "Slack bot is missing users:read (and/or files:read) scope. Add the scope in Slack OAuth & Permissions, reinstall the app, update SLACK_BOT_TOKEN in Vercel."
+      : null;
+
     return res.status(200).json({
       success: true,
       pooled: pool.length,
       pool,
+      // Non-fatal diagnostics — present in the manual sync response so you
+      // can spot silent fallbacks without digging through Vercel logs.
+      resolveIssues: resolveIssues.length ? resolveIssues : undefined,
+      hint,
+      imagesFound: pool.filter(p => p.image).length,
+      imagesSourceBreakdown: pool.reduce((acc, p) => {
+        if (p.image?.source) acc[p.image.source] = (acc[p.image.source] || 0) + 1;
+        return acc;
+      }, {}),
     });
   } catch (err) {
     console.error("sync-weekly-wins error:", err);

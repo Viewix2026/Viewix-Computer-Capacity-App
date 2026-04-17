@@ -392,7 +392,18 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
                     {isExpanded && (
                       <tr>
                         <td colSpan={totalCols} style={{ padding: 0, background: "var(--bg)", borderBottom: "1px solid var(--border)" }}>
-                          <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+                          {/* Resizable wrapper — producer can drag the bottom-right corner
+                              to expand the panel in any direction (CSS resize: both covers
+                              bottom + right; combined with min/max width+height it's
+                              effectively omnidirectional at the active corner). */}
+                          <div style={{
+                            padding: "16px 20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start",
+                            resize: "both", overflow: "auto",
+                            minHeight: 160, maxHeight: "70vh",
+                            minWidth: 360, maxWidth: "100%",
+                            position: "relative",
+                          }}>
+                            <div style={{ position: "absolute", bottom: 2, right: 2, fontSize: 9, color: "var(--muted)", pointerEvents: "none", opacity: 0.5 }}>↘ drag to resize</div>
                             {/* Logo section */}
                             <div>
                               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Client Logo</div>

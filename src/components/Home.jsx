@@ -15,8 +15,11 @@ export function Home({ foundersData, setFoundersData, teamLunch, isFounder, isFo
   const winDate = hasManual ? foundersData.weeklyWinDate : (fromPool?.postedAt || "");
   const winImage = !hasManual ? fromPool?.image : null;
   const isFromSlack = !hasManual && !!fromPool;
-  // Slack file URLs need auth — proxy through our endpoint
-  const proxiedImg = winImage?.url ? `/api/slack-image?url=${encodeURIComponent(winImage.url)}` : null;
+  // Slack file URLs (files.slack.com, *.slack-edge.com) need the bot token
+  // to fetch, so we route them through our proxy. Public block/attachment
+  // URLs (e.g. imgur-hosted) load directly.
+  const needsProxy = winImage?.url && /^https:\/\/(files\.slack\.com|[\w-]+\.slack-edge\.com)\//.test(winImage.url);
+  const proxiedImg = needsProxy ? `/api/slack-image?url=${encodeURIComponent(winImage.url)}` : (winImage?.url || null);
 
   return (
     <>
