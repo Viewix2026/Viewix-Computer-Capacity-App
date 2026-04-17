@@ -482,12 +482,10 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         <ClientResearchStep project={project} onPatch={onPatch} />
       )}
       {tab === "videoReview" && (
-        <TabPlaceholder tabNum={4} title="Video Format Review"
-          hint="Phase E — top 25 over-performing videos from the 120-video scrape. Tick / cross, optionally add extra video links, then approve to move to Shortlist." />
+        <VideoReviewStep project={project} onPatch={onPatch} />
       )}
       {tab === "shortlist" && (
-        <TabPlaceholder tabNum={5} title="Format Shortlist"
-          hint="Phase E — ticked videos each get a format definition via Whisper + text. Saves into the global Format Library." />
+        <ShortlistStep project={project} onPatch={onPatch} />
       )}
       {tab === "select" && (
         <TabPlaceholder tabNum={6} title="Format Selection"
@@ -1464,117 +1462,162 @@ function MetricChip({ label, value, accent, muted }) {
 // default is 2× the handle's baseline. The current scrape uses handle-level
 // baselines only (keyword/hashtag baselines flagged as out of scope).
 // ═══════════════════════════════════════════
-function ReviewStep({ project, onPatch }) {
-  const posts = Array.isArray(project.posts) ? project.posts : [];
-  const reviews = project.videoReviews || {};
+// Phase E: Tab 4 Video Format Review. Pulls from competitorScrape.posts
+// (populated by /api/apify-webhook on Stage B completion). Displays the
+// top 25 by overperformanceScore. Producer ticks/crosses each, optionally
+// adds their own video URLs, approves → writes approvals.videoReview and
+// advances to Shortlist.
+function VideoReviewStep({ project, onPatch }) {
+  const competitorScrape = project.competitorScrape || {};
+  const posts = Array.isArray(competitorScrape.posts) ? competitorScrape.posts : [];
+  const topIds = Array.isArray(competitorScrape.topOverperformers) ? competitorScrape.topOverperformers : [];
+  const review = project.videoReview || {};
+  const ticked = new Set(review.ticked || []);
+  const crossed = new Set(review.crossed || []);
+  const extraLinks = Array.isArray(review.extraLinks) ? review.extraLinks : [];
+  const approvals = project.approvals || {};
+  const isDone = !!approvals.videoReview;
 
-  // Slider value lives locally for responsiveness; debounced 300ms write to Firebase.
-  const storedMultiplier = typeof project.performanceMultiplier === "number" ? project.performanceMultiplier : 2;
-  const [mult, setMult] = useState(storedMultiplier);
-  useEffect(() => { setMult(storedMultiplier); }, [storedMultiplier]);
-  useEffect(() => {
-    if (mult === storedMultiplier) return;
-    const t = setTimeout(() => {
-      onPatch({ performanceMultiplier: mult });
-    }, 300);
-    return () => clearTimeout(t);
-  }, [mult]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const [filter, setFilter] = useState("all");
+  const [newLink, setNewLink] = useState("");
 
-  const [filter, setFilter] = useState("all");  // all | ticked | crossed | unreviewed
-
-  // Videos only, classified, above the multiplier.
-  const videos = posts.filter(p => p.isVideo);
-  const qualifying = videos.filter(p =>
-    p.format && p.overperformanceScore != null && p.overperformanceScore >= mult
-  );
-
-  const tickedIds = Object.entries(reviews).filter(([, r]) => r?.status === "ticked").map(([k]) => k);
-  const crossedIds = Object.entries(reviews).filter(([, r]) => r?.status === "crossed").map(([k]) => k);
-
-  let filtered = qualifying;
-  if (filter === "ticked")     filtered = qualifying.filter(p => reviews[p.id]?.status === "ticked");
-  else if (filter === "crossed")   filtered = qualifying.filter(p => reviews[p.id]?.status === "crossed");
-  else if (filter === "unreviewed") filtered = qualifying.filter(p => !reviews[p.id]);
+  // Top 25, strictly by topOverperformers order (computed server-side).
+  const topPosts = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 25);
 
   const setStatus = (postId, status) => {
-    const current = reviews[postId]?.status;
-    const next = current === status ? null : status;  // toggle off if clicking the same button
-    const updated = { ...reviews };
-    if (next === null) {
-      delete updated[postId];
-    } else {
-      updated[postId] = { status: next, reviewedAt: new Date().toISOString() };
-    }
-    onPatch({ videoReviews: updated });
+    const nextTicked = new Set(ticked);
+    const nextCrossed = new Set(crossed);
+    nextTicked.delete(postId);
+    nextCrossed.delete(postId);
+    if (status === "ticked") nextTicked.add(postId);
+    else if (status === "crossed") nextCrossed.add(postId);
+    fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/ticked`, [...nextTicked]);
+    fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/crossed`, [...nextCrossed]);
   };
 
-  const reviewedCount = tickedIds.length + crossedIds.length;
-  const canAdvance = tickedIds.length > 0;
+  const addLink = () => {
+    const u = newLink.trim();
+    if (!u) return;
+    if (extraLinks.includes(u)) return;
+    const next = [...extraLinks, u];
+    fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/extraLinks`, next);
+    setNewLink("");
+  };
+  const removeLink = (u) => {
+    fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/extraLinks`, extraLinks.filter(x => x !== u));
+  };
+
+  const approve = () => {
+    fbSet(`/preproduction/socialOrganic/${project.id}/approvals/videoReview`, new Date().toISOString());
+    onPatch({ tab: "shortlist" });
+  };
+
+  let filtered = topPosts;
+  if (filter === "ticked")     filtered = topPosts.filter(p => ticked.has(p.id));
+  else if (filter === "crossed")   filtered = topPosts.filter(p => crossed.has(p.id));
+  else if (filter === "unreviewed") filtered = topPosts.filter(p => !ticked.has(p.id) && !crossed.has(p.id));
+
+  const scrapeStatus = competitorScrape.status;
+  const scrapeRunning = scrapeStatus === "running" && posts.length === 0;
+  const scrapeErrored = scrapeStatus === "error";
 
   return (
     <div>
-      {/* Multiplier slider */}
-      <div style={{ marginBottom: 14, padding: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>Outperforming filter</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-              Only show videos that outperform their handle's median by at least this multiplier.
-            </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Video Format Review</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+            Top {topPosts.length} over-performing competitor videos from the Stage B scrape ({posts.length} total scraped). Tick the ones worth shortlisting, cross the rest, optionally add your own picks at the bottom.
           </div>
-          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--accent)" }}>{mult.toFixed(2)}×</div>
-        </div>
-        <input type="range" min={1} max={5} step={0.25} value={mult}
-          onChange={e => setMult(parseFloat(e.target.value))}
-          style={{ width: "100%", accentColor: "var(--accent)" }} />
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-          <span>1.00×</span><span>2.00× (default)</span><span>5.00×</span>
-        </div>
-      </div>
-
-      {/* Filter chips + progress counter */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <FilterChip label={`All (${qualifying.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
-          <FilterChip label={`✓ Ticked (${tickedIds.length})`} active={filter === "ticked"} colour="#22C55E" onClick={() => setFilter("ticked")} />
-          <FilterChip label={`✗ Crossed (${crossedIds.length})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
-          <FilterChip label={`Unreviewed (${qualifying.length - reviewedCount})`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
         </div>
         <div style={{ fontSize: 11, color: "var(--muted)" }}>
-          {reviewedCount}/{qualifying.length} reviewed
-          {canAdvance && (
-            <button onClick={() => onPatch({ stage: "shortlist" })} style={{ ...btnPrimary, marginLeft: 10, padding: "6px 14px" }}>
-              → Shortlist ({tickedIds.length})
-            </button>
-          )}
+          ✓ {ticked.size} · ✗ {crossed.size} · {topPosts.length + extraLinks.length - ticked.size - crossed.size} unreviewed
         </div>
       </div>
 
-      {qualifying.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
-            {videos.length === 0 ? "No video posts in this scrape" : `No videos above ${mult.toFixed(2)}× baseline`}
-          </div>
-          <div style={{ fontSize: 11 }}>
-            {videos.length === 0
-              ? "Only classified videos appear here — images are skipped for reels."
-              : "Drop the multiplier slider above to surface more videos."}
-          </div>
+      {scrapeRunning && (
+        <div style={{ padding: 14, marginBottom: 14, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 8, fontSize: 12, color: "#3B82F6" }}>
+          Competitor scrape still running… the top 25 will appear here once Apify finishes.
         </div>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
-          {filtered.map(p => (
-            <ReviewCard key={p.id} post={p}
-              status={reviews[p.id]?.status || null}
-              onTick={() => setStatus(p.id, "ticked")}
-              onCross={() => setStatus(p.id, "crossed")}
-            />
-          ))}
+      )}
+      {scrapeErrored && (
+        <div style={{ padding: 14, marginBottom: 14, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontSize: 12, color: "#EF4444" }}>
+          Competitor scrape errored: {competitorScrape.error || "(no detail)"}. Go back to Tab 2 and retry Stage B.
+        </div>
+      )}
+
+      {/* Filter chips */}
+      {topPosts.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          <FilterChip label={`All (${topPosts.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterChip label={`✓ Ticked (${ticked.size})`} active={filter === "ticked"} colour="#22C55E" onClick={() => setFilter("ticked")} />
+          <FilterChip label={`✗ Crossed (${crossed.size})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
+          <FilterChip label={`Unreviewed`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
+        </div>
+      )}
+
+      {/* Top-25 grid */}
+      {topPosts.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
+          {filtered.map(p => {
+            const status = ticked.has(p.id) ? "ticked" : crossed.has(p.id) ? "crossed" : null;
+            return (
+              <ReviewCard key={p.id} post={p}
+                status={status}
+                onTick={() => setStatus(p.id, "ticked")}
+                onCross={() => setStatus(p.id, "crossed")}
+              />
+            );
+          })}
           {filtered.length === 0 && (
             <div style={{ gridColumn: "1 / -1", padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
               No videos match this filter.
             </div>
           )}
+        </div>
+      )}
+
+      {/* Extra links — producer can paste their own picks */}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>Extra video links ({extraLinks.length})</div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>
+          Already have a reel in mind that the scrape didn't surface? Paste the Instagram / TikTok / YouTube URL and it carries through to Shortlist.
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+          {extraLinks.map(u => (
+            <span key={u} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 360 }}>
+              <a href={u} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {u.replace(/^https?:\/\//, "").slice(0, 40)}{u.length > 50 ? "…" : ""}
+              </a>
+              {!isDone && <button onClick={() => removeLink(u)} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 13, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>}
+            </span>
+          ))}
+          {extraLinks.length === 0 && <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None yet.</span>}
+        </div>
+        {!isDone && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <input type="url" value={newLink} onChange={e => setNewLink(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addLink(); } }}
+              placeholder="https://www.instagram.com/reel/..."
+              style={{ ...inputSt, fontSize: 12, flex: 1 }} />
+            <button onClick={addLink} disabled={!newLink.trim()}
+              style={{ ...btnSecondary, padding: "6px 14px", opacity: newLink.trim() ? 1 : 0.5 }}>Add</button>
+          </div>
+        )}
+      </div>
+
+      {!isDone && (
+        <button onClick={approve}
+          disabled={ticked.size === 0 && extraLinks.length === 0}
+          title={ticked.size === 0 && extraLinks.length === 0 ? "Tick at least one video (or add an extra link)" : "Approve and move to Shortlist"}
+          style={{ ...btnPrimary, opacity: (ticked.size === 0 && extraLinks.length === 0) ? 0.5 : 1 }}>
+          Approve → Shortlist ({ticked.size + extraLinks.length})
+        </button>
+      )}
+      {isDone && (
+        <div style={{ padding: 14, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 8, fontSize: 12, color: "#22C55E", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <span>✓ Approved {new Date(approvals.videoReview).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
+          <button onClick={() => onPatch({ tab: "shortlist" })} style={btnPrimary}>→ Shortlist</button>
         </div>
       )}
     </div>
@@ -1662,12 +1705,24 @@ function ReviewCard({ post, status, onTick, onCross }) {
 // opening the project restores edits.
 // ═══════════════════════════════════════════
 function ShortlistStep({ project, onPatch }) {
-  const posts = Array.isArray(project.posts) ? project.posts : [];
-  const reviews = project.videoReviews || {};
+  // Schema: competitor videos come from competitorScrape.posts + the producer
+  // may have added extra links that aren't in any scrape. We unify into a
+  // single "candidates" list — extra links get stub post objects so the UI
+  // can render them with the same card shape.
+  const competitorPosts = Array.isArray(project.competitorScrape?.posts) ? project.competitorScrape.posts : [];
+  const review = project.videoReview || {};
+  const tickedIds = new Set(review.ticked || []);
+  const extraLinks = Array.isArray(review.extraLinks) ? review.extraLinks : [];
   const shortlisted = project.shortlistedFormats || {};
 
-  // Only ticked videos are candidates for shortlisting.
-  const tickedVideos = posts.filter(p => p.isVideo && reviews[p.id]?.status === "ticked");
+  const tickedPosts = competitorPosts.filter(p => p.isVideo && tickedIds.has(p.id));
+  const extraAsPosts = extraLinks.map(url => ({
+    id: `ext_${url.replace(/[^a-zA-Z0-9]/g, "").slice(-16)}`,
+    url, handle: "(extra)", caption: "", isVideo: true, thumbnail: null,
+    views: null, overperformanceScore: null,
+    _isExtraLink: true,
+  }));
+  const tickedVideos = [...tickedPosts, ...extraAsPosts];
 
   // Global format library + categories — both listened to live so the
   // form's category dropdown and "Add as example to" search stay in sync
@@ -1710,7 +1765,10 @@ function ShortlistStep({ project, onPatch }) {
         <div style={{ fontSize: 11, color: "var(--muted)" }}>
           {allShortlisted.length}/{tickedVideos.length} shortlisted
           {canAdvance && (
-            <button onClick={() => onPatch({ stage: "select" })} style={{ ...btnPrimary, marginLeft: 10, padding: "6px 14px" }}>
+            <button onClick={() => {
+              fbSet(`/preproduction/socialOrganic/${project.id}/approvals/shortlist`, new Date().toISOString());
+              onPatch({ tab: "select" });
+            }} style={{ ...btnPrimary, marginLeft: 10, padding: "6px 14px" }}>
               → Select ({allShortlisted.length})
             </button>
           )}
@@ -1721,7 +1779,7 @@ function ShortlistStep({ project, onPatch }) {
         <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>No ticked videos yet</div>
           <div style={{ fontSize: 11 }}>Go back to Review and tick the videos worth shortlisting.</div>
-          <button onClick={() => onPatch({ stage: "review" })} style={{ ...btnSecondary, marginTop: 12 }}>← Back to Review</button>
+          <button onClick={() => onPatch({ tab: "videoReview" })} style={{ ...btnSecondary, marginTop: 12 }}>← Back to Video Review</button>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) 1fr", gap: 16 }}>
