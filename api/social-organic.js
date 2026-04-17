@@ -637,6 +637,22 @@ async function handleSynthesise(req, res) {
   const posts = Array.isArray(project.posts) ? project.posts : [];
   if (!posts.length) return res.status(400).json({ error: "No posts to synthesise. Run scrape first." });
 
+  // Guard against synthesising from zero classified posts. If we don't require
+  // classification, Claude receives only handle-level metrics and hallucinates
+  // the hook / format / visual sections from its training data rather than
+  // from the actual scrape. Producer-useful output requires real post data.
+  const classifiedCount = posts.filter(p => p.format).length;
+  if (classifiedCount === 0) {
+    return res.status(400).json({
+      error: "No classified posts — synthesis would be hallucinated",
+      detail: `All ${posts.length} scraped post(s) are unclassified. Run Classify first (or use the Fast caption-only toggle if Vision is failing) so the synthesis is grounded in actual post data.`,
+    });
+  }
+  if (classifiedCount < 5 && posts.length >= 10) {
+    // Soft warning — still run, but let the caller know
+    console.warn(`[synthesise] Only ${classifiedCount} of ${posts.length} posts classified — synthesis quality will be limited.`);
+  }
+
   await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
     status: "synthesising",
     updatedAt: new Date().toISOString(),
