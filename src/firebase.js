@@ -71,6 +71,13 @@ export function fbSet(p, v) {
   if (db) db.ref(p).set(v).catch(e => console.error("Firebase set failed", p, e));
 }
 
+// Patch semantics — merges the given keys into the existing node instead of
+// replacing it. Use this when you want to update part of an object without
+// wiping sibling keys (e.g. updating .tab without losing .visitedTabs).
+export function fbUpdate(p, v) {
+  if (db) db.ref(p).update(v).catch(e => console.error("Firebase update failed", p, e));
+}
+
 export function fbListen(p, cb) {
   if (!db) return () => {};
   const r = db.ref(p);

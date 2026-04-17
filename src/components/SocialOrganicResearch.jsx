@@ -9,7 +9,7 @@
 // `synthesis` field on old projects is preserved but unused.
 
 import { useState, useEffect, useRef } from "react";
-import { onFB, fbSet, fbListen, getCurrentRole } from "../firebase";
+import { onFB, fbSet, fbUpdate, fbListen, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
@@ -145,12 +145,11 @@ export function SocialOrganicResearch({ accounts }) {
   const getAccountLogoBg = (companyName, attioCompanyId) =>
     findAccount(companyName, attioCompanyId)?.logoBg;
 
-  // Detail-view helpers
+  // Detail-view helpers. Uses fbUpdate (patch semantics) rather than fbSet
+  // so partial writes only touch the given keys — sub-fields like
+  // visitedTabs don't get clobbered by stale `current` snapshots.
   const patchProject = (projectId, patch) => {
-    const current = projects[projectId];
-    if (!current) return;
-    fbSet(`/preproduction/socialOrganic/${projectId}`, {
-      ...current,
+    fbUpdate(`/preproduction/socialOrganic/${projectId}`, {
       ...patch,
       updatedAt: new Date().toISOString(),
     });
@@ -1784,7 +1783,14 @@ function ShortlistStep({ project, onPatch }) {
   const activeVideo = tickedVideos.find(v => v.id === activeId) || null;
   const existingShortlist = activeVideo ? shortlisted[`sl_${activeVideo.id}`] || null : null;
 
-  const allShortlisted = Object.values(shortlisted || {}).filter(Boolean);
+  // Filter shortlist entries to only those whose source video is still
+  // in the ticked / extra-links set. When a producer goes back to Tab 4
+  // and unticks, we don't delete the shortlist entry (producer may want
+  // to re-tick and recover their description), but we DO stop counting
+  // it so the Shortlist progress counter reflects reality.
+  const validVideoIds = new Set(tickedVideos.map(v => v.id));
+  const allShortlisted = Object.values(shortlisted || {})
+    .filter(s => s && s.videoId && validVideoIds.has(s.videoId));
   const canAdvance = allShortlisted.length > 0;
 
   return (

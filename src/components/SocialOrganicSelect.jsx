@@ -128,17 +128,25 @@ export function SocialOrganicSelect({ project, onPatch }) {
     activationConstraint: { distance: 6 },
   }));
 
-  // Shortlisted items (source A). Dedup against already-selected entries.
-  const shortlistCards = Object.values(shortlisted).filter(Boolean).map(s => ({
-    dragId: `sl:${s.formatLibraryId}`,
-    source: "project",
-    formatLibraryId: s.formatLibraryId,
-    name: s.formatName || library[s.formatLibraryId]?.name || "Unnamed",
-    description: s.description || library[s.formatLibraryId]?.videoAnalysis || "",
-    category: s.category || library[s.formatLibraryId]?.category || null,
-    thumbnail: library[s.formatLibraryId]?.examples?.[0]?.thumbnail || null,
-    exampleUrl: library[s.formatLibraryId]?.examples?.[0]?.url || null,
-  })).filter(c => !selected.some(s => s.formatLibraryId === c.formatLibraryId));
+  // Shortlisted items (source A). Filter out entries whose source video
+  // has been unticked in Tab 4 — they're stale but we don't hard-delete
+  // the entry in case the producer re-ticks and wants their description
+  // back. Also dedup against already-selected entries.
+  const tickedVideoIds = new Set((project.videoReview?.ticked) || []);
+  const extraLinkIds = new Set((project.videoReview?.extraLinks || []).map(u => `ext_${u.replace(/[^a-zA-Z0-9]/g, "").slice(-16)}`));
+  const shortlistCards = Object.values(shortlisted)
+    .filter(s => s && s.videoId && (tickedVideoIds.has(s.videoId) || extraLinkIds.has(s.videoId)))
+    .map(s => ({
+      dragId: `sl:${s.formatLibraryId}`,
+      source: "project",
+      formatLibraryId: s.formatLibraryId,
+      name: s.formatName || library[s.formatLibraryId]?.name || "Unnamed",
+      description: s.description || library[s.formatLibraryId]?.videoAnalysis || "",
+      category: s.category || library[s.formatLibraryId]?.category || null,
+      thumbnail: library[s.formatLibraryId]?.examples?.[0]?.thumbnail || null,
+      exampleUrl: library[s.formatLibraryId]?.examples?.[0]?.url || null,
+    }))
+    .filter(c => !selected.some(s => s.formatLibraryId === c.formatLibraryId));
 
   // "Recently Added" cutoff — 14 days keeps the list meaningful without
   // flushing every format out after one sprint.
