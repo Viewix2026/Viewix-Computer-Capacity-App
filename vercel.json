@@ -8,6 +8,9 @@
     },
     "api/social-organic.js": {
       "maxDuration": 300
+    },
+    "api/fathom-webhook.js": {
+      "maxDuration": 120
     }
   },
   "crons": [

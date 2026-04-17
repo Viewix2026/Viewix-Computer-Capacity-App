@@ -343,6 +343,11 @@ export function MeetingFeedback() {
         {filtered.map(item => {
           const a = item.analysis;
           const rc = ratingColor(a?.rating);
+          // Stale if stuck in "analysing" for >3 minutes without a result, or if an error was written
+          const createdMs = item.createdAt ? new Date(item.createdAt).getTime() : 0;
+          const stuckAnalysing = item.status === "analysing" && !a && createdMs && (Date.now() - createdMs) > 3 * 60 * 1000;
+          const hasError = item.status === "error";
+          const needsRetry = stuckAnalysing || hasError;
           return (
             <div key={item.id} onClick={() => setActiveId(item.id)}
               style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }}
@@ -350,7 +355,11 @@ export function MeetingFeedback() {
               onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{item.clientName}</span>
-                {item.status === "analysing" && !a ? (
+                {needsRetry ? (
+                  <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: "rgba(239,68,68,0.15)", color: "#EF4444" }}>
+                    {hasError ? "Error" : "Stuck"}
+                  </span>
+                ) : item.status === "analysing" && !a ? (
                   <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: rc.bg, color: rc.fg }}>Analysing...</span>
                 ) : a?.rating !== undefined ? (
                   <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 14, fontWeight: 800, background: rc.bg, color: rc.fg, fontFamily: "'JetBrains Mono',monospace" }}>
@@ -358,6 +367,14 @@ export function MeetingFeedback() {
                   </span>
                 ) : (
                   <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: rc.bg, color: rc.fg }}>N/A</span>
+                )}
+                {needsRetry && (
+                  <button
+                    onClick={e => { e.stopPropagation(); reanalyse(item); }}
+                    disabled={analysing}
+                    style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: "var(--accent-soft)", color: "var(--accent)", border: "none", cursor: "pointer", fontFamily: "inherit", opacity: analysing ? 0.5 : 1 }}>
+                    {analysing ? "Retrying…" : "Retry"}
+                  </button>
                 )}
                 {item.meetingType && (() => {
                   const mt = MEETING_TYPES.find(t => t.key === item.meetingType);

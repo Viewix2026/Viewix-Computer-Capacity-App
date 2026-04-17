@@ -238,7 +238,30 @@ export default async function handler(req, res) {
     const { feedbackId, transcript, salesperson, clientName, meetingName, meetingType } = req.body || {};
     if (!feedbackId || !transcript) return res.status(400).json({ error: "Missing feedbackId or transcript" });
 
-    const userMessage = `Salesperson: ${salesperson || "Unknown"}
+    const updated = await runMeetingFeedbackAnalysis({
+      feedbackId, transcript, salesperson, clientName, meetingName, meetingType,
+      apiKey: ANTHROPIC_KEY,
+    });
+    return res.status(200).json({ success: true, analysis: updated });
+  } catch (err) {
+    console.error("meeting-feedback error:", err);
+    // Write error status so the UI stops spinning and gets a retry option
+    try {
+      if (req.body?.feedbackId) {
+        await fbSet(`/meetingFeedback/${req.body.feedbackId}/status`, "error");
+        await fbSet(`/meetingFeedback/${req.body.feedbackId}/lastError`, err.message || "Unknown error");
+      }
+    } catch {}
+    return res.status(500).json({ error: err.message || "Unknown error" });
+  }
+}
+
+// Exported so api/fathom-webhook.js can call this directly instead of HTTP-
+// self-invoking (Vercel serverless freezes the webhook lambda as soon as it
+// responds, killing any in-flight fetch to our own API — that's what was
+// leaving records stuck at status="analysing").
+export async function runMeetingFeedbackAnalysis({ feedbackId, transcript, salesperson, clientName, meetingName, meetingType, apiKey }) {
+  const userMessage = `Salesperson: ${salesperson || "Unknown"}
 Client: ${clientName || "Unknown"}
 Meeting: ${meetingName || "Sales call"}
 Type: ${meetingType || "general"}
@@ -246,33 +269,30 @@ Type: ${meetingType || "general"}
 Transcript:
 ${transcript}`;
 
-    const systemPrompt = getSystemPrompt(meetingType);
-    const raw = await callClaude(systemPrompt, userMessage, ANTHROPIC_KEY);
-    let result;
-    try {
-      result = parseJSON(raw);
-    } catch (e) {
-      return res.status(500).json({ error: "Failed to parse AI response", raw });
-    }
-
-    const updated = {
-      rating: result.rating,
-      summary: result.summary || "",
-      strengths: result.strengths || [],
-      improvements: result.improvements || [],
-      keyMoments: result.keyMoments || [],
-      outcome: result.outcome || "",
-      status: "analysed",
-      analysedAt: new Date().toISOString(),
-    };
-
-    // Write analysis AND flip the top-level status so the UI stops showing "Analysing..."
-    await fbSet(`/meetingFeedback/${feedbackId}/analysis`, updated);
-    await fbSet(`/meetingFeedback/${feedbackId}/status`, "analysed");
-
-    return res.status(200).json({ success: true, analysis: updated });
-  } catch (err) {
-    console.error("meeting-feedback error:", err);
-    return res.status(500).json({ error: err.message || "Unknown error" });
+  const systemPrompt = getSystemPrompt(meetingType);
+  const raw = await callClaude(systemPrompt, userMessage, apiKey);
+  let result;
+  try {
+    result = parseJSON(raw);
+  } catch (e) {
+    // Surface parse failure as a status so the UI can show retry
+    await fbSet(`/meetingFeedback/${feedbackId}/status`, "error");
+    await fbSet(`/meetingFeedback/${feedbackId}/lastError`, `Failed to parse AI response: ${e.message}`);
+    throw new Error("Failed to parse AI response");
   }
+
+  const updated = {
+    rating: result.rating,
+    summary: result.summary || "",
+    strengths: result.strengths || [],
+    improvements: result.improvements || [],
+    keyMoments: result.keyMoments || [],
+    outcome: result.outcome || "",
+    status: "analysed",
+    analysedAt: new Date().toISOString(),
+  };
+  await fbSet(`/meetingFeedback/${feedbackId}/analysis`, updated);
+  await fbSet(`/meetingFeedback/${feedbackId}/status`, "analysed");
+  await fbSet(`/meetingFeedback/${feedbackId}/lastError`, null);
+  return updated;
 }

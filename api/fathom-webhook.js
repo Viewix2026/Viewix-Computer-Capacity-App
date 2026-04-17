@@ -19,6 +19,7 @@
 // Response: { success: true, feedbackId, meetingType, analyseQueued: true }
 
 import { adminSet, getAdmin } from "./_fb-admin.js";
+import { runMeetingFeedbackAnalysis } from "./meeting-feedback.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = "viewix-fathom-2026";
@@ -120,23 +121,32 @@ export default async function handler(req, res) {
 
     await fbSet(`/meetingFeedback/${feedbackId}`, entry);
 
-    // Kick off analysis in the background — fire-and-forget so we return fast to the webhook caller.
-    // The meeting-feedback endpoint writes the analysis back to Firebase when done.
-    const base = req.headers["x-forwarded-host"]
-      ? `https://${req.headers["x-forwarded-host"]}`
-      : `https://${req.headers.host}`;
-    fetch(`${base}/api/meeting-feedback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        feedbackId,
-        transcript: entry.transcript,
-        salesperson: entry.salesperson,
-        clientName: entry.clientName,
-        meetingName: entry.meetingName,
-        meetingType: entry.meetingType,
-      }),
-    }).catch(err => console.error("Background analysis dispatch failed:", err.message));
+    // Run the analysis inline and await. Vercel freezes serverless functions
+    // the moment they respond, so any fire-and-forget fetch would die mid-
+    // flight — that's why records were getting stuck at "analysing" forever.
+    // Worst case this takes ~45s which is within most webhook senders' timeout
+    // budgets (Fathom, Zapier, Make all tolerate up to 60-90s).
+    const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+    let analyseResult = null;
+    let analyseError = null;
+    if (!ANTHROPIC_KEY) {
+      analyseError = "ANTHROPIC_API_KEY not configured";
+    } else {
+      try {
+        analyseResult = await runMeetingFeedbackAnalysis({
+          feedbackId,
+          transcript: entry.transcript,
+          salesperson: entry.salesperson,
+          clientName: entry.clientName,
+          meetingName: entry.meetingName,
+          meetingType: entry.meetingType,
+          apiKey: ANTHROPIC_KEY,
+        });
+      } catch (err) {
+        analyseError = err.message || "Analysis failed";
+        console.error("fathom-webhook analysis error:", err);
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -144,7 +154,9 @@ export default async function handler(req, res) {
       meetingType: entry.meetingType,
       salesperson: entry.salesperson,
       clientName: entry.clientName,
-      analyseQueued: true,
+      analysed: !!analyseResult,
+      analyseError,
+      rating: analyseResult?.rating ?? null,
     });
   } catch (err) {
     console.error("fathom-webhook error:", err);
