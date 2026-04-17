@@ -2061,33 +2061,25 @@ function ShortlistForm({ video, project, library, categories, existing, onSaved 
               style={inputSt} />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-            <div>
-              <Label>Category</Label>
-              <select value={category} onChange={e => { setCategory(e.target.value); setNewCategory(""); }} style={inputSt}>
-                <option value="">— pick or create below —</option>
-                {categoryList.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-              </select>
-              <input type="text" value={newCategory} onChange={e => setNewCategory(e.target.value)}
-                placeholder="+ or type a new category"
-                style={{ ...inputSt, fontSize: 11, marginTop: 4 }} />
+          {/* Category field removed per workflow spec — the Format Library
+              categorisation in Tab 6 (Suggested / Recently Added / Over
+              Performers) doesn't depend on a per-format category, so there's
+              no reason to make producers pick one here. */}
+          <div style={{ marginBottom: 10 }}>
+            <Label>Tags</Label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4, minHeight: 24 }}>
+              {tags.map(t => (
+                <span key={t} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  {t}
+                  <button onClick={() => setTags(tags.filter(x => x !== t))} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>
+                </span>
+              ))}
             </div>
-            <div>
-              <Label>Tags</Label>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4, minHeight: 24 }}>
-                {tags.map(t => (
-                  <span key={t} style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    {t}
-                    <button onClick={() => setTags(tags.filter(x => x !== t))} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>
-                  </span>
-                ))}
-              </div>
-              <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagInput); } }}
-                onBlur={() => tagInput.trim() && addTag(tagInput)}
-                placeholder="Press enter to add"
-                style={{ ...inputSt, fontSize: 11 }} />
-            </div>
+            <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagInput); } }}
+              onBlur={() => tagInput.trim() && addTag(tagInput)}
+              placeholder="Press enter to add"
+              style={{ ...inputSt, fontSize: 11 }} />
           </div>
 
           <DescriptionField
