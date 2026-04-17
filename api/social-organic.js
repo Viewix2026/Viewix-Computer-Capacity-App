@@ -345,46 +345,66 @@ async function handleClassify(req, res) {
   });
 
   const systemPrompt = buildClassifierSystemPrompt();
-  const model = fast ? "claude-haiku-4-6" : "claude-sonnet-4-6";
+  // Vision mode uses Sonnet; Fast (caption-only) uses Haiku.
+  // If vision fails mid-batch we gracefully retry that batch caption-only
+  // with Haiku so nothing ends up unclassified.
+  const visionModel = "claude-sonnet-4-6";
+  const textModel = "claude-haiku-4-6";
   const batchSize = 10;
   const postById = Object.fromEntries(posts.map(p => [p.id, p]));
   const classified = [];
   const errors = [];
 
+  const classifyBatchCaptionOnly = async (batch) => {
+    const userText = batch.map((p, j) =>
+      `Post ${j + 1} (postId: ${p.id}) — handle ${p.handle}, views ${p.views ?? "n/a"}, engagement ${p.engagementRate}\nCaption: ${(p.caption || "(empty)").slice(0, 400)}`
+    ).join("\n\n");
+    return callClaude({
+      model: textModel, systemPrompt,
+      userMessage: `Classify these Instagram posts. Return the JSON array in the same order.\n\n${userText}`,
+      maxTokens: 4000, apiKey: ANTHROPIC_KEY,
+    });
+  };
+
   for (let i = 0; i < unclassified.length; i += batchSize) {
     const batch = unclassified.slice(i, i + batchSize);
+    const batchIdx = i / batchSize;
+    let raw = null;
+    let usedFallback = false;
     try {
-      let raw;
       if (fast) {
-        // Caption-only — send a single text block with all batch posts inlined
-        const userText = batch.map((p, j) =>
-          `Post ${j + 1} (postId: ${p.id}) — handle ${p.handle}, views ${p.views ?? "n/a"}, engagement ${p.engagementRate}\nCaption: ${(p.caption || "(empty)").slice(0, 400)}`
-        ).join("\n\n");
-        raw = await callClaude({
-          model, systemPrompt,
-          userMessage: `Classify these Instagram posts. Return the JSON array in the same order.\n\n${userText}`,
-          maxTokens: 4000, apiKey: ANTHROPIC_KEY,
-        });
+        raw = await classifyBatchCaptionOnly(batch);
       } else {
         // Vision — multimodal content blocks with thumbnail URLs
         const userContent = buildClassifierUserMessage(batch);
-        raw = await callClaudeMultimodal({
-          model, systemPrompt, userContent, maxTokens: 4000, apiKey: ANTHROPIC_KEY,
-        });
+        try {
+          raw = await callClaudeMultimodal({
+            model: visionModel, systemPrompt, userContent, maxTokens: 4000, apiKey: ANTHROPIC_KEY,
+          });
+        } catch (visionErr) {
+          // Vision failed (usually Instagram CDN blocking Anthropic's image fetcher
+          // or Claude refusing a URL). Fall back to caption-only Haiku so the batch
+          // isn't a total loss.
+          console.warn(`[classify] Batch ${batchIdx} vision failed, retrying caption-only:`, visionErr.message);
+          errors.push({ batch: batchIdx, stage: "vision", error: visionErr.message, recovered: true });
+          raw = await classifyBatchCaptionOnly(batch);
+          usedFallback = true;
+        }
       }
       const parsed = parseJSON(raw);
-      if (!Array.isArray(parsed)) throw new Error("Classifier returned non-array");
+      if (!Array.isArray(parsed)) throw new Error(`Classifier returned non-array: ${String(raw).slice(0, 200)}`);
       parsed.forEach(c => {
         if (!c.postId || !postById[c.postId]) return;
         if (!FORMAT_BUCKETS.includes(c.format)) c.format = "other";
         postById[c.postId].format = c.format;
         postById[c.postId].formatConfidence = +(c.confidence || 0);
-        postById[c.postId].formatEvidence = (c.evidence || "").slice(0, 200);
+        postById[c.postId].formatEvidence = (c.evidence || "").slice(0, 200) + (usedFallback ? " (caption-only)" : "");
         postById[c.postId].hookType = HOOK_TYPES.includes(c.hookType) && c.hookType !== "null" ? c.hookType : null;
         classified.push(c.postId);
       });
     } catch (err) {
-      errors.push({ batch: i / batchSize, error: err.message });
+      console.error(`[classify] Batch ${batchIdx} failed entirely:`, err.message, raw ? `Raw: ${String(raw).slice(0, 300)}` : "");
+      errors.push({ batch: batchIdx, stage: usedFallback ? "text-fallback" : "parse", error: err.message, rawPreview: raw ? String(raw).slice(0, 200) : null });
     }
   }
 

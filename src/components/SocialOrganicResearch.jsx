@@ -504,7 +504,14 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setClassifyInfo(`Classified ${d.classified} post${d.classified === 1 ? "" : "s"}${d.batchErrors?.length ? ` · ${d.batchErrors.length} batch error(s)` : ""}`);
+      let msg = `Classified ${d.classified} post${d.classified === 1 ? "" : "s"}`;
+      if (d.batchErrors?.length) {
+        // Show the first batch error's actual message + preview so it's actionable
+        const firstErr = d.batchErrors[0];
+        msg += ` · ${d.batchErrors.length} batch error(s). First: "${firstErr.error}"`;
+        if (firstErr.rawPreview) msg += ` — raw: ${firstErr.rawPreview.slice(0, 120)}`;
+      }
+      setClassifyInfo(msg);
     } catch (e) {
       setClassifyError(e.message);
     } finally {
