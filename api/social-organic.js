@@ -828,31 +828,18 @@ async function handleRunPipeline(req, res) {
 //   Social Snapshot → Target Viewer Persona → Key Takeaways → Formats (from
 //   selected) → Script Table (per video: content style, hook, text hook,
 //   visual hook, script/notes, props).
-const DEFAULT_SOCIAL_ORGANIC_PROMPT = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. A producer has gathered research on a client's niche, shortlisted high-performing competitor videos, and picked the exact formats they want to shoot. Your job is to produce a single structured preproduction document the producer can take into the shoot.
+const DEFAULT_SOCIAL_ORGANIC_PROMPT = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. A producer has gathered research on a client's niche, shortlisted high-performing competitor videos, and picked the exact formats they want to shoot. Your job is to produce a script table the producer can take into the shoot.
+
+The Brand Truth, Client Research, and Format Selection have already been approved — use them as context but do NOT regenerate them. You are producing ONLY the per-video script table.
 
 RULES:
-- Be specific, opinionated, and evidence-based. Do not reach for generic agency-speak.
-- Every section should feel like a smart colleague who watched the reference videos, not a template.
+- Be specific, opinionated, evidence-based. No generic agency-speak.
+- Every line should feel like a smart colleague who watched the reference videos.
 - Never use em dashes. Use commas, full stops, or rewrite.
 - Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
 
 STRUCTURE TO RETURN:
 {
-  "clientContext": {
-    "brandTruths": "2-4 sentences on what the brand is known for, what it does best, and what makes it credible.",
-    "brandAmbitions": "2-3 sentences on where this content should take the brand — not a mission statement, a pointed direction.",
-    "clientGoals": "3-5 bullet-style lines, one per line, on what the client explicitly wants this content to achieve.",
-    "keyConsiderations": "3-5 bullet-style lines on constraints or preferences: what they will not do, who they will not speak to, tone rules."
-  },
-  "socialSnapshot": {
-    "averagePerformance": "One sentence summarising typical post performance on the client's handles (views, engagement cadence).",
-    "highestPerforming": "One sentence describing the client's best-performing piece of content to date.",
-    "takeaways": "3-5 bullet-style lines on what is working and what is not, grounded in the research data."
-  },
-  "targetViewer": {
-    "demographic": "2-4 sentences on age, gender skew, consumption habits.",
-    "painPoints": "3-5 bullet-style lines. Include direct viewer-voice quotes where the research supports it."
-  },
   "scriptTable": [
     {
       "videoNumber": 1,
@@ -864,14 +851,14 @@ STRUCTURE TO RETURN:
       "scriptNotes": "Question prompts or talking-point bullets the producer should walk the client through on set.",
       "props": "Physical props, outfits, or location cues. Use 'N/A' if none."
     }
-    // one entry per selected format
+    // one entry per selected format — may span multiple rows if numberOfVideos > selectedFormats.length
   ]
 }
 
 IMPORTANT:
-- The scriptTable must have EXACTLY one entry per format in the "Selected Formats" list below, in the same order. Do not invent extra formats.
+- Total rows must equal numberOfVideos. Distribute rows across formats roughly evenly (3-6 videos per format is the norm).
 - Use formatName values verbatim from the Selected Formats input.
-- Hook, textHook and visualHook should be concrete enough that a producer can read them aloud on set.`;
+- Hook, textHook and visualHook must be concrete enough to read aloud on set.`;
 
 async function getPromptOverride() {
   // Live prompt override — falls back to the hardcoded default if empty.
@@ -885,13 +872,14 @@ async function getFantasticExample() {
 }
 
 function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample }) {
-  const posts = project.posts || [];
-  const tickedPosts = Object.entries(project.videoReviews || {})
-    .filter(([, r]) => r?.status === "ticked")
-    .map(([id]) => posts.find(p => p.id === id))
-    .filter(Boolean);
-  const handleStats = project.handleStats || {};
-  const transcript = project.inputs?.transcript?.text || null;
+  // New schema sources — Brand Truth and client research are already approved.
+  const bt = project.brandTruth?.fields || {};
+  const competitorPosts = Array.isArray(project.competitorScrape?.posts) ? project.competitorScrape.posts : [];
+  const tickedIds = new Set((project.videoReview?.ticked) || []);
+  const tickedPosts = competitorPosts.filter(p => tickedIds.has(p.id));
+  const extraLinks = Array.isArray(project.videoReview?.extraLinks) ? project.videoReview.extraLinks : [];
+  const keyTakeaways = project.clientResearch?.keyTakeaways || "";
+  const transcript = project.brandTruth?.transcript || "";
 
   const formatsBlock = selectedFormatObjects.map((fmt, i) => {
     const ex = Array.isArray(fmt.examples) ? fmt.examples : [];
@@ -909,28 +897,36 @@ function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExamp
     `${p.handle} · ${p.overperformanceScore ? p.overperformanceScore.toFixed(1) + "× baseline" : ""}\n  Caption: ${(p.caption || "").slice(0, 220).replace(/\n+/g, " ")}`
   ).join("\n\n");
 
-  const statsBlock = Object.entries(handleStats).map(([h, s]) =>
-    `${s.handle || h}: avg ${s.avgViews} views, median ${s.medianViews}`
-  ).join("\n");
+  const extraBlock = extraLinks.length ? extraLinks.map(u => `  Extra link: ${u}`).join("\n") : "";
 
   return `CLIENT: ${project.companyName}
 ${project.videoType ? `DEAL TYPE: ${project.videoType}` : ""}
 ${project.numberOfVideos ? `TOTAL VIDEOS TO SHOOT THIS ROUND: ${project.numberOfVideos}` : ""}
 
-HANDLE STATS:
-${statsBlock || "(none)"}
+APPROVED BRAND TRUTH (from Tab 1):
+- Brand Truths: ${bt.brandTruths || "(none)"}
+- Brand Ambitions: ${bt.brandAmbitions || "(none)"}
+- Client Goals: ${bt.clientGoals || "(none)"}
+- Key Considerations: ${bt.keyConsiderations || "(none)"}
+- Target Viewer: ${bt.targetViewerDemographic || "(none)"}
+- Pain Points: ${bt.painPoints || "(none)"}
+- Language: ${bt.language || "(none)"}
 
-TICKED REFERENCE VIDEOS (producer hand-picked these during review — use them to ground the script table):
+PRODUCER'S READ ON CLIENT'S EXISTING CONTENT (from Tab 3):
+${keyTakeaways || "(none)"}
+
+TICKED REFERENCE VIDEOS (producer hand-picked these during review):
 ${tickedBlock || "(none)"}
+${extraBlock}
 
 ${transcript ? `\nPRE-PRODUCTION MEETING TRANSCRIPT:\n${transcript.slice(0, 6000)}\n` : ""}
 
-SELECTED FORMATS (render one scriptTable entry per format, in order):
+SELECTED FORMATS (in the order the producer chose them):
 ${formatsBlock}
 
 ${fantasticExample ? `\nEXAMPLE OF A FANTASTIC PAST PREPRODUCTION DOC (same JSON shape; use it as a quality bar, do not copy verbatim):\n${fantasticExample.slice(0, 4000)}\n` : ""}
 
-Produce the preproduction JSON now.`;
+Produce the scriptTable JSON now.`;
 }
 
 async function handleGenerateScript(req, res) {
@@ -997,21 +993,22 @@ async function handleGenerateScript(req, res) {
     })),
   }));
 
+  // New 7-tab schema: clientContext / socialSnapshot / targetViewer are all
+  // owned by Tab 1 (project.brandTruth.fields). Tab 7's preproductionDoc is
+  // just formats + scriptTable, keeping the doc focused on what clients see.
   const preproductionDoc = {
-    clientContext: parsed.clientContext || {},
-    socialSnapshot: parsed.socialSnapshot || {},
-    targetViewer: parsed.targetViewer || {},
     formats: formatsSection,
     scriptTable: Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [],
     generatedAt: new Date().toISOString(),
     modelUsed: "claude-opus-4-6",
     runId,
     rewriteHistory: project.preproductionDoc?.rewriteHistory || [],
+    clientFeedback: project.preproductionDoc?.clientFeedback || {},
   };
 
   await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
     preproductionDoc,
-    stage: "script",
+    tab: "script",
     status: "review",
     updatedAt: new Date().toISOString(),
   });
@@ -1731,6 +1728,78 @@ Rank them. Return JSON.`;
   return res.status(200).json({ success: true, count, formatIds, reason: parsed.reason || "" });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// TAB 7 — PUSH TO DELIVERIES (Phase G)
+// Mirrors the Meta Ads handoff in src/components/Preproduction.jsx:612-637
+// but runs server-side so we can: (a) guard against duplicate pushes,
+// (b) bundle all writes atomically, (c) include fields the client side
+// doesn't have handy (e.g. client logo from the account record).
+// ═══════════════════════════════════════════════════════════════════
+async function handlePushToDeliveries(req, res) {
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const scriptTable = project.preproductionDoc?.scriptTable || [];
+  if (scriptTable.length === 0) {
+    return res.status(400).json({ error: "No script rows — generate the scripts first" });
+  }
+
+  // Guard against duplicate pushes — the UI disables the button once
+  // deliveryHandoff is set, but the server enforces it.
+  if (project.deliveryHandoff?.deliveryId) {
+    return res.status(409).json({ error: "Already pushed to Deliveries", deliveryId: project.deliveryHandoff.deliveryId });
+  }
+
+  const deliveryId = `del-${Date.now()}`;
+  const now = new Date().toISOString();
+
+  // Client logo lookup from the account record (same pattern as the Meta
+  // Ads branch in Preproduction.jsx).
+  let logoUrl = null;
+  if (project.attioCompanyId) {
+    const accounts = await fbGet("/accounts");
+    if (accounts) {
+      const acct = Object.values(accounts).find(a => a?.attioId === project.attioCompanyId);
+      if (acct?.logoUrl) logoUrl = acct.logoUrl;
+    }
+  }
+
+  const videos = scriptTable.map(row => ({
+    name: row.videoName || row.formatName || "Unnamed video",
+    viewixStatus: "In Development",
+    revision1: "",
+    revision2: "",
+  }));
+
+  const delivery = {
+    id: deliveryId,
+    shortId: project.shortId || null,
+    clientName: project.companyName,
+    projectName: `Social Organic · ${project.companyName}`,
+    logoUrl,
+    notes: "",
+    videos,
+    createdAt: now,
+    sourceType: "socialOrganic",
+    sourceProjectId: projectId,
+  };
+
+  await fbSet(`/deliveries/${deliveryId}`, delivery);
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    deliveryHandoff: { deliveryId, pushedAt: now },
+    status: "exported",
+    tab: "done",
+    updatedAt: now,
+  });
+  // Writing approvals.script too so the tab-bar shows the Script tab as done.
+  await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/script`, now);
+
+  return res.status(200).json({ success: true, deliveryId, videoCount: videos.length });
+}
+
 // ─── Dispatcher ───
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1774,6 +1843,8 @@ export default async function handler(req, res) {
         return await handleStartProfileScrape(req, res);
       case "suggestFormats":
         return await handleSuggestFormats(req, res);
+      case "pushToDeliveries":
+        return await handlePushToDeliveries(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }

@@ -27,6 +27,10 @@ const SCRIPT_COLUMNS = [
 
 export function PreproductionPublicView() {
   const [project, setProject] = useState(null);
+  // projectType lets us render different layouts depending on where the
+  // record was found. "metaAds" = existing full layout; "socialOrganic" =
+  // minimal script-table view (introduced by the Tab-7 client feedback flow).
+  const [projectType, setProjectType] = useState(null);
   const [loading, setLoading] = useState(true);
   const [feedbackCell, setFeedbackCell] = useState(null); // { cellId, column } or { cellId, column: "_row" } for row feedback
   const [feedbackText, setFeedbackText] = useState("");
@@ -47,20 +51,35 @@ export function PreproductionPublicView() {
     onFB(async () => {
       try { await signInAnonymouslyForPublic(); }
       catch (e) { console.warn("Anonymous auth failed, continuing:", e.message); }
+
+      // Try metaAds first (legacy default). If we don't find a match within
+      // a reasonable window, fall back to socialOrganic. We wire both
+      // listeners so hot-swaps land live — whichever responds with a real
+      // match wins.
+      let foundAny = false;
+
       if (projectId) {
         fbListen(`/preproduction/metaAds/${projectId}`, (data) => {
-          if (data) setProject(data);
-          setLoading(false);
+          if (data) { setProject(data); setProjectType("metaAds"); foundAny = true; setLoading(false); }
+        });
+        fbListen(`/preproduction/socialOrganic/${projectId}`, (data) => {
+          if (data && !foundAny) { setProject(data); setProjectType("socialOrganic"); foundAny = true; setLoading(false); }
         });
       } else if (shortId) {
-        // Pretty /p/HASH path — find the matching project by shortId
         fbListen(`/preproduction/metaAds`, (allProjects) => {
-          if (!allProjects) { setLoading(false); return; }
+          if (!allProjects) return;
           const match = Object.values(allProjects).find(p => p && p.shortId && p.shortId.toLowerCase() === shortId);
-          if (match) setProject(match);
-          setLoading(false);
+          if (match) { setProject(match); setProjectType("metaAds"); foundAny = true; setLoading(false); }
+        });
+        fbListen(`/preproduction/socialOrganic`, (allProjects) => {
+          if (!allProjects) return;
+          const match = Object.values(allProjects).find(p => p && p.shortId && p.shortId.toLowerCase() === shortId);
+          if (match && !foundAny) { setProject(match); setProjectType("socialOrganic"); foundAny = true; setLoading(false); }
         });
       }
+      // Loading timeout — 3s should be more than enough to see if either
+      // path has data. After that, show the "not found" error state.
+      setTimeout(() => { if (!foundAny) setLoading(false); }, 3000);
     });
   }, [projectId, shortId]);
 
@@ -87,7 +106,7 @@ export function PreproductionPublicView() {
       fetch("/api/preproduction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "notifyFeedback", projectId: project?.id || projectId }),
+        body: JSON.stringify({ action: "notifyFeedback", projectId: project?.id || projectId, type: projectType }),
       }).catch(() => {});
     }, 120000); // 2 minutes
   };
@@ -96,23 +115,32 @@ export function PreproductionPublicView() {
     const pid = project?.id || projectId;
     if (!feedbackCell || !feedbackText.trim() || !pid) return;
     setSaving(true);
-    const key = feedbackCell.column === "_row"
-      ? `${feedbackCell.cellId}__row`
-      : `${feedbackCell.cellId}_${feedbackCell.column}`;
+    // Key convention differs by project type:
+    //   metaAds        → `{rowId}_{col}` or `{rowId}__row`
+    //   socialOrganic  → `scriptTable.{i}.{col}` (dot-path of the field)
+    const key = projectType === "socialOrganic"
+      ? feedbackCell.cellKey
+      : (feedbackCell.column === "_row"
+          ? `${feedbackCell.cellId}__row`
+          : `${feedbackCell.cellId}_${feedbackCell.column}`);
     const now = new Date().toISOString();
-    fbSet(`/preproduction/metaAds/${pid}/clientFeedback/${key}`, {
+    const basePath = projectType === "socialOrganic"
+      ? `/preproduction/socialOrganic/${pid}/preproductionDoc/clientFeedback`
+      : `/preproduction/metaAds/${pid}/clientFeedback`;
+    fbSet(`${basePath}/${key.replace(/\./g, "_")}`, {
       text: feedbackText.trim(),
       submittedAt: now,
-      cellId: feedbackCell.cellId,
-      column: feedbackCell.column,
+      cellId: feedbackCell.cellId || null,
+      column: feedbackCell.column || null,
+      cellKey: feedbackCell.cellKey || null,
     });
     // Log to central feedback log for prompt refinement
     fbSet(`/preproduction/feedbackLog/cf_${Date.now()}`, {
       type: "clientFeedback",
+      projectType,
       projectId: pid,
       companyName: project?.companyName || "",
-      cellId: feedbackCell.cellId,
-      column: feedbackCell.column,
+      cellKey: key,
       text: feedbackText.trim(),
       timestamp: now,
     });
@@ -123,6 +151,13 @@ export function PreproductionPublicView() {
   };
 
   const getFeedback = (cellId, column) => {
+    if (projectType === "socialOrganic") {
+      const fb = project?.preproductionDoc?.clientFeedback;
+      if (!fb) return null;
+      // Producer-side writes path-style keys; we translate back here.
+      const key = (cellId || "").replace(/\./g, "_");
+      return fb[key] || null;
+    }
     if (!project?.clientFeedback) return null;
     return project.clientFeedback[`${cellId}_${column}`] || null;
   };
@@ -138,6 +173,120 @@ export function PreproductionPublicView() {
       <div style={{ color: "#5A6B85", fontSize: 14 }}>Project not found</div>
     </div>
   );
+
+  // Social Organic projects have a different data shape — render a
+  // minimal script-table view with per-cell feedback boxes.
+  if (projectType === "socialOrganic") {
+    return renderSocialOrganic();
+  }
+
+  // eslint-disable-next-line no-inner-declarations
+  function renderSocialOrganic() {
+    const doc = project?.preproductionDoc || {};
+    const rows = Array.isArray(doc.scriptTable) ? doc.scriptTable : [];
+    const fb = doc.clientFeedback || {};
+
+    const SO_COLS = [
+      { key: "formatName",   label: "Format",        editable: false },
+      { key: "contentStyle", label: "Content Style" },
+      { key: "hook",         label: "Hook (spoken)" },
+      { key: "textHook",     label: "Text Hook" },
+      { key: "visualHook",   label: "Visual Hook" },
+      { key: "scriptNotes",  label: "Script / Notes" },
+      { key: "props",        label: "Props" },
+    ];
+
+    return (
+      <div style={{ minHeight: "100vh", background: "#0B0F1A", fontFamily: "'DM Sans',-apple-system,sans-serif", color: "#E8ECF4" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}`}</style>
+
+        <div style={{ padding: "24px 40px", borderBottom: "1px solid #1E2A3A", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            {accountLogo && <img src={accountLogo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 36, borderRadius: 4, objectFit: "contain", background: logoBg(accountLogoBg), padding: 4 }} />}
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#E8ECF4" }}>{project.companyName}</div>
+              <div style={{ fontSize: 12, color: "#5A6B85", marginTop: 2 }}>Preproduction brief · click any cell to leave feedback</div>
+            </div>
+          </div>
+          <Logo />
+        </div>
+
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "30px 40px" }}>
+          {rows.length === 0 ? (
+            <div style={{ padding: 60, textAlign: "center", color: "#5A6B85", fontSize: 14 }}>
+              The producer is still writing the scripts — check back shortly.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto", background: "#141A26", border: "1px solid #1E2A3A", borderRadius: 12, padding: 20 }}>
+              <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "#0B0F1A" }}>
+                    <th style={{ textAlign: "left", padding: "10px 12px", fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", width: 40 }}>#</th>
+                    {SO_COLS.map(c => (
+                      <th key={c.key} style={{ textAlign: "left", padding: "10px 12px", fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", minWidth: 160 }}>{c.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, i) => (
+                    <tr key={i} style={{ borderTop: "1px solid #1E2A3A" }}>
+                      <td style={{ padding: "8px 12px", color: "#5A6B85", fontSize: 11, fontFamily: "'JetBrains Mono',monospace" }}>{row.videoNumber || i + 1}</td>
+                      {SO_COLS.map(c => {
+                        const cellKey = `scriptTable.${i}.${c.key}`;
+                        const existing = fb[cellKey.replace(/\./g, "_")];
+                        const editable = c.editable !== false;
+                        const value = row[c.key] || "";
+                        return (
+                          <td key={c.key} style={{ padding: "4px 6px", verticalAlign: "top", position: "relative" }}>
+                            <div
+                              onClick={() => editable && setFeedbackCell({ cellKey, cellId: `row_${i}`, column: c.key })}
+                              style={{
+                                padding: "6px 8px", borderRadius: 4, minHeight: 24,
+                                background: existing ? "rgba(245,158,11,0.08)" : "transparent",
+                                outline: existing ? "1px solid rgba(245,158,11,0.4)" : "1px solid transparent",
+                                cursor: editable ? "pointer" : "default",
+                                color: value ? "#E8ECF4" : "#5A6B85",
+                                fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap",
+                              }}>
+                              {value || (editable ? "(empty)" : "—")}
+                              {existing && (
+                                <div style={{ marginTop: 4, fontSize: 10, color: "#F59E0B", fontStyle: "italic" }}>
+                                  Your feedback: "{existing.text}"
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {feedbackCell && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setFeedbackCell(null)}>
+              <div style={{ background: "#141A26", borderRadius: 12, padding: 22, maxWidth: 520, width: "92%", border: "1px solid #1E2A3A" }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", marginBottom: 10 }}>Leave feedback</div>
+                <div style={{ fontSize: 11, color: "#5A6B85", marginBottom: 10 }}>{SO_COLS.find(c => c.key === feedbackCell.column)?.label}</div>
+                <textarea value={feedbackText} onChange={e => setFeedbackText(e.target.value)} autoFocus rows={4}
+                  placeholder="What would you like changed?"
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #1E2A3A", background: "#0B0F1A", color: "#E8ECF4", fontSize: 13, fontFamily: "inherit", resize: "vertical", marginBottom: 10 }} />
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <button onClick={() => setFeedbackCell(null)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1E2A3A", background: "transparent", color: "#5A6B85", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                  <button onClick={submitFeedback} disabled={!feedbackText.trim() || saving}
+                    style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: "#8B5CF6", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: (!feedbackText.trim() || saving) ? 0.5 : 1 }}>
+                    {saving ? "Saving…" : "Submit"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const p = project;
   const hasScripts = p.scriptTable && p.scriptTable.length > 0;

@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { onFB, fbSet, fbListen, getCurrentRole } from "../firebase";
-import { logoBg, makeShortId } from "../utils";
+import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
 import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewriteModal";
@@ -492,8 +492,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
           hint="Phase F — AI pre-selects formats based on brand truth, ticked videos, and total video count. Producer drags between panels to refine. Category filter: Suggested / Recently Added / Over Performers." />
       )}
       {tab === "script" && (
-        <TabPlaceholder tabNum={7} title="Scripting"
-          hint="Phase G — Claude generates the script table per video. Cell-level AI rewrite + manual edit. Clients can view and leave feedback via a share URL. Push to Deliveries when approved." />
+        <ScriptStep project={project} onPatch={onPatch} />
       )}
       {tab === "done" && (
         <TabPlaceholder tabNum={8} title="Done"
@@ -2148,7 +2147,7 @@ const SCRIPT_COLUMNS = [
   { key: "props",        label: "Props",         width: 100 },
 ];
 
-function ScriptBuilderStep({ project, onPatch }) {
+function ScriptStep({ project, onPatch }) {
   const doc = project.preproductionDoc || null;
   const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
   const [generating, setGenerating] = useState(false);
@@ -2217,16 +2216,12 @@ function ScriptBuilderStep({ project, onPatch }) {
 
   return (
     <div>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Preproduction brief</div>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-            Generated {doc.generatedAt ? new Date(doc.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "—"} · {doc.modelUsed || "claude-opus-4-6"}. Click any cell to edit.
-          </div>
-        </div>
-        <button onClick={generate} style={btnSecondary}>Regenerate</button>
-      </div>
+      {/* Header + toolbar */}
+      <ScriptToolbar project={project} onRegenerate={generate} onPatch={onPatch} />
+
+      {/* Feedback summary banner — if the client has left comments since the
+          last time the producer was in here, flag it. */}
+      <ClientFeedbackSummary project={project} />
 
       {formatsChanged && (
         <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(245,158,11,0.08)", borderRadius: 8, border: "1px solid rgba(245,158,11,0.3)", fontSize: 12, color: "#F59E0B" }}>
@@ -2240,24 +2235,8 @@ function ScriptBuilderStep({ project, onPatch }) {
         </div>
       )}
 
-      {/* Sections */}
-      <SectionCard title="Client context">
-        <EditableField label="Brand truths" path="clientContext.brandTruths" value={doc.clientContext?.brandTruths} onEdit={openRewrite} />
-        <EditableField label="Brand ambitions" path="clientContext.brandAmbitions" value={doc.clientContext?.brandAmbitions} onEdit={openRewrite} />
-        <EditableField label="Overall client goals" path="clientContext.clientGoals" value={doc.clientContext?.clientGoals} onEdit={openRewrite} multi />
-        <EditableField label="Key considerations" path="clientContext.keyConsiderations" value={doc.clientContext?.keyConsiderations} onEdit={openRewrite} multi />
-      </SectionCard>
-
-      <SectionCard title="Social snapshot">
-        <EditableField label="Average performance" path="socialSnapshot.averagePerformance" value={doc.socialSnapshot?.averagePerformance} onEdit={openRewrite} />
-        <EditableField label="Highest performing" path="socialSnapshot.highestPerforming" value={doc.socialSnapshot?.highestPerforming} onEdit={openRewrite} />
-        <EditableField label="Key takeaways" path="socialSnapshot.takeaways" value={doc.socialSnapshot?.takeaways} onEdit={openRewrite} multi />
-      </SectionCard>
-
-      <SectionCard title="Target viewer">
-        <EditableField label="Demographic" path="targetViewer.demographic" value={doc.targetViewer?.demographic} onEdit={openRewrite} />
-        <EditableField label="Pain points & language" path="targetViewer.painPoints" value={doc.targetViewer?.painPoints} onEdit={openRewrite} multi />
-      </SectionCard>
+      {/* Brand Truth sections moved to Tab 1 (project.brandTruth) in the
+          7-tab restructure. Tab 7 is now script-focused only. */}
 
       <SectionCard title="Formats">
         <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10, fontStyle: "italic" }}>
@@ -2306,23 +2285,33 @@ function ScriptBuilderStep({ project, onPatch }) {
                 </tr>
               </thead>
               <tbody>
-                {(doc.scriptTable || []).map((row, i) => (
-                  <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
-                    <td style={tdStyle}>{row.videoNumber || i + 1}</td>
-                    {SCRIPT_COLUMNS.map(c => (
-                      <td key={c.key} style={tdStyle}>
-                        {c.editable === false ? (
-                          <div style={{ padding: "4px 6px", color: "var(--fg)", fontWeight: 600 }}>{row[c.key] || "—"}</div>
-                        ) : (
-                          <Clickable
-                            value={row[c.key]}
-                            onClick={() => openRewrite(`scriptTable.${i}.${c.key}`, c.label, row[c.key])}
-                          />
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                {(doc.scriptTable || []).map((row, i) => {
+                  const feedback = doc.clientFeedback || {};
+                  return (
+                    <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                      <td style={tdStyle}>{row.videoNumber || i + 1}</td>
+                      {SCRIPT_COLUMNS.map(c => {
+                        // Client-feedback cell key: matches what the public
+                        // view writes — `scriptTable.{i}.{c.key}`.
+                        const cellKey = `scriptTable.${i}.${c.key}`;
+                        const cellFeedback = feedback[cellKey] || null;
+                        return (
+                          <td key={c.key} style={tdStyle}>
+                            {c.editable === false ? (
+                              <div style={{ padding: "4px 6px", color: "var(--fg)", fontWeight: 600 }}>{row[c.key] || "—"}</div>
+                            ) : (
+                              <Clickable
+                                value={row[c.key]}
+                                feedback={cellFeedback}
+                                onClick={() => openRewrite(cellKey, c.label, row[c.key])}
+                              />
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -3061,6 +3050,101 @@ function StatChip({ label, value }) {
     <div style={{ padding: "10px 14px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, minWidth: 140 }}>
       <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace", marginTop: 3 }}>{value}</div>
+    </div>
+  );
+}
+
+// ScriptStep toolbar: regenerate, copy share URL, push to Deliveries.
+function ScriptToolbar({ project, onRegenerate, onPatch }) {
+  const doc = project.preproductionDoc || {};
+  const deliveryHandoff = project.deliveryHandoff || null;
+  const shareUrl = preproductionShareUrl(project);
+  const [copied, setCopied] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [pushError, setPushError] = useState(null);
+
+  const copyShare = () => {
+    try {
+      navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard blocked (e.g. http in dev) — fall back to selecting.
+      window.prompt("Copy this URL:", shareUrl);
+    }
+  };
+
+  const pushToDeliveries = async () => {
+    if (deliveryHandoff?.deliveryId) return;
+    if (!window.confirm("Push this project to the Deliveries tab? Creates one video row per script table entry.")) return;
+    setPushing(true);
+    setPushError(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pushToDeliveries", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+    } catch (e) {
+      setPushError(e.message);
+    } finally {
+      setPushing(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Preproduction brief</div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+          {doc.generatedAt
+            ? `Generated ${new Date(doc.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} · ${doc.modelUsed || "claude-opus-4-6"}`
+            : "No brief yet."} Click any cell to rewrite it.
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {doc.generatedAt && project.shortId && (
+          <button onClick={copyShare} style={btnSecondary}>
+            {copied ? "✓ Copied" : "📎 Copy share URL"}
+          </button>
+        )}
+        {doc.generatedAt && <button onClick={onRegenerate} style={btnSecondary}>Regenerate</button>}
+        {doc.scriptTable?.length > 0 && !deliveryHandoff && (
+          <button onClick={pushToDeliveries} disabled={pushing}
+            style={{ ...btnPrimary, opacity: pushing ? 0.6 : 1 }}>
+            {pushing ? "Pushing…" : "→ Push to Deliveries"}
+          </button>
+        )}
+        {deliveryHandoff?.deliveryId && (
+          <span style={{ padding: "6px 12px", background: "rgba(34,197,94,0.12)", color: "#22C55E", borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
+            ✓ Delivered {new Date(deliveryHandoff.pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+          </span>
+        )}
+      </div>
+      {pushError && (
+        <div style={{ width: "100%", padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+          {pushError}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Banner that summarises client-left feedback on the current scriptTable.
+// Producers should be able to tell at a glance "has the client replied yet?"
+// without spelunking through each cell.
+function ClientFeedbackSummary({ project }) {
+  const feedback = project.preproductionDoc?.clientFeedback || {};
+  const entries = Object.entries(feedback || {}).filter(([, v]) => v && v.text);
+  if (entries.length === 0) return null;
+  const newest = entries.sort((a, b) => (b[1].submittedAt || "").localeCompare(a[1].submittedAt || ""))[0];
+  return (
+    <div style={{ padding: 14, marginBottom: 14, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 8, fontSize: 12, color: "#F59E0B" }}>
+      <strong>{entries.length} client comment{entries.length === 1 ? "" : "s"}</strong>
+      {newest?.[1]?.submittedAt && ` · latest ${new Date(newest[1].submittedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}`}
+      . Cells with feedback show an amber dot.
     </div>
   );
 }

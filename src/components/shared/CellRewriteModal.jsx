@@ -36,7 +36,10 @@ const btnSecondary = {
 };
 
 // A "cell" that looks like static text until hovered — click opens the rewrite modal.
-export function Clickable({ value, onClick, multi }) {
+// `feedback` is an optional client-feedback object (has a `text` field) —
+// when present, the cell renders with an amber dot + tooltip so producers
+// notice unresolved comments.
+export function Clickable({ value, onClick, multi, feedback }) {
   const [hover, setHover] = useState(false);
   const empty = !value || !value.toString().trim();
   return (
@@ -44,6 +47,7 @@ export function Clickable({ value, onClick, multi }) {
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      title={feedback?.text ? `Client feedback: ${feedback.text}` : ""}
       style={{
         padding: "6px 8px", borderRadius: 4,
         background: hover ? "var(--bg)" : "transparent",
@@ -55,7 +59,11 @@ export function Clickable({ value, onClick, multi }) {
         minHeight: 20,
         fontStyle: empty ? "italic" : "normal",
         transition: "outline 0.1s, background 0.1s",
+        position: "relative",
       }}>
+      {feedback?.text && (
+        <span style={{ position: "absolute", top: 4, right: 4, width: 8, height: 8, borderRadius: "50%", background: "#F59E0B" }} />
+      )}
       {empty ? "(empty — click to fill)" : value}
     </div>
   );

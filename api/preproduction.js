@@ -389,21 +389,37 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
     }
 
     // ─── NOTIFY FEEDBACK: Slack notification when client leaves feedback ───
+    // Covers both Meta Ads (/preproduction/metaAds) and Social Organic
+    // (/preproduction/socialOrganic with clientFeedback nested under
+    // preproductionDoc). Project lookup tries both paths.
     if (action === "notifyFeedback") {
-      const { projectId } = req.body;
+      const { projectId, type } = req.body;
       if (!projectId) return res.status(400).json({ error: "Missing projectId" });
 
-      const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+      let project = null;
+      let flavour = type || null;
+      if (!flavour || flavour === "metaAds") {
+        project = await fbGet(`/preproduction/metaAds/${projectId}`);
+        if (project) flavour = "metaAds";
+      }
+      if (!project && (!flavour || flavour === "socialOrganic")) {
+        project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+        if (project) flavour = "socialOrganic";
+      }
       if (!project) return res.status(404).json({ error: "Project not found" });
 
       const slackUrl = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
       if (slackUrl) {
-        const feedbackCount = project.clientFeedback ? Object.keys(project.clientFeedback).length : 0;
+        const feedback = flavour === "socialOrganic"
+          ? project.preproductionDoc?.clientFeedback
+          : project.clientFeedback;
+        const feedbackCount = feedback ? Object.keys(feedback).length : 0;
+        const label = flavour === "socialOrganic" ? "Social Organic scripts" : "Meta Ads scripts";
         await fetch(slackUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            text: `${project.companyName} has left feedback on their Meta Ads scripts (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}). Review in dashboard: planner.viewix.com.au`,
+            text: `${project.companyName} has left feedback on their ${label} (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}). Review in dashboard: planner.viewix.com.au`,
           }),
         });
       }
