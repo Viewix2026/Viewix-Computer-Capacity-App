@@ -514,8 +514,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         <ShortlistStep project={project} onPatch={onPatch} />
       )}
       {tab === "select" && (
-        <TabPlaceholder tabNum={6} title="Format Selection"
-          hint="Phase F — AI pre-selects formats based on brand truth, ticked videos, and total video count. Producer drags between panels to refine. Category filter: Suggested / Recently Added / Over Performers." />
+        <SocialOrganicSelect project={project} onPatch={onPatch} />
       )}
       {tab === "script" && (
         <ScriptStep project={project} onPatch={onPatch} />
