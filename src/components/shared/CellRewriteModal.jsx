@@ -70,13 +70,16 @@ export function Clickable({ value, onClick, multi, feedback }) {
 }
 
 // Labelled wrapper around <Clickable>. Used for doc-style layouts.
-export function EditableField({ label, path, value, onEdit, multi }) {
+// `feedback` — optional client-feedback object ({ text, submittedAt }) —
+// lights up the cell with the amber dot + tooltip, so producers can see
+// which fields the client has asked to change.
+export function EditableField({ label, path, value, onEdit, multi, feedback }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
         {label}
       </div>
-      <Clickable value={value} onClick={() => onEdit(path, label, value)} multi={multi} />
+      <Clickable value={value} onClick={() => onEdit(path, label, value)} multi={multi} feedback={feedback} />
     </div>
   );
 }

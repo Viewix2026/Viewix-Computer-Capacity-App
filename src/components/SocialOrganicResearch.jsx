@@ -2546,16 +2546,25 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
             </button>
           </div>
 
-          {BRAND_TRUTH_FIELDS.map(f => (
-            <EditableField
-              key={f.key}
-              label={f.label}
-              path={f.key}
-              value={fields[f.key]}
-              onEdit={openRewrite}
-              multi={f.multi}
-            />
-          ))}
+          {BRAND_TRUTH_FIELDS.map(f => {
+            // Client feedback is stored under preproductionDoc.clientFeedback
+            // by the public view. Key convention matches: dot-path flattened
+            // to underscores, so `brandTruth.fields.brandTruths` lands at
+            // `brandTruth_fields_brandTruths`.
+            const feedbackKey = `brandTruth_fields_${f.key}`;
+            const cellFeedback = project.preproductionDoc?.clientFeedback?.[feedbackKey] || null;
+            return (
+              <EditableField
+                key={f.key}
+                label={f.label}
+                path={f.key}
+                value={fields[f.key]}
+                onEdit={openRewrite}
+                multi={f.multi}
+                feedback={cellFeedback}
+              />
+            );
+          })}
         </div>
       ) : !generating && (
         <div style={{ padding: 30, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12, color: "var(--muted)" }}>

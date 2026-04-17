@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initFB, onFB, fbSet, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
+import { ReelPreview } from "./shared/ReelPreview";
 import { logoBg } from "../utils";
 
 const MOTIVATOR_COLORS = {
@@ -184,6 +185,9 @@ export function PreproductionPublicView() {
   function renderSocialOrganic() {
     const doc = project?.preproductionDoc || {};
     const rows = Array.isArray(doc.scriptTable) ? doc.scriptTable : [];
+    const formats = Array.isArray(doc.formats) ? doc.formats : [];
+    const bt = project?.brandTruth?.fields || {};
+    const takeaways = project?.clientResearch?.keyTakeaways || "";
     const fb = doc.clientFeedback || {};
 
     const SO_COLS = [
@@ -196,6 +200,53 @@ export function PreproductionPublicView() {
       { key: "props",        label: "Props" },
     ];
 
+    // Brand Truth fields the client can comment on — same shape as the
+    // producer-side Brand Truth editor but read-only here + feedback-only.
+    const BT_FIELDS = [
+      { key: "brandTruths",             label: "Brand Truths" },
+      { key: "brandAmbitions",          label: "Brand Ambitions" },
+      { key: "clientGoals",             label: "Overall Client Goals" },
+      { key: "keyConsiderations",       label: "Key Considerations" },
+      { key: "targetViewerDemographic", label: "Target Viewer" },
+      { key: "painPoints",              label: "Pain Points" },
+      { key: "language",                label: "Language" },
+    ];
+
+    // Helper: render a feedback-capable block. cellKey is the dot-path we
+    // write under preproductionDoc.clientFeedback; same convention as the
+    // producer-side Clickable so yellow-dot indicators line up.
+    const FeedbackCell = ({ cellKey, label, value, multi }) => {
+      const existing = fb[cellKey.replace(/\./g, "_")];
+      return (
+        <div
+          onClick={() => setFeedbackCell({ cellKey, cellId: cellKey, column: label })}
+          style={{
+            padding: "10px 14px", borderRadius: 6, minHeight: 28,
+            background: existing ? "rgba(245,158,11,0.08)" : "#0B0F1A",
+            border: existing ? "1px solid rgba(245,158,11,0.4)" : "1px solid #1E2A3A",
+            cursor: "pointer",
+            color: value ? "#E8ECF4" : "#5A6B85",
+            fontSize: 13, lineHeight: 1.6, whiteSpace: multi ? "pre-wrap" : "normal",
+            fontStyle: value ? "normal" : "italic",
+            transition: "background 0.15s, border 0.15s",
+          }}>
+          {value || "(empty)"}
+          {existing && (
+            <div style={{ marginTop: 6, fontSize: 11, color: "#F59E0B", fontStyle: "italic", lineHeight: 1.5 }}>
+              Your feedback: "{existing.text}"
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const Section = ({ title, children }) => (
+      <div style={{ background: "#141A26", border: "1px solid #1E2A3A", borderRadius: 12, padding: 24, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 16 }}>{title}</div>
+        {children}
+      </div>
+    );
+
     return (
       <div style={{ minHeight: "100vh", background: "#0B0F1A", fontFamily: "'DM Sans',-apple-system,sans-serif", color: "#E8ECF4" }}>
         <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}`}</style>
@@ -205,19 +256,82 @@ export function PreproductionPublicView() {
             {accountLogo && <img src={accountLogo} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 36, borderRadius: 4, objectFit: "contain", background: logoBg(accountLogoBg), padding: 4 }} />}
             <div>
               <div style={{ fontSize: 20, fontWeight: 800, color: "#E8ECF4" }}>{project.companyName}</div>
-              <div style={{ fontSize: 12, color: "#5A6B85", marginTop: 2 }}>Preproduction brief · click any cell to leave feedback</div>
+              <div style={{ fontSize: 12, color: "#5A6B85", marginTop: 2 }}>Social preproduction brief · click any section to leave feedback</div>
             </div>
           </div>
           <Logo />
         </div>
 
-        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "30px 40px" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "30px 40px" }}>
+
+          {/* Brand Truth — the context Claude extracted from the preproduction
+              meeting. Client reviews it here, flags anything off before scripts
+              get locked in. */}
+          {BT_FIELDS.some(f => bt[f.key]) && (
+            <Section title="Brand Truth">
+              {BT_FIELDS.map(f => (
+                <div key={f.key} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 5 }}>{f.label}</div>
+                  <FeedbackCell cellKey={`brandTruth.fields.${f.key}`} label={f.label} value={bt[f.key]} multi />
+                </div>
+              ))}
+            </Section>
+          )}
+
+          {/* Client Research takeaway — the producer's read on existing content. */}
+          {takeaways && (
+            <Section title="Producer's read on your current content">
+              <FeedbackCell cellKey="clientResearch.keyTakeaways" label="Key takeaways" value={takeaways} multi />
+            </Section>
+          )}
+
+          {/* Selected formats — so the client knows what's being produced.
+              Each format shows up to 3 example reel embeds so the client
+              can watch live examples of the style being proposed. */}
+          {formats.length > 0 && (
+            <Section title={`Formats we'll produce (${formats.length})`}>
+              <div style={{ display: "grid", gap: 18 }}>
+                {formats.map((f, i) => {
+                  const examples = Array.isArray(f.examples) ? f.examples.slice(0, 3) : [];
+                  return (
+                    <div key={f.formatLibraryId || i} style={{ padding: 16, background: "#0B0F1A", border: "1px solid #1E2A3A", borderRadius: 8 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", marginBottom: 10 }}>{i + 1}. {f.name}</div>
+                      {f.videoAnalysis && (
+                        <div style={{ marginBottom: 12 }}>
+                          <FeedbackCell cellKey={`formats.${i}.videoAnalysis`} label={`${f.name} — analysis`} value={f.videoAnalysis} multi />
+                        </div>
+                      )}
+                      {examples.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Examples</div>
+                          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(examples.length, 3)}, 1fr)`, gap: 10 }}>
+                            {examples.map((ex, j) => (
+                              <div key={j} style={{ background: "#141A26", borderRadius: 6, overflow: "hidden", border: "1px solid #1E2A3A" }}>
+                                <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="9 / 14" />
+                                <a href={ex.url} target="_blank" rel="noopener noreferrer"
+                                  style={{ display: "block", padding: "6px 10px", fontSize: 10, color: "#8B5CF6", textDecoration: "none", borderTop: "1px solid #1E2A3A" }}>
+                                  {ex.sourceAccount || "example"} ↗
+                                </a>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Section>
+          )}
+
+          {/* Script table — the actual per-video content plan. */}
+          <Section title={`Scripts (${rows.length})`}>
           {rows.length === 0 ? (
-            <div style={{ padding: 60, textAlign: "center", color: "#5A6B85", fontSize: 14 }}>
+            <div style={{ padding: 30, textAlign: "center", color: "#5A6B85", fontSize: 13 }}>
               The producer is still writing the scripts — check back shortly.
             </div>
           ) : (
-            <div style={{ overflowX: "auto", background: "#141A26", border: "1px solid #1E2A3A", borderRadius: 12, padding: 20 }}>
+            <div style={{ overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: "#0B0F1A" }}>
@@ -264,6 +378,7 @@ export function PreproductionPublicView() {
               </table>
             </div>
           )}
+          </Section>
 
           {feedbackCell && (
             <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setFeedbackCell(null)}>
