@@ -432,7 +432,8 @@ async function handleClassify(req, res) {
     success: true,
     classified: classified.length,
     batchErrors: errors,
-    model,
+    // Surface which model(s) ran, useful for cost-attribution debugging.
+    model: fast ? textModel : `${visionModel} (+ ${textModel} fallback)`,
   });
 }
 
