@@ -63,16 +63,56 @@ export function SocialOrganicSelect({ project, onPatch }) {
     return () => { u1(); u2(); };
   }, []);
 
-  // Target count — numberOfVideos / 5 rounded, override wins.
+  // Target count — AI-suggested if present, else numberOfVideos / 5, else manual.
+  const aiCount = typeof project.suggestedFormatCount === "number" ? project.suggestedFormatCount : null;
   const numberOfVideos = project.numberOfVideos || null;
   const override = project.videoCountOverride || null;
   const targetFromDeal = numberOfVideos ? Math.max(1, Math.round(numberOfVideos / 5)) : null;
-  const targetCount = override || targetFromDeal || null;
+  const targetCount = override || aiCount || targetFromDeal || null;
 
   // Filter state for the library panel.
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState([]);
+  // Left-panel category tabs — Suggested (AI) / Recently Added / Over Performers.
+  const [categoryMode, setCategoryMode] = useState("all");
+
+  // Suggest action — asks Claude to rank the library against the project.
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState(null);
+  const runSuggest = async () => {
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "suggestFormats", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+    } catch (e) {
+      setSuggestError(e.message);
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  // Auto-populate selected from AI suggestions the first time they land, as
+  // long as the producer hasn't already started picking.
+  const suggestedIds = Array.isArray(project.suggestedFormatIds) ? project.suggestedFormatIds : [];
+  useEffect(() => {
+    if (selected.length > 0) return;
+    if (suggestedIds.length === 0) return;
+    const next = suggestedIds.map((id, i) => ({
+      formatLibraryId: id,
+      source: "library",
+      order: i,
+      addedAt: new Date().toISOString(),
+    }));
+    setSelected(next);
+    onPatch({ selectedFormats: next });
+  }, [JSON.stringify(suggestedIds), selected.length]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const sensors = useSensors(useSensor(PointerSensor, {
     // 6px buffer stops accidental picks when the producer is just clicking to read.
@@ -90,9 +130,21 @@ export function SocialOrganicSelect({ project, onPatch }) {
     thumbnail: library[s.formatLibraryId]?.examples?.[0]?.thumbnail || null,
   })).filter(c => !selected.some(s => s.formatLibraryId === c.formatLibraryId));
 
+  // "Recently Added" cutoff — 14 days keeps the list meaningful without
+  // flushing every format out after one sprint.
+  const recentCutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  const suggestedIdSet = new Set(suggestedIds);
+
   // Library items (source B), filtered.
   const libraryCards = Object.values(library || {})
     .filter(f => f && f.id && !f.archived)
+    .filter(f => {
+      if (categoryMode === "all") return true;
+      if (categoryMode === "suggested") return suggestedIdSet.has(f.id);
+      if (categoryMode === "recent") return f.createdAt && new Date(f.createdAt).getTime() > recentCutoff;
+      if (categoryMode === "over") return false;  // TODO — needs analytics signal
+      return true;
+    })
     .filter(f => categoryFilter === "all" ? true : f.category === categoryFilter)
     .filter(f => tagFilter.length === 0 ? true : tagFilter.every(t => (f.tags || []).includes(t)))
     .filter(f => {
@@ -109,8 +161,14 @@ export function SocialOrganicSelect({ project, onPatch }) {
       description: f.videoAnalysis || "",
       category: f.category || null,
       thumbnail: f.examples?.[0]?.thumbnail || null,
+      isSuggested: suggestedIdSet.has(f.id),
     }))
-    .sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0) || a.name.localeCompare(b.name));
+    // Suggested formats float to the top, then by usage, then name.
+    .sort((a, b) => {
+      if (a.isSuggested && !b.isSuggested) return -1;
+      if (!a.isSuggested && b.isSuggested) return 1;
+      return (b.usageCount || 0) - (a.usageCount || 0) || a.name.localeCompare(b.name);
+    });
 
   const allTags = Array.from(new Set(
     Object.values(library || {}).flatMap(f => f?.archived ? [] : (f?.tags || []))
@@ -166,10 +224,42 @@ export function SocialOrganicSelect({ project, onPatch }) {
     }
   };
 
+  const approvals = project.approvals || {};
+  const isApproved = !!approvals.select;
   const canAdvance = targetCount ? selected.length >= targetCount : selected.length > 0;
+
+  const approve = () => {
+    fbSet(`/preproduction/socialOrganic/${project.id}/approvals/select`, new Date().toISOString());
+    onPatch({ tab: "script" });
+  };
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      {/* AI suggest banner */}
+      <div style={{ marginBottom: 14, padding: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>
+              AI-suggested formats
+              {aiCount != null && <span style={{ marginLeft: 10, fontSize: 11, color: "var(--accent)", fontFamily: "'JetBrains Mono',monospace" }}>{aiCount} recommended</span>}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              {project.suggestedFormatReason || "Claude ranks your library against the Brand Truth, shortlisted videos, and client takeaways."}
+              {numberOfVideos && ` Deal has ${numberOfVideos} video${numberOfVideos === 1 ? "" : "s"} — ~${Math.max(1, Math.round(numberOfVideos / 5))} formats is a sensible anchor (3-6 videos each).`}
+            </div>
+          </div>
+          <button onClick={runSuggest} disabled={suggesting}
+            style={{ ...btnSecondary, opacity: suggesting ? 0.5 : 1 }}>
+            {suggesting ? "Thinking…" : aiCount != null ? "Re-suggest" : "Suggest with AI"}
+          </button>
+        </div>
+        {suggestError && (
+          <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+            {suggestError}
+          </div>
+        )}
+      </div>
+
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Select formats</div>
@@ -215,6 +305,14 @@ export function SocialOrganicSelect({ project, onPatch }) {
 
         {/* Global library */}
         <Panel title="Global library" count={libraryCards.length}>
+          {/* Category-mode tabs — Suggested / Recently Added / Over Performers.
+              Sits above the filter bar so producers reach for AI picks first. */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 10, padding: 3, background: "var(--bg)", borderRadius: 6 }}>
+            <CatTab label="All" active={categoryMode === "all"} onClick={() => setCategoryMode("all")} />
+            <CatTab label={`Suggested${suggestedIds.length ? ` (${suggestedIds.length})` : ""}`} active={categoryMode === "suggested"} onClick={() => setCategoryMode("suggested")} disabled={suggestedIds.length === 0} />
+            <CatTab label="Recently Added" active={categoryMode === "recent"} onClick={() => setCategoryMode("recent")} />
+            <CatTab label="Over Performers" active={categoryMode === "over"} onClick={() => setCategoryMode("over")} disabled title="Analytics signal pending — coming soon" />
+          </div>
           <FormatFilterBar
             search={search} setSearch={setSearch}
             categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
@@ -223,7 +321,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
             allTags={allTags}
           />
           {libraryCards.length === 0 ? (
-            <EmptyPanel msg="No library formats match — clear filters or shortlist more videos." />
+            <EmptyPanel msg={categoryMode === "over" ? "Over Performers needs analytics data — coming later." : "No library formats match — clear filters or shortlist more videos."} />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "45vh", overflowY: "auto", paddingRight: 4 }}>
               {libraryCards.map(c => (
@@ -242,7 +340,43 @@ export function SocialOrganicSelect({ project, onPatch }) {
         onRemove={removeFormat}
         targetCount={targetCount}
       />
+
+      {/* Approval bar */}
+      <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+          {selected.length}{targetCount != null ? ` / ${targetCount}` : ""} selected
+          {canAdvance && !isApproved && " · ready to approve"}
+        </div>
+        {!isApproved ? (
+          <button onClick={approve}
+            disabled={!canAdvance}
+            title={canAdvance ? "Approve and move to Scripting" : `Pick at least ${targetCount || 1} format${(targetCount || 1) === 1 ? "" : "s"}`}
+            style={{ ...btnPrimary, opacity: canAdvance ? 1 : 0.5 }}>
+            Approve → Scripting
+          </button>
+        ) : (
+          <button onClick={() => onPatch({ tab: "script" })} style={btnPrimary}>
+            → Scripting
+          </button>
+        )}
+      </div>
     </DndContext>
+  );
+}
+
+function CatTab({ label, active, onClick, disabled, title }) {
+  return (
+    <button onClick={onClick} disabled={disabled} title={title || ""}
+      style={{
+        flex: 1, padding: "5px 10px", borderRadius: 4, border: "none",
+        background: active ? "var(--accent)" : "transparent",
+        color: active ? "#fff" : disabled ? "var(--muted)" : "var(--fg)",
+        fontSize: 11, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer",
+        fontFamily: "inherit", opacity: disabled ? 0.5 : 1,
+        whiteSpace: "nowrap",
+      }}>
+      {label}
+    </button>
   );
 }
 

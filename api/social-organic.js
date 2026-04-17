@@ -1615,6 +1615,122 @@ Suggest competitor handles and keywords now.`;
   return res.status(200).json({ success: true, competitors: normalisedCompetitors, keywords });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// TAB 6 — FORMAT SELECTION (Phase F)
+// suggestFormats: Claude ranks the library against the project context,
+// returns a recommended count + ranked format IDs. The UI pre-populates
+// the right-panel selected list with the top N, producer refines.
+// ═══════════════════════════════════════════════════════════════════
+async function handleSuggestFormats(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const library = await fbGet("/formatLibrary");
+  const libraryEntries = Object.values(library || {}).filter(f => f && f.id && !f.archived);
+  if (libraryEntries.length === 0) {
+    return res.status(200).json({ success: true, count: 0, formatIds: [], reason: "library_empty" });
+  }
+
+  // Sprinkle in shortlisted formats from this project (Phase 2 shortlist)
+  // — Claude should strongly prefer those because they were hand-picked.
+  const shortlistedIds = Object.values(project.shortlistedFormats || {})
+    .map(s => s?.formatLibraryId).filter(Boolean);
+  const shortlistedSet = new Set(shortlistedIds);
+
+  const bt = project.brandTruth?.fields || {};
+  const takeaways = project.clientResearch?.keyTakeaways || "";
+  const numberOfVideos = project.numberOfVideos || null;
+
+  // Suggested count: videos ÷ 5, rounded, floor 1 ceil 8. Producer can
+  // override in the UI but this is a sensible anchor.
+  const suggestedCount = numberOfVideos
+    ? Math.min(8, Math.max(1, Math.round(numberOfVideos / 5)))
+    : 4;
+
+  const libraryBlock = libraryEntries.map(f => {
+    const tags = (f.tags || []).join(", ");
+    const inShortlist = shortlistedSet.has(f.id) ? " [SHORTLISTED THIS PROJECT]" : "";
+    return `${f.id}: ${f.name}${inShortlist}
+  Analysis: ${(f.videoAnalysis || "").slice(0, 200)}
+  Tags: ${tags}`;
+  }).join("\n\n");
+
+  const systemPrompt = `You rank a video-format library against a specific client's preproduction context. Return JSON only — no markdown, no code fences.
+
+STRUCTURE:
+{
+  "count": integer,            // 3-8 formats, anchored at videos÷5 unless context says otherwise
+  "formatIds": ["fmt_...", ...],   // ranked best-first, length = count
+  "reason": "one sentence on why this mix"
+}
+
+RULES:
+- Only use format IDs from the library below. Do NOT invent new ones.
+- Prefer formats flagged [SHORTLISTED THIS PROJECT] — those are producer-chosen.
+- Match the client's tone + target viewer + platforms + pain points.
+- Spread across different content styles (don't pick 5 talking-heads if the library has variety).`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+VIDEOS THIS ROUND: ${numberOfVideos ?? "unknown"}
+SUGGESTED COUNT ANCHOR: ~${suggestedCount}
+
+BRAND TRUTHS: ${bt.brandTruths || "(none)"}
+BRAND AMBITIONS: ${bt.brandAmbitions || "(none)"}
+CLIENT GOALS: ${bt.clientGoals || "(none)"}
+KEY CONSIDERATIONS: ${bt.keyConsiderations || "(none)"}
+TARGET VIEWER: ${bt.targetViewerDemographic || "(none)"}
+PAIN POINTS: ${bt.painPoints || "(none)"}
+LANGUAGE: ${bt.language || "(none)"}
+
+PRODUCER'S READ ON CLIENT'S EXISTING CONTENT: ${takeaways || "(none)"}
+
+AVAILABLE FORMATS (library):
+${libraryBlock}
+
+Rank them. Return JSON.`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt, userMessage,
+      maxTokens: 2000,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 400) });
+  }
+
+  // Filter to real IDs only (Claude sometimes invents), dedupe, trim to count.
+  const validIds = new Set(libraryEntries.map(f => f.id));
+  const cleanIds = (parsed.formatIds || []).filter(id => validIds.has(id));
+  const dedupedIds = Array.from(new Set(cleanIds));
+  const count = Math.max(1, Math.min(8, parseInt(parsed.count, 10) || suggestedCount));
+  const formatIds = dedupedIds.slice(0, count);
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    suggestedFormatCount: count,
+    suggestedFormatIds: formatIds,
+    suggestedFormatReason: parsed.reason || "",
+    suggestedFormatsAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  return res.status(200).json({ success: true, count, formatIds, reason: parsed.reason || "" });
+}
+
 // ─── Dispatcher ───
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1656,6 +1772,8 @@ export default async function handler(req, res) {
         return await handleSuggestCompetitors(req, res);
       case "startProfileScrape":
         return await handleStartProfileScrape(req, res);
+      case "suggestFormats":
+        return await handleSuggestFormats(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }
