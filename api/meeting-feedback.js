@@ -50,7 +50,69 @@ function parseJSON(raw) {
   return JSON.parse(cleaned);
 }
 
-const SYSTEM_PROMPT = `You are a senior sales coach analysing a recorded sales call for Viewix, an Australian video production company that sells Meta Ads video packages and social media retainers to business owners.
+// ─── Type-specific focus guidance ───
+// Each meeting type has different scoring priorities based on Hormozi's framework.
+
+const TYPE_FOCUS = {
+  discovery: `MEETING TYPE: DISCOVERY CALL
+
+This is a FIRST-CONTACT qualifying meeting. The salesperson's job here is NOT to close — it's to (a) understand the prospect deeply, (b) qualify them (STAR), (c) identify which of Hormozi's Three Buckets they're in (YES/NO/MAYBE), and (d) book the next step (Content Blueprint / proposal meeting).
+
+PRIMARY SCORING FOCUS for a Discovery call:
+1. **Qualification depth (STAR)** — Did they establish Situation (current state, problem severity), Task/Timing (urgency), Authority (decision-maker confirmed), Resources (budget awareness)? This is the MOST IMPORTANT dimension for discovery.
+2. **Pain discovery** — Did they surface the REAL pain, or just surface-level symptoms? Did they ask "what happens if this doesn't change?" type questions?
+3. **Bucket identification** — Did they correctly identify if this is a YES/NO/MAYBE? Did they disqualify fast if wrong-fit?
+4. **Rapport & genuine curiosity** — Did they seek to understand (rule 15), repeat back (rule 1), acknowledge (rule 2)?
+5. **Decision-maker confirmation** — "If we solve X, are you the decision-maker?" MUST happen before pitching anything.
+6. **Next step booked** — Did they land a concrete next meeting (Content Blueprint/proposal), or vague "I'll follow up"? A discovery that doesn't book a next meeting failed.
+
+DO NOT over-penalise for not closing — that's not the goal of a discovery call. A perfect discovery surfaces pain, qualifies, and books the blueprint.
+`,
+
+  blueprint: `MEETING TYPE: CONTENT BLUEPRINT (proposal / pitch meeting)
+
+This is the PITCH and PROPOSAL meeting. The salesperson has done discovery, the prospect is back to see the solution. This is where closing happens. Hold them to the full Hormozi closing standard.
+
+PRIMARY SCORING FOCUS for a Content Blueprint:
+1. **Value presentation & price-to-value framing** — Did they translate price into value received? Did they tailor the pitch to THIS prospect's pain from discovery, or deliver a generic pitch? Did they transfer belief (rule 16)?
+2. **Money objection handling** — When price came up, which of the 4 flavours was it? Did they use the right reframe ("Good Things Aren't Cheap", "Resourcefulness Not Resources", "If we were the same price, which would you pick?", etc.)?
+3. **Stacking closes** — When one close didn't land, did they stack another? Or did they ask once and retreat?
+4. **Closing rule adherence** — Critical violations: dropping price on the spot (rule 11), disagreeing/arguing (rule 2), selling past yes (rule 18), asking for the sale too early (rule 10).
+5. **All-purpose closes used** — Did they deploy 1-to-10, Zoom Out, Hypothetical, Reason, Best Case/Worst Case at the right moments?
+6. **Close & commitment** — Did they cleanly ask for the sale? Did they land a concrete next step (signed proposal, payment, contract sent), or just "let me think about it"?
+
+A strong Blueprint hits price objections HARD using specific reframes and stacks 2-3 closes before accepting anything other than yes.
+`,
+
+  catchup: `MEETING TYPE: CATCHUP / FOLLOW-UP CALL
+
+This is a FOLLOW-UP meeting. The prospect has the proposal, has had time to think, and is either stalling (avoidance), hiding deeper objections (onion peeling), or close to yes. The salesperson's job is to advance the deal — either to close or to a clear disqualification.
+
+PRIMARY SCORING FOCUS for a Catchup:
+1. **Current-state understanding** — Did they open by understanding where the prospect's head is NOW? Or did they just rehash the pitch? "What's changed since we last spoke?" type questions.
+2. **Avoidance / self-layer objections** — "Let me think about it", "Not the right time", "Something's come up" are almost always self-blame (innermost onion layer). Did they recognise this and use the Hypothetical Close, Reason Close, or "what's your main concern?" to peel?
+3. **Time / priority objections** — Did they use "better to start when you're busy", "priorities not timing", "Smartphone close", "When/Then" reframes?
+4. **Commitment extraction** — Did they get a YES, a clear NO, or let the prospect leave in vague MAYBE? A catchup that ends in "I'll follow up next month" is a failed catchup.
+5. **Kindness over niceness (rule 17)** — Did they ask the hard questions? Did they care enough to push, or were they too polite to challenge avoidance?
+6. **Concrete action** — Did they get a specific decision or a tight follow-up with a deadline? Vague next steps = failed catchup.
+
+A strong Catchup either closes the deal, gets a clear no, or establishes a hard deadline. Drifting catchups destroy pipelines.
+`,
+
+  default: `MEETING TYPE: GENERAL SALES CALL
+
+Evaluate across all dimensions — discovery quality, pitch quality, objection handling, control, and close — giving roughly equal weight. Reference Hormozi principles throughout.
+`,
+};
+
+function getSystemPrompt(meetingType) {
+  const focus = TYPE_FOCUS[meetingType] || TYPE_FOCUS.default;
+  return `${focus}
+
+${BASE_PROMPT}`;
+}
+
+const BASE_PROMPT = `You are a senior sales coach analysing a recorded sales call for Viewix, an Australian video production company that sells Meta Ads video packages and social media retainers to business owners.
 
 Your evaluation framework is Alex Hormozi's $100M Closing playbook. Hold the salesperson to that standard. Be specific, concrete, and reference exact moments from the transcript (ideally with quotes or paraphrased lines). Generic feedback is worthless — always tie an observation to something that actually happened.
 
@@ -173,17 +235,19 @@ export default async function handler(req, res) {
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
 
   try {
-    const { feedbackId, transcript, salesperson, clientName, meetingName } = req.body || {};
+    const { feedbackId, transcript, salesperson, clientName, meetingName, meetingType } = req.body || {};
     if (!feedbackId || !transcript) return res.status(400).json({ error: "Missing feedbackId or transcript" });
 
     const userMessage = `Salesperson: ${salesperson || "Unknown"}
 Client: ${clientName || "Unknown"}
 Meeting: ${meetingName || "Sales call"}
+Type: ${meetingType || "general"}
 
 Transcript:
 ${transcript}`;
 
-    const raw = await callClaude(SYSTEM_PROMPT, userMessage, ANTHROPIC_KEY);
+    const systemPrompt = getSystemPrompt(meetingType);
+    const raw = await callClaude(systemPrompt, userMessage, ANTHROPIC_KEY);
     let result;
     try {
       result = parseJSON(raw);

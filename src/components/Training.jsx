@@ -58,7 +58,11 @@ export function Training({
     if (idx < 0) return p;
     const si = idx + dir;
     if (si < 0 || si >= p.length) return p;
+    // Swap both array position AND order field (the render sorts by order)
     const n = [...p];
+    const tmpOrder = n[idx].order;
+    n[idx] = { ...n[idx], order: n[si].order };
+    n[si] = { ...n[si], order: tmpOrder };
     [n[idx], n[si]] = [n[si], n[idx]];
     return n;
   });

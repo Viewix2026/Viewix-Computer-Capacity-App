@@ -3,6 +3,21 @@ import { onFB, fbSet, fbListen } from "../firebase";
 
 const SALESPEOPLE = ["Brandon", "Jeremy"];
 
+const MEETING_TYPES = [
+  { key: "discovery", label: "Discovery", desc: "First-contact qualifying call", color: "#22C55E" },
+  { key: "blueprint", label: "Content Blueprint", desc: "Proposal / pitch meeting", color: "#0082FA" },
+  { key: "catchup", label: "Catchup", desc: "Follow-up call", color: "#F59E0B" },
+];
+
+// Auto-detect meeting type from the meeting name
+function detectMeetingType(name) {
+  const n = (name || "").toLowerCase();
+  if (n.includes("discovery") || n.includes("intro") || n.includes("qualifying")) return "discovery";
+  if (n.includes("blueprint") || n.includes("proposal") || n.includes("pitch") || n.includes("presentation")) return "blueprint";
+  if (n.includes("catchup") || n.includes("catch up") || n.includes("follow") || n.includes("check-in") || n.includes("check in")) return "catchup";
+  return "";
+}
+
 const inputSt = {
   padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)",
   background: "var(--input-bg)", color: "var(--fg)", fontSize: 13,
@@ -32,6 +47,7 @@ export function MeetingFeedback() {
   const [creating, setCreating] = useState(false);
   const [formClient, setFormClient] = useState("");
   const [formMeeting, setFormMeeting] = useState("");
+  const [formType, setFormType] = useState("");
   const [formSalesperson, setFormSalesperson] = useState("");
   const [formTranscript, setFormTranscript] = useState("");
   const [analysing, setAnalysing] = useState(false);
@@ -56,10 +72,12 @@ export function MeetingFeedback() {
       return;
     }
     const id = `mf-${Date.now()}`;
+    const resolvedType = formType || detectMeetingType(formMeeting) || "";
     const entry = {
       id,
       clientName: formClient.trim(),
       meetingName: formMeeting.trim() || "Sales call",
+      meetingType: resolvedType,
       salesperson: formSalesperson,
       transcript: formTranscript.trim(),
       createdAt: new Date().toISOString(),
@@ -79,6 +97,7 @@ export function MeetingFeedback() {
           salesperson: entry.salesperson,
           clientName: entry.clientName,
           meetingName: entry.meetingName,
+          meetingType: entry.meetingType,
         }),
       });
       const data = await resp.json();
@@ -96,6 +115,7 @@ export function MeetingFeedback() {
       setAnalysing(false);
       setFormClient("");
       setFormMeeting("");
+      setFormType("");
       setFormSalesperson("");
       setFormTranscript("");
     }
@@ -120,6 +140,7 @@ export function MeetingFeedback() {
           salesperson: item.salesperson,
           clientName: item.clientName,
           meetingName: item.meetingName,
+          meetingType: item.meetingType || detectMeetingType(item.meetingName),
         }),
       });
       const data = await resp.json();
@@ -152,7 +173,14 @@ export function MeetingFeedback() {
             <div>
               <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{activeItem.salesperson}</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: "var(--fg)" }}>{activeItem.clientName}</div>
-              <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{activeItem.meetingName}</div>
+              <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
+                {activeItem.meetingType && (() => {
+                  const mt = MEETING_TYPES.find(t => t.key === activeItem.meetingType);
+                  if (!mt) return null;
+                  return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: `${mt.color}20`, color: mt.color, textTransform: "uppercase", letterSpacing: "0.5px" }}>{mt.label}</span>;
+                })()}
+                <span>{activeItem.meetingName}</span>
+              </div>
               <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
                 {activeItem.createdAt ? new Date(activeItem.createdAt).toLocaleString("en-AU") : ""}
               </div>
@@ -254,14 +282,28 @@ export function MeetingFeedback() {
       {creating && (
         <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, marginBottom: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 12 }}>Analyse a new meeting</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
             <div>
               <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Client Name</label>
               <input value={formClient} onChange={e => setFormClient(e.target.value)} placeholder="e.g. Acme Corp" style={inputSt} />
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Meeting Name</label>
-              <input value={formMeeting} onChange={e => setFormMeeting(e.target.value)} placeholder="e.g. Discovery call" style={inputSt} />
+              <input value={formMeeting} onChange={e => setFormMeeting(e.target.value)} placeholder="e.g. Discovery with Acme" style={inputSt} />
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Meeting Type</label>
+              <select value={formType} onChange={e => setFormType(e.target.value)} style={inputSt}>
+                <option value="">Auto-detect from name</option>
+                {MEETING_TYPES.map(t => <option key={t.key} value={t.key}>{t.label} — {t.desc}</option>)}
+              </select>
+              {!formType && formMeeting && detectMeetingType(formMeeting) && (
+                <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                  Will auto-detect as: <span style={{ color: MEETING_TYPES.find(t => t.key === detectMeetingType(formMeeting))?.color, fontWeight: 700 }}>{MEETING_TYPES.find(t => t.key === detectMeetingType(formMeeting))?.label}</span>
+                </div>
+              )}
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Salesperson</label>
@@ -282,7 +324,7 @@ export function MeetingFeedback() {
               style={{ ...btnPrimary, opacity: (analysing || !formClient.trim() || !formSalesperson || !formTranscript.trim()) ? 0.5 : 1 }}>
               {analysing ? "Analysing..." : "Analyse"}
             </button>
-            <button onClick={() => { setCreating(false); setFormClient(""); setFormMeeting(""); setFormSalesperson(""); setFormTranscript(""); }} style={btnSecondary}>Cancel</button>
+            <button onClick={() => { setCreating(false); setFormClient(""); setFormMeeting(""); setFormType(""); setFormSalesperson(""); setFormTranscript(""); }} style={btnSecondary}>Cancel</button>
           </div>
         </div>
       )}
@@ -317,6 +359,11 @@ export function MeetingFeedback() {
                 ) : (
                   <span style={{ padding: "2px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: rc.bg, color: rc.fg }}>N/A</span>
                 )}
+                {item.meetingType && (() => {
+                  const mt = MEETING_TYPES.find(t => t.key === item.meetingType);
+                  if (!mt) return null;
+                  return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: `${mt.color}20`, color: mt.color, textTransform: "uppercase", letterSpacing: "0.5px" }}>{mt.label}</span>;
+                })()}
                 <span style={{ fontSize: 12, color: "var(--muted)" }}>·</span>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>{item.meetingName}</span>
               </div>
