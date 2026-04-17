@@ -43,10 +43,9 @@ export default async function handler(req, res) {
 
   const uid = ROLE_TO_UID[role];
   try {
-    // Set the custom claim on the user (creates the user if missing).
-    // Security rules read this via auth.token.role.
-    await admin.auth().setCustomUserClaims(uid, { role });
-    // Mint a custom token that also carries the claim (belt-and-suspenders).
+    // Mint a custom token with the role as a developer claim.
+    // Firebase auto-creates the user when the client signs in with this token,
+    // and the developer claims are propagated to auth.token.role in security rules.
     const token = await admin.auth().createCustomToken(uid, { role });
     return res.status(200).json({ token, role });
   } catch (e) {
