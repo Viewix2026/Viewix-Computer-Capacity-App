@@ -1305,6 +1305,269 @@ Return only the rewritten value.`;
   return res.status(200).json({ success: true, newValue });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// TAB 2 — FORMAT RESEARCH (Phase C)
+// suggestCompetitors:     Claude proposes handles + keywords from context
+// startClientScrape:      async Apify runs for client IG posts + profiles
+// startCompetitorScrape:  async Apify run for ~120-video competitor scrape
+// Completion signalled via /api/apify-webhook back into Firebase.
+// ═══════════════════════════════════════════════════════════════════
+
+const APIFY_IG_PROFILE_ACTOR = "apify~instagram-profile-scraper";
+const APIFY_TT_PROFILE_ACTOR = "clockworks~tiktok-profile-scraper";
+const APIFY_YT_CHANNEL_ACTOR = "streamers~youtube-channel-info";
+
+// Resolve the webhook base URL. In Vercel production we want the canonical
+// domain, not the ephemeral preview URL. The env var takes precedence; fall
+// back to the preview URL for Vercel previews / local dev.
+function apifyWebhookBase() {
+  const fromEnv = process.env.APIFY_WEBHOOK_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) return `https://${vercelUrl}`;
+  return "https://planner.viewix.com.au";  // last-ditch canonical
+}
+
+// Fire an async Apify run + write a sidecar so the webhook can route the
+// callback back to this project + purpose. Returns the runId.
+async function startApifyRun({ actorId, input, token, projectId, purpose, extraSidecar = {} }) {
+  const SECRET = process.env.APIFY_WEBHOOK_SECRET;
+  if (!SECRET) throw new Error("APIFY_WEBHOOK_SECRET not configured");
+  const webhookUrl = `${apifyWebhookBase()}/api/apify-webhook?secret=${encodeURIComponent(SECRET)}`;
+  const webhooks = [{
+    eventTypes: ["ACTOR.RUN.SUCCEEDED", "ACTOR.RUN.FAILED", "ACTOR.RUN.TIMED_OUT", "ACTOR.RUN.ABORTED"],
+    requestUrl: webhookUrl,
+    payloadTemplate: `{"runId":"{{resource.id}}","status":"{{resource.status}}","datasetId":"{{resource.defaultDatasetId}}"}`,
+  }];
+  const webhooksB64 = Buffer.from(JSON.stringify(webhooks)).toString("base64");
+  const url = `https://api.apify.com/v2/acts/${actorId}/runs?token=${encodeURIComponent(token)}&webhooks=${encodeURIComponent(webhooksB64)}`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Apify run start ${r.status}: ${JSON.stringify(data).slice(0, 300)}`);
+  const runId = data.data?.id;
+  if (!runId) throw new Error("Apify didn't return a run id");
+  // Sidecar tells the webhook where to route the result.
+  await fbSet(`/preproduction/socialOrganic/_apifyRuns/${runId}`, {
+    projectId, purpose, actorId,
+    startedAt: new Date().toISOString(),
+    ...extraSidecar,
+  });
+  return runId;
+}
+
+async function handleStartClientScrape(req, res) {
+  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+  if (!APIFY_TOKEN) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
+
+  const { projectId, handle } = req.body || {};
+  if (!projectId || !handle) return res.status(400).json({ error: "Missing projectId or handle" });
+
+  const cleanHandle = handle.replace(/^@+/, "").trim();
+  if (!cleanHandle) return res.status(400).json({ error: "Invalid handle" });
+
+  // Mark the bundle as running immediately so the UI can render spinners
+  // without waiting for Apify's first webhook.
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape`, {
+    status: "running",
+    startedAt: new Date().toISOString(),
+    error: null,
+  });
+
+  const runIds = {};
+  const errors = {};
+
+  // 1. Client's IG posts (reels-only filtered in the webhook handler).
+  try {
+    runIds.posts = await startApifyRun({
+      actorId: APIFY_ACTOR,
+      input: {
+        directUrls: [`https://www.instagram.com/${cleanHandle}/`],
+        resultsType: "posts",
+        resultsLimit: 60,              // enough to find top-5 by views
+        searchType: "user",
+        addParentData: false,
+      },
+      token: APIFY_TOKEN,
+      projectId,
+      purpose: "clientPosts",
+      extraSidecar: { handle: `@${cleanHandle.toLowerCase()}` },
+    });
+  } catch (e) {
+    errors.posts = e.message;
+  }
+
+  // 2. IG profile scrape (for follower count).
+  try {
+    runIds.profileIG = await startApifyRun({
+      actorId: APIFY_IG_PROFILE_ACTOR,
+      input: { usernames: [cleanHandle] },
+      token: APIFY_TOKEN,
+      projectId,
+      purpose: "clientProfileIG",
+    });
+  } catch (e) {
+    errors.profileIG = e.message;
+  }
+
+  // TikTok + YouTube scrapes deferred to Phase D — they need the producer
+  // to supply the platform handles, which happens in Tab 3.
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape`, {
+    apifyRunIds: runIds,
+  });
+
+  return res.status(200).json({ success: true, runIds, errors });
+}
+
+async function handleStartCompetitorScrape(req, res) {
+  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+  if (!APIFY_TOKEN) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const research = project.research || {};
+  const competitors = Array.isArray(research.competitors) ? research.competitors : [];
+  const handles = competitors.map(c => c.handle).filter(Boolean);
+  if (handles.length === 0) {
+    return res.status(400).json({ error: "No competitor handles to scrape" });
+  }
+
+  const directUrls = handles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  // ~120 videos across N handles → 120 / N rounded. Cap at 50 per handle
+  // (apify-side ceiling) and at least 10.
+  const perHandle = Math.min(50, Math.max(10, Math.round(120 / handles.length)));
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, {
+    status: "running",
+    startedAt: new Date().toISOString(),
+    error: null,
+  });
+
+  let runId;
+  try {
+    runId = await startApifyRun({
+      actorId: APIFY_ACTOR,
+      input: {
+        directUrls,
+        resultsType: "posts",
+        resultsLimit: perHandle,
+        searchType: "user",
+        addParentData: false,
+      },
+      token: APIFY_TOKEN,
+      projectId,
+      purpose: "competitorPosts",
+    });
+  } catch (e) {
+    await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, {
+      status: "error",
+      error: e.message,
+      finishedAt: new Date().toISOString(),
+    });
+    return res.status(502).json({ error: "Failed to start Apify run", detail: e.message });
+  }
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, {
+    apifyRunId: runId,
+  });
+
+  return res.status(200).json({ success: true, runId, handles: handles.length, perHandle });
+}
+
+// Ask Claude for competitor handles + keywords grounded in brand truth,
+// transcript, and the account's saved competitors. Returns suggestions only
+// — the producer reviews and edits before approving Stage B.
+async function handleSuggestCompetitors(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const bt = project.brandTruth?.fields || {};
+  const transcript = project.brandTruth?.transcript || "";
+  let sherpa = "";
+  if (project.attioCompanyId) {
+    const accounts = await fbGet("/accounts");
+    if (accounts) {
+      const acct = Object.values(accounts).find(a => a?.attioId === project.attioCompanyId);
+      if (acct) {
+        const saved = (acct.competitors || []).map(c => c.handle || c.displayName).filter(Boolean);
+        if (saved.length) sherpa = `\nSAVED COMPETITORS (may or may not fit this round):\n${saved.join(", ")}`;
+        if (acct.industry) sherpa = `Industry: ${acct.industry}` + sherpa;
+      }
+    }
+  }
+
+  const systemPrompt = `You suggest Instagram competitor handles + hashtag keywords for Viewix's Social Organic research. Return JSON only, no markdown, no code fences. Prioritise accounts and topics the client would actually benchmark against. Avoid generic industry-giant handles unless they genuinely overlap. Limit: 5 handles, 8 keywords.
+
+STRUCTURE:
+{
+  "competitors": [{"handle": "@example", "reason": "one short sentence"}],
+  "keywords": ["keyword one", "hashtag-friendly phrase"]
+}`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+${sherpa}
+BRAND TRUTHS: ${bt.brandTruths || "(none)"}
+TARGET VIEWER: ${bt.targetViewerDemographic || "(none)"}
+PAIN POINTS: ${bt.painPoints || "(none)"}
+
+PREPRODUCTION TRANSCRIPT (first 4000 chars):
+"""
+${transcript.slice(0, 4000)}
+"""
+
+Suggest competitor handles and keywords now.`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-sonnet-4-6",
+      systemPrompt, userMessage,
+      maxTokens: 1500,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 400) });
+  }
+
+  const normalisedCompetitors = (parsed.competitors || [])
+    .map(c => {
+      if (typeof c === "string") return { handle: c.startsWith("@") ? c : `@${c.replace(/^@+/, "")}`, reason: "" };
+      const h = (c.handle || c.username || "").trim();
+      if (!h) return null;
+      return { handle: h.startsWith("@") ? h : `@${h.replace(/^@+/, "")}`, reason: c.reason || "" };
+    })
+    .filter(Boolean)
+    .slice(0, 5);
+  const keywords = (parsed.keywords || []).map(k => (k || "").toString().trim().replace(/^#/, "")).filter(Boolean).slice(0, 8);
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/research`, {
+    aiSuggestedAt: new Date().toISOString(),
+    aiSuggestions: { competitors: normalisedCompetitors, keywords },
+  });
+
+  return res.status(200).json({ success: true, competitors: normalisedCompetitors, keywords });
+}
+
 // ─── Dispatcher ───
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1338,6 +1601,12 @@ export default async function handler(req, res) {
         return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField":
         return await handleRewriteBrandTruthField(req, res);
+      case "startClientScrape":
+        return await handleStartClientScrape(req, res);
+      case "startCompetitorScrape":
+        return await handleStartCompetitorScrape(req, res);
+      case "suggestCompetitors":
+        return await handleSuggestCompetitors(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }

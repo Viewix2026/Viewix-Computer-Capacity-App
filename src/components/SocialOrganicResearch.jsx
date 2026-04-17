@@ -476,8 +476,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         <BrandTruthStep project={project} linkedAccount={linkedAccount} onPatch={onPatch} />
       )}
       {tab === "research" && (
-        <TabPlaceholder tabNum={2} title="Format Research"
-          hint="Phase C — two approval gates. Stage A kicks off an async scrape of the client's own Instagram reels + follower counts for IG/TikTok/YouTube. Stage B asks Claude to suggest competitor handles + keywords, then triggers an async 120-video scrape." />
+        <ResearchStep project={project} linkedAccount={linkedAccount} onPatch={onPatch} />
       )}
       {tab === "clientResearch" && (
         <TabPlaceholder tabNum={3} title="Client Research"
@@ -525,19 +524,23 @@ function effectiveTab(project) {
   return project?.tab || "brandTruth";
 }
 
+// `prev` is the approval key that must be set to unlock this tab. Most match
+// tab keys 1:1, but Tab 2 (Format Research) has TWO sub-approvals —
+// `research_a` (client handle approved → client scrape kicked off) and
+// `research_b` (competitors approved → 120-video scrape kicked off). Tab 3
+// gates on research_a so producers can move on while Stage B is still
+// scraping; Tab 4 gates on research_b.
 export const TABS = [
   { key: "brandTruth",     label: "Brand Truth",     num: 1, prev: null },
   { key: "research",       label: "Format Research", num: 2, prev: "brandTruth" },
-  { key: "clientResearch", label: "Client Research", num: 3, prev: "research" },
-  { key: "videoReview",    label: "Video Review",    num: 4, prev: "clientResearch" },
+  { key: "clientResearch", label: "Client Research", num: 3, prev: "research_a" },
+  { key: "videoReview",    label: "Video Review",    num: 4, prev: "research_b" },
   { key: "shortlist",      label: "Shortlist",       num: 5, prev: "videoReview" },
   { key: "select",         label: "Selection",       num: 6, prev: "shortlist" },
   { key: "script",         label: "Scripting",       num: 7, prev: "select" },
 ];
 
-// A tab is reachable iff the previous tab has an approval timestamp.
-// Tab 1 is always reachable. This enforces the producer-approval gate without
-// tracking per-tab reachability logic in each component.
+// A tab is reachable iff its prerequisite approval key is set.
 export function isTabReachable(project, tabKey) {
   const tab = TABS.find(t => t.key === tabKey);
   if (!tab) return false;
@@ -2477,6 +2480,320 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
           updatedAtPath={`/preproduction/socialOrganic/${project.id}/updatedAt`}
           onClose={() => setRewriteTarget(null)}
         />
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// TAB 2 — FORMAT RESEARCH (Phase C)
+// Two sequential approval gates:
+//   Stage A: client IG handle → kicks off client posts + IG profile scrape
+//   Stage B: competitors + keywords → kicks off 120-video scrape
+// Scrapes are async via Apify → /api/apify-webhook → Firebase; UI listens
+// to scrape status fields and shows pills.
+// ═══════════════════════════════════════════
+function ResearchStep({ project, linkedAccount, onPatch }) {
+  const research = project.research || {};
+  const clientScrape = project.clientScrape || {};
+  const competitorScrape = project.competitorScrape || {};
+  const approvals = project.approvals || {};
+
+  // Stage A: client handle. Default from the linked account's saved IG handle
+  // (accounts store competitors — the first entry often is the client itself
+  // in current practice; fall back to a derived handle from companyName).
+  const defaultHandle = research.clientHandle
+    || linkedAccount?.instagramHandle
+    || (linkedAccount?.competitors || []).find(c => c.isClient)?.handle
+    || "";
+  const [clientHandle, setClientHandle] = useState(defaultHandle);
+  const [starting, setStarting] = useState({ a: false, b: false });
+  const [err, setErr] = useState({ a: null, b: null });
+
+  useEffect(() => {
+    if (clientHandle === (research.clientHandle || "")) return;
+    const t = setTimeout(() => {
+      fbSet(`/preproduction/socialOrganic/${project.id}/research/clientHandle`, clientHandle);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [clientHandle]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const approveStageA = async () => {
+    if (!clientHandle.trim()) { setErr(e => ({ ...e, a: "Add a handle first" })); return; }
+    setStarting(s => ({ ...s, a: true }));
+    setErr(e => ({ ...e, a: null }));
+    try {
+      fbSet(`/preproduction/socialOrganic/${project.id}/research/clientHandle`, clientHandle);
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "startClientScrape", projectId: project.id, handle: clientHandle }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      fbSet(`/preproduction/socialOrganic/${project.id}/approvals/research_a`, new Date().toISOString());
+    } catch (e) {
+      setErr(err => ({ ...err, a: e.message }));
+    } finally {
+      setStarting(s => ({ ...s, a: false }));
+    }
+  };
+
+  // Stage B state — AI-suggested competitors + keywords.
+  const [competitors, setCompetitors] = useState(research.competitors || []);
+  const [keywords, setKeywords] = useState(research.keywords || []);
+  const [newHandle, setNewHandle] = useState("");
+  const [newKeyword, setNewKeyword] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  useEffect(() => { setCompetitors(research.competitors || []); }, [JSON.stringify(research.competitors)]);  // eslint-disable-line
+  useEffect(() => { setKeywords(research.keywords || []); }, [JSON.stringify(research.keywords)]);  // eslint-disable-line
+
+  const suggestedCompetitorMap = new Map((research.aiSuggestions?.competitors || []).map(c => [c.handle.toLowerCase(), c.reason]));
+
+  const addCompetitor = (handle, source = "manual") => {
+    const norm = handle.trim().startsWith("@") ? handle.trim() : `@${handle.trim().replace(/^@+/, "")}`;
+    if (!norm || norm === "@") return;
+    if (competitors.some(c => c.handle.toLowerCase() === norm.toLowerCase())) return;
+    const next = [...competitors, { handle: norm, source }];
+    setCompetitors(next);
+    fbSet(`/preproduction/socialOrganic/${project.id}/research/competitors`, next);
+  };
+  const removeCompetitor = (handle) => {
+    const next = competitors.filter(c => c.handle !== handle);
+    setCompetitors(next);
+    fbSet(`/preproduction/socialOrganic/${project.id}/research/competitors`, next);
+  };
+  const addKeyword = (k) => {
+    const v = k.trim().replace(/^#/, "");
+    if (!v || keywords.includes(v)) return;
+    const next = [...keywords, v];
+    setKeywords(next);
+    fbSet(`/preproduction/socialOrganic/${project.id}/research/keywords`, next);
+  };
+  const removeKeyword = (k) => {
+    const next = keywords.filter(x => x !== k);
+    setKeywords(next);
+    fbSet(`/preproduction/socialOrganic/${project.id}/research/keywords`, next);
+  };
+
+  const runSuggest = async () => {
+    setSuggesting(true);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      // Auto-add suggested competitors + keywords if empty; otherwise just
+      // leave the suggestions in research.aiSuggestions for manual accept.
+      if (competitors.length === 0 && Array.isArray(d.competitors)) {
+        const next = d.competitors.map(c => ({ handle: c.handle, source: "ai" }));
+        setCompetitors(next);
+        fbSet(`/preproduction/socialOrganic/${project.id}/research/competitors`, next);
+      }
+      if (keywords.length === 0 && Array.isArray(d.keywords)) {
+        setKeywords(d.keywords);
+        fbSet(`/preproduction/socialOrganic/${project.id}/research/keywords`, d.keywords);
+      }
+    } catch (e) {
+      setErr(err => ({ ...err, b: e.message }));
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  const approveStageB = async () => {
+    if (competitors.length === 0) { setErr(e => ({ ...e, b: "Add at least one competitor" })); return; }
+    setStarting(s => ({ ...s, b: true }));
+    setErr(e => ({ ...e, b: null }));
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "startCompetitorScrape", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      fbSet(`/preproduction/socialOrganic/${project.id}/approvals/research_b`, new Date().toISOString());
+    } catch (e) {
+      setErr(err => ({ ...err, b: e.message }));
+    } finally {
+      setStarting(s => ({ ...s, b: false }));
+    }
+  };
+
+  const stageADone = !!approvals.research_a;
+  const stageBDone = !!approvals.research_b;
+
+  return (
+    <div>
+      {/* Stage A: client Instagram handle */}
+      <StageCard
+        stageLabel="Stage A"
+        title="Client Instagram"
+        hint="The client's own handle, prefilled from their account. Approving kicks off an async scrape of their reels + Instagram follower count."
+        done={stageADone}
+        doneText={`Approved ${stageADone ? new Date(approvals.research_a).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}`}
+        error={err.a}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input type="text" value={clientHandle} onChange={e => setClientHandle(e.target.value)}
+            disabled={stageADone}
+            placeholder="@client_handle"
+            style={{ ...inputSt, maxWidth: 280, fontSize: 13, opacity: stageADone ? 0.6 : 1 }} />
+          {!stageADone && (
+            <button onClick={approveStageA} disabled={starting.a || !clientHandle.trim()}
+              style={{ ...btnPrimary, opacity: (starting.a || !clientHandle.trim()) ? 0.5 : 1 }}>
+              {starting.a ? "Starting…" : "Approve & Start Scrape"}
+            </button>
+          )}
+        </div>
+        {stageADone && <ScrapeStatusPill scrape={clientScrape} label="Client scrape" />}
+      </StageCard>
+
+      {/* Stage B: competitors + keywords (only unlocks once Stage A approved,
+          matching the "two sequential gates" in the spec). */}
+      <div style={{ marginTop: 14, opacity: stageADone ? 1 : 0.55, pointerEvents: stageADone ? "auto" : "none" }}>
+        <StageCard
+          stageLabel="Stage B"
+          title="Competitors & Keywords"
+          hint="AI suggests competitor handles and hashtag keywords from the approved Brand Truth + transcript + Sherpa. Edit freely before approving."
+          done={stageBDone}
+          doneText={`Approved ${stageBDone ? new Date(approvals.research_b).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}`}
+          error={err.b}>
+
+          {!stageBDone && (
+            <div style={{ marginBottom: 12 }}>
+              <button onClick={runSuggest} disabled={suggesting} style={{ ...btnSecondary, opacity: suggesting ? 0.5 : 1 }}>
+                {suggesting ? "Thinking…" : research.aiSuggestedAt ? "Re-suggest" : "Suggest with AI"}
+              </button>
+              {research.aiSuggestedAt && (
+                <span style={{ marginLeft: 10, fontSize: 11, color: "var(--muted)" }}>
+                  Suggested {new Date(research.aiSuggestedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+                </span>
+              )}
+            </div>
+          )}
+
+          <Label>Competitor handles</Label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+            {competitors.map(c => {
+              const reason = suggestedCompetitorMap.get(c.handle.toLowerCase());
+              const sourceChip = c.source === "ai" ? { bg: "rgba(139,92,246,0.15)", fg: "#8B5CF6", label: "AI" } : { bg: "rgba(59,130,246,0.12)", fg: "#3B82F6", label: c.source };
+              return (
+                <span key={c.handle} title={reason || ""}
+                  style={{ padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  {c.handle}
+                  <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 3, background: sourceChip.bg, color: sourceChip.fg, textTransform: "uppercase" }}>{sourceChip.label}</span>
+                  {!stageBDone && <button onClick={() => removeCompetitor(c.handle)} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 14, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>}
+                </span>
+              );
+            })}
+            {competitors.length === 0 && <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None yet — hit "Suggest with AI" or add manually.</span>}
+          </div>
+          {!stageBDone && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              <input type="text" value={newHandle} onChange={e => setNewHandle(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCompetitor(newHandle); setNewHandle(""); } }}
+                placeholder="@handle — press Enter"
+                style={{ ...inputSt, fontSize: 12, flex: 1 }} />
+              <button onClick={() => { addCompetitor(newHandle); setNewHandle(""); }} disabled={!newHandle.trim()}
+                style={{ ...btnSecondary, padding: "6px 14px", opacity: newHandle.trim() ? 1 : 0.5 }}>Add</button>
+            </div>
+          )}
+
+          <Label>Keywords / hashtags</Label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+            {keywords.map(k => (
+              <span key={k} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                #{k}
+                {!stageBDone && <button onClick={() => removeKeyword(k)} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 14, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>}
+              </span>
+            ))}
+            {keywords.length === 0 && <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None yet.</span>}
+          </div>
+          {!stageBDone && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <input type="text" value={newKeyword} onChange={e => setNewKeyword(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addKeyword(newKeyword); setNewKeyword(""); } }}
+                placeholder="e.g. mens suiting, pilates studio"
+                style={{ ...inputSt, fontSize: 12, flex: 1 }} />
+              <button onClick={() => { addKeyword(newKeyword); setNewKeyword(""); }} disabled={!newKeyword.trim()}
+                style={{ ...btnSecondary, padding: "6px 14px", opacity: newKeyword.trim() ? 1 : 0.5 }}>Add</button>
+            </div>
+          )}
+
+          {!stageBDone && (
+            <button onClick={approveStageB}
+              disabled={starting.b || competitors.length === 0}
+              style={{ ...btnPrimary, opacity: (starting.b || competitors.length === 0) ? 0.5 : 1 }}>
+              {starting.b ? "Starting…" : `Approve & Scrape ~120 Videos`}
+            </button>
+          )}
+          {stageBDone && <ScrapeStatusPill scrape={competitorScrape} label="Competitor scrape" />}
+        </StageCard>
+      </div>
+
+      {/* Forward button: Tab 3 unlocks on research_a; Tab 4 unlocks on research_b.
+          Most producers will want to move on to Tab 3 while Stage B is still scraping. */}
+      {stageADone && (
+        <div style={{ marginTop: 14, padding: "10px 14px", background: "var(--accent-soft)", borderRadius: 8, border: "1px solid var(--accent)", fontSize: 12, color: "var(--fg)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span>Stage A approved. You can move to Tab 3 while {stageBDone ? "the competitor scrape runs" : "setting up Stage B"}.</span>
+          <button onClick={() => onPatch({ tab: "clientResearch" })} style={btnPrimary}>→ Client Research</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StageCard({ stageLabel, title, hint, done, doneText, error, children }) {
+  return (
+    <div style={{ background: "var(--card)", border: `1px solid ${done ? "#22C55E" : "var(--border)"}`, borderRadius: 12, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.08em" }}>{stageLabel}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)", marginTop: 2 }}>{title}</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, lineHeight: 1.5, maxWidth: 620 }}>{hint}</div>
+        </div>
+        {done && (
+          <span style={{ padding: "3px 10px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "rgba(34,197,94,0.15)", color: "#22C55E" }}>
+            ✓ {doneText || "Approved"}
+          </span>
+        )}
+      </div>
+      {children}
+      {error && (
+        <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScrapeStatusPill({ scrape, label }) {
+  const status = scrape?.status || "queued";
+  const colour = {
+    queued:  { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85", text: "Queued" },
+    running: { bg: "rgba(59,130,246,0.15)",  fg: "#3B82F6", text: "Scraping… (async, you can move on)" },
+    done:    { bg: "rgba(34,197,94,0.15)",   fg: "#22C55E", text: "Complete" },
+    error:   { bg: "rgba(239,68,68,0.15)",   fg: "#EF4444", text: scrape?.error || "Error" },
+  }[status] || { bg: "var(--bg)", fg: "var(--muted)", text: status };
+  return (
+    <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <span style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: colour.bg, color: colour.fg }}>
+        {label}: {colour.text}
+      </span>
+      {scrape?.startedAt && (
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>
+          Started {new Date(scrape.startedAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}
+        </span>
+      )}
+      {scrape?.finishedAt && (
+        <span style={{ fontSize: 10, color: "var(--muted)" }}>
+          · Finished {new Date(scrape.finishedAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}
+        </span>
       )}
     </div>
   );
