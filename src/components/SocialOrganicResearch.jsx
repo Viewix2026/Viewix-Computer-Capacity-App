@@ -15,6 +15,7 @@ import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
 import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewriteModal";
 import { DescriptionField } from "./shared/DescriptionField";
+import { ReelPreview } from "./shared/ReelPreview";
 
 // ─── Constants ───
 const STATUS_COLORS = {
@@ -890,22 +891,17 @@ function PostCard({ post, projectId }) {
     <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", transition: "border-color 0.15s", position: "relative" }}
       onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
       onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
+      <div style={{ position: "relative" }}>
+        <ReelPreview shortCode={post.shortCode} url={post.url} thumbnail={post.thumbnail} aspectRatio="1 / 1" />
+        {overBadge && over != null && (
+          <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: overBadge.bg, color: overBadge.fg, zIndex: 2 }}>
+            {over >= 1 ? `${over.toFixed(1)}× avg` : `${(over * 100).toFixed(0)}% avg`}
+          </div>
+        )}
+      </div>
       <a href={post.url} target="_blank" rel="noopener noreferrer"
         style={{ display: "block", textDecoration: "none" }}>
-        <div style={{ aspectRatio: "1 / 1", background: "#000", position: "relative", overflow: "hidden" }}>
-          {post.thumbnail ? (
-            <img src={post.thumbnail} alt="" loading="lazy" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color: "var(--muted)", fontSize: 11 }}>No thumbnail</div>
-          )}
-          {post.isVideo && (
-            <div style={{ position: "absolute", top: 6, right: 6, padding: "2px 6px", background: "rgba(0,0,0,0.6)", borderRadius: 4, fontSize: 9, fontWeight: 700, color: "#fff" }}>▶ video</div>
-          )}
-          {overBadge && over != null && (
-            <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: overBadge.bg, color: overBadge.fg }}>
-              {over >= 1 ? `${over.toFixed(1)}× avg` : `${(over * 100).toFixed(0)}% avg`}
-            </div>
-          )}
+        <div style={{ display: "none" }}>
         </div>
         <div style={{ padding: 10 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 3 }}>
@@ -1674,21 +1670,15 @@ function ReviewCard({ post, status, onTick, onCross }) {
 
   return (
     <div style={{ background: "var(--card)", border, borderRadius: 10, overflow: "hidden", opacity, transition: "opacity 0.15s, border 0.15s", position: "relative" }}>
+      <div style={{ position: "relative" }}>
+        <ReelPreview shortCode={post.shortCode} url={post.url} thumbnail={post.thumbnail} aspectRatio="1 / 1" />
+        {post.overperformanceScore != null && (
+          <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: "rgba(34,197,94,0.85)", color: "#fff", zIndex: 2 }}>
+            {post.overperformanceScore.toFixed(1)}× avg
+          </div>
+        )}
+      </div>
       <a href={post.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", textDecoration: "none" }}>
-        <div style={{ aspectRatio: "1 / 1", background: "#000", position: "relative", overflow: "hidden" }}>
-          {post.thumbnail ? (
-            <img src={post.thumbnail} alt="" loading="lazy" onError={e => { e.target.style.display = "none"; }}
-              style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color: "var(--muted)", fontSize: 11 }}>No thumbnail</div>
-          )}
-          <div style={{ position: "absolute", top: 6, right: 6, padding: "2px 6px", background: "rgba(0,0,0,0.6)", borderRadius: 4, fontSize: 9, fontWeight: 700, color: "#fff" }}>▶ video</div>
-          {post.overperformanceScore != null && (
-            <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: "rgba(34,197,94,0.85)", color: "#fff" }}>
-              {post.overperformanceScore.toFixed(1)}× avg
-            </div>
-          )}
-        </div>
         <div style={{ padding: 10, textDecoration: textDeco }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 3 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>{post.handle}</div>

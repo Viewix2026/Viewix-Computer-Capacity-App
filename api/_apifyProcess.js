@@ -39,8 +39,21 @@ async function fetchDatasetItems(datasetId, token) {
   return await r.json();
 }
 
+// Recursively replace every `undefined` with `null` — Firebase rejects
+// undefined values, but accepts null. Saves us from having to remember
+// `?? null` on every single field.
+function cleanUndefined(obj) {
+  if (obj === undefined) return null;
+  if (obj === null || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(cleanUndefined);
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) out[k] = cleanUndefined(v);
+  return out;
+}
+
 function normaliseInstagramPost(raw, handleHint) {
-  const id = raw.shortCode ? `ig_${raw.shortCode}` : `ig_${Math.random().toString(36).slice(2, 10)}`;
+  const shortCode = raw.shortCode || raw.shortcode || null;
+  const id = shortCode ? `ig_${shortCode}` : `ig_${Math.random().toString(36).slice(2, 10)}`;
   const owner = raw.ownerUsername || raw.owner?.username || handleHint || "unknown";
   const isVideo = raw.isVideo ?? (raw.type === "Video") ?? false;
   const views = raw.videoViewCount ?? raw.videoPlayCount ?? null;
@@ -48,20 +61,22 @@ function normaliseInstagramPost(raw, handleHint) {
   const comments = raw.commentsCount ?? 0;
   const followers = raw.ownerFollowersCount ?? raw.owner?.followersCount ?? null;
   const engagementRate = followers && followers > 0 ? +(((likes + comments) / followers) * 100).toFixed(3) : null;
+  // Every field defaulted to a non-undefined value. Firebase-safe out of
+  // the box, no post-processing required.
   return {
     id,
     handle: `@${owner.toLowerCase()}`,
-    url: raw.url || `https://www.instagram.com/p/${raw.shortCode}/`,
-    shortCode: raw.shortCode,
-    type: raw.type,
-    isVideo,
+    url: raw.url || (shortCode ? `https://www.instagram.com/p/${shortCode}/` : null),
+    shortCode: shortCode || null,
+    type: raw.type || null,
+    isVideo: !!isVideo,
     thumbnail: raw.displayUrl || null,
     caption: raw.caption || "",
-    timestamp: raw.timestamp,
-    views,
-    likes,
-    comments,
-    engagementRate,
+    timestamp: raw.timestamp || null,
+    views: views ?? null,
+    likes: likes ?? 0,
+    comments: comments ?? 0,
+    engagementRate: engagementRate ?? null,
     overperformanceScore: null,
   };
 }
@@ -163,8 +178,8 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
       if (f != null) { igFollowers = f; break; }
     }
 
-    await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape`, { posts, topByViews });
-    await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile`, { avgViews, medianViews });
+    await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape`, cleanUndefined({ posts, topByViews }));
+    await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile`, cleanUndefined({ avgViews, medianViews }));
     if (igFollowers != null) {
       await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile/followers`, { instagram: igFollowers });
     }
@@ -178,16 +193,22 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
     const followers = extractFollowerCount(items, purpose);
     await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile/followers`, { youtube: followers });
   } else if (purpose === "competitorPosts") {
-    const posts = items.map(raw => normaliseInstagramPost(raw, null));
+    // Drop any items Apify returned that don't look like real posts —
+    // the hashtag-search mode can include intermediate objects without
+    // shortCodes, which aren't useful for video review and just break
+    // downstream Firebase writes.
+    const posts = items
+      .map(raw => normaliseInstagramPost(raw, null))
+      .filter(p => p.url && p.handle !== "@unknown");
     const handleStats = computeHandleStatsAndScore(posts);
     const topOverperformers = [...posts]
       .filter(p => p.isVideo && p.overperformanceScore != null)
       .sort((a, b) => (b.overperformanceScore || 0) - (a.overperformanceScore || 0))
       .slice(0, 25)
       .map(p => p.id);
-    await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, {
+    await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, cleanUndefined({
       posts, handleStats, topOverperformers,
-    });
+    }));
   } else {
     console.warn(`[apify-process] Unknown purpose ${purpose} for run ${runId}`);
   }
