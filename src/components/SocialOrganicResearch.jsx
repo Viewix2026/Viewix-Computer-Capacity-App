@@ -3204,9 +3204,8 @@ function ClientResearchStep({ project, onPatch }) {
             {scrapeRunning ? "Waiting on scrape…" : "No reels yet — waiting on the client scrape."}
           </div>
         ) : (
-          {/* Wider tiles + taller aspect ratio so the Instagram embed has
-              room to render the full reel frame without cropping the
-              player chrome. */}
+          // Wider tiles + taller aspect ratio so the Instagram embed has
+          // room to render the full reel frame without cropping the chrome.
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
             {topPosts.map(p => (
               <div key={p.id} style={{ background: "var(--bg)", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
