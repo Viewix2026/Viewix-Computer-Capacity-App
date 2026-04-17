@@ -442,6 +442,31 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
 
   const tab = effectiveTab(project);
 
+  // Project-wide scrape auto-poll. Runs at the ResearchDetail level (NOT
+  // inside the StatusPill) so it keeps firing when the producer navigates
+  // to Tab 3+ while a scrape is still running. Silent — the backend flips
+  // status to "done" via Firebase when any run finishes, UI rerenders.
+  const clientScrapeStatus = project.clientScrape?.status;
+  const competitorScrapeStatus = project.competitorScrape?.status;
+  const anyScrapeRunning = clientScrapeStatus === "running" || competitorScrapeStatus === "running";
+  useEffect(() => {
+    if (!anyScrapeRunning) return;
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        await fetch("/api/social-organic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "refreshScrapes", projectId: project.id }),
+        });
+      } catch { /* silent */ }
+    };
+    const initial = setTimeout(poll, 15000);  // first check 15s in
+    const interval = setInterval(poll, 15000); // every 15s thereafter
+    return () => { cancelled = true; clearTimeout(initial); clearInterval(interval); };
+  }, [project.id, anyScrapeRunning]);
+
   return (
     <div>
       {/* Header */}
@@ -2949,9 +2974,13 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
 
   // Manual refresh — kept for the rare case the producer wants to force
   // a check immediately rather than wait for the next auto-poll tick.
+  // We surface the RAW Apify reported status + console link so the producer
+  // can see what Apify is actually doing (genuinely slow, rate-limited,
+  // actor crash, etc.) without spelunking through Vercel logs.
+  const [refreshResults, setRefreshResults] = useState(null);
   const doRefresh = async () => {
     if (!projectId) return;
-    setRefreshing(true); setRefreshMsg(null);
+    setRefreshing(true); setRefreshMsg(null); setRefreshResults(null);
     try {
       const r = await fetch("/api/social-organic", {
         method: "POST",
@@ -2966,11 +2995,11 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
       else if (stillRunning > 0) setRefreshMsg(`Still running at Apify (${stillRunning} run${stillRunning === 1 ? "" : "s"}).`);
       else if (d.recovered?.length) setRefreshMsg(`Rolled back — retry Approve.`);
       else setRefreshMsg("No in-flight runs to refresh.");
+      setRefreshResults(d.results || []);
     } catch (e) {
       setRefreshMsg(`Refresh failed: ${e.message}`);
     } finally {
       setRefreshing(false);
-      setTimeout(() => setRefreshMsg(null), 5000);
     }
   };
 
@@ -3007,6 +3036,26 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
         <span style={{ fontSize: 10, color: "#F59E0B" }}>
           Taking longer than usual — still auto-checking in the background.
         </span>
+      )}
+      {refreshResults && refreshResults.length > 0 && (
+        <div style={{ width: "100%", marginTop: 6, padding: 10, background: "var(--bg)", borderRadius: 6, border: "1px solid var(--border)", fontSize: 10, fontFamily: "'JetBrains Mono',monospace" }}>
+          {refreshResults.map((r, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: i ? 4 : 0 }}>
+              <span style={{ color: "var(--muted)" }}>{r.purpose}:</span>
+              <span style={{
+                color: r.apifyStatus === "RUNNING" ? "#3B82F6"
+                  : r.apifyStatus === "SUCCEEDED" ? "#22C55E"
+                  : r.apifyStatus === "FAILED" || r.apifyStatus === "ABORTED" || r.apifyStatus?.startsWith("TIMED") ? "#EF4444"
+                  : "var(--fg)",
+                fontWeight: 700,
+              }}>{r.apifyStatus || r.outcome}</span>
+              {r.runningForSec != null && <span style={{ color: "var(--muted)" }}>{r.runningForSec}s elapsed</span>}
+              {r.durationMs != null && <span style={{ color: "var(--muted)" }}>ran {Math.round(r.durationMs / 1000)}s</span>}
+              {r.exitCode != null && r.exitCode !== 0 && <span style={{ color: "#EF4444" }}>exit {r.exitCode}</span>}
+              {r.consoleUrl && <a href={r.consoleUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none", marginLeft: "auto" }}>Apify console ↗</a>}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

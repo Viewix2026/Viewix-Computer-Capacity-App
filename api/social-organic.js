@@ -1909,25 +1909,41 @@ async function handleRefreshScrapes(req, res) {
     try {
       const r = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(APIFY_TOKEN)}`);
       if (!r.ok) {
-        results.push({ runId, purpose: meta.purpose, outcome: "apify_error", status: r.status });
+        const errBody = await r.text();
+        results.push({ runId, purpose: meta.purpose, outcome: "apify_error", httpStatus: r.status, detail: errBody.slice(0, 200), consoleUrl: `https://console.apify.com/actors/runs/${runId}` });
         continue;
       }
       const data = await r.json();
-      const status = data?.data?.status;
+      const apifyStatus = data?.data?.status;
       const datasetId = data?.data?.defaultDatasetId;
+      const startedAt = data?.data?.startedAt;
+      const finishedAt = data?.data?.finishedAt;
+      const exitCode = data?.data?.exitCode;
+      const durationMs = startedAt && finishedAt ? (new Date(finishedAt).getTime() - new Date(startedAt).getTime()) : null;
 
-      if (status === "SUCCEEDED" || status === "FAILED" || status === "ABORTED" || status === "TIMED-OUT" || status === "TIMED_OUT") {
-        // Replay the webhook path so all routing + status flips happen in
-        // exactly one place. Fire-and-await so refresh is synchronous for
-        // the caller.
+      if (apifyStatus === "SUCCEEDED" || apifyStatus === "FAILED" || apifyStatus === "ABORTED" || apifyStatus === "TIMED-OUT" || apifyStatus === "TIMED_OUT") {
         const wr = await fetch(webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runId, status, datasetId }),
+          body: JSON.stringify({ runId, status: apifyStatus, datasetId }),
         });
-        results.push({ runId, purpose: meta.purpose, outcome: wr.ok ? "replayed" : "replay_failed", status });
+        const wrText = wr.ok ? null : await wr.text();
+        results.push({
+          runId, purpose: meta.purpose,
+          outcome: wr.ok ? "replayed" : "replay_failed",
+          apifyStatus, exitCode, durationMs,
+          replayDetail: wrText?.slice(0, 200) || null,
+          consoleUrl: `https://console.apify.com/actors/runs/${runId}`,
+        });
       } else {
-        results.push({ runId, purpose: meta.purpose, outcome: "still_running", status });
+        results.push({
+          runId, purpose: meta.purpose,
+          outcome: "still_running",
+          apifyStatus,
+          startedAt,
+          runningForSec: startedAt ? Math.round((Date.now() - new Date(startedAt).getTime()) / 1000) : null,
+          consoleUrl: `https://console.apify.com/actors/runs/${runId}`,
+        });
       }
     } catch (e) {
       results.push({ runId, purpose: meta.purpose, outcome: "error", error: e.message });
