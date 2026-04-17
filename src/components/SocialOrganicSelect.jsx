@@ -92,6 +92,9 @@ export function SocialOrganicSelect({ project, onPatch }) {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      // Re-suggest clears the "autopopulated already" flag so the new
+      // suggestion actually takes effect.
+      fbSet(`/preproduction/socialOrganic/${project.id}/selectedFormatsInitialized`, null);
     } catch (e) {
       setSuggestError(e.message);
     } finally {
@@ -99,10 +102,14 @@ export function SocialOrganicSelect({ project, onPatch }) {
     }
   };
 
-  // Auto-populate selected from AI suggestions the first time they land, as
-  // long as the producer hasn't already started picking.
+  // Auto-populate selected from AI suggestions ONCE per project. We persist
+  // a flag (selectedFormatsInitialized) so clearing the queue manually
+  // doesn't retrigger the effect — the producer may have intentionally
+  // emptied it to start fresh.
   const suggestedIds = Array.isArray(project.suggestedFormatIds) ? project.suggestedFormatIds : [];
+  const alreadyInitialized = !!project.selectedFormatsInitialized;
   useEffect(() => {
+    if (alreadyInitialized) return;
     if (selected.length > 0) return;
     if (suggestedIds.length === 0) return;
     const next = suggestedIds.map((id, i) => ({
@@ -113,7 +120,8 @@ export function SocialOrganicSelect({ project, onPatch }) {
     }));
     setSelected(next);
     onPatch({ selectedFormats: next });
-  }, [JSON.stringify(suggestedIds), selected.length]);  // eslint-disable-line react-hooks/exhaustive-deps
+    fbSet(`/preproduction/socialOrganic/${project.id}/selectedFormatsInitialized`, new Date().toISOString());
+  }, [JSON.stringify(suggestedIds), alreadyInitialized]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const sensors = useSensors(useSensor(PointerSensor, {
     // 6px buffer stops accidental picks when the producer is just clicking to read.
