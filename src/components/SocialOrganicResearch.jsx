@@ -473,8 +473,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
       <TabBar project={project} onChange={(nextTab) => onPatch({ tab: nextTab })} />
 
       {tab === "brandTruth" && (
-        <TabPlaceholder tabNum={1} title="Brand Truth"
-          hint="Phase B — paste the preproduction meeting transcript + producer notes. Claude generates Brand Truth / Ambitions / Goals / Key Considerations / Target Viewer / Pain Points / Language. Each field is editable with AI rewrite or manual edit." />
+        <BrandTruthStep project={project} linkedAccount={linkedAccount} onPatch={onPatch} />
       )}
       {tab === "research" && (
         <TabPlaceholder tabNum={2} title="Format Research"
@@ -2313,3 +2312,172 @@ function SectionCard({ title, children }) {
   );
 }
 
+
+// ═══════════════════════════════════════════
+// TAB 1 — BRAND TRUTH (Phase B)
+// Producer pastes the preproduction meeting transcript + optional notes,
+// Claude Opus generates 7 fields, each field opens the shared
+// CellRewriteModal on click. Approval writes approvals.brandTruth.
+// ═══════════════════════════════════════════
+const BRAND_TRUTH_FIELDS = [
+  { key: "brandTruths",             label: "Brand Truths",             multi: true },
+  { key: "brandAmbitions",          label: "Brand Ambitions",          multi: true },
+  { key: "clientGoals",             label: "Overall Client Goals",     multi: true },
+  { key: "keyConsiderations",       label: "Key Considerations",       multi: true },
+  { key: "targetViewerDemographic", label: "Target Viewer Demographic",multi: true },
+  { key: "painPoints",              label: "Pain Points",              multi: true },
+  { key: "language",                label: "Language",                 multi: true },
+];
+
+function BrandTruthStep({ project, linkedAccount, onPatch }) {
+  const bt = project.brandTruth || {};
+  const fields = bt.fields || {};
+  const [transcript, setTranscript] = useState(bt.transcript || "");
+  const [producerNotes, setProducerNotes] = useState(bt.producerNotes || "");
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState(null);
+  const [rewriteTarget, setRewriteTarget] = useState(null);
+
+  // Debounced writes for transcript + notes so the producer can leave and
+  // return. 500ms is comfortable — no perceptible typing lag.
+  useEffect(() => {
+    if (transcript === (bt.transcript || "")) return;
+    const t = setTimeout(() => {
+      fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/transcript`, transcript);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [transcript]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (producerNotes === (bt.producerNotes || "")) return;
+    const t = setTimeout(() => {
+      fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/producerNotes`, producerNotes);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [producerNotes]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const generate = async () => {
+    setGenError(null);
+    setGenerating(true);
+    try {
+      // Make sure the latest transcript + notes are on disk before generating.
+      await Promise.all([
+        new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/transcript`, transcript); setTimeout(res, 50); }),
+        new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/producerNotes`, producerNotes); setTimeout(res, 50); }),
+      ]);
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener rehydrates fields automatically.
+    } catch (e) {
+      setGenError(e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const approve = () => {
+    fbSet(`/preproduction/socialOrganic/${project.id}/approvals/brandTruth`, new Date().toISOString());
+    onPatch({ tab: "research" });
+  };
+
+  const openRewrite = (path, label, currentValue) => {
+    setRewriteTarget({ path, label, currentValue: currentValue || "" });
+  };
+
+  const allFieldsFilled = BRAND_TRUTH_FIELDS.every(f => (fields[f.key] || "").trim());
+
+  return (
+    <div>
+      {/* Input card: transcript + notes + generate */}
+      <div style={{ marginBottom: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Inputs</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              Paste the preproduction meeting transcript. Add notes on anything the client emphasised. Claude reads both plus the Sherpa-saved account context.
+              {linkedAccount && ` Sherpa linked to "${linkedAccount.companyName}".`}
+            </div>
+          </div>
+          <button onClick={generate}
+            disabled={generating || (!transcript.trim() && !producerNotes.trim())}
+            style={{ ...btnPrimary, opacity: (generating || (!transcript.trim() && !producerNotes.trim())) ? 0.5 : 1 }}>
+            {generating ? "Generating…" : bt.generatedAt ? "Regenerate" : "Generate Brand Truth"}
+          </button>
+        </div>
+
+        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 5 }}>
+          Preproduction meeting transcript
+        </label>
+        <textarea value={transcript} onChange={e => setTranscript(e.target.value)}
+          placeholder="Paste the full meeting transcript here…"
+          rows={6}
+          style={{ ...inputSt, resize: "vertical", fontSize: 12, fontFamily: "inherit", marginBottom: 10 }} />
+
+        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 5 }}>
+          Producer notes <span style={{ fontWeight: 400, textTransform: "none", fontStyle: "italic", color: "var(--muted)" }}>(optional — anything extra you want Claude to weight)</span>
+        </label>
+        <textarea value={producerNotes} onChange={e => setProducerNotes(e.target.value)}
+          placeholder="e.g. Client specifically wants female-demo only. No humour."
+          rows={3}
+          style={{ ...inputSt, resize: "vertical", fontSize: 12, fontFamily: "inherit" }} />
+
+        {genError && (
+          <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+            {genError}
+          </div>
+        )}
+      </div>
+
+      {/* Generated fields */}
+      {bt.generatedAt ? (
+        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Brand Truth</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                Generated {new Date(bt.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} · {bt.modelUsed || "claude-opus-4-6"}. Click any cell to edit.
+              </div>
+            </div>
+            <button onClick={approve}
+              disabled={!allFieldsFilled}
+              title={allFieldsFilled ? "Approve and move to Format Research" : "Fill every field before approving"}
+              style={{ ...btnPrimary, opacity: allFieldsFilled ? 1 : 0.5 }}>
+              Approve → Format Research
+            </button>
+          </div>
+
+          {BRAND_TRUTH_FIELDS.map(f => (
+            <EditableField
+              key={f.key}
+              label={f.label}
+              path={f.key}
+              value={fields[f.key]}
+              onEdit={openRewrite}
+              multi={f.multi}
+            />
+          ))}
+        </div>
+      ) : !generating && (
+        <div style={{ padding: 30, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12, color: "var(--muted)" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>No brand truth yet</div>
+          <div style={{ fontSize: 12 }}>Paste a transcript (or just producer notes) above and hit "Generate Brand Truth".</div>
+        </div>
+      )}
+
+      {rewriteTarget && (
+        <CellRewriteModal
+          target={rewriteTarget}
+          fbPathPrefix={`/preproduction/socialOrganic/${project.id}/brandTruth/fields`}
+          apiAction="rewriteBrandTruthField"
+          extraPayload={{ projectId: project.id }}
+          updatedAtPath={`/preproduction/socialOrganic/${project.id}/updatedAt`}
+          onClose={() => setRewriteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}

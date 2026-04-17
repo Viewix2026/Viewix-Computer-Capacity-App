@@ -1100,6 +1100,211 @@ Return only the rewritten value.`;
   return res.status(200).json({ success: true, newValue });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// TAB 1 — BRAND TRUTH (Phase B of 7-tab restructure)
+// generateBrandTruth:     one-shot extraction from transcript + notes + Sherpa
+// rewriteBrandTruthField: cell-level rewrite mirroring rewriteScriptSection
+// ═══════════════════════════════════════════════════════════════════
+
+const DEFAULT_BRAND_TRUTH_PROMPT = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. You have just sat in on a preproduction meeting with a client and need to produce the "Brand Truth" block that the producer will carry through the rest of the preproduction workflow.
+
+RULES:
+- Be specific, opinionated, evidence-based. No generic agency-speak.
+- Quote the client's own language where useful — verbatim quotes are more valuable than paraphrased ones.
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
+
+STRUCTURE:
+{
+  "brandTruths": "2-4 sentences on what the brand is known for, what it does best, and what makes it credible. Concrete claims, not fluff.",
+  "brandAmbitions": "2-3 sentences on where this content should take the brand — a pointed direction, not a mission statement.",
+  "clientGoals": "3-5 bullet-style lines, one per line, on what the client explicitly wants this content round to achieve.",
+  "keyConsiderations": "3-5 bullet-style lines on constraints or preferences: what they won't do, who they won't speak to, tone rules, topics to avoid.",
+  "targetViewerDemographic": "2-4 sentences on age, gender skew, consumption habits, platforms they live on.",
+  "painPoints": "3-5 bullet-style lines, each capturing a specific viewer pain point. Use direct viewer-voice quotes where the transcript supports it.",
+  "language": "2-4 sentences describing the tone + vocabulary + phrase patterns the target viewer uses and responds to. Include specific words/phrases where possible."
+}`;
+
+async function getBrandTruthPromptOverride() {
+  const p = await fbGet("/preproductionTemplates/brandTruthPrompt");
+  return (typeof p === "string" && p.trim()) ? p : DEFAULT_BRAND_TRUTH_PROMPT;
+}
+
+async function handleGenerateBrandTruth(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const transcript = project.brandTruth?.transcript || "";
+  const producerNotes = project.brandTruth?.producerNotes || "";
+  if (!transcript.trim() && !producerNotes.trim()) {
+    return res.status(400).json({ error: "Paste a transcript or producer notes before generating." });
+  }
+
+  // Pull Sherpa / account-level context so Claude has the client background
+  // it needs to ground the truths. We read the linked account record if the
+  // webhook stored an attioCompanyId; otherwise we skip Sherpa.
+  let sherpaBlock = "";
+  if (project.attioCompanyId) {
+    const accounts = await fbGet("/accounts");
+    if (accounts) {
+      const acct = Object.values(accounts).find(a => a?.attioId === project.attioCompanyId);
+      if (acct) {
+        const bits = [];
+        if (acct.industry) bits.push(`Industry: ${acct.industry}`);
+        if (acct.websiteUrl) bits.push(`Website: ${acct.websiteUrl}`);
+        if (acct.notes) bits.push(`Notes: ${acct.notes}`);
+        if (Array.isArray(acct.competitors) && acct.competitors.length) {
+          bits.push(`Saved competitors: ${acct.competitors.map(c => c.handle || c.displayName).filter(Boolean).join(", ")}`);
+        }
+        if (bits.length) sherpaBlock = `\nSHERPA (saved client context):\n${bits.join("\n")}\n`;
+      }
+    }
+  }
+
+  const systemPrompt = await getBrandTruthPromptOverride();
+  const userMessage = `CLIENT: ${project.companyName}
+${project.videoType ? `DEAL TYPE: ${project.videoType}` : ""}
+${project.numberOfVideos ? `TOTAL VIDEOS THIS ROUND: ${project.numberOfVideos}` : ""}
+${sherpaBlock}
+PREPRODUCTION MEETING TRANSCRIPT:
+"""
+${transcript.slice(0, 12000) || "(none)"}
+"""
+
+PRODUCER NOTES:
+"""
+${producerNotes.slice(0, 4000) || "(none)"}
+"""
+
+Produce the brand truth JSON now.`;
+
+  const runId = `brandtruth_${Date.now()}_${crypto.randomBytes(2).toString("hex")}`;
+  const startedAt = Date.now();
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 4000,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
+  }
+
+  const fields = {
+    brandTruths:             parsed.brandTruths || "",
+    brandAmbitions:          parsed.brandAmbitions || "",
+    clientGoals:             parsed.clientGoals || "",
+    keyConsiderations:       parsed.keyConsiderations || "",
+    targetViewerDemographic: parsed.targetViewerDemographic || "",
+    painPoints:              parsed.painPoints || "",
+    language:                parsed.language || "",
+  };
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/brandTruth`, {
+    fields,
+    generatedAt: new Date().toISOString(),
+    modelUsed: "claude-opus-4-6",
+    runId,
+  });
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Cost log — same pattern as handleGenerateScript.
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    await fbSet(`/preproduction/socialOrganic/_costLog/${today}/${runId}`, {
+      type: "brandTruth",
+      projectId,
+      durationMs: Date.now() - startedAt,
+      model: "claude-opus-4-6",
+      createdAt: new Date().toISOString(),
+    });
+  } catch { /* noop */ }
+
+  return res.status(200).json({ success: true, fields });
+}
+
+// Single-field rewrite for Brand Truth cells. Mirrors rewriteScriptSection
+// but writes under brandTruth/fields/{field} instead of preproductionDoc/*.
+async function handleRewriteBrandTruthField(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, path, instruction, currentValue } = req.body || {};
+  if (!projectId || !path || !instruction) {
+    return res.status(400).json({ error: "Missing projectId, path, or instruction" });
+  }
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const systemPrompt = `You rewrite a single field of a Brand Truth doc for Viewix. Return ONLY the rewritten value as plain text. No markdown, no preamble, no code fences. Never use em dashes; use commas or full stops instead. Keep length comparable to the current value unless the instruction asks otherwise.`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+FIELD: ${path}
+
+CURRENT VALUE:
+"""
+${currentValue || ""}
+"""
+
+REWRITE INSTRUCTION:
+"""
+${instruction}
+"""
+
+Return only the rewritten value.`;
+
+  let newValue;
+  try {
+    const raw = await callClaude({
+      model: "claude-sonnet-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 1500,
+      apiKey: ANTHROPIC_KEY,
+    });
+    newValue = raw.trim();
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  // path comes in as a JS dot-path (e.g. "brandTruths"); it's a single-level
+  // field directly under brandTruth/fields so we don't bother with a dotted
+  // translator here.
+  await fbSet(`/preproduction/socialOrganic/${projectId}/brandTruth/fields/${path}`, newValue);
+
+  const historyEntry = {
+    timestamp: new Date().toISOString(),
+    path, instruction,
+    previousValue: currentValue || "",
+    newValue,
+  };
+  const history = Array.isArray(project.brandTruth?.rewriteHistory) ? project.brandTruth.rewriteHistory : [];
+  history.push(historyEntry);
+  await fbSet(`/preproduction/socialOrganic/${projectId}/brandTruth/rewriteHistory`, history);
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, newValue });
+}
+
 // ─── Dispatcher ───
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1129,6 +1334,10 @@ export default async function handler(req, res) {
         return await handleGenerateScript(req, res);
       case "rewriteScriptSection":
         return await handleRewriteScriptSection(req, res);
+      case "generateBrandTruth":
+        return await handleGenerateBrandTruth(req, res);
+      case "rewriteBrandTruthField":
+        return await handleRewriteBrandTruthField(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }
