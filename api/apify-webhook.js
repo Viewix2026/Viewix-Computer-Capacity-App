@@ -202,17 +202,27 @@ export default async function handler(req, res) {
       const avgViews = views.length ? Math.round(views.reduce((s, v) => s + v, 0) / views.length) : 0;
       const medianViews = views.length ? views[Math.floor(views.length / 2)] : 0;
       const topByViews = [...posts].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 5).map(p => p.id);
+
+      // Follower count comes straight off the raw post payload — every post
+      // carries ownerFollowersCount. Saves us a separate profile-scraper run.
+      let igFollowers = null;
+      for (const raw of items) {
+        const f = raw?.ownerFollowersCount ?? raw?.owner?.followersCount ?? raw?.owner?.edge_followed_by?.count ?? null;
+        if (f != null) { igFollowers = f; break; }
+      }
+
       await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape`, {
         posts,
         topByViews,
-        "profile/avgViews": avgViews,
-        "profile/medianViews": medianViews,
       });
-      // Firebase adminPatch doesn't support nested-slash keys in the same
-      // call as direct keys reliably — explicitly patch the profile sub-path.
       await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile`, {
         avgViews, medianViews,
       });
+      if (igFollowers != null) {
+        await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile/followers`, {
+          instagram: igFollowers,
+        });
+      }
     } else if (purpose === "clientProfileIG") {
       const followers = extractFollowerCount(items, purpose);
       await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile/followers`, {

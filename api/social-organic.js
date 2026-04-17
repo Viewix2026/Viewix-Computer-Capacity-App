@@ -1377,7 +1377,12 @@ async function handleStartClientScrape(req, res) {
   const runIds = {};
   const errors = {};
 
-  // 1. Client's IG posts (reels-only filtered in the webhook handler).
+  // Only ONE Apify run for Stage A: the client's reels. Each post returned
+  // carries ownerFollowersCount / owner.followersCount already, so we don't
+  // need a separate profile scrape just to get the IG follower number — the
+  // webhook handler pulls it off the first post directly. Removing the
+  // second run eliminates a point of failure (actor availability / schema
+  // differences) and halves the surface area.
   try {
     runIds.posts = await startApifyRun({
       actorId: APIFY_ACTOR,
@@ -1397,23 +1402,6 @@ async function handleStartClientScrape(req, res) {
     errors.posts = e.message;
     console.error(`[startClientScrape] posts run failed:`, e);
   }
-
-  // 2. IG profile scrape (for follower count).
-  try {
-    runIds.profileIG = await startApifyRun({
-      actorId: APIFY_IG_PROFILE_ACTOR,
-      input: { usernames: [cleanHandle] },
-      token: APIFY_TOKEN,
-      projectId,
-      purpose: "clientProfileIG",
-    });
-  } catch (e) {
-    errors.profileIG = e.message;
-    console.error(`[startClientScrape] profileIG run failed:`, e);
-  }
-
-  // TikTok + YouTube scrapes deferred to Phase D — they need the producer
-  // to supply the platform handles, which happens in Tab 3.
 
   const anyRunStarted = Object.keys(runIds).length > 0;
 
