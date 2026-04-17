@@ -3324,10 +3324,16 @@ function StatChip({ label, value }) {
   );
 }
 
-// ScriptStep toolbar: regenerate, copy share URL, push to Deliveries.
+// ScriptStep toolbar: regenerate, copy share URL, push to Runsheets.
+// Social Organic projects feed into the Runsheets tab (shoot scheduling),
+// NOT the Deliveries tab (post-production handover).
 function ScriptToolbar({ project, onRegenerate, onPatch }) {
   const doc = project.preproductionDoc || {};
-  const deliveryHandoff = project.deliveryHandoff || null;
+  // Legacy projects may still have deliveryHandoff from the old push path.
+  // Treat either as "already pushed".
+  const runsheetHandoff = project.runsheetHandoff || null;
+  const legacyDelivery = project.deliveryHandoff || null;
+  const pushed = !!(runsheetHandoff?.runsheetId || legacyDelivery?.deliveryId);
   const shareUrl = preproductionShareUrl(project);
   const [copied, setCopied] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -3344,16 +3350,16 @@ function ScriptToolbar({ project, onRegenerate, onPatch }) {
     }
   };
 
-  const pushToDeliveries = async () => {
-    if (deliveryHandoff?.deliveryId) return;
-    if (!window.confirm("Push this project to the Deliveries tab? Creates one video row per script table entry.")) return;
+  const pushToRunsheet = async () => {
+    if (pushed) return;
+    if (!window.confirm("Push this project to the Runsheets tab? Creates a new runsheet with one video row per script table entry.")) return;
     setPushing(true);
     setPushError(null);
     try {
       const r = await fetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "pushToDeliveries", projectId: project.id }),
+        body: JSON.stringify({ action: "pushToRunsheet", projectId: project.id }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
@@ -3381,15 +3387,15 @@ function ScriptToolbar({ project, onRegenerate, onPatch }) {
           </button>
         )}
         {doc.generatedAt && <button onClick={onRegenerate} style={btnSecondary}>Regenerate</button>}
-        {doc.scriptTable?.length > 0 && !deliveryHandoff && (
-          <button onClick={pushToDeliveries} disabled={pushing}
+        {doc.scriptTable?.length > 0 && !pushed && (
+          <button onClick={pushToRunsheet} disabled={pushing}
             style={{ ...btnPrimary, opacity: pushing ? 0.6 : 1 }}>
-            {pushing ? "Pushing…" : "→ Push to Deliveries"}
+            {pushing ? "Pushing…" : "→ Push to Runsheets"}
           </button>
         )}
-        {deliveryHandoff?.deliveryId && (
+        {pushed && (
           <span style={{ padding: "6px 12px", background: "rgba(34,197,94,0.12)", color: "#22C55E", borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
-            ✓ Delivered {new Date(deliveryHandoff.pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+            ✓ Pushed to Runsheets {new Date((runsheetHandoff || legacyDelivery).pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
           </span>
         )}
       </div>

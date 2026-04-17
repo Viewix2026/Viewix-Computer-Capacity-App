@@ -1968,7 +1968,13 @@ async function handleRefreshScrapes(req, res) {
 // (b) bundle all writes atomically, (c) include fields the client side
 // doesn't have handy (e.g. client logo from the account record).
 // ═══════════════════════════════════════════════════════════════════
-async function handlePushToDeliveries(req, res) {
+// Push to Runsheets. Social Organic preproduction flows into a shooting
+// runsheet (not the Deliveries tab — deliveries are for post-production
+// handover, which happens after the shoot). Shape mirrors what the
+// Runsheets UI's handleCreate writes: projectType "organic", one video
+// slot per scriptTable row, an empty shoot-day the producer schedules
+// against via drag-drop.
+async function handlePushToRunsheet(req, res) {
   const { projectId } = req.body || {};
   if (!projectId) return res.status(400).json({ error: "Missing projectId" });
 
@@ -1981,56 +1987,74 @@ async function handlePushToDeliveries(req, res) {
   }
 
   // Guard against duplicate pushes — the UI disables the button once
-  // deliveryHandoff is set, but the server enforces it.
-  if (project.deliveryHandoff?.deliveryId) {
-    return res.status(409).json({ error: "Already pushed to Deliveries", deliveryId: project.deliveryHandoff.deliveryId });
+  // runsheetHandoff is set, but the server enforces it.
+  if (project.runsheetHandoff?.runsheetId) {
+    return res.status(409).json({ error: "Already pushed to Runsheets", runsheetId: project.runsheetHandoff.runsheetId });
   }
 
-  const deliveryId = `del-${Date.now()}`;
+  const runsheetId = `rs-${Date.now()}`;
   const now = new Date().toISOString();
 
-  // Client logo lookup from the account record (same pattern as the Meta
-  // Ads branch in Preproduction.jsx).
-  let logoUrl = null;
-  if (project.attioCompanyId) {
-    const accounts = await fbGet("/accounts");
-    if (accounts) {
-      const acct = Object.values(accounts).find(a => a?.attioId === project.attioCompanyId);
-      if (acct?.logoUrl) logoUrl = acct.logoUrl;
-    }
-  }
-
-  const videos = scriptTable.map(row => ({
-    name: row.videoName || row.formatName || "Unnamed video",
-    viewixStatus: "In Development",
-    revision1: "",
-    revision2: "",
+  // Map the Social Organic script rows onto the Runsheets video shape.
+  // Organic runsheets don't use the Meta Ads columns (hook/explainThePain/
+  // results/etc.) — we carry across formatName, the spoken hook, text/visual
+  // hooks, script notes, and props. The other fields stay as empty strings
+  // so the Runsheet UI doesn't crash on them.
+  const videos = scriptTable.map((row, i) => ({
+    id: `v-${Date.now()}-${i}`,
+    videoName: row.formatName || `Video ${i + 1}`,
+    contentStyle: row.contentStyle || "",
+    hook: row.hook || "",
+    textHook: row.textHook || "",
+    visualHook: row.visualHook || "",
+    scriptNotes: row.scriptNotes || "",
+    props: row.props || "",
+    people: "",
+    // Meta Ads columns kept empty so the Runsheets UI has consistent shape.
+    explainThePain: "", results: "", theOffer: "", whyTheOffer: "",
+    cta: "", metaAdHeadline: "", metaAdCopy: "",
+    motivatorType: "", audienceType: "",
   }));
 
-  const delivery = {
-    id: deliveryId,
-    shortId: project.shortId || null,
-    clientName: project.companyName,
-    projectName: `Social Organic · ${project.companyName}`,
-    logoUrl,
-    notes: "",
+  const shootDays = [{
+    id: `sd-${Date.now()}-0`,
+    label: "Shoot 1",
+    date: "",
+    location: "",
+    startTime: "09:00",
+    endTime: "17:00",
+    timeSlots: [
+      { id: `ts-${Date.now()}-0-0`, startTime: "09:00", endTime: "09:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+    ],
+  }];
+
+  const runsheet = {
+    id: runsheetId,
+    projectId,
+    projectType: "organic",
+    companyName: project.companyName || "",
+    status: "draft",
+    producerId: "",
+    directorId: "",
+    clientContacts: [],
+    shootDays,
     videos,
     createdAt: now,
+    updatedAt: now,
     sourceType: "socialOrganic",
     sourceProjectId: projectId,
   };
 
-  await fbSet(`/deliveries/${deliveryId}`, delivery);
+  await fbSet(`/runsheets/${runsheetId}`, runsheet);
   await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
-    deliveryHandoff: { deliveryId, pushedAt: now },
+    runsheetHandoff: { runsheetId, pushedAt: now },
     status: "exported",
     tab: "done",
     updatedAt: now,
   });
-  // Writing approvals.script too so the tab-bar shows the Script tab as done.
   await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/script`, now);
 
-  return res.status(200).json({ success: true, deliveryId, videoCount: videos.length });
+  return res.status(200).json({ success: true, runsheetId, videoCount: videos.length });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2154,8 +2178,9 @@ export default async function handler(req, res) {
         return await handleSuggestClientHandle(req, res);
       case "suggestFormats":
         return await handleSuggestFormats(req, res);
-      case "pushToDeliveries":
-        return await handlePushToDeliveries(req, res);
+      case "pushToRunsheet":
+      case "pushToDeliveries":  // legacy action name — kept so in-flight callers don't 400
+        return await handlePushToRunsheet(req, res);
       case "smartParseFormats":
         return await handleSmartParseFormats(req, res);
       case "refreshScrapes":
