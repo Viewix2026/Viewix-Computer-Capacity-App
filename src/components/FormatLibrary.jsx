@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from "react";
 import { onFB, fbSet, fbListen, getCurrentRole } from "../firebase";
+import { ReelPreview } from "./shared/ReelPreview";
 
 // Shared with other preproduction surfaces so the look-and-feel matches.
 const inputSt = {
@@ -200,7 +201,7 @@ export function FormatFilterBar({ search, setSearch, categoryFilter, setCategory
 
 function FormatCard({ format, categories, onClick }) {
   const examples = Array.isArray(format.examples) ? format.examples : [];
-  const thumb = examples.find(e => e.thumbnail)?.thumbnail || null;
+  const firstExample = examples.find(e => e.url || e.thumbnail) || null;
   const cat = format.category ? (categories[format.category]?.label || format.category) : null;
 
   return (
@@ -209,12 +210,11 @@ function FormatCard({ format, categories, onClick }) {
       borderRadius: 10, padding: 0, cursor: "pointer", fontFamily: "inherit",
       overflow: "hidden", opacity: format.archived ? 0.6 : 1, display: "flex", flexDirection: "column",
     }}>
-      <div style={{ aspectRatio: "16 / 9", background: "#000", position: "relative", overflow: "hidden" }}>
-        {thumb ? (
-          <img src={thumb} alt="" onError={e => { e.target.style.display = "none"; }}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      <div style={{ position: "relative" }}>
+        {firstExample ? (
+          <ReelPreview url={firstExample.url} thumbnail={firstExample.thumbnail} aspectRatio="16 / 9" />
         ) : (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color: "var(--muted)", fontSize: 24 }}>📼</div>
+          <div style={{ aspectRatio: "16 / 9", background: "#1E2A3A", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 24 }}>📼</div>
         )}
         {format.archived && (
           <div style={{ position: "absolute", top: 6, left: 6, padding: "2px 8px", background: "rgba(90,107,133,0.85)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3 }}>ARCHIVED</div>
@@ -362,8 +362,8 @@ function FormatDetail({ format, categories, onBack, onSave, onArchiveToggle, onD
               {examples.map((ex, i) => (
                 <a key={i} href={ex.url} target="_blank" rel="noopener noreferrer"
                   style={{ display: "flex", gap: 10, padding: 8, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, textDecoration: "none" }}>
-                  <div style={{ width: 56, height: 56, background: "#000", borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
-                    {ex.thumbnail && <img src={ex.thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  <div style={{ width: 56, height: 56, borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
+                    <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="1 / 1" compact />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>{ex.sourceAccount}</div>

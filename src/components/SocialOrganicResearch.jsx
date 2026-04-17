@@ -1816,8 +1816,8 @@ function ShortlistStep({ project, onPatch }) {
                     background: "var(--card)", cursor: "pointer", fontFamily: "inherit",
                     display: "flex", gap: 10, alignItems: "center",
                   }}>
-                  <div style={{ width: 56, height: 56, flexShrink: 0, background: "#000", borderRadius: 4, overflow: "hidden" }}>
-                    {v.thumbnail && <img src={v.thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                  <div style={{ width: 56, height: 56, flexShrink: 0, borderRadius: 4, overflow: "hidden" }}>
+                    <ReelPreview shortCode={v.shortCode} url={v.url} thumbnail={v.thumbnail} aspectRatio="1 / 1" compact />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", marginBottom: 2 }}>{v.handle}</div>
@@ -2011,8 +2011,8 @@ function ShortlistForm({ video, project, library, categories, existing, onSaved 
       {/* Header: video preview */}
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
         <a href={video.url} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0 }}>
-          <div style={{ width: 80, height: 80, background: "#000", borderRadius: 6, overflow: "hidden" }}>
-            {video.thumbnail && <img src={video.thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+          <div style={{ width: 80, height: 80, borderRadius: 6, overflow: "hidden" }}>
+            <ReelPreview shortCode={video.shortCode} url={video.url} thumbnail={video.thumbnail} aspectRatio="1 / 1" compact />
           </div>
         </a>
         <div style={{ flex: 1 }}>

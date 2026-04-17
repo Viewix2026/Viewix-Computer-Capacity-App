@@ -24,6 +24,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { FormatFilterBar } from "./FormatLibrary";
+import { ReelPreview } from "./shared/ReelPreview";
 
 const inputSt = {
   padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)",
@@ -128,6 +129,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
     description: s.description || library[s.formatLibraryId]?.videoAnalysis || "",
     category: s.category || library[s.formatLibraryId]?.category || null,
     thumbnail: library[s.formatLibraryId]?.examples?.[0]?.thumbnail || null,
+    exampleUrl: library[s.formatLibraryId]?.examples?.[0]?.url || null,
   })).filter(c => !selected.some(s => s.formatLibraryId === c.formatLibraryId));
 
   // "Recently Added" cutoff — 14 days keeps the list meaningful without
@@ -161,6 +163,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
       description: f.videoAnalysis || "",
       category: f.category || null,
       thumbnail: f.examples?.[0]?.thumbnail || null,
+      exampleUrl: f.examples?.[0]?.url || null,
       isSuggested: suggestedIdSet.has(f.id),
     }))
     // Suggested formats float to the top, then by usage, then name.
@@ -430,8 +433,8 @@ function DraggableFormatCard({ card, onClick }) {
       }}
       onDoubleClick={onClick}
       title="Drag into the selected queue, or double-click to add">
-      <div style={{ width: 40, height: 40, background: "#000", borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
-        {card.thumbnail && <img src={card.thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+      <div style={{ width: 40, height: 40, borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
+        <ReelPreview url={card.exampleUrl} thumbnail={card.thumbnail} aspectRatio="1 / 1" compact />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.name}</div>
@@ -467,6 +470,7 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
               const fmt = library[s.formatLibraryId] || null;
               const name = shortlisted[`sl_${s.formatLibraryId}`]?.formatName || fmt?.name || s.formatLibraryId;
               const thumb = fmt?.examples?.[0]?.thumbnail || null;
+              const exampleUrl = fmt?.examples?.[0]?.url || null;
               return (
                 <SortableSelectedRow key={s.formatLibraryId}
                   id={`drop:${s.formatLibraryId}`}
@@ -474,6 +478,7 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
                   name={name}
                   source={s.source}
                   thumbnail={thumb}
+                  exampleUrl={exampleUrl}
                   onRemove={() => onRemove(s.formatLibraryId)}
                 />
               );
@@ -485,7 +490,7 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
   );
 }
 
-function SortableSelectedRow({ id, index, name, source, thumbnail, onRemove }) {
+function SortableSelectedRow({ id, index, name, source, thumbnail, exampleUrl, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   return (
     <div ref={setNodeRef}
@@ -501,8 +506,8 @@ function SortableSelectedRow({ id, index, name, source, thumbnail, onRemove }) {
       <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", minWidth: 18 }}>
         {String(index + 1).padStart(2, "0")}
       </span>
-      <div style={{ width: 32, height: 32, background: "#000", borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
-        {thumbnail && <img src={thumbnail} alt="" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+      <div style={{ width: 32, height: 32, borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
+        <ReelPreview url={exampleUrl} thumbnail={thumbnail} aspectRatio="1 / 1" compact />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
