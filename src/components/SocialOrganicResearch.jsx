@@ -479,8 +479,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         <ResearchStep project={project} linkedAccount={linkedAccount} onPatch={onPatch} />
       )}
       {tab === "clientResearch" && (
-        <TabPlaceholder tabNum={3} title="Client Research"
-          hint="Phase D — top 5 client videos by views, follower counts, average views. Producer fills a mandatory key-takeaways text area before approving." />
+        <ClientResearchStep project={project} onPatch={onPatch} />
       )}
       {tab === "videoReview" && (
         <TabPlaceholder tabNum={4} title="Video Format Review"
@@ -2795,6 +2794,215 @@ function ScrapeStatusPill({ scrape, label }) {
           · Finished {new Date(scrape.finishedAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}
         </span>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// TAB 3 — CLIENT RESEARCH (Phase D)
+// Populates from the Stage A scrape. Shows top 5 reels by views, follower
+// counts (IG auto, TT/YT producer-supplied), avg views. Producer writes a
+// mandatory key-takeaways text — approval is gated on it being filled.
+// ═══════════════════════════════════════════
+function ClientResearchStep({ project, onPatch }) {
+  const clientScrape = project.clientScrape || {};
+  const profile = clientScrape.profile || {};
+  const followers = profile.followers || {};
+  const posts = Array.isArray(clientScrape.posts) ? clientScrape.posts : [];
+  const topIds = Array.isArray(clientScrape.topByViews) ? clientScrape.topByViews : [];
+  const topPosts = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 5);
+  const handles = clientScrape.handles || {};
+  const approvals = project.approvals || {};
+  const isDone = !!approvals.clientResearch;
+
+  const [takeaways, setTakeaways] = useState(project.clientResearch?.keyTakeaways || "");
+  const [ttHandle, setTtHandle] = useState(handles.tiktok || "");
+  const [ytHandle, setYtHandle] = useState(handles.youtube || "");
+  const [busy, setBusy] = useState({ tt: false, yt: false });
+  const [err, setErr] = useState({ tt: null, yt: null });
+
+  // Debounced takeaways write.
+  useEffect(() => {
+    if (takeaways === (project.clientResearch?.keyTakeaways || "")) return;
+    const t = setTimeout(() => {
+      fbSet(`/preproduction/socialOrganic/${project.id}/clientResearch/keyTakeaways`, takeaways);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [takeaways]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startProfileScrape = async (platform, handle) => {
+    const clean = handle.trim().replace(/^@/, "");
+    if (!clean) { setErr(e => ({ ...e, [platform === "tiktok" ? "tt" : "yt"]: "Add a handle first" })); return; }
+    const key = platform === "tiktok" ? "tt" : "yt";
+    setBusy(s => ({ ...s, [key]: true }));
+    setErr(e => ({ ...e, [key]: null }));
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "startProfileScrape", projectId: project.id, platform, handle: clean }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+    } catch (e) {
+      setErr(err => ({ ...err, [key]: e.message }));
+    } finally {
+      setBusy(s => ({ ...s, [key]: false }));
+    }
+  };
+
+  const approve = () => {
+    if (!takeaways.trim()) return;
+    fbSet(`/preproduction/socialOrganic/${project.id}/clientResearch/keyTakeaways`, takeaways);
+    fbSet(`/preproduction/socialOrganic/${project.id}/approvals/clientResearch`, new Date().toISOString());
+    onPatch({ tab: "videoReview" });
+  };
+
+  const scrapeRunning = clientScrape.status === "running" && posts.length === 0;
+  const scrapeErrored = clientScrape.status === "error";
+
+  return (
+    <div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Client Research</div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+          From the Stage A scrape. The key-takeaways text below is mandatory — it captures your read on the client's current content for Tab 7.
+        </div>
+      </div>
+
+      {/* Scrape-status banners */}
+      {scrapeRunning && (
+        <div style={{ padding: 14, marginBottom: 14, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 8, fontSize: 12, color: "#3B82F6" }}>
+          Client scrape running… the reels + follower count will appear here once Apify finishes (usually 30-90s).
+        </div>
+      )}
+      {scrapeErrored && (
+        <div style={{ padding: 14, marginBottom: 14, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontSize: 12, color: "#EF4444" }}>
+          Client scrape errored: {clientScrape.error || "(no detail)"}. Go back to Tab 2 and retry Stage A.
+        </div>
+      )}
+
+      {/* Follower-count cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 14 }}>
+        <FollowerCard platform="Instagram" handle={clientScrape.handles?.instagram || project.research?.clientHandle}
+          count={followers.instagram} autoScraped />
+        <FollowerCard platform="TikTok" handle={ttHandle} onHandleChange={setTtHandle}
+          onScrape={() => startProfileScrape("tiktok", ttHandle)}
+          count={followers.tiktok} busy={busy.tt} error={err.tt} disabled={isDone} />
+        <FollowerCard platform="YouTube" handle={ytHandle} onHandleChange={setYtHandle}
+          onScrape={() => startProfileScrape("youtube", ytHandle)}
+          count={followers.youtube} busy={busy.yt} error={err.yt} disabled={isDone} />
+      </div>
+
+      {/* Average / median stats */}
+      {(profile.avgViews || profile.medianViews) && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+          <StatChip label="Avg views" value={formatBig(profile.avgViews)} />
+          <StatChip label="Median views" value={formatBig(profile.medianViews)} />
+          <StatChip label="Total reels scraped" value={posts.length} />
+        </div>
+      )}
+
+      {/* Top 5 reels */}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 10 }}>Top 5 client reels by views</div>
+        {topPosts.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+            {scrapeRunning ? "Waiting on scrape…" : "No reels yet — waiting on the client scrape."}
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
+            {topPosts.map(p => (
+              <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                style={{ display: "block", background: "var(--bg)", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)", textDecoration: "none" }}>
+                <div style={{ aspectRatio: "9 / 16", background: "#000" }}>
+                  {p.thumbnail && <img src={p.thumbnail} alt="" loading="lazy" onError={e => { e.target.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                </div>
+                <div style={{ padding: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", fontFamily: "'JetBrains Mono',monospace" }}>
+                    👁 {formatBig(p.views)}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {(p.caption || "").slice(0, 60)}
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Key takeaways — mandatory */}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 6 }}>
+          Key takeaways <span style={{ color: "#EF4444", marginLeft: 4 }}>*</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
+          What are the strengths of the client's current content? Where are the gaps? Use your eyes on the reels above — Claude will weight this heavily in Tab 7.
+        </div>
+        <textarea value={takeaways} onChange={e => setTakeaways(e.target.value)}
+          placeholder="e.g. Strong on-camera presence but formats are inconsistent. Best-performing reels are the 'day in the life' ones. No hook formula — we should standardise."
+          rows={5}
+          disabled={isDone}
+          style={{ ...inputSt, resize: "vertical", fontSize: 12, fontFamily: "inherit", opacity: isDone ? 0.7 : 1 }} />
+      </div>
+
+      {!isDone && (
+        <button onClick={approve}
+          disabled={!takeaways.trim()}
+          title={!takeaways.trim() ? "Fill the key takeaways first" : "Approve and move to Video Review"}
+          style={{ ...btnPrimary, opacity: takeaways.trim() ? 1 : 0.5 }}>
+          Approve → Video Review
+        </button>
+      )}
+      {isDone && (
+        <div style={{ padding: 14, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 8, fontSize: 12, color: "#22C55E", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <span>✓ Approved {new Date(approvals.clientResearch).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
+          <button onClick={() => onPatch({ tab: "videoReview" })} style={btnPrimary}>→ Video Review</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FollowerCard({ platform, handle, onHandleChange, onScrape, count, busy, error, disabled, autoScraped }) {
+  const countStr = count == null ? "—" : formatBig(count);
+  const platformIcon = { Instagram: "📷", TikTok: "🎵", YouTube: "📺" }[platform] || "";
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <span style={{ fontSize: 14 }}>{platformIcon}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{platform}</span>
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>
+        {countStr} <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>followers</span>
+      </div>
+      {autoScraped ? (
+        <div style={{ fontSize: 10, color: "var(--muted)" }}>
+          @{(handle || "").replace(/^@/, "")} · from Stage A scrape
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 4 }}>
+          <input type="text" value={handle || ""} onChange={e => onHandleChange(e.target.value)}
+            disabled={disabled || busy}
+            placeholder="@handle"
+            style={{ ...inputSt, fontSize: 11, padding: "5px 8px" }} />
+          <button onClick={onScrape} disabled={disabled || busy || !handle?.trim()}
+            style={{ ...btnSecondary, padding: "5px 10px", fontSize: 11, opacity: (disabled || busy || !handle?.trim()) ? 0.5 : 1 }}>
+            {busy ? "…" : count == null ? "Fetch" : "Refresh"}
+          </button>
+        </div>
+      )}
+      {error && <div style={{ fontSize: 10, color: "#EF4444", marginTop: 4 }}>{error}</div>}
+    </div>
+  );
+}
+
+function StatChip({ label, value }) {
+  return (
+    <div style={{ padding: "10px 14px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, minWidth: 140 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace", marginTop: 3 }}>{value}</div>
     </div>
   );
 }

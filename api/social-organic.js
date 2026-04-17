@@ -1482,6 +1482,53 @@ async function handleStartCompetitorScrape(req, res) {
   return res.status(200).json({ success: true, runId, handles: handles.length, perHandle });
 }
 
+// Fire TikTok / YouTube profile scrapes for Tab 3. Producers supply handles
+// here because Fathom/Attio don't reliably know them. Each triggers its own
+// Apify actor; results land under clientScrape.profile.followers.{tiktok,youtube}
+// via the same apify-webhook routing as the IG scrapes.
+async function handleStartProfileScrape(req, res) {
+  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+  if (!APIFY_TOKEN) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
+
+  const { projectId, platform, handle } = req.body || {};
+  if (!projectId || !platform || !handle) {
+    return res.status(400).json({ error: "Missing projectId, platform, or handle" });
+  }
+  const cleanHandle = handle.replace(/^@+/, "").trim();
+
+  let actorId, input, purpose;
+  if (platform === "tiktok") {
+    actorId = APIFY_TT_PROFILE_ACTOR;
+    input = { profiles: [cleanHandle], resultsPerPage: 1, shouldDownloadVideos: false };
+    purpose = "clientProfileTT";
+  } else if (platform === "youtube") {
+    actorId = APIFY_YT_CHANNEL_ACTOR;
+    // streamers/youtube-channel-info takes startUrls
+    const url = /^https?:\/\//.test(handle)
+      ? handle
+      : `https://www.youtube.com/@${cleanHandle}`;
+    input = { startUrls: [{ url }] };
+    purpose = "clientProfileYT";
+  } else {
+    return res.status(400).json({ error: "platform must be 'tiktok' or 'youtube'" });
+  }
+
+  try {
+    const runId = await startApifyRun({
+      actorId, input, token: APIFY_TOKEN,
+      projectId, purpose,
+      extraSidecar: { handle: cleanHandle },
+    });
+    // Also store the supplied handle on the project so the UI remembers it.
+    await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/handles`, {
+      [platform]: cleanHandle,
+    });
+    return res.status(200).json({ success: true, runId });
+  } catch (e) {
+    return res.status(502).json({ error: "Failed to start Apify run", detail: e.message });
+  }
+}
+
 // Ask Claude for competitor handles + keywords grounded in brand truth,
 // transcript, and the account's saved competitors. Returns suggestions only
 // — the producer reviews and edits before approving Stage B.
@@ -1607,6 +1654,8 @@ export default async function handler(req, res) {
         return await handleStartCompetitorScrape(req, res);
       case "suggestCompetitors":
         return await handleSuggestCompetitors(req, res);
+      case "startProfileScrape":
+        return await handleStartProfileScrape(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }
