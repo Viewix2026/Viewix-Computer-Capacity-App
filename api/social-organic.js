@@ -1824,6 +1824,63 @@ Rank them. Return JSON.`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Recovery: poll Apify directly for in-flight runs and replay the
+// webhook locally when any have finished. Covers webhook drops, Vercel
+// cold-start misses, secret mismatches during env-var rotations, etc.
+// Safe to call repeatedly — it's idempotent (sidecar deleted on success).
+// ═══════════════════════════════════════════════════════════════════
+async function handleRefreshScrapes(req, res) {
+  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+  const SECRET = process.env.APIFY_WEBHOOK_SECRET;
+  if (!APIFY_TOKEN) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
+  if (!SECRET) return res.status(500).json({ error: "APIFY_WEBHOOK_SECRET not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const sidecars = (await fbGet(`/preproduction/socialOrganic/_apifyRuns`)) || {};
+  const mine = Object.entries(sidecars).filter(([, meta]) => meta?.projectId === projectId);
+
+  if (mine.length === 0) {
+    return res.status(200).json({ success: true, checked: 0, note: "No in-flight runs for this project." });
+  }
+
+  const webhookUrl = `${apifyWebhookBase()}/api/apify-webhook?secret=${encodeURIComponent(SECRET)}`;
+  const results = [];
+
+  for (const [runId, meta] of mine) {
+    try {
+      const r = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${encodeURIComponent(APIFY_TOKEN)}`);
+      if (!r.ok) {
+        results.push({ runId, purpose: meta.purpose, outcome: "apify_error", status: r.status });
+        continue;
+      }
+      const data = await r.json();
+      const status = data?.data?.status;
+      const datasetId = data?.data?.defaultDatasetId;
+
+      if (status === "SUCCEEDED" || status === "FAILED" || status === "ABORTED" || status === "TIMED-OUT" || status === "TIMED_OUT") {
+        // Replay the webhook path so all routing + status flips happen in
+        // exactly one place. Fire-and-await so refresh is synchronous for
+        // the caller.
+        const wr = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runId, status, datasetId }),
+        });
+        results.push({ runId, purpose: meta.purpose, outcome: wr.ok ? "replayed" : "replay_failed", status });
+      } else {
+        results.push({ runId, purpose: meta.purpose, outcome: "still_running", status });
+      }
+    } catch (e) {
+      results.push({ runId, purpose: meta.purpose, outcome: "error", error: e.message });
+    }
+  }
+
+  return res.status(200).json({ success: true, checked: mine.length, results });
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // TAB 7 — PUSH TO DELIVERIES (Phase G)
 // Mirrors the Meta Ads handoff in src/components/Preproduction.jsx:612-637
 // but runs server-side so we can: (a) guard against duplicate pushes,
@@ -1942,6 +1999,8 @@ export default async function handler(req, res) {
         return await handleSuggestFormats(req, res);
       case "pushToDeliveries":
         return await handlePushToDeliveries(req, res);
+      case "refreshScrapes":
+        return await handleRefreshScrapes(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }

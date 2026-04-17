@@ -2785,7 +2785,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
             {handleSuggestion.reason}
           </div>
         )}
-        {stageADone && <ScrapeStatusPill scrape={clientScrape} label="Client scrape" />}
+        {stageADone && <ScrapeStatusPill scrape={clientScrape} label="Client scrape" projectId={project.id} />}
       </StageCard>
 
       {/* Stage B: competitors + keywords (only unlocks once Stage A approved,
@@ -2868,7 +2868,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
               {starting.b ? "Starting…" : `Approve & Scrape ~120 Videos`}
             </button>
           )}
-          {stageBDone && <ScrapeStatusPill scrape={competitorScrape} label="Competitor scrape" />}
+          {stageBDone && <ScrapeStatusPill scrape={competitorScrape} label="Competitor scrape" projectId={project.id} />}
         </StageCard>
       </div>
 
@@ -2910,7 +2910,7 @@ function StageCard({ stageLabel, title, hint, done, doneText, error, children })
   );
 }
 
-function ScrapeStatusPill({ scrape, label }) {
+function ScrapeStatusPill({ scrape, label, projectId }) {
   const status = scrape?.status || "queued";
   const colour = {
     queued:  { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85", text: "Queued" },
@@ -2918,6 +2918,42 @@ function ScrapeStatusPill({ scrape, label }) {
     done:    { bg: "rgba(34,197,94,0.15)",   fg: "#22C55E", text: "Complete" },
     error:   { bg: "rgba(239,68,68,0.15)",   fg: "#EF4444", text: scrape?.error || "Error" },
   }[status] || { bg: "var(--bg)", fg: "var(--muted)", text: status };
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+
+  // Refresh is a manual escape hatch — if the Apify webhook drops or
+  // Vercel misses the callback, the producer can force a status check
+  // by polling Apify directly.
+  const doRefresh = async () => {
+    if (!projectId) return;
+    setRefreshing(true); setRefreshMsg(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refreshScrapes", projectId }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      const replayed = (d.results || []).filter(x => x.outcome === "replayed").length;
+      const stillRunning = (d.results || []).filter(x => x.outcome === "still_running").length;
+      if (replayed > 0) setRefreshMsg(`Pulled ${replayed} completed run${replayed === 1 ? "" : "s"}.`);
+      else if (stillRunning > 0) setRefreshMsg(`Still running at Apify (${stillRunning} run${stillRunning === 1 ? "" : "s"}).`);
+      else setRefreshMsg("No in-flight runs to refresh.");
+    } catch (e) {
+      setRefreshMsg(`Refresh failed: ${e.message}`);
+    } finally {
+      setRefreshing(false);
+      setTimeout(() => setRefreshMsg(null), 5000);
+    }
+  };
+
+  // Running over 90 seconds is our signal to surface the refresh option.
+  const startedMs = scrape?.startedAt ? new Date(scrape.startedAt).getTime() : 0;
+  const stalled = status === "running" && startedMs && (Date.now() - startedMs) > 90 * 1000;
+
   return (
     <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <span style={{ padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: colour.bg, color: colour.fg }}>
@@ -2931,6 +2967,21 @@ function ScrapeStatusPill({ scrape, label }) {
       {scrape?.finishedAt && (
         <span style={{ fontSize: 10, color: "var(--muted)" }}>
           · Finished {new Date(scrape.finishedAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })}
+        </span>
+      )}
+      {(status === "running" || status === "error") && projectId && (
+        <button onClick={doRefresh} disabled={refreshing}
+          title="Poll Apify directly for this scrape's status and pull the results if finished"
+          style={{ padding: "3px 10px", borderRadius: 10, fontSize: 10, fontWeight: 700, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", cursor: "pointer", fontFamily: "inherit", opacity: refreshing ? 0.5 : 1 }}>
+          {refreshing ? "Checking…" : "↻ Refresh"}
+        </button>
+      )}
+      {refreshMsg && (
+        <span style={{ fontSize: 10, color: "var(--accent)" }}>{refreshMsg}</span>
+      )}
+      {stalled && !refreshMsg && (
+        <span style={{ fontSize: 10, color: "#F59E0B" }}>
+          Running longer than usual — click ↻ Refresh to check Apify directly.
         </span>
       )}
     </div>
