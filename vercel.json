@@ -23,10 +23,6 @@
     {
       "path": "/api/check-contacts",
       "schedule": "0 22 * * *"
-    },
-    {
-      "path": "/api/sync-weekly-wins",
-      "schedule": "0 21 * * *"
     }
   ],
   "rewrites": [

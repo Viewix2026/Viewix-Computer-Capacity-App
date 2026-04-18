@@ -15,6 +15,7 @@ import {
 } from "../utils";
 import { Badge, Metric, NumIn, UBar, FChart } from "./UIComponents";
 import { Grid } from "./Grid";
+import { VideoEmbed } from "./shared/VideoEmbed";
 
 export function Capacity({
   capTab, setCapTab,
@@ -102,7 +103,7 @@ export function Capacity({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Capacity Planner</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "roster", label: "Team Roster" }, { key: "schedule", label: "Weekly Schedule" }, { key: "forecast", label: "Forecast" }, { key: "timelogs", label: "Time Logs" }, { key: "lunch", label: "Team Lunch" }, { key: "weeklyWin", label: "Weekly Win" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "roster", label: "Team Roster" }, { key: "schedule", label: "Weekly Schedule" }, { key: "forecast", label: "Forecast" }, { key: "timelogs", label: "Time Logs" }, { key: "lunch", label: "Team Lunch" }, { key: "videoOfTheWeek", label: "Video of the Week" }].map(t => (
             <button key={t.key} onClick={() => setCapTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: capTab === t.key ? "var(--card)" : "transparent", color: capTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
@@ -303,77 +304,97 @@ export function Capacity({
           </div>
         )}
 
-        {capTab === "weeklyWin" && (
+        {capTab === "videoOfTheWeek" && (
           <div style={{ maxWidth: 700, margin: "0 auto" }}>
-            {/* Auto-pulled Slack pool */}
-            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "24px", marginBottom: 16 }}>
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 12, gap: 12 }}>
+            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "24px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                <span style={{ fontSize: 22 }}>🎬</span>
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 18 }}>🔥</span>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Auto pool from #wins</div>
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                    Last 3 messages reacted with 🔥 in the wins channel. Rotates daily on the home page.
-                    {foundersData.weeklyWinSyncedAt && ` Last synced ${new Date(foundersData.weeklyWinSyncedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`}
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Video of the Week</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                    Paste a Frame.io / YouTube / Instagram URL. Auto-embedded on the home page with the creator note below.
                   </div>
                 </div>
-                <button onClick={async () => {
-                  try {
-                    const r = await fetch("/api/sync-weekly-wins", { method: "GET" });
-                    const d = await r.json();
-                    if (!r.ok) alert("Sync failed: " + (d.error || "Unknown") + (d.detail ? " — " + d.detail : ""));
-                    else alert(`Synced ${d.pooled || 0} wins from Slack`);
-                  } catch (e) { alert("Sync failed: " + e.message); }
-                }} style={{ ...BTN, background: "var(--bg)", color: "var(--accent)", border: "1px solid var(--border)", whiteSpace: "nowrap" }}>Sync now</button>
               </div>
-              {Array.isArray(foundersData.weeklyWinPool) && foundersData.weeklyWinPool.length > 0 ? (
-                <div style={{ display: "grid", gap: 10 }}>
-                  {foundersData.weeklyWinPool.map((w, i) => (
-                    <div key={i} style={{ padding: "14px 16px", background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>#{i + 1}</span>
-                        {w.reactionCount && <span style={{ fontSize: 11, color: "var(--muted)" }}>🔥 {w.reactionCount}</span>}
-                        {w.author && <span style={{ fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>{w.author}</span>}
-                        {w.image && <span style={{ fontSize: 11, color: "var(--muted)" }}>📷 image</span>}
-                        {w.postedAt && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{new Date(w.postedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>}
-                      </div>
-                      <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{w.text || "(no text)"}</div>
-                      {w.image?.url && (
-                        <div style={{ marginTop: 8, borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)", maxHeight: 160, display: "inline-block" }}>
-                          <img src={`/api/slack-image?url=${encodeURIComponent(w.image.url)}`} alt="" onError={e => { e.target.parentElement.style.display = "none"; }} style={{ display: "block", maxHeight: 160, width: "auto", objectFit: "contain" }} />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--muted)", background: "var(--bg)", borderRadius: 8, border: "1px dashed var(--border)", fontSize: 13 }}>
-                  No 🔥-reacted messages yet. React to messages in #wins with 🔥 to feature them here.
+
+              {/* Video URL */}
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Video URL</label>
+              <input
+                type="url"
+                value={foundersData.videoOfTheWeek?.videoUrl || ""}
+                onChange={e => setFoundersData(p => ({
+                  ...p,
+                  videoOfTheWeek: {
+                    ...(p.videoOfTheWeek || {}),
+                    videoUrl: e.target.value,
+                    updatedAt: new Date().toISOString(),
+                  },
+                }))}
+                placeholder="https://youtube.com/watch?v=... or frame.io/... or instagram.com/reel/..."
+                style={{ width: "100%", padding: "10px 14px", fontSize: 13, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", fontFamily: "'JetBrains Mono',monospace", boxSizing: "border-box" }}
+              />
+
+              {/* Preview — live re-renders as producer types so they can
+                  confirm the embed works before walking away. */}
+              {foundersData.videoOfTheWeek?.videoUrl && (
+                <div style={{ marginTop: 14, padding: 12, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Preview</div>
+                  <VideoEmbed url={foundersData.videoOfTheWeek.videoUrl} />
                 </div>
               )}
-            </div>
 
-            {/* Manual override */}
-            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "24px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Manual override</div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>If set, this replaces the auto-pulled pool until cleared.</div>
+              {/* Creator */}
+              <div style={{ marginTop: 16 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Who made it</label>
+                <input
+                  type="text"
+                  value={foundersData.videoOfTheWeek?.creator || ""}
+                  onChange={e => setFoundersData(p => ({
+                    ...p,
+                    videoOfTheWeek: {
+                      ...(p.videoOfTheWeek || {}),
+                      creator: e.target.value,
+                      updatedAt: new Date().toISOString(),
+                    },
+                  }))}
+                  placeholder="e.g. Vish + Steve"
+                  style={{ width: "100%", padding: "10px 14px", fontSize: 13, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+                />
+              </div>
+
+              {/* Note */}
+              <div style={{ marginTop: 14 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Note about the video</label>
+                <textarea
+                  value={foundersData.videoOfTheWeek?.note || ""}
+                  onChange={e => setFoundersData(p => ({
+                    ...p,
+                    videoOfTheWeek: {
+                      ...(p.videoOfTheWeek || {}),
+                      note: e.target.value,
+                      updatedAt: new Date().toISOString(),
+                    },
+                  }))}
+                  placeholder="What's great about this one? Client, project, technique, whatever."
+                  rows={3}
+                  style={{ width: "100%", padding: "12px 14px", fontSize: 13, fontWeight: 500, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", resize: "vertical", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.5, boxSizing: "border-box" }}
+                />
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
+                <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                  Saves automatically.
+                  {foundersData.videoOfTheWeek?.updatedAt && ` Last updated ${new Date(foundersData.videoOfTheWeek.updatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`}
                 </div>
-                {foundersData.weeklyWin && (
-                  <button onClick={() => { if (window.confirm("Clear manual override and resume auto pool?")) setFoundersData(p => ({ ...p, weeklyWin: "", weeklyWinAuthor: "", weeklyWinDate: "" })); }} style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--muted)", fontSize: 11, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}>Clear override</button>
+                {foundersData.videoOfTheWeek?.videoUrl && (
+                  <button
+                    onClick={() => { if (window.confirm("Clear the current Video of the Week?")) setFoundersData(p => ({ ...p, videoOfTheWeek: null })); }}
+                    style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--muted)", fontSize: 11, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Clear
+                  </button>
                 )}
               </div>
-              <div style={{ marginTop: 14 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Win message</label>
-                <textarea value={foundersData.weeklyWin || ""} onChange={e => setFoundersData(p => ({ ...p, weeklyWin: e.target.value, weeklyWinAuthor: p.weeklyWinAuthor || "", weeklyWinDate: new Date().toISOString() }))} placeholder="Post a manual win to override the auto pool..." rows={4} style={{ width: "100%", padding: "12px 14px", fontSize: 14, fontWeight: 500, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", resize: "vertical", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.6, boxSizing: "border-box" }} />
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Shoutout from (optional)</label>
-                <input type="text" value={foundersData.weeklyWinAuthor || ""} onChange={e => setFoundersData(p => ({ ...p, weeklyWinAuthor: e.target.value }))} placeholder="e.g. Jeremy, Brandon, Push" style={{ width: "100%", padding: "8px 12px", fontSize: 13, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", fontFamily: "inherit", boxSizing: "border-box" }} />
-              </div>
-              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 10 }}>Saves automatically.</div>
             </div>
           </div>
         )}

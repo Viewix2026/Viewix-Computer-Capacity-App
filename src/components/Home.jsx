@@ -1,25 +1,13 @@
 // Home page — read-only dashboard everyone sees on login.
-// Displays Team Quote (founders edit), Next Team Lunch, Weekly Win (auto-rotated
-// from Slack #wins pool or manual override), and Quick Links.
-// All editing happens elsewhere (Capacity → Weekly Win, Capacity → Team Lunch,
-// Founders → Team Quote).
+// Displays Team Quote (founders edit), Next Team Lunch, Video of the Week
+// (embedded + a short note — editable from the Capacity tab), and Quick Links.
+// Editing lives in Capacity → Video of the Week / Team Lunch; Team Quote
+// is edited inline on Home by founders.
+
+import { VideoEmbed } from "./shared/VideoEmbed";
 
 export function Home({ foundersData, setFoundersData, teamLunch, isFounder, isFounders }) {
-  const pool = Array.isArray(foundersData.weeklyWinPool) ? foundersData.weeklyWinPool : [];
-  const hasManual = !!foundersData.weeklyWin;
-  // Rotate through pool by day-of-year so it changes daily but is stable per-day
-  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
-  const fromPool = pool.length > 0 ? pool[dayOfYear % pool.length] : null;
-  const winText = hasManual ? foundersData.weeklyWin : (fromPool?.text || "");
-  const winAuthor = hasManual ? foundersData.weeklyWinAuthor : (fromPool?.author || "");
-  const winDate = hasManual ? foundersData.weeklyWinDate : (fromPool?.postedAt || "");
-  const winImage = !hasManual ? fromPool?.image : null;
-  const isFromSlack = !hasManual && !!fromPool;
-  // Slack file URLs (files.slack.com, *.slack-edge.com) need the bot token
-  // to fetch, so we route them through our proxy. Public block/attachment
-  // URLs (e.g. imgur-hosted) load directly.
-  const needsProxy = winImage?.url && /^https:\/\/(files\.slack\.com|[\w-]+\.slack-edge\.com)\//.test(winImage.url);
-  const proxiedImg = needsProxy ? `/api/slack-image?url=${encodeURIComponent(winImage.url)}` : (winImage?.url || null);
+  const votw = foundersData.videoOfTheWeek || null;
 
   return (
     <>
@@ -68,37 +56,40 @@ export function Home({ foundersData, setFoundersData, teamLunch, isFounder, isFo
           )}
         </div>
 
-        {/* Weekly Win — manual override OR rotated from Slack :fire: pool */}
-        <div style={{ marginBottom: 20, padding: "24px", background: "linear-gradient(135deg, rgba(245,158,11,0.08) 0%, rgba(139,92,246,0.08) 100%)", border: "1px solid var(--border)", borderRadius: 12, position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", top: -20, right: -20, fontSize: 120, opacity: 0.06, pointerEvents: "none" }}>🎉</div>
+        {/* Video of the Week — embedded from Frame.io / YouTube / Instagram. */}
+        <div style={{ marginBottom: 20, padding: "24px", background: "linear-gradient(135deg, rgba(139,92,246,0.08) 0%, rgba(59,130,246,0.08) 100%)", border: "1px solid var(--border)", borderRadius: 12, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: -20, right: -20, fontSize: 120, opacity: 0.06, pointerEvents: "none" }}>🎬</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, position: "relative" }}>
-            <span style={{ fontSize: 24 }}>🎉</span>
+            <span style={{ fontSize: 24 }}>🎬</span>
             <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>Weekly Win</div>
-                {isFromSlack && pool.length > 1 && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: "rgba(245,158,11,0.15)", color: "#F59E0B" }}>🔥 {(dayOfYear % pool.length) + 1} of {pool.length}</span>}
-              </div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>Video of the Week</div>
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                {winDate ? `Posted ${new Date(winDate).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}${isFromSlack ? " · auto-pulled from #wins" : ""}` : "Big team wins, shoutouts and moments worth celebrating"}
+                {votw?.updatedAt ? `Posted ${new Date(votw.updatedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}` : "The week's standout piece of work"}
               </div>
             </div>
           </div>
-          {(winText || proxiedImg) ? (
-            <div style={{ padding: "18px 22px", background: "var(--card)", borderRadius: 10, border: "1px solid var(--border)", position: "relative" }}>
-              {winText && <div style={{ fontSize: 16, fontWeight: 600, color: "var(--fg)", lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: proxiedImg ? 14 : 0 }}>{winText}</div>}
-              {proxiedImg && (
-                <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)", background: "var(--bg)", maxHeight: 400 }}>
-                  <img src={proxiedImg} alt="" onError={e => { e.target.parentElement.style.display = "none"; }} style={{ display: "block", maxWidth: "100%", maxHeight: 400, width: "auto", height: "auto", margin: "0 auto", objectFit: "contain" }} />
+          {votw?.videoUrl ? (
+            <div style={{ padding: "18px", background: "var(--card)", borderRadius: 10, border: "1px solid var(--border)" }}>
+              <div style={{ marginBottom: 14 }}>
+                <VideoEmbed url={votw.videoUrl} />
+              </div>
+              {votw.note && (
+                <div style={{ fontSize: 14, color: "var(--fg)", lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: votw.creator ? 10 : 0 }}>
+                  {votw.note}
                 </div>
               )}
-              {winAuthor && (
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", marginTop: proxiedImg ? 12 : 10 }}>— {winAuthor}</div>
+              {votw.creator && (
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>
+                  — {votw.creator}
+                </div>
               )}
             </div>
           ) : (
             <div style={{ padding: "30px 20px", textAlign: "center", color: "var(--muted)", background: "var(--card)", borderRadius: 10, border: "1px dashed var(--border)" }}>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>No wins yet</div>
-              <div style={{ fontSize: 12 }}>React with 🔥 in #wins on Slack to feature a message here{isFounder ? ", or post one manually from Capacity → Weekly Win" : ""}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Nothing this week yet</div>
+              <div style={{ fontSize: 12 }}>
+                {isFounder ? "Post one from Capacity → Video of the Week" : "Check back soon — updated weekly"}
+              </div>
             </div>
           )}
         </div>
