@@ -64,7 +64,7 @@ export function Home({ foundersData, setFoundersData, teamLunch, isFounder, isFo
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>Video of the Week</div>
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                {votw?.updatedAt ? `Posted ${new Date(votw.updatedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}` : "The week's standout piece of work"}
+                The week's standout piece of work
               </div>
             </div>
           </div>
