@@ -901,7 +901,7 @@ function PostCard({ post, projectId }) {
       onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
       onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
       <div style={{ position: "relative" }}>
-        <ReelPreview shortCode={post.shortCode} url={post.url} thumbnail={post.thumbnail} aspectRatio="1 / 1" />
+        <ReelPreview shortCode={post.shortCode} url={post.url} thumbnail={post.thumbnail} aspectRatio="9 / 14" />
         {overBadge && over != null && (
           <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: overBadge.bg, color: overBadge.fg, zIndex: 2 }}>
             {over >= 1 ? `${over.toFixed(1)}× avg` : `${(over * 100).toFixed(0)}% avg`}
@@ -1680,7 +1680,7 @@ function ReviewCard({ post, status, onTick, onCross }) {
   return (
     <div style={{ background: "var(--card)", border, borderRadius: 10, overflow: "hidden", opacity, transition: "opacity 0.15s, border 0.15s", position: "relative" }}>
       <div style={{ position: "relative" }}>
-        <ReelPreview shortCode={post.shortCode} url={post.url} thumbnail={post.thumbnail} aspectRatio="1 / 1" />
+        <ReelPreview shortCode={post.shortCode} url={post.url} thumbnail={post.thumbnail} aspectRatio="9 / 14" />
         {post.overperformanceScore != null && (
           <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: "rgba(34,197,94,0.85)", color: "#fff", zIndex: 2 }}>
             {post.overperformanceScore.toFixed(1)}× avg
