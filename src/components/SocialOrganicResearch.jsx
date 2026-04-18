@@ -1752,18 +1752,15 @@ function ShortlistStep({ project, onPatch }) {
   }));
   const tickedVideos = [...tickedPosts, ...extraAsPosts];
 
-  // Global format library + categories — both listened to live so the
-  // form's category dropdown and "Add as example to" search stay in sync
-  // with what other projects have contributed.
+  // Global format library — listened to live so the "Add as example"
+  // picker sees new library entries from other projects in real time.
   const [library, setLibrary] = useState({});
-  const [categories, setCategories] = useState({});
   useEffect(() => {
-    let unsubL = () => {}, unsubC = () => {};
+    let unsub = () => {};
     onFB(() => {
-      unsubL = fbListen("/formatLibrary", (d) => setLibrary(d || {}));
-      unsubC = fbListen("/formatCategories", (d) => setCategories(d || {}));
+      unsub = fbListen("/formatLibrary", (d) => setLibrary(d || {}));
     });
-    return () => { unsubL(); unsubC(); };
+    return () => { unsub(); };
   }, []);
 
   // Which video is active in the right-hand form. Default to the first
@@ -1855,7 +1852,6 @@ function ShortlistStep({ project, onPatch }) {
                 video={activeVideo}
                 project={project}
                 library={library}
-                categories={categories}
                 existing={existingShortlist}
                 onSaved={() => {
                   // Auto-advance to the next unshortlisted video on save.
@@ -1877,12 +1873,10 @@ function ShortlistStep({ project, onPatch }) {
 
 // The actual form. Split out so that choosing a new video fully remounts it
 // via key={activeVideo.id} (no stale field state when switching).
-function ShortlistForm({ video, project, library, categories, existing, onSaved }) {
+function ShortlistForm({ video, project, library, existing, onSaved }) {
   const mode = existing?.addedAsExampleTo ? "example" : existing?.formatLibraryId ? "new" : "new";
   const [saveMode, setSaveMode] = useState(mode);  // "new" | "example"
   const [formatName, setFormatName] = useState(existing?.formatName || "");
-  const [category, setCategory] = useState(existing?.category || "");
-  const [newCategory, setNewCategory] = useState("");
   const [tags, setTags] = useState(existing?.tags || []);
   const [tagInput, setTagInput] = useState("");
   const [description, setDescription] = useState(existing?.description || "");
@@ -1891,10 +1885,6 @@ function ShortlistForm({ video, project, library, categories, existing, onSaved 
   const [addTargetId, setAddTargetId] = useState(existing?.addedAsExampleTo || "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
-
-  const categoryList = Object.entries(categories || {})
-    .map(([k, v]) => ({ key: k, label: v?.label || k }))
-    .sort((a, b) => a.label.localeCompare(b.label));
 
   const libraryList = Object.values(library || {})
     .filter(f => f && f.id && !f.archived)
@@ -1907,8 +1897,6 @@ function ShortlistForm({ video, project, library, categories, existing, onSaved 
     setTags([...tags, t]);
     setTagInput("");
   };
-
-  const effectiveCategory = newCategory.trim() || category;
 
   const save = async () => {
     setSaveError(null);
@@ -1962,7 +1950,7 @@ function ShortlistForm({ video, project, library, categories, existing, onSaved 
           videoAnalysis: description,
           filmingInstructions: filming,
           structureInstructions: structure,
-          category: effectiveCategory || null,
+          category: null,  // Category removed from form; filter happens in Tab 6 via other signals.
           tags,
           examples: [
             {
@@ -1985,14 +1973,6 @@ function ShortlistForm({ video, project, library, categories, existing, onSaved 
           archived: false,
         };
         fbSet(`/formatLibrary/${libraryId}`, libEntry);
-
-        // Register new category if user created one inline.
-        if (newCategory.trim()) {
-          const catKey = newCategory.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-          if (catKey) {
-            fbSet(`/formatCategories/${catKey}`, { label: newCategory.trim(), createdAt: now });
-          }
-        }
       }
 
       // Write the project-side shortlist record.
@@ -2003,7 +1983,7 @@ function ShortlistForm({ video, project, library, categories, existing, onSaved 
         description,
         filmingInstructions: filming,
         structureInstructions: structure,
-        category: effectiveCategory || null,
+        category: null,
         tags,
         formatLibraryId: libraryId,
         addedAsExampleTo: saveMode === "example" ? libraryId : null,
@@ -2462,16 +2442,18 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
     // everything already populated. Producers edit if the suggestions miss.
     //  - suggestClientHandle → Stage A's @handle input
     //  - suggestCompetitors  → Stage B's competitor + keyword chips
+    // Log failures so we can spot silent misses in Vercel logs — producer
+    // still moves forward and can manually fill if auto-suggest drops.
     fetch("/api/social-organic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "suggestClientHandle", projectId: project.id }),
-    }).catch(() => {});
+    }).catch(err => console.warn("suggestClientHandle fire-and-forget failed:", err));
     fetch("/api/social-organic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
-    }).catch(() => {});
+    }).catch(err => console.warn("suggestCompetitors fire-and-forget failed:", err));
     onPatch({ tab: "research" });
   };
 
@@ -2642,7 +2624,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
-    }).catch(() => {});
+    }).catch(err => console.warn("suggestCompetitors mount-fallback failed:", err));
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const resuggest = () => {

@@ -45,6 +45,12 @@ async function fbGet(path) {
   const { err } = getAdmin();
   if (!err) return adminGet(path);
   const r = await fetch(`${FIREBASE_URL}${path}.json`);
+  // Defensive: REST fallback returns JSON on success or HTML/text on 401/403.
+  // Without this guard, .json() would throw opaquely downstream when rules reject.
+  if (!r.ok) {
+    const body = await r.text();
+    throw new Error(`Firebase REST ${r.status} on GET ${path}: ${body.slice(0, 200)}`);
+  }
   return r.json();
 }
 
