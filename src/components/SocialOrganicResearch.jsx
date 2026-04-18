@@ -3099,6 +3099,16 @@ function ClientResearchStep({ project, onPatch }) {
   const [busy, setBusy] = useState({ tt: false, yt: false });
   const [err, setErr] = useState({ tt: null, yt: null });
 
+  // Sync local input state when Claude's suggestClientHandle call lands
+  // new handles in Firebase. Without this, the inputs stay on their initial
+  // empty value even after the backend writes a pre-filled handle.
+  useEffect(() => {
+    if (handles.tiktok && handles.tiktok !== ttHandle) setTtHandle(handles.tiktok);
+  }, [handles.tiktok]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (handles.youtube && handles.youtube !== ytHandle) setYtHandle(handles.youtube);
+  }, [handles.youtube]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Debounced takeaways write.
   useEffect(() => {
     if (takeaways === (project.clientResearch?.keyTakeaways || "")) return;
@@ -3157,6 +3167,25 @@ function ClientResearchStep({ project, onPatch }) {
     fbSet(`/preproduction/socialOrganic/${project.id}/approvals/clientResearch`, new Date().toISOString());
     onPatch({ tab: "videoReview" });
   };
+
+  // Auto-fetch follower counts as soon as Claude's pre-filled handle
+  // lands in Firebase — saves the producer from manually clicking Fetch
+  // for TikTok + YouTube. Skips if the follower count is already set,
+  // if the fetch is already in flight, or if there's no handle yet.
+  // One-shot per platform: triggered by a ref-backed guard so the
+  // effect doesn't retrigger after the scrape completes.
+  const autoFetchedRef = useRef({ tiktok: false, youtube: false });
+  useEffect(() => {
+    if (isDone) return;  // already approved — don't kick off fresh scrapes
+    if (handles.tiktok && !autoFetchedRef.current.tiktok && followers.tiktok == null && !busy.tt) {
+      autoFetchedRef.current.tiktok = true;
+      startProfileScrape("tiktok", handles.tiktok);
+    }
+    if (handles.youtube && !autoFetchedRef.current.youtube && followers.youtube == null && !busy.yt) {
+      autoFetchedRef.current.youtube = true;
+      startProfileScrape("youtube", handles.youtube);
+    }
+  }, [handles.tiktok, handles.youtube]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const scrapeRunning = clientScrape.status === "running" && posts.length === 0;
   const scrapeErrored = clientScrape.status === "error";

@@ -1523,20 +1523,24 @@ async function handleSuggestClientHandle(req, res) {
   const bt = project.brandTruth?.fields || {};
   const transcript = project.brandTruth?.transcript || "";
 
-  const systemPrompt = `You extract a client's Instagram handle from preproduction context. Return JSON only — no markdown, no code fences.
+  const systemPrompt = `You extract a client's social media handles (Instagram, TikTok, YouTube) from preproduction context. Return JSON only — no markdown, no code fences.
 
 RULES:
-- If the transcript explicitly mentions a handle (e.g. "@brandname" or "our instagram is ___"), return exactly that.
-- If there's a clear website domain, infer the most likely handle (usually the second-level domain).
-- Otherwise guess based on the company name — strip spaces, lowercase.
-- Set confidence: "high" if the transcript is explicit, "medium" if inferred from a clear signal, "low" if it's a pure guess from the company name.
-- If you genuinely can't tell, return handle: null.
+- Check the transcript first. If a handle is stated explicitly (e.g. "our instagram is @foo", "tiktok.com/@bar", "find us on youtube at @baz"), use it verbatim.
+- Website domain is a strong signal for all three — most brands use the same handle across platforms.
+- TikTok handles: format "@name" (no dots).
+- YouTube handles: format "@name" (since 2022). Do NOT return /channel/UC... URLs or legacy /c/name formats — only the @-style handle.
+- Confidence levels per platform:
+  - "high"   = transcript explicitly mentions it OR website domain matches cleanly.
+  - "medium" = strong inference from company name / brand truth.
+  - "low"    = pure guess from the name, could easily be wrong.
+- If you really can't guess for a platform, return handle: null for that one.
 
 STRUCTURE:
 {
-  "handle": "@example",
-  "confidence": "high"|"medium"|"low",
-  "reason": "one short sentence"
+  "instagram": { "handle": "@example", "confidence": "high"|"medium"|"low", "reason": "one short sentence" },
+  "tiktok":    { "handle": "@example", "confidence": "...", "reason": "..." },
+  "youtube":   { "handle": "@example", "confidence": "...", "reason": "..." }
 }`;
 
   const userMessage = `CLIENT NAME: ${project.companyName}
@@ -1549,14 +1553,14 @@ PREPRODUCTION TRANSCRIPT (first 6000 chars):
 ${transcript.slice(0, 6000) || "(none)"}
 """
 
-What's the client's Instagram handle?`;
+What are the client's social handles?`;
 
   let raw;
   try {
     raw = await callClaude({
       model: "claude-sonnet-4-6",
       systemPrompt, userMessage,
-      maxTokens: 500,
+      maxTokens: 800,
       apiKey: ANTHROPIC_KEY,
     });
   } catch (e) {
@@ -1566,26 +1570,65 @@ What's the client's Instagram handle?`;
   let parsed;
   try { parsed = parseJSON(raw); }
   catch {
-    // Tolerant fallback — if Claude returned raw text, try to pull a handle out.
+    // Back-compat: old prompt returned a flat {handle, confidence, reason}.
+    // Keep tolerant regex fallback so a Claude blip doesn't break the flow.
     const m = raw.match(/@[a-zA-Z0-9_.]+/);
-    parsed = { handle: m ? m[0] : null, confidence: "low", reason: "parsed from non-JSON response" };
+    parsed = {
+      instagram: { handle: m ? m[0] : null, confidence: "low", reason: "parsed from non-JSON response" },
+      tiktok:    { handle: null, confidence: "low", reason: "" },
+      youtube:   { handle: null, confidence: "low", reason: "" },
+    };
   }
 
-  let handle = (parsed.handle || "").trim();
-  if (handle && !handle.startsWith("@")) handle = "@" + handle.replace(/^@+/, "");
+  // Normalise each platform's handle — strip leading @'s and re-add exactly one.
+  const norm = (h) => {
+    const s = (h || "").toString().trim();
+    if (!s) return null;
+    return s.startsWith("@") ? s : "@" + s.replace(/^@+/, "");
+  };
 
+  const ig = parsed.instagram || {};
+  const tt = parsed.tiktok    || {};
+  const yt = parsed.youtube   || {};
+  const igHandle = norm(ig.handle);
+  const ttHandle = norm(tt.handle);
+  const ytHandle = norm(yt.handle);
+
+  // Instagram goes to research.clientHandle (the one that gates Stage A).
+  // Never overwrite a handle the producer has manually set.
   await fbPatch(`/preproduction/socialOrganic/${projectId}/research`, {
-    // Only overwrite if no manual handle exists yet — never clobber producer edits.
-    ...(project.research?.clientHandle ? {} : { clientHandle: handle }),
+    ...(project.research?.clientHandle ? {} : { clientHandle: igHandle }),
     handleSuggestion: {
-      handle: handle || null,
-      confidence: parsed.confidence || "low",
-      reason: parsed.reason || "",
+      instagram: { handle: igHandle, confidence: ig.confidence || "low", reason: ig.reason || "" },
+      tiktok:    { handle: ttHandle, confidence: tt.confidence || "low", reason: tt.reason || "" },
+      youtube:   { handle: ytHandle, confidence: yt.confidence || "low", reason: yt.reason || "" },
       suggestedAt: new Date().toISOString(),
     },
   });
 
-  return res.status(200).json({ success: true, handle, confidence: parsed.confidence, reason: parsed.reason });
+  // TT + YT land under clientScrape.handles — same path handleStartProfileScrape
+  // uses — so the ClientResearchStep inputs auto-populate. Strip the leading
+  // @ first because the scrape API expects a bare handle.
+  const handlesPatch = {};
+  if (ttHandle) handlesPatch.tiktok  = ttHandle.replace(/^@/, "");
+  if (ytHandle) handlesPatch.youtube = ytHandle.replace(/^@/, "");
+  if (Object.keys(handlesPatch).length) {
+    // Only write to platforms the producer hasn't already filled in.
+    const existingHandles = project.clientScrape?.handles || {};
+    const safePatch = {};
+    if (handlesPatch.tiktok && !existingHandles.tiktok)   safePatch.tiktok  = handlesPatch.tiktok;
+    if (handlesPatch.youtube && !existingHandles.youtube) safePatch.youtube = handlesPatch.youtube;
+    if (Object.keys(safePatch).length) {
+      await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/handles`, safePatch);
+    }
+  }
+
+  return res.status(200).json({
+    success: true,
+    instagram: { handle: igHandle, confidence: ig.confidence, reason: ig.reason },
+    tiktok:    { handle: ttHandle, confidence: tt.confidence, reason: tt.reason },
+    youtube:   { handle: ytHandle, confidence: yt.confidence, reason: yt.reason },
+  });
 }
 
 // Fire TikTok / YouTube profile scrapes for Tab 3. Producers supply handles
