@@ -1950,7 +1950,6 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
           videoAnalysis: description,
           filmingInstructions: filming,
           structureInstructions: structure,
-          category: null,  // Category removed from form; filter happens in Tab 6 via other signals.
           tags,
           examples: [
             {
@@ -1975,15 +1974,21 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
         fbSet(`/formatLibrary/${libraryId}`, libEntry);
       }
 
-      // Write the project-side shortlist record.
+      // Write the project-side shortlist record. We copy the video's own
+      // thumbnail / URL / shortCode onto this record so the downstream Tab 6
+      // Select step can render a reliable preview even when the library
+      // example's scraped thumbnail URL has expired (Apify IG CDN URLs die
+      // after ~24h; embedding the shortCode always works).
       const shortlistId = `sl_${video.id}`;
       fbSet(`/preproduction/socialOrganic/${project.id}/shortlistedFormats/${shortlistId}`, {
         videoId: video.id,
+        videoUrl: video.url || null,
+        videoShortCode: video.shortCode || null,
+        thumbnail: video.thumbnail || null,
         formatName: saveMode === "new" ? formatName.trim() : (library[libraryId]?.name || ""),
         description,
         filmingInstructions: filming,
         structureInstructions: structure,
-        category: null,
         tags,
         formatLibraryId: libraryId,
         addedAsExampleTo: saveMode === "example" ? libraryId : null,
@@ -2036,7 +2041,7 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
             <option value="">— pick a format —</option>
             {libraryList.map(f => (
               <option key={f.id} value={f.id}>
-                {f.name}{f.category ? ` · ${categories[f.category]?.label || f.category}` : ""}
+                {f.name}
                 {Array.isArray(f.examples) && f.examples.length > 0 && ` (${f.examples.length} example${f.examples.length === 1 ? "" : "s"})`}
               </option>
             ))}
@@ -3405,9 +3410,12 @@ function ScriptToolbar({ project, onRegenerate, onPatch }) {
           </button>
         )}
         {pushed && (
-          <span style={{ padding: "6px 12px", background: "rgba(34,197,94,0.12)", color: "#22C55E", borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
-            ✓ Pushed to Runsheets {new Date((runsheetHandoff || legacyDelivery).pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
-          </span>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "6px 12px", background: "rgba(34,197,94,0.12)", color: "#22C55E", borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
+            <span>✓ Pushed {new Date((runsheetHandoff || legacyDelivery).pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
+            <span style={{ color: "#5A6B85", fontSize: 10, fontWeight: 500 }}>
+              Find it in <span style={{ color: "#22C55E", fontWeight: 700 }}>Pre-Prod → Runsheets</span>
+            </span>
+          </div>
         )}
       </div>
       {pushError && (

@@ -54,14 +54,12 @@ export function SocialOrganicSelect({ project, onPatch }) {
 
   // Library listener (pure read; writes go through the existing hooks).
   const [library, setLibrary] = useState({});
-  const [categories, setCategories] = useState({});
   useEffect(() => {
-    let u1 = () => {}, u2 = () => {};
+    let u1 = () => {};
     onFB(() => {
       u1 = fbListen("/formatLibrary", d => setLibrary(d || {}));
-      u2 = fbListen("/formatCategories", d => setCategories(d || {}));
     });
-    return () => { u1(); u2(); };
+    return () => { u1(); };
   }, []);
 
   // Target count — AI-suggested if present, else numberOfVideos / 5, else manual.
@@ -73,9 +71,10 @@ export function SocialOrganicSelect({ project, onPatch }) {
 
   // Filter state for the library panel.
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState([]);
   // Left-panel category tabs — Suggested (AI) / Recently Added / Over Performers.
+  // (These are derived views, not per-format categories — naming kept for
+  // backwards-compat with Phase 4 spec.)
   const [categoryMode, setCategoryMode] = useState("all");
 
   // Suggest action — asks Claude to rank the library against the project.
@@ -136,16 +135,22 @@ export function SocialOrganicSelect({ project, onPatch }) {
   const extraLinkIds = new Set((project.videoReview?.extraLinks || []).map(u => `ext_${u.replace(/[^a-zA-Z0-9]/g, "").slice(-16)}`));
   const shortlistCards = Object.values(shortlisted)
     .filter(s => s && s.videoId && (tickedVideoIds.has(s.videoId) || extraLinkIds.has(s.videoId)))
-    .map(s => ({
-      dragId: `sl:${s.formatLibraryId}`,
-      source: "project",
-      formatLibraryId: s.formatLibraryId,
-      name: s.formatName || library[s.formatLibraryId]?.name || "Unnamed",
-      description: s.description || library[s.formatLibraryId]?.videoAnalysis || "",
-      category: s.category || library[s.formatLibraryId]?.category || null,
-      thumbnail: library[s.formatLibraryId]?.examples?.[0]?.thumbnail || null,
-      exampleUrl: library[s.formatLibraryId]?.examples?.[0]?.url || null,
-    }))
+    .map(s => {
+      const lib = library[s.formatLibraryId] || null;
+      const firstEx = lib?.examples?.[0] || null;
+      return {
+        dragId: `sl:${s.formatLibraryId}`,
+        source: "project",
+        formatLibraryId: s.formatLibraryId,
+        name: s.formatName || lib?.name || "Unnamed",
+        description: s.description || lib?.videoAnalysis || "",
+        tags: s.tags || lib?.tags || [],
+        // Prefer the shortlist record's own video (fresh this session) over
+        // the library example (whose IG thumbnail URL may have expired).
+        thumbnail: s.thumbnail || firstEx?.thumbnail || null,
+        exampleUrl: s.videoUrl || firstEx?.url || null,
+      };
+    })
     .filter(c => !selected.some(s => s.formatLibraryId === c.formatLibraryId));
 
   // "Recently Added" cutoff — 14 days keeps the list meaningful without
@@ -163,7 +168,6 @@ export function SocialOrganicSelect({ project, onPatch }) {
       if (categoryMode === "over") return false;  // TODO — needs analytics signal
       return true;
     })
-    .filter(f => categoryFilter === "all" ? true : f.category === categoryFilter)
     .filter(f => tagFilter.length === 0 ? true : tagFilter.every(t => (f.tags || []).includes(t)))
     .filter(f => {
       if (!search.trim()) return true;
@@ -177,7 +181,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
       formatLibraryId: f.id,
       name: f.name,
       description: f.videoAnalysis || "",
-      category: f.category || null,
+      tags: f.tags || [],
       thumbnail: f.examples?.[0]?.thumbnail || null,
       exampleUrl: f.examples?.[0]?.url || null,
       isSuggested: suggestedIdSet.has(f.id),
@@ -334,8 +338,6 @@ export function SocialOrganicSelect({ project, onPatch }) {
           </div>
           <FormatFilterBar
             search={search} setSearch={setSearch}
-            categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
-            categories={categories}
             tagFilter={tagFilter} setTagFilter={setTagFilter}
             allTags={allTags}
           />
@@ -455,7 +457,7 @@ function DraggableFormatCard({ card, onClick }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.name}</div>
         <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {card.source === "project" ? "📁 project" : "📚 library"}{card.category ? ` · ${card.category}` : ""}
+          {card.source === "project" ? "📁 project" : "📚 library"}{(card.tags && card.tags[0]) ? ` · #${card.tags[0]}` : ""}
         </div>
       </div>
     </div>

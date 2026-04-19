@@ -28,6 +28,16 @@ export function DescriptionField({ label, hint, value, onChange, rows = 3, requi
   const [transcribing, setTranscribing] = useState(false);
   const [transcribeError, setTranscribeError] = useState(null);
 
+  // Refs to the latest value + onChange. The blob-transcribe effect fires
+  // asynchronously (fetch + round trip to /api/whisper takes seconds), and
+  // if the user typed into the textarea in the meantime the closure's
+  // `value` would be stale — we'd overwrite their edits with the pre-dictation
+  // state + appended transcript. Reading via ref always picks up the latest.
+  const valueRef = useRef(value);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { valueRef.current = value; }, [value]);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
   // Auto-transcribe on blob — matches the "tap mic / speak / tap mic / see
   // text" mental model. Skip sub-500B blobs (usually a mis-tap).
   const handledBlobRef = useRef(null);
@@ -45,10 +55,17 @@ export function DescriptionField({ label, hint, value, onChange, rows = 3, requi
         const r = await fetch("/api/whisper", { method: "POST", body: form });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
-        if (d.text) {
-          // Append (don't replace) so a second pass can add a follow-up thought.
-          const join = value && !value.endsWith(" ") ? " " : "";
-          onChange(`${value}${join}${d.text}`.trim());
+        const text = (d.text || "").trim();
+        if (text) {
+          // Append to whatever's in the textarea *right now* (fresh ref),
+          // not the snapshot from when recording started.
+          const current = valueRef.current || "";
+          const join = current && !current.endsWith(" ") && !current.endsWith("\n") ? " " : "";
+          onChangeRef.current(`${current}${join}${text}`);
+        } else {
+          // Whisper returned nothing — let the user know rather than silently
+          // closing the recorder; they may have recorded with a dead mic.
+          setTranscribeError("No speech detected.");
         }
       } catch (e) {
         setTranscribeError(e.message);

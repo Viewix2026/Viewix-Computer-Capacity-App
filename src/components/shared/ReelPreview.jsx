@@ -26,10 +26,18 @@ export function ReelPreview({ shortCode, url, thumbnail, aspectRatio = "1 / 1", 
   const sc = shortCode || shortCodeFromUrl(url);
 
   if (compact) {
-    // Compact: try the (possibly expired) thumbnail, fall back to a play-
-    // button placeholder. No iframe — too heavy for a 56x56 tile.
+    // Compact: try the (possibly expired) thumbnail, fall back to an
+    // Instagram-coloured gradient placeholder. No iframe — too heavy
+    // for a 32–80px tile. The gradient keeps compact tiles looking
+    // polished even when the scraped thumbnail URL has expired
+    // (Apify's IG CDN URLs die after ~24h).
     return (
-      <div style={{ aspectRatio, background: "#1E2A3A", position: "relative", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{
+        aspectRatio,
+        background: "linear-gradient(135deg, #833AB4 0%, #C13584 35%, #FD1D1D 65%, #FCB045 100%)",
+        position: "relative", overflow: "hidden",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
         {thumbnail ? (
           <img src={thumbnail} alt="" loading="lazy"
             onError={e => { e.target.style.display = "none"; }}
@@ -38,7 +46,7 @@ export function ReelPreview({ shortCode, url, thumbnail, aspectRatio = "1 / 1", 
         {/* Play icon always renders as overlay so it's visible even when
             the thumbnail loads (and if it fails, the icon is the fallback). */}
         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-          <div style={{ width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10 }}>▶</div>
+          <div style={{ width: 22, height: 22, borderRadius: "50%", background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 10 }}>▶</div>
         </div>
       </div>
     );

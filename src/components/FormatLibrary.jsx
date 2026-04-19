@@ -32,23 +32,22 @@ const btnSecondary = {
 
 export function FormatLibrary({ role, isFounder }) {
   const [library, setLibrary] = useState({});
-  const [categories, setCategories] = useState({});
   const [activeId, setActiveId] = useState(null);
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
 
   useEffect(() => {
-    let u1 = () => {}, u2 = () => {};
+    let u = () => {};
     onFB(() => {
-      u1 = fbListen("/formatLibrary", d => setLibrary(d || {}));
-      u2 = fbListen("/formatCategories", d => setCategories(d || {}));
+      u = fbListen("/formatLibrary", d => setLibrary(d || {}));
     });
-    return () => { u1(); u2(); };
+    return () => { u(); };
   }, []);
 
+  // Defensive — entries should all have id + name; belt-and-braces because
+  // seed imports and legacy records have been through a few schema tweaks.
   const list = Object.values(library || {}).filter(f => f && f.id);
 
   // Derive the tag cloud from all non-archived formats.
@@ -58,7 +57,6 @@ export function FormatLibrary({ role, isFounder }) {
 
   const filtered = list
     .filter(f => (showArchived ? true : !f.archived))
-    .filter(f => categoryFilter === "all" ? true : f.category === categoryFilter)
     .filter(f => tagFilter.length === 0 ? true : tagFilter.every(t => (f.tags || []).includes(t)))
     .filter(f => {
       if (!search.trim()) return true;
@@ -77,7 +75,6 @@ export function FormatLibrary({ role, isFounder }) {
     return (
       <FormatDetail
         format={active}
-        categories={categories}
         onBack={() => setActiveId(null)}
         onSave={(patch) => {
           fbSet(`/formatLibrary/${active.id}`, { ...active, ...patch, updatedAt: new Date().toISOString() });
@@ -114,8 +111,6 @@ export function FormatLibrary({ role, isFounder }) {
       {/* Filter bar */}
       <FormatFilterBar
         search={search} setSearch={setSearch}
-        categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
-        categories={categories}
         tagFilter={tagFilter} setTagFilter={setTagFilter}
         allTags={allTags}
         showArchived={showArchived} setShowArchived={setShowArchived}
@@ -124,19 +119,37 @@ export function FormatLibrary({ role, isFounder }) {
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>📚</div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>{list.length === 0 ? "Empty library" : "No formats match your filters"}</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            {list.length === 0 ? "Empty library" : `No matches (${list.length} hidden by filters)`}
+          </div>
           <div style={{ fontSize: 12, marginTop: 6 }}>
             {list.length === 0
               ? "Shortlist a video in any Social Media Organic project to add the first entry."
-              : "Clear filters to see everything."}
+              : "Clear the search / tags / archive toggle to see everything."}
           </div>
+          {list.length > 0 && (
+            <button
+              onClick={() => { setSearch(""); setTagFilter([]); setShowArchived(false); }}
+              style={{ ...btnSecondary, marginTop: 14 }}>
+              Clear all filters
+            </button>
+          )}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
-          {filtered.map(f => (
-            <FormatCard key={f.id} format={f} categories={categories} onClick={() => setActiveId(f.id)} />
-          ))}
-        </div>
+        <>
+          {/* Count + filtered-by hint — surfaces the real list size so an
+              empty-looking library is obvious when it's a filter issue. */}
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>
+            {filtered.length === list.length
+              ? `${list.length} format${list.length === 1 ? "" : "s"}`
+              : `Showing ${filtered.length} of ${list.length}`}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+            {filtered.map(f => (
+              <FormatCard key={f.id} format={f} onClick={() => setActiveId(f.id)} />
+            ))}
+          </div>
+        </>
       )}
 
       {promptEditorOpen && (
@@ -147,19 +160,12 @@ export function FormatLibrary({ role, isFounder }) {
 }
 
 // Filter bar is exported so the Phase 4 Select UI can reuse it verbatim.
-export function FormatFilterBar({ search, setSearch, categoryFilter, setCategoryFilter, categories, tagFilter, setTagFilter, allTags, showArchived, setShowArchived }) {
+export function FormatFilterBar({ search, setSearch, tagFilter, setTagFilter, allTags, showArchived, setShowArchived }) {
   return (
     <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
       <input type="text" value={search} onChange={e => setSearch(e.target.value)}
         placeholder="Search name, analysis, tags…"
         style={{ ...inputSt, width: 240, fontSize: 12, padding: "6px 10px" }} />
-      <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
-        style={{ ...inputSt, width: "auto", fontSize: 12, padding: "6px 10px" }}>
-        <option value="all">All categories</option>
-        {Object.entries(categories || {})
-          .sort((a, b) => (a[1].label || a[0]).localeCompare(b[1].label || b[0]))
-          .map(([k, v]) => <option key={k} value={k}>{v?.label || k}</option>)}
-      </select>
       {allTags.length > 0 && (
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
           {allTags.slice(0, 12).map(t => {
@@ -188,10 +194,10 @@ export function FormatFilterBar({ search, setSearch, categoryFilter, setCategory
   );
 }
 
-function FormatCard({ format, categories, onClick }) {
+function FormatCard({ format, onClick }) {
   const examples = Array.isArray(format.examples) ? format.examples : [];
   const firstExample = examples.find(e => e.url || e.thumbnail) || null;
-  const cat = format.category ? (categories[format.category]?.label || format.category) : null;
+  const topTag = (format.tags || [])[0] || null;
 
   return (
     <button onClick={onClick} style={{
@@ -199,7 +205,7 @@ function FormatCard({ format, categories, onClick }) {
       borderRadius: 10, padding: 0, cursor: "pointer", fontFamily: "inherit",
       overflow: "hidden", opacity: format.archived ? 0.6 : 1, display: "flex", flexDirection: "column",
     }}>
-      {/* Portrait 9:14 — Instagram reels are vertical, so a landscape 16:9
+      {/* Portrait 9:16 — Instagram reels are vertical, so a landscape 16:9
           window letterboxes the embed with huge black bars. Matches the
           ratio used on the video-review and shortlist surfaces. */}
       <div style={{ position: "relative" }}>
@@ -208,9 +214,9 @@ function FormatCard({ format, categories, onClick }) {
         ) : (
           <div style={{ aspectRatio: "9 / 16", background: "#1E2A3A", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 32 }}>📼</div>
         )}
-        {cat && (
+        {topTag && (
           <div style={{ position: "absolute", top: 6, left: 6, padding: "3px 8px", background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            {cat}
+            #{topTag}
           </div>
         )}
         {format.archived && (
@@ -248,13 +254,11 @@ function FormatCard({ format, categories, onClick }) {
   );
 }
 
-function FormatDetail({ format, categories, onBack, onSave, onArchiveToggle, onDelete }) {
-  const [editing, setEditing] = useState(null);  // field key
+function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
   const [name, setName] = useState(format.name || "");
   const [videoAnalysis, setVideoAnalysis] = useState(format.videoAnalysis || "");
   const [filming, setFilming] = useState(format.filmingInstructions || "");
   const [structure, setStructure] = useState(format.structureInstructions || "");
-  const [category, setCategory] = useState(format.category || "");
   const [tags, setTags] = useState(Array.isArray(format.tags) ? format.tags : []);
   const [tagInput, setTagInput] = useState("");
 
@@ -263,7 +267,6 @@ function FormatDetail({ format, categories, onBack, onSave, onArchiveToggle, onD
     setVideoAnalysis(format.videoAnalysis || "");
     setFilming(format.filmingInstructions || "");
     setStructure(format.structureInstructions || "");
-    setCategory(format.category || "");
     setTags(Array.isArray(format.tags) ? format.tags : []);
   }, [format.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -272,14 +275,13 @@ function FormatDetail({ format, categories, onBack, onSave, onArchiveToggle, onD
     videoAnalysis !== (format.videoAnalysis || "") ||
     filming !== (format.filmingInstructions || "") ||
     structure !== (format.structureInstructions || "") ||
-    category !== (format.category || "") ||
     JSON.stringify(tags) !== JSON.stringify(Array.isArray(format.tags) ? format.tags : []);
 
   const save = () => {
     onSave({
       name: name.trim() || format.name,
       videoAnalysis, filmingInstructions: filming, structureInstructions: structure,
-      category: category || null, tags,
+      tags,
     });
   };
 
@@ -310,13 +312,6 @@ function FormatDetail({ format, categories, onBack, onSave, onArchiveToggle, onD
         <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
           <FieldRow label="Name">
             <input value={name} onChange={e => setName(e.target.value)} style={inputSt} />
-          </FieldRow>
-
-          <FieldRow label="Category">
-            <select value={category} onChange={e => setCategory(e.target.value)} style={inputSt}>
-              <option value="">— none —</option>
-              {Object.entries(categories || {}).map(([k, v]) => <option key={k} value={k}>{v?.label || k}</option>)}
-            </select>
           </FieldRow>
 
           <FieldRow label="Tags">

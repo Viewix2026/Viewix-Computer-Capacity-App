@@ -278,8 +278,93 @@ export function PreproductionPublicView() {
             </Section>
           )}
 
-          {/* Client Research takeaway — the producer's read on existing content. */}
-          {takeaways && (
+          {/* Client Research — the producer's scrape of the client's existing
+              reels. Shows follower counts, engagement stats, and the current
+              best-performing reel. Helps the client understand the baseline
+              we're working from before they look at the new format plan. */}
+          {(() => {
+            const scrape = project?.clientScrape || {};
+            const profile = scrape.profile || {};
+            const followers = profile.followers || {};
+            const posts = Array.isArray(scrape.posts) ? scrape.posts : [];
+            const topIds = Array.isArray(scrape.topByViews) ? scrape.topByViews : [];
+            const topPost = topIds.length > 0 ? posts.find(p => p.id === topIds[0]) : null;
+            const hasAny =
+              followers.instagram != null || followers.tiktok != null || followers.youtube != null
+              || profile.avgViews != null || profile.medianViews != null
+              || posts.length > 0 || topPost;
+            if (!hasAny) return null;
+
+            // Local big-number formatter (matches the producer-side formatBig).
+            const fmtBig = n => {
+              if (n == null) return "—";
+              if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+              if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+              return String(n);
+            };
+            const FollowerPill = ({ platform, count, handle }) => (
+              <div style={{ flex: 1, minWidth: 140, background: "#0B0F1A", border: "1px solid #1E2A3A", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{platform}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#E8ECF4", fontFamily: "'JetBrains Mono',monospace" }}>{count != null ? fmtBig(count) : "—"}</div>
+                {handle && <div style={{ fontSize: 10, color: "#5A6B85", marginTop: 3 }}>{handle.startsWith("@") ? handle : `@${handle}`}</div>}
+              </div>
+            );
+            const StatPill = ({ label, value }) => (
+              <div style={{ padding: "10px 14px", background: "#0B0F1A", border: "1px solid #1E2A3A", borderRadius: 8, flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{label}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#E8ECF4", fontFamily: "'JetBrains Mono',monospace" }}>{value}</div>
+              </div>
+            );
+            const handles = scrape.handles || {};
+            return (
+              <Section title="Your current content">
+                {/* Follower cards */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+                  <FollowerPill platform="Instagram" count={followers.instagram} handle={handles.instagram || project?.research?.clientHandle} />
+                  <FollowerPill platform="TikTok"    count={followers.tiktok}    handle={handles.tiktok} />
+                  <FollowerPill platform="YouTube"   count={followers.youtube}   handle={handles.youtube} />
+                </div>
+
+                {/* Engagement stats */}
+                {(profile.avgViews != null || profile.medianViews != null || posts.length > 0) && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+                    <StatPill label="Avg views"          value={fmtBig(profile.avgViews)} />
+                    <StatPill label="Median views"       value={fmtBig(profile.medianViews)} />
+                    <StatPill label="Total reels scraped" value={String(posts.length)} />
+                  </div>
+                )}
+
+                {/* Top reel by views + producer takeaway side by side on wide,
+                    stacked on narrow. */}
+                <div style={{ display: "grid", gridTemplateColumns: topPost ? "minmax(220px, 300px) 1fr" : "1fr", gap: 16, alignItems: "start" }}>
+                  {topPost && (
+                    <div style={{ background: "#0B0F1A", border: "1px solid #1E2A3A", borderRadius: 8, overflow: "hidden" }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", padding: "10px 12px 6px" }}>Top performer</div>
+                      <ReelPreview shortCode={topPost.shortCode} url={topPost.url} thumbnail={topPost.thumbnail} aspectRatio="9 / 16" />
+                      <a href={topPost.url} target="_blank" rel="noopener noreferrer" style={{ display: "block", padding: "10px 12px", textDecoration: "none", borderTop: "1px solid #1E2A3A" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#8B5CF6", fontFamily: "'JetBrains Mono',monospace" }}>👁 {fmtBig(topPost.views)} views</div>
+                        {topPost.caption && (
+                          <div style={{ fontSize: 10, color: "#5A6B85", marginTop: 3, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                            {topPost.caption}
+                          </div>
+                        )}
+                      </a>
+                    </div>
+                  )}
+                  {takeaways && (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Producer's read</div>
+                      <FeedbackCell cellKey="clientResearch.keyTakeaways" label="Key takeaways" value={takeaways} multi />
+                    </div>
+                  )}
+                </div>
+              </Section>
+            );
+          })()}
+
+          {/* Fallback: if there's no scrape data but a takeaway was written,
+              still render it as a standalone section (legacy projects). */}
+          {takeaways && !project?.clientScrape && (
             <Section title="Producer's read on your current content">
               <FeedbackCell cellKey="clientResearch.keyTakeaways" label="Key takeaways" value={takeaways} multi />
             </Section>
