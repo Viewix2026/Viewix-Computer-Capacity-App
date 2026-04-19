@@ -11,7 +11,7 @@
 // into Viewix's institutional knowledge of what filming styles work.
 
 import { useEffect, useState } from "react";
-import { onFB, fbSet, fbListen, getCurrentRole } from "../firebase";
+import { onFB, fbSet, fbListen } from "../firebase";
 import { ReelPreview } from "./shared/ReelPreview";
 
 // Shared with other preproduction surfaces so the look-and-feel matches.
@@ -38,7 +38,6 @@ export function FormatLibrary({ role, isFounder }) {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [tagFilter, setTagFilter] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
 
   useEffect(() => {
@@ -107,10 +106,7 @@ export function FormatLibrary({ role, isFounder }) {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {isFounder && (
-            <>
-              <button onClick={() => setPromptEditorOpen(true)} style={btnSecondary}>Edit Script prompts</button>
-              <button onClick={() => setImportOpen(true)} style={btnSecondary}>Seed import</button>
-            </>
+            <button onClick={() => setPromptEditorOpen(true)} style={btnSecondary}>Edit Script prompts</button>
           )}
         </div>
       </div>
@@ -143,13 +139,6 @@ export function FormatLibrary({ role, isFounder }) {
         </div>
       )}
 
-      {importOpen && (
-        <SeedImporter
-          existing={library}
-          categories={categories}
-          onClose={() => setImportOpen(false)}
-        />
-      )}
       {promptEditorOpen && (
         <PromptEditor onClose={() => setPromptEditorOpen(false)} />
       )}
@@ -414,186 +403,6 @@ function formatBigLocal(n) {
   return String(n);
 }
 
-// ═══════════════════════════════════════════
-// SEED IMPORTER — paste structured content, preview, commit
-// Founders-only. The parser is intentionally forgiving: it accepts either
-// a simple table (tab-separated) or double-newline-separated blocks and
-// tries to extract { name, structure, examples }.  A preview step is
-// mandatory because the parser will get things wrong on edge cases.
-// Flags every imported format with seedImported: true so dedupe is easy.
-// ═══════════════════════════════════════════
-function SeedImporter({ existing, categories, onClose }) {
-  const [raw, setRaw] = useState("");
-  const [parsed, setParsed] = useState(null);
-  const [importing, setImporting] = useState(false);
-  const [opusParsing, setOpusParsing] = useState(false);
-  const [opusError, setOpusError] = useState(null);
-
-  // Opus-powered parse — hands the raw text to the smartParseFormats API
-  // action, which runs Claude Opus against a structured extraction prompt.
-  // Works much better than the heuristic on loose / unstructured docs.
-  const parseWithOpus = async () => {
-    setOpusError(null); setOpusParsing(true);
-    try {
-      const r = await fetch("/api/social-organic", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "smartParseFormats", rawText: raw }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
-      setParsed(d.formats || []);
-    } catch (e) {
-      setOpusError(e.message);
-    } finally {
-      setOpusParsing(false);
-    }
-  };
-
-  const parse = () => {
-    // Simple heuristic: blocks are separated by 2+ newlines. Each block's
-    // first non-empty line is the format name. Lines starting with "http"
-    // become examples. Everything else is lumped into the video analysis.
-    const blocks = raw.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
-    const out = blocks.map(block => {
-      const lines = block.split(/\n/).map(l => l.trim());
-      const name = lines[0] || "(unnamed)";
-      const rest = lines.slice(1);
-      const examples = [];
-      const analysisLines = [];
-      const structureLines = [];
-      const filmingLines = [];
-      let mode = "analysis";
-      for (const l of rest) {
-        if (/^https?:\/\//.test(l)) {
-          examples.push({ url: l });
-          continue;
-        }
-        if (/^filming[:\s]/i.test(l) || l.toLowerCase().startsWith("filming:")) { mode = "filming"; continue; }
-        if (/^structure[:\s]/i.test(l) || l.toLowerCase().startsWith("structure:")) { mode = "structure"; continue; }
-        if (mode === "filming") filmingLines.push(l);
-        else if (mode === "structure") structureLines.push(l);
-        else analysisLines.push(l);
-      }
-      return {
-        name,
-        videoAnalysis: analysisLines.join("\n").trim(),
-        filmingInstructions: filmingLines.join("\n").trim(),
-        structureInstructions: structureLines.join("\n").trim(),
-        examples,
-      };
-    });
-    setParsed(out);
-  };
-
-  const commit = async () => {
-    if (!parsed || parsed.length === 0) return;
-    setImporting(true);
-    const now = new Date().toISOString();
-    const createdBy = getCurrentRole() || "founder";
-    try {
-      for (const p of parsed) {
-        // Dedupe by name (case-insensitive) against existing seed imports.
-        const dupe = Object.values(existing || {}).find(f =>
-          f && f.seedImported && (f.name || "").trim().toLowerCase() === (p.name || "").trim().toLowerCase()
-        );
-        const id = dupe?.id || `fmt_seed_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        fbSet(`/formatLibrary/${id}`, {
-          id, name: p.name,
-          videoAnalysis: p.videoAnalysis,
-          filmingInstructions: p.filmingInstructions,
-          structureInstructions: p.structureInstructions,
-          examples: (p.examples || []).map(e => ({ ...e, addedAt: now })),
-          category: null,
-          tags: Array.isArray(p.tags) ? p.tags : [],
-          sourceProjectId: null, sourceClient: "Seed import",
-          createdAt: dupe?.createdAt || now,
-          createdBy,
-          usageCount: dupe?.usageCount || 0,
-          archived: false,
-          seedImported: true,
-          updatedAt: now,
-        });
-      }
-      setImporting(false);
-      onClose();
-    } catch (e) {
-      console.error(e);
-      alert("Seed import failed: " + e.message);
-      setImporting(false);
-    }
-  };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
-      <div style={{ background: "var(--card)", borderRadius: 12, padding: 22, maxWidth: 820, width: "90%", maxHeight: "86vh", overflowY: "auto", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Seed import</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-              Paste the "2026 Social Reels Formats" doc. Each format should be separated by a blank line. Preview before committing.
-            </div>
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer" }}>×</button>
-        </div>
-
-        {!parsed ? (
-          <>
-            <textarea value={raw} onChange={e => setRaw(e.target.value)}
-              placeholder={`Paste the full "2026 Social Reels Formats" doc here. Claude Opus handles unstructured content well — Filming: and Structure: labels aren't required.`}
-              rows={16}
-              style={{ ...inputSt, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }} />
-            {opusError && (
-              <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
-                {opusError}
-              </div>
-            )}
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              <button onClick={onClose} style={btnSecondary}>Cancel</button>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={parse} disabled={!raw.trim()} style={{ ...btnSecondary, opacity: raw.trim() ? 1 : 0.5 }}
-                  title="Quick heuristic parser — works if the doc uses 'Filming:' / 'Structure:' section labels.">
-                  Heuristic preview
-                </button>
-                <button onClick={parseWithOpus} disabled={!raw.trim() || opusParsing}
-                  style={{ ...btnPrimary, opacity: (raw.trim() && !opusParsing) ? 1 : 0.5 }}
-                  title="Claude Opus reads the doc, pulls out each format, infers tags. Best for loose or verbose docs.">
-                  {opusParsing ? "Parsing with Opus…" : "Parse with Opus"}
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>
-              Preview — {parsed.length} format{parsed.length === 1 ? "" : "s"} detected
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 400, overflowY: "auto", marginBottom: 12 }}>
-              {parsed.map((p, i) => (
-                <div key={i} style={{ padding: 12, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{p.name}</div>
-                  {p.videoAnalysis && <div style={{ fontSize: 11, color: "var(--fg)", marginTop: 4, lineHeight: 1.5 }}>{p.videoAnalysis}</div>}
-                  {p.filmingInstructions && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}><strong>Filming:</strong> {p.filmingInstructions}</div>}
-                  {p.structureInstructions && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}><strong>Structure:</strong> {p.structureInstructions}</div>}
-                  {p.examples.length > 0 && <div style={{ fontSize: 10, color: "var(--accent)", marginTop: 6 }}>{p.examples.length} example URL{p.examples.length === 1 ? "" : "s"}</div>}
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <button onClick={() => setParsed(null)} style={btnSecondary}>← Edit raw</button>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={onClose} style={btnSecondary}>Cancel</button>
-                <button onClick={commit} disabled={importing} style={{ ...btnPrimary, opacity: importing ? 0.6 : 1 }}>
-                  {importing ? "Importing…" : `Import ${parsed.length}`}
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // Founders-only editor for the Script Builder prompt + fantastic example.
 // We store both under /preproductionTemplates/ so they survive deploys and
