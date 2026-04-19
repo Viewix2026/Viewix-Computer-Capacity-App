@@ -136,7 +136,7 @@ export function FormatLibrary({ role, isFounder }) {
           </div>
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
           {filtered.map(f => (
             <FormatCard key={f.id} format={f} categories={categories} onClick={() => setActiveId(f.id)} />
           ))}
@@ -210,37 +210,50 @@ function FormatCard({ format, categories, onClick }) {
       borderRadius: 10, padding: 0, cursor: "pointer", fontFamily: "inherit",
       overflow: "hidden", opacity: format.archived ? 0.6 : 1, display: "flex", flexDirection: "column",
     }}>
+      {/* Portrait 9:14 — Instagram reels are vertical, so a landscape 16:9
+          window letterboxes the embed with huge black bars. Matches the
+          ratio used on the video-review and shortlist surfaces. */}
       <div style={{ position: "relative" }}>
         {firstExample ? (
-          <ReelPreview url={firstExample.url} thumbnail={firstExample.thumbnail} aspectRatio="16 / 9" />
+          <ReelPreview url={firstExample.url} thumbnail={firstExample.thumbnail} aspectRatio="9 / 14" />
         ) : (
-          <div style={{ aspectRatio: "16 / 9", background: "#1E2A3A", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 24 }}>📼</div>
+          <div style={{ aspectRatio: "9 / 14", background: "#1E2A3A", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 32 }}>📼</div>
+        )}
+        {cat && (
+          <div style={{ position: "absolute", top: 6, left: 6, padding: "3px 8px", background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            {cat}
+          </div>
         )}
         {format.archived && (
-          <div style={{ position: "absolute", top: 6, left: 6, padding: "2px 8px", background: "rgba(90,107,133,0.85)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3 }}>ARCHIVED</div>
+          <div style={{ position: "absolute", top: 6, right: 6, padding: "3px 8px", background: "rgba(90,107,133,0.85)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3 }}>ARCHIVED</div>
         )}
         {examples.length > 0 && (
           <div style={{ position: "absolute", bottom: 6, right: 6, padding: "2px 8px", background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 3 }}>
             {examples.length} example{examples.length === 1 ? "" : "s"}
           </div>
         )}
+        {(format.usageCount || 0) > 0 && (
+          <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", background: "rgba(99,102,241,0.85)", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 3 }}>
+            used {format.usageCount}×
+          </div>
+        )}
       </div>
-      <div style={{ padding: 12, flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{format.name}</div>
-        {cat && <div style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{cat}</div>}
-        <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4, overflow: "hidden", maxHeight: 40 }}>
-          {(format.videoAnalysis || "").slice(0, 120)}{(format.videoAnalysis || "").length > 120 ? "…" : ""}
+      <div style={{ padding: 12, flex: 1, display: "flex", flexDirection: "column", gap: 6, minHeight: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", lineHeight: 1.3 }}>{format.name}</div>
+        <div style={{
+          fontSize: 11, color: "var(--muted)", lineHeight: 1.4,
+          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+          overflow: "hidden", textOverflow: "ellipsis",
+        }}>
+          {format.videoAnalysis || ""}
         </div>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: "auto" }}>
-          {(format.tags || []).slice(0, 3).map(t => (
-            <span key={t} style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "var(--bg)", color: "var(--muted)" }}>{t}</span>
-          ))}
-          {(format.usageCount || 0) > 0 && (
-            <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 3, background: "var(--accent-soft)", color: "var(--accent)", marginLeft: "auto" }}>
-              used {format.usageCount}×
-            </span>
-          )}
-        </div>
+        {(format.tags || []).length > 0 && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: "auto" }}>
+            {(format.tags || []).slice(0, 3).map(t => (
+              <span key={t} style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 3, background: "var(--bg)", color: "var(--muted)" }}>{t}</span>
+            ))}
+          </div>
+        )}
       </div>
     </button>
   );
