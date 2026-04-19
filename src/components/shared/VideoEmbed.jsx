@@ -19,7 +19,7 @@ function detectEmbed(url) {
   // Instagram — /p/ or /reel/ or /reels/
   const ig = u.match(/instagram\.com\/(?:p|reel|reels)\/([A-Za-z0-9_-]+)/);
   if (ig) {
-    return { kind: "instagram", embedUrl: `https://www.instagram.com/p/${ig[1]}/embed`, aspect: "9 / 14" };
+    return { kind: "instagram", embedUrl: `https://www.instagram.com/p/${ig[1]}/embed`, aspect: "9 / 16" };
   }
 
   // TikTok — /@user/video/123 or /v/123

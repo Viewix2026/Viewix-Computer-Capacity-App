@@ -307,7 +307,7 @@ export function PreproductionPublicView() {
                           <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(examples.length, 3)}, 1fr)`, gap: 10 }}>
                             {examples.map((ex, j) => (
                               <div key={j} style={{ background: "#141A26", borderRadius: 6, overflow: "hidden", border: "1px solid #1E2A3A" }}>
-                                <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="9 / 14" />
+                                <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="9 / 16" />
                                 <a href={ex.url} target="_blank" rel="noopener noreferrer"
                                   style={{ display: "block", padding: "6px 10px", fontSize: 10, color: "#8B5CF6", textDecoration: "none", borderTop: "1px solid #1E2A3A" }}>
                                   {ex.sourceAccount || "example"} ↗
