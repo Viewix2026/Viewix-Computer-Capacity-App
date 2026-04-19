@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { fbSet, fbListenSafe } from "../firebase";
+import { fbSet, fbSetAsync, fbListenSafe } from "../firebase";
 import { generateRunsheetDocx } from "../runsheetDocx";
 import { logoBg } from "../utils";
 
@@ -70,7 +70,16 @@ export function Runsheets({ accounts, projects }) {
   // nulls, so the runsheet list doesn't blank itself on token refresh.
   useEffect(() => {
     const u1 = fbListenSafe("/runsheets", d => setRunsheets(d || {}));
-    const u2 = fbListenSafe("/editors", d => { if (d && Array.isArray(d)) setEditors(d); });
+    // Firebase deserializes arrays as objects when there are gaps in the
+    // numeric keys, so don't rely on Array.isArray — coerce whatever comes
+    // back to a clean array of editor records. Without this, the create-
+    // runsheet Producer / Shooter dropdowns stay empty even though /editors
+    // has data.
+    const u2 = fbListenSafe("/editors", d => {
+      if (!d) { setEditors([]); return; }
+      const arr = Array.isArray(d) ? d : Object.values(d);
+      setEditors(arr.filter(e => e && e.id && e.name));
+    });
     return () => { u1(); u2(); };
   }, []);
 
@@ -110,11 +119,30 @@ export function Runsheets({ accounts, projects }) {
     fbSet(`/runsheets/${rsId}`, { ...runsheets[rsId], ...data, updatedAt: new Date().toISOString() });
   };
 
+  const [createError, setCreateError] = useState(null);
+  const [createBusy, setCreateBusy] = useState(false);
+
+  // Helper: Firebase sometimes deserializes arrays as objects with integer
+  // keys (when the stored array had any non-sequential writes). `.map()`
+  // fails on those. Coerce here so handleCreate doesn't silently throw.
+  const toArray = (v) => Array.isArray(v) ? v : (v && typeof v === "object" ? Object.values(v) : []);
+
   // ─── Create runsheet ───
-  const handleCreate = () => {
-    if (!createProjectId) return;
+  const handleCreate = async () => {
+    setCreateError(null);
+    setCreateBusy(true);
+    try { await doCreate(); }
+    catch (e) {
+      console.error("Create runsheet failed:", e);
+      setCreateError(e.message || String(e));
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+  const doCreate = async () => {
+    if (!createProjectId) { setCreateError("Pick a source project first."); return; }
     const proj = projects[createProjectId];
-    if (!proj) return;
+    if (!proj) { setCreateError(`Project ${createProjectId} not found in the projects map. Refresh and try again.`); return; }
     const id = `rs-${Date.now()}`;
 
     // Meta Ads scripts live at proj.scriptTable; Social Organic scripts live
@@ -122,9 +150,11 @@ export function Runsheets({ accounts, projects }) {
     // instead of videoName, plus hook/textHook/visualHook/scriptNotes). Use
     // the _projectType tag set by Preproduction.jsx to branch the mapping.
     const isOrganic = proj._projectType === "socialOrganic";
-    const scriptRows = isOrganic
-      ? (proj.preproductionDoc?.scriptTable || [])
-      : (proj.scriptTable || []);
+    const scriptRows = toArray(isOrganic ? proj.preproductionDoc?.scriptTable : proj.scriptTable);
+    if (scriptRows.length === 0) {
+      setCreateError("This project has no script rows yet — generate the scripts first, then come back.");
+      return;
+    }
     const projectType = isOrganic ? "organic" : "metaAds";
 
     const videos = scriptRows.map((v, i) => isOrganic ? {
@@ -168,7 +198,9 @@ export function Runsheets({ accounts, projects }) {
       status: "draft", producerId: createProducerId, directorId: createDirectorId,
       clientContacts: [], shootDays, videos, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     };
-    fbSet(`/runsheets/${id}`, rs);
+    // Await the write so we can surface errors (permissions, connectivity)
+    // straight back to the producer instead of silently no-opping.
+    await fbSetAsync(`/runsheets/${id}`, rs);
     setActiveId(id);
     setActiveDayIdx(0);
     setCreating(false);
@@ -764,10 +796,18 @@ export function Runsheets({ accounts, projects }) {
               </select>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={handleCreate} disabled={!createProjectId} style={{ ...btnPrimary, opacity: createProjectId ? 1 : 0.5 }}>Create</button>
-            <button onClick={() => setCreating(false)} style={btnSecondary}>Cancel</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button onClick={handleCreate} disabled={!createProjectId || createBusy}
+              style={{ ...btnPrimary, opacity: (!createProjectId || createBusy) ? 0.5 : 1 }}>
+              {createBusy ? "Creating…" : "Create"}
+            </button>
+            <button onClick={() => { setCreating(false); setCreateError(null); }} style={btnSecondary}>Cancel</button>
           </div>
+          {createError && (
+            <div style={{ marginTop: 12, padding: "8px 12px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, fontSize: 11, color: "#EF4444" }}>
+              {createError}
+            </div>
+          )}
         </div>
       )}
 

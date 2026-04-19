@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { fbSet, fbListenSafe } from "../firebase";
+import { fbSet, fbSetAsync, fbListenSafe } from "../firebase";
 import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { FormatLibrary } from "./FormatLibrary";
@@ -469,31 +469,45 @@ export function Preproduction({ role, isFounder } = {}) {
   }
 
   // ─── Create manual project ───
-  function handleManualAdd() {
+  // Awaits the write so connectivity / rules failures surface to the
+  // user instead of silently no-opping. Leaves the form open on error
+  // so the producer doesn't lose what they typed.
+  const [manualAddError, setManualAddError] = useState(null);
+  const [manualAddBusy, setManualAddBusy] = useState(false);
+  async function handleManualAdd() {
+    setManualAddError(null);
     if (!manualCompany.trim()) return;
+    setManualAddBusy(true);
     const projectId = `meta_${Date.now()}`;
-    fbSet(`/preproduction/metaAds/${projectId}`, {
-      id: projectId,
-      shortId: makeShortId(),
-      companyName: manualCompany.trim(),
-      packageTier: manualTier,
-      status: "draft",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      attioCompanyId: null,
-      attioDealId: null,
-      dealValue: null,
-      transcript: null,
-      brandAnalysis: null,
-      targetCustomer: null,
-      motivators: null,
-      visuals: null,
-      scriptTable: null,
-      rewriteHistory: [],
-    });
-    setManualCompany("");
-    setManualTier("standard");
-    setManualAddOpen(false);
+    try {
+      await fbSetAsync(`/preproduction/metaAds/${projectId}`, {
+        id: projectId,
+        shortId: makeShortId(),
+        companyName: manualCompany.trim(),
+        packageTier: manualTier,
+        status: "draft",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        attioCompanyId: null,
+        attioDealId: null,
+        dealValue: null,
+        transcript: null,
+        brandAnalysis: null,
+        targetCustomer: null,
+        motivators: null,
+        visuals: null,
+        scriptTable: null,
+        rewriteHistory: [],
+      });
+      setManualCompany("");
+      setManualTier("standard");
+      setManualAddOpen(false);
+    } catch (e) {
+      console.error("Manual project create failed:", e);
+      setManualAddError(e.message || String(e));
+    } finally {
+      setManualAddBusy(false);
+    }
   }
 
   // ─── Export xlsx ───
@@ -1052,8 +1066,16 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 <option value="deluxe">Deluxe</option>
               </select>
             </div>
-            <button onClick={handleManualAdd} disabled={!manualCompany.trim()} style={{ ...btnPrimary, opacity: !manualCompany.trim() ? 0.5 : 1 }}>Create</button>
-            <button onClick={() => setManualAddOpen(false)} style={NB}>Cancel</button>
+            <button onClick={handleManualAdd} disabled={!manualCompany.trim() || manualAddBusy}
+              style={{ ...btnPrimary, opacity: (!manualCompany.trim() || manualAddBusy) ? 0.5 : 1 }}>
+              {manualAddBusy ? "Creating…" : "Create"}
+            </button>
+            <button onClick={() => { setManualAddOpen(false); setManualAddError(null); }} style={NB}>Cancel</button>
+          </div>
+        )}
+        {manualAddOpen && manualAddError && (
+          <div style={{ padding: "8px 12px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, fontSize: 11, color: "#EF4444", marginBottom: 12 }}>
+            Create failed: {manualAddError}
           </div>
         )}
 

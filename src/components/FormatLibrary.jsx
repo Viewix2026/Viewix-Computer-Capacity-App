@@ -38,10 +38,22 @@ export function FormatLibrary({ role, isFounder }) {
   const [showArchived, setShowArchived] = useState(false);
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
 
-  // fbListenSafe waits for auth + ignores transient-null re-fires, so the
-  // library doesn't spontaneously blank itself when Firebase refreshes the
-  // token mid-session.
-  useEffect(() => fbListenSafe("/formatLibrary", d => setLibrary(d || {})), []);
+  // Load-tracking so the UI can distinguish "genuinely empty library" from
+  // "listener hasn't fired yet / is stuck". Bumped-on-demand via listenTick
+  // so the manual Reload button can force a fresh listener.
+  const [listenerFired, setListenerFired] = useState(false);
+  const [listenerError, setListenerError] = useState(null);
+  const [listenTick, setListenTick] = useState(0);
+
+  useEffect(() => {
+    setListenerFired(false);
+    setListenerError(null);
+    const off = fbListenSafe("/formatLibrary", d => {
+      setListenerFired(true);
+      setLibrary(d || {});
+    });
+    return off;
+  }, [listenTick]);
 
   // Defensive — entries should all have id + name; belt-and-braces because
   // seed imports and legacy records have been through a few schema tweaks.
@@ -115,21 +127,33 @@ export function FormatLibrary({ role, isFounder }) {
 
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12 }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>📚</div>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>
+            {listenerFired ? "📚" : "⏳"}
+          </div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>
-            {list.length === 0 ? "Empty library" : `No matches (${list.length} hidden by filters)`}
+            {!listenerFired ? "Loading library…"
+              : list.length === 0 ? "Empty library"
+              : `No matches (${list.length} hidden by filters)`}
           </div>
           <div style={{ fontSize: 12, marginTop: 6 }}>
-            {list.length === 0
-              ? "Shortlist a video in any Social Media Organic project to add the first entry."
-              : "Clear the search / tags / archive toggle to see everything."}
+            {!listenerFired
+              ? "Firebase is still responding — if this takes more than a few seconds, hit Reload."
+              : list.length === 0
+                ? "Shortlist a video in any Social Media Organic project to add the first entry."
+                : "Clear the search / tags / archive toggle to see everything."}
           </div>
-          {list.length > 0 && (
-            <button
-              onClick={() => { setSearch(""); setTagFilter([]); setShowArchived(false); }}
-              style={{ ...btnSecondary, marginTop: 14 }}>
-              Clear all filters
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 14, flexWrap: "wrap" }}>
+            {listenerFired && list.length > 0 && (
+              <button onClick={() => { setSearch(""); setTagFilter([]); setShowArchived(false); }} style={btnSecondary}>
+                Clear all filters
+              </button>
+            )}
+            <button onClick={() => setListenTick(t => t + 1)} style={btnSecondary}>
+              Reload library
             </button>
+          </div>
+          {listenerError && (
+            <div style={{ marginTop: 12, fontSize: 11, color: "#EF4444" }}>Error: {listenerError}</div>
           )}
         </div>
       ) : (

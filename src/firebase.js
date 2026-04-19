@@ -71,6 +71,14 @@ export function fbSet(p, v) {
   if (db) db.ref(p).set(v).catch(e => console.error("Firebase set failed", p, e));
 }
 
+// Awaitable version — use when the caller needs to handle write failures
+// (e.g. surface to the user). fbSet stays fire-and-forget for the common
+// case of "write this and carry on" where a .catch log is sufficient.
+export function fbSetAsync(p, v) {
+  if (!db) return Promise.reject(new Error("Firebase not initialised"));
+  return db.ref(p).set(v);
+}
+
 // Patch semantics — merges the given keys into the existing node instead of
 // replacing it. Use this when you want to update part of an object without
 // wiping sibling keys (e.g. updating .tab without losing .visitedTabs).
