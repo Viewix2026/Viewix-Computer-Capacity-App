@@ -225,7 +225,10 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
           <button onClick={() => setTab("buyerjourney")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: tab === "buyerjourney" ? "var(--card)" : "transparent", color: tab === "buyerjourney" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Buyer Journey</button>
         </div>
         {tab === "clients" && (<div style={{ display: "flex", gap: 6 }}>
-          <button onClick={doSync} disabled={syncing} style={{ ...BTN, background: "transparent", color: "var(--accent)", border: "1px solid var(--border)" }}>{syncing ? "Syncing..." : "Sync from Attio"}</button>
+          {/* Sync from Attio button removed — new-account creation now flows
+              through the webhook-deal-won path; accounts are created
+              automatically when a deal is won in Attio. Producers can
+              still add manually if needed. */}
           <button onClick={() => setAdding(true)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>+ Add Client</button>
         </div>)}
       </div>
@@ -302,7 +305,7 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
           <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", borderRadius: 12, border: "1px solid var(--border)" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
             <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No accounts yet</div>
-            <div style={{ fontSize: 13 }}>Sync from Attio or add clients manually</div>
+            <div style={{ fontSize: 13 }}>Clients appear here automatically when a deal is won in Attio, or add one manually above.</div>
           </div>
         ) : (
           <div style={{ overflowX: "auto", background: "var(--card)", borderRadius: 12, border: "1px solid var(--border)" }}>

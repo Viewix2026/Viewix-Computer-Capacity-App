@@ -64,7 +64,21 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   try {
-    const { companyName, companyId, dealName, dealValue, closeDate, videoType, numberOfVideos, secret } = req.body || {};
+    const body = req.body || {};
+    const { companyName, companyId, dealName, dealValue, closeDate, videoType, numberOfVideos, secret } = body;
+
+    // New Attio fields (Zapier sends these with capital letters / spaces —
+    // bracket notation required). Each is optional; Destination is
+    // comma-separated which we split client-side for chip rendering.
+    const description = body["Description"] || body.description || body.scopeOfWork || "";
+    const destinationRaw = body["Destination"] || body.destinations || body.destination || "";
+    const destinations = typeof destinationRaw === "string"
+      ? destinationRaw.split(",").map(s => s.trim()).filter(Boolean)
+      : (Array.isArray(destinationRaw) ? destinationRaw : []);
+    const targetAudience = body["Target Audience"] || body.targetAudience || body.audience || "";
+    const dueDate = body["Due Date"] || body.dueDate || body.projectDueDate || null;
+    const firstName = body["First Name"] || body.firstName || "";
+    const clientEmail = body["Client Email"] || body.clientEmail || body.email || "";
 
     if (secret !== SECRET) return res.status(401).json({ error: "Invalid secret" });
     if (!companyName) return res.status(400).json({ error: "companyName is required" });
@@ -72,6 +86,11 @@ export default async function handler(req, res) {
     const now = new Date().toISOString().split("T")[0];
     const signingDate = closeDate || now;
     const results = { account: null, delivery: null, sherpas: null };
+    // Capture the IDs of each linked record as we create them — gets
+    // denormalised onto the /projects/{id} record at the end so the
+    // Projects tab's status pills can click straight through to each one
+    // without re-querying Firebase.
+    const links = { accountId: null, sherpaId: null, preprodId: null, preprodType: null, runsheetId: null, deliveryId: null };
 
     // --- 1. ACCOUNTS ---
     const accounts = (await fbGet("/accounts")) || {};
@@ -125,6 +144,7 @@ export default async function handler(req, res) {
       }
       results.account = "updated";
     }
+    links.accountId = acctId;
 
     // --- 2. DELIVERIES ---
     // Meta Ads packages skip delivery creation here — delivery is auto-created
@@ -157,6 +177,7 @@ export default async function handler(req, res) {
       }
       await fbSet(`/deliveries/${delId}`, newDelivery);
       results.delivery = "created";
+      links.deliveryId = delId;
     } else {
       results.delivery = "deferred to preproduction approval";
     }
@@ -182,8 +203,12 @@ export default async function handler(req, res) {
         docUrl: "",
       });
       results.sherpas = "created";
+      links.sherpaId = clId;
     } else {
       results.sherpas = "exists";
+      // Find the existing sherpa's id so the Projects tab links through.
+      const existing = clientEntries.find(cl => (cl.name || "").trim().toLowerCase() === nameLC.trim());
+      if (existing?.id) links.sherpaId = existing.id;
     }
 
     // --- 4. PREPRODUCTION ---
@@ -192,6 +217,8 @@ export default async function handler(req, res) {
 
     if (isMetaAds) {
       const projectId = `meta_${Date.now()}`;
+      links.preprodId = projectId;
+      links.preprodType = "metaAds";
       const tier = metaAdsTiers.find(t => dealTypeLower.includes(t));
       await fbSet(`/preproduction/metaAds/${projectId}`, {
         id: projectId,
@@ -217,6 +244,8 @@ export default async function handler(req, res) {
 
     if (socialRetainerTiers.some(t => dealTypeLower.includes(t))) {
       const projectId = `social_${Date.now()}`;
+      links.preprodId = projectId;
+      links.preprodType = "socialOrganic";
       const tier = socialRetainerTiers.find(t => dealTypeLower.includes(t));
       // Persist deal-level fields mirror of the Meta Ads branch (above):
       // numberOfVideos drives the target count in the Select step (Phase 4),
@@ -246,6 +275,36 @@ export default async function handler(req, res) {
       });
       results.preproduction = "socialOrganic created";
     }
+
+    // --- 4b. PROJECTS ---
+    // Central registry of every won deal. Dashboard's Projects tab reads
+    // from here. Denormalises the Attio webhook fields + the IDs of all
+    // linked records (account / sherpa / preprod / runsheet / delivery)
+    // so the status-pill UI has everything it needs without cross-queries.
+    const projectId = "proj-" + Date.now() + "-" + Math.random().toString(36).slice(2, 5);
+    await fbSet(`/projects/${projectId}`, {
+      id: projectId,
+      shortId: makeShortId(),
+      clientName: companyName,
+      projectName: (dealName || "").trim() || "Untitled project",
+      dealValue: dealValue != null ? Number(dealValue) || null : null,
+      videoType: videoType || "",
+      numberOfVideos: parseInt(numberOfVideos) || null,
+      description,                    // scope of work from Attio "Description"
+      destinations,                   // array, split from Attio comma-separated "Destination"
+      targetAudience,                 // Attio "Target Audience" — future field, empty for now
+      dueDate,                        // Attio "Due Date" — future field, null for now
+      closeDate: closeDate || null,
+      clientContact: { firstName, email: clientEmail },
+      attioCompanyId: companyId || null,
+      attioDealId: null,              // Attio webhook doesn't expose the deal's own record_id yet
+      status: "active",               // active | archived
+      producerNotes: "",
+      links,                          // { accountId, sherpaId, preprodId, preprodType, deliveryId, runsheetId }
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    results.project = projectId;
 
     // --- 5. REFRESH ATTIO CACHE ---
     // Pull a fresh copy of all deals from Attio and store at /attioCache so the

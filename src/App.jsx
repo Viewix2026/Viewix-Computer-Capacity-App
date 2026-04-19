@@ -23,7 +23,7 @@ import { AccountsDashboard } from "./components/AccountsDashboard";
 import { Founders } from "./components/Founders";
 import { Home } from "./components/Home";
 import { Capacity } from "./components/Capacity";
-import { Deliveries } from "./components/Deliveries";
+import { Projects } from "./components/Projects";
 import { Training } from "./components/Training";
 import { DeliveryPublicView } from "./components/DeliveryPublicView";
 import { Preproduction } from "./components/Preproduction";
@@ -70,6 +70,12 @@ export default function App(){
 
   // Deliveries state
   const[deliveries,setDeliveries]=useState([]);
+
+  // Projects state — /projects/{id} records created by the Attio webhook
+  // (api/webhook-deal-won.js Section 4b). Listener-only: writes happen
+  // direct to Firebase from Projects.jsx to avoid the debounced bulk-write
+  // clobbering webhook-created records that haven't hit local state yet.
+  const[projects,setProjects]=useState([]);
   const[mondayEditorList,setMondayEditorList]=useState(DEFAULT_MONDAY_EDITORS);
 
   // Buyer Journey state
@@ -156,6 +162,12 @@ export default function App(){
             if(data.deliveries){
               const dArr=Object.values(data.deliveries).filter(d=>d&&d.id).map(d=>({...d,videos:Array.isArray(d.videos)?d.videos:[]}));
               setDeliveries(dArr);
+            }
+            if(data.projects){
+              const pArr=Object.values(data.projects).filter(p=>p&&p.id);
+              setProjects(pArr);
+            } else {
+              setProjects([]);
             }
             if(data.buyerJourney){
               setBuyerJourney(data.buyerJourney);
@@ -259,7 +271,7 @@ export default function App(){
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
-      {isFounder&&<SideIcon icon="📦" label="Deliveries" active={tool==="deliveries"} onClick={()=>setTool("deliveries")}/>}
+      {isFounder&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
       {isFounder&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
@@ -455,8 +467,11 @@ export default function App(){
     {/* ═══ ACCOUNTS (includes Buyer Journey sub-tab) ═══ */}
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} buyerJourney={buyerJourney} setBuyerJourney={setBuyerJourney} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
-    {/* ═══ DELIVERIES ═══ */}
-    {tool==="deliveries"&&isFounder&&(<Deliveries deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>)}
+    {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
+    {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>)}
+
+    {/* Legacy direct-to-Deliveries route (kept so old bookmarks still resolve). */}
+    {tool==="deliveries"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>)}
 
 
     {/* ═══ SHERPAS ═══ */}
