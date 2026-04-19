@@ -375,33 +375,54 @@ export function PreproductionPublicView() {
               can watch live examples of the style being proposed. */}
           {formats.length > 0 && (
             <Section title={`Formats we'll produce (${formats.length})`}>
-              <div style={{ display: "grid", gap: 18 }}>
+              {/* Compact 2-column grid. Each format is a horizontal row:
+                  small portrait thumbnail on the left (first example, with
+                  play overlay + click-through to all examples), name +
+                  truncated analysis on the right. Click the analysis to
+                  expand + leave feedback. Keeps the whole section skimmable
+                  at a glance — a 5-format brief used to take up ~2 screens,
+                  now fits in one. */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 10 }}>
                 {formats.map((f, i) => {
                   const examples = Array.isArray(f.examples) ? f.examples.slice(0, 3) : [];
+                  const first = examples[0] || null;
+                  const hasFeedback = !!doc.clientFeedback?.[`formats.${i}.videoAnalysis`.replace(/\./g, "_")];
                   return (
-                    <div key={f.formatLibraryId || i} style={{ padding: 16, background: "#0B0F1A", border: "1px solid #1E2A3A", borderRadius: 8 }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: "#E8ECF4", marginBottom: 10 }}>{i + 1}. {f.name}</div>
-                      {f.videoAnalysis && (
-                        <div style={{ marginBottom: 12 }}>
-                          <FeedbackCell cellKey={`formats.${i}.videoAnalysis`} label={`${f.name} — analysis`} value={f.videoAnalysis} multi />
-                        </div>
+                    <div key={f.formatLibraryId || i} style={{
+                      display: "flex", gap: 10, padding: 10,
+                      background: "#0B0F1A", border: `1px solid ${hasFeedback ? "rgba(245,158,11,0.4)" : "#1E2A3A"}`,
+                      borderRadius: 8,
+                    }}>
+                      {first && (
+                        <a href={first.url} target="_blank" rel="noopener noreferrer"
+                          style={{ width: 64, flexShrink: 0, borderRadius: 4, overflow: "hidden", textDecoration: "none" }}>
+                          <ReelPreview url={first.url} thumbnail={first.thumbnail} aspectRatio="9 / 16" compact />
+                        </a>
                       )}
-                      {examples.length > 0 && (
-                        <div>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Examples</div>
-                          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(examples.length, 3)}, 1fr)`, gap: 10 }}>
-                            {examples.map((ex, j) => (
-                              <div key={j} style={{ background: "#141A26", borderRadius: 6, overflow: "hidden", border: "1px solid #1E2A3A" }}>
-                                <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="9 / 16" />
-                                <a href={ex.url} target="_blank" rel="noopener noreferrer"
-                                  style={{ display: "block", padding: "6px 10px", fontSize: 10, color: "#8B5CF6", textDecoration: "none", borderTop: "1px solid #1E2A3A" }}>
-                                  {ex.sourceAccount || "example"} ↗
-                                </a>
-                              </div>
-                            ))}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 2 }}>
+                          <span style={{ fontSize: 10, color: "#5A6B85", fontWeight: 700, fontFamily: "'JetBrains Mono',monospace" }}>{String(i + 1).padStart(2, "0")}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#E8ECF4", lineHeight: 1.2 }}>{f.name}</span>
+                        </div>
+                        {f.videoAnalysis && (
+                          <div
+                            onClick={() => setFeedbackCell({ cellKey: `formats.${i}.videoAnalysis`, cellId: `formats.${i}.videoAnalysis`, column: `${f.name} — analysis` })}
+                            style={{
+                              fontSize: 11, color: "#8A9BB4", lineHeight: 1.45, cursor: "pointer",
+                              display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                              overflow: "hidden", textOverflow: "ellipsis",
+                            }}
+                            title="Click to leave feedback on this format"
+                          >
+                            {f.videoAnalysis}
                           </div>
-                        </div>
-                      )}
+                        )}
+                        {examples.length > 1 && (
+                          <div style={{ fontSize: 10, color: "#5A6B85", marginTop: 4 }}>
+                            {examples.length} example{examples.length === 1 ? "" : "s"}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
