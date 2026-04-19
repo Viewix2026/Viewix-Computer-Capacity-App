@@ -1319,7 +1319,10 @@ Return only the rewritten value.`;
 
 const APIFY_IG_PROFILE_ACTOR = "apify~instagram-profile-scraper";
 const APIFY_TT_PROFILE_ACTOR = "clockworks~tiktok-profile-scraper";
-const APIFY_YT_CHANNEL_ACTOR = "streamers~youtube-channel-info";
+// "streamers/youtube-channel-info" doesn't exist on the Apify store — the
+// actual Fast YouTube Channel Scraper (which exposes numberOfSubscribers
+// + basic channel metadata) is published as youtube-channel-scraper.
+const APIFY_YT_CHANNEL_ACTOR = "streamers~youtube-channel-scraper";
 
 // Resolve the webhook base URL. In Vercel production we want the canonical
 // domain, not the ephemeral preview URL. The env var takes precedence; fall
@@ -1652,11 +1655,11 @@ async function handleStartProfileScrape(req, res) {
     purpose = "clientProfileTT";
   } else if (platform === "youtube") {
     actorId = APIFY_YT_CHANNEL_ACTOR;
-    // streamers/youtube-channel-info takes startUrls
+    // streamers/youtube-channel-scraper takes startUrls with method.
     const url = /^https?:\/\//.test(handle)
       ? handle
       : `https://www.youtube.com/@${cleanHandle}`;
-    input = { startUrls: [{ url }] };
+    input = { startUrls: [{ url, method: "GET" }], maxResults: 1 };
     purpose = "clientProfileYT";
   } else {
     return res.status(400).json({ error: "platform must be 'tiktok' or 'youtube'" });

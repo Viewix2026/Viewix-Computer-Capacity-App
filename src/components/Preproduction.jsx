@@ -104,6 +104,11 @@ function EditModal({ title, onClose, children }) {
 export function Preproduction({ role, isFounder } = {}) {
   const [subTab, setSubTab] = useState("metaAds");
   const [projects, setProjects] = useState({});
+  // Separate listener for Social Organic so the Runsheets sub-tab can
+  // source from both project types when creating a runsheet. Meta Ads
+  // UI below stays scoped to `projects` only — organic never shows up
+  // on the Meta Ads list.
+  const [socialOrganicProjects, setSocialOrganicProjects] = useState({});
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
   const [transcriptText, setTranscriptText] = useState("");
@@ -133,7 +138,7 @@ export function Preproduction({ role, isFounder } = {}) {
 
   // Firebase listeners
   useEffect(() => {
-    let unsub1 = () => {}, unsub2 = () => {};
+    let unsub1 = () => {}, unsub2 = () => {}, unsub3 = () => {};
     onFB(() => {
       unsub1 = fbListen("/preproduction/metaAds", (data) => {
         setProjects(data || {});
@@ -154,9 +159,25 @@ export function Preproduction({ role, isFounder } = {}) {
       unsub2 = fbListen("/accounts", (data) => {
         setAccounts(data || {});
       });
+      unsub3 = fbListen("/preproduction/socialOrganic", (data) => {
+        setSocialOrganicProjects(data || {});
+      });
     });
-    return () => { unsub1(); unsub2(); };
+    return () => { unsub1(); unsub2(); unsub3(); };
   }, []);
+
+  // Unified project map for the Runsheets sub-tab. Each entry gets a
+  // `_projectType` tag ("metaAds" | "socialOrganic") so Runsheets.handleCreate
+  // can branch the video-field mapping correctly. Keyed by project id
+  // across both sources — collisions are impossible because metaAds ids
+  // start with `meta_` and socialOrganic ids with `social_`.
+  const runsheetSourceProjects = {};
+  Object.entries(projects).forEach(([k, v]) => {
+    if (v && v.id) runsheetSourceProjects[k] = { ...v, _projectType: "metaAds" };
+  });
+  Object.entries(socialOrganicProjects).forEach(([k, v]) => {
+    if (v && v.id) runsheetSourceProjects[k] = { ...v, _projectType: "socialOrganic" };
+  });
 
   const projectList = Object.values(projects)
     .filter(p => p && p.id)
@@ -1044,7 +1065,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         {/* Social Media Organic — competitor research, Stage 1 of social pre-prod flow */}
         {subTab === "socialOrganic" && <SocialOrganicResearch accounts={accounts} />}
 
-        {subTab === "runsheets" && <Runsheets accounts={accounts} projects={projects} />}
+        {subTab === "runsheets" && <Runsheets accounts={accounts} projects={runsheetSourceProjects} />}
 
         {/* Format Library — global, cross-project. Producers contribute during Phase 2 shortlisting. */}
         {subTab === "formatLibrary" && <FormatLibrary role={role} isFounder={isFounder} />}

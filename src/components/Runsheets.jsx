@@ -80,9 +80,21 @@ export function Runsheets({ accounts, projects }) {
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const activeRS = activeId ? runsheets[activeId] : null;
 
-  // Approved projects that can have runsheets
+  // Approved projects that can have runsheets. Meta Ads: status === "approved" once the
+  // producer signs off. Social Organic: status === "exported" once scripts are generated
+  // (the Social Organic flow doesn't have an explicit "approved" state — the Push to
+  // Runsheets button flips it to "exported"). We also accept a project if it has a
+  // non-empty scriptTable, so manually-created drafts can still be used.
   const approvedProjects = Object.values(projects || {})
-    .filter(p => p && p.id && (p.status === "approved" || p.status === "exported"))
+    .filter(p => {
+      if (!p || !p.id) return false;
+      if (p.status === "approved" || p.status === "exported") return true;
+      // Social Organic scripts live at preproductionDoc.scriptTable; Meta Ads at scriptTable.
+      const rows = p._projectType === "socialOrganic"
+        ? (p.preproductionDoc?.scriptTable || [])
+        : (p.scriptTable || []);
+      return rows.length > 0;
+    })
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
   const findAccount = (companyName) => {
@@ -106,17 +118,41 @@ export function Runsheets({ accounts, projects }) {
     const proj = projects[createProjectId];
     if (!proj) return;
     const id = `rs-${Date.now()}`;
-    const videos = (proj.scriptTable || []).map(v => ({
+
+    // Meta Ads scripts live at proj.scriptTable; Social Organic scripts live
+    // at proj.preproductionDoc.scriptTable with a different shape (formatName
+    // instead of videoName, plus hook/textHook/visualHook/scriptNotes). Use
+    // the _projectType tag set by Preproduction.jsx to branch the mapping.
+    const isOrganic = proj._projectType === "socialOrganic";
+    const scriptRows = isOrganic
+      ? (proj.preproductionDoc?.scriptTable || [])
+      : (proj.scriptTable || []);
+    const projectType = isOrganic ? "organic" : "metaAds";
+
+    const videos = scriptRows.map((v, i) => isOrganic ? {
+      // Social Organic shape
+      id: v.id || `v-${Date.now()}-${i}`,
+      videoName: v.formatName || v.videoName || `Video ${i + 1}`,
+      contentStyle: v.contentStyle || "",
+      hook: v.hook || "",
+      textHook: v.textHook || "",
+      visualHook: v.visualHook || "",
+      scriptNotes: v.scriptNotes || "",
+      props: v.props || "",
+      people: "",
+      // Keep Meta Ads columns empty so the UI's consistent video shape holds.
+      explainThePain: "", results: "", theOffer: "", whyTheOffer: "",
+      cta: "", metaAdHeadline: "", metaAdCopy: "",
+      motivatorType: "", audienceType: "",
+    } : {
+      // Meta Ads shape (existing)
       id: v.id, videoName: v.videoName || "", hook: v.hook || "",
       explainThePain: v.explainThePain || "", results: v.results || "",
       theOffer: v.theOffer || "", whyTheOffer: v.whyTheOffer || "",
       cta: v.cta || "", metaAdHeadline: v.metaAdHeadline || "",
       metaAdCopy: v.metaAdCopy || "", motivatorType: v.motivatorType || "",
       audienceType: v.audienceType || "", props: "", people: "", contentStyle: "",
-    }));
-    // Detect project type — Meta Ads projects come from /preproduction/metaAds
-    const isMetaAds = !!(proj.scriptTable && proj.scriptTable.length > 0 && proj.scriptTable[0].hook !== undefined);
-    const projectType = isMetaAds ? "metaAds" : "organic";
+    });
 
     const shootDays = [];
     for (let i = 0; i < Math.max(1, createDays); i++) {
@@ -647,17 +683,38 @@ export function Runsheets({ accounts, projects }) {
                   <span style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{v.videoName}</span>
                   <button onClick={() => setEditingVideo(null)} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 18, cursor: "pointer" }}>×</button>
                 </div>
-                {[{ key: "contentStyle", label: "Content Style" }, { key: "props", label: "Props" }, { key: "people", label: "People" }].map(f => (
+                {/* Organic runsheets carry the full script shape — expose every
+                    field the producer needs to tweak on the day of the shoot.
+                    Meta Ads only gets the three filming-context fields below
+                    (hook/CTA stay read-only because they're the Ad's script). */}
+                {(isMetaAds
+                  ? [
+                      { key: "contentStyle", label: "Content Style" },
+                      { key: "props",        label: "Props" },
+                      { key: "people",       label: "People" },
+                    ]
+                  : [
+                      { key: "contentStyle", label: "Content Style" },
+                      { key: "hook",         label: "Hook (spoken)" },
+                      { key: "textHook",     label: "Text Hook" },
+                      { key: "visualHook",   label: "Visual Hook" },
+                      { key: "scriptNotes",  label: "Script / Notes" },
+                      { key: "props",        label: "Props" },
+                      { key: "people",       label: "People" },
+                    ]
+                ).map(f => (
                   <div key={f.key} style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>{f.label}</label>
                     <textarea value={v[f.key] || ""} onChange={e => updateVideo(v.id, f.key, e.target.value)}
                       style={{ ...inputSt, minHeight: 50, resize: "vertical" }} />
                   </div>
                 ))}
-                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
-                  <strong>Hook:</strong> {v.hook || "—"}<br />
-                  <strong>CTA:</strong> {v.cta || "—"}
-                </div>
+                {isMetaAds && (
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                    <strong>Hook:</strong> {v.hook || "—"}<br />
+                    <strong>CTA:</strong> {v.cta || "—"}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -680,7 +737,14 @@ export function Runsheets({ accounts, projects }) {
               <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4 }}>Source Project (Approved)</label>
               <select value={createProjectId} onChange={e => setCreateProjectId(e.target.value)} style={inputSt}>
                 <option value="">Select project...</option>
-                {approvedProjects.map(p => <option key={p.id} value={p.id}>{p.companyName} — {p.packageTier} ({p.scriptTable?.length || 0} ads)</option>)}
+                {approvedProjects.map(p => {
+                  const isOrganic = p._projectType === "socialOrganic";
+                  const rows = isOrganic
+                    ? (p.preproductionDoc?.scriptTable?.length || 0)
+                    : (p.scriptTable?.length || 0);
+                  const typeLabel = isOrganic ? "organic" : (p.packageTier || "meta ads");
+                  return <option key={p.id} value={p.id}>{p.companyName} — {typeLabel} ({rows} {isOrganic ? "videos" : "ads"})</option>;
+                })}
               </select>
             </div>
             <div style={{ minWidth: 80 }}>
