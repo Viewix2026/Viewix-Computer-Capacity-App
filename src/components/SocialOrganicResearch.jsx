@@ -9,7 +9,7 @@
 // `synthesis` field on old projects is preserved but unused.
 
 import { useState, useEffect, useRef } from "react";
-import { onFB, fbSet, fbUpdate, fbListen, getCurrentRole } from "../firebase";
+import { onFB, onAuthReady, fbSet, fbUpdate, fbListen, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
@@ -109,10 +109,14 @@ export function SocialOrganicResearch({ accounts }) {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [creating, setCreating] = useState(false);
 
-  // Firebase listener
+  // Firebase listener — gated on auth (not just SDK load) because security
+  // rules deny unauthenticated reads and would silently cache empty data.
+  // This is what caused the "competitor research blank even though it's
+  // full" bug on reload: onFB attaches too early, listener fires with null,
+  // never retries.
   useEffect(() => {
     let unsub = () => {};
-    onFB(() => {
+    onAuthReady(() => {
       unsub = fbListen("/preproduction/socialOrganic", (data) => {
         // Filter internal keys (_costLog, _handleDirectory) out of the project list
         const filtered = {};
@@ -1516,7 +1520,17 @@ function VideoReviewStep({ project, onPatch }) {
   const [newLink, setNewLink] = useState("");
 
   // Top 25, strictly by topOverperformers order (computed server-side).
-  const topPosts = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 25);
+  // If topOverperformers is missing or came back empty (legacy scrapes, or
+  // runs where nothing exceeded the threshold), fall back to sorting the
+  // raw posts by overperformanceScore / views so the grid isn't blank
+  // when the data is actually there.
+  let topPosts = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 25);
+  if (topPosts.length === 0 && posts.length > 0) {
+    topPosts = [...posts]
+      .sort((a, b) => (b.overperformanceScore || 0) - (a.overperformanceScore || 0)
+        || (b.views || 0) - (a.views || 0))
+      .slice(0, 25);
+  }
 
   const setStatus = (postId, status) => {
     const nextTicked = new Set(ticked);
@@ -1757,7 +1771,7 @@ function ShortlistStep({ project, onPatch }) {
   const [library, setLibrary] = useState({});
   useEffect(() => {
     let unsub = () => {};
-    onFB(() => {
+    onAuthReady(() => {
       unsub = fbListen("/formatLibrary", (d) => setLibrary(d || {}));
     });
     return () => { unsub(); };

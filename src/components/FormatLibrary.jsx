@@ -11,7 +11,7 @@
 // into Viewix's institutional knowledge of what filming styles work.
 
 import { useEffect, useState } from "react";
-import { onFB, fbSet, fbListen } from "../firebase";
+import { onAuthReady, fbSet, fbListen } from "../firebase";
 import { ReelPreview } from "./shared/ReelPreview";
 
 // Shared with other preproduction surfaces so the look-and-feel matches.
@@ -39,8 +39,12 @@ export function FormatLibrary({ role, isFounder }) {
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
 
   useEffect(() => {
+    // Must wait for auth, not just the SDK — Firebase security rules deny
+    // reads from unauthenticated clients and return null, which the listener
+    // then caches as "empty library". Using onAuthReady ensures the token
+    // is ready before we attach.
     let u = () => {};
-    onFB(() => {
+    onAuthReady(() => {
       u = fbListen("/formatLibrary", d => setLibrary(d || {}));
     });
     return () => { u(); };
@@ -410,7 +414,7 @@ function PromptEditor({ onClose }) {
 
   useEffect(() => {
     let u1 = () => {}, u2 = () => {};
-    onFB(() => {
+    onAuthReady(() => {
       u1 = fbListen("/preproductionTemplates/socialOrganicPrompt", d => setPrompt(typeof d === "string" ? d : ""));
       u2 = fbListen("/preproductionTemplates/fantasticExample", d => setExample(typeof d === "string" ? d : ""));
       setLoading(false);
