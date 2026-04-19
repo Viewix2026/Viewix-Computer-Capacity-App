@@ -307,15 +307,15 @@ function CreateProjectModal({ accounts, onCancel, onCreate }) {
         platforms: ["instagram"],
         transcript: null,
       },
-      transcriptSuggestions: null,
-      scrape: null,
-      posts: [],
-      handleStats: {},
-      // Producer-driven 5-stage workflow (Phase 1+). Legacy projects without
-      // `stage` fall back to effectiveStage() derived from posts state.
-      stage: "scrape",
-      performanceMultiplier: 2,
-      videoReviews: {},
+      // Producer-driven 7-tab workflow. Tab router keys off `project.tab`;
+      // approvals[key] timestamps advance gates. `videoReview` is a typed
+      // record (ticked/crossed/extraLinks arrays) — the old `videoReviews`
+      // map schema is gone.
+      tab: "brandTruth",
+      approvals: {},
+      videoReview: { ticked: [], crossed: [], extraLinks: [] },
+      shortlistedFormats: {},
+      selectedFormats: [],
     };
     onCreate(project);
   };

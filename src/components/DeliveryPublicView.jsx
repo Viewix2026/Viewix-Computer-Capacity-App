@@ -23,18 +23,20 @@ export function DeliveryPublicView(){
     if(!deliveryId&&!shortId)return;
     document.title="Viewix Dashboard";
     initFB();
+    // Capture the unsubscribe so unmount / dep-change tears down the
+    // listener. Previously we leaked a /deliveries listener on every
+    // deliveryId or shortId change.
+    let unsub=()=>{};
     onFB(async()=>{
       try{await signInAnonymouslyForPublic();}
       catch(e){console.warn("Anonymous auth failed, continuing:",e.message);}
       if(deliveryId){
-        // Legacy ?d=ID path — direct lookup
-        fbListen(`/deliveries/${deliveryId}`,(data)=>{
+        unsub=fbListen(`/deliveries/${deliveryId}`,(data)=>{
           if(data)setDelivery(data);
           setLoading(false);
         });
       }else if(shortId){
-        // Pretty /d/HASH path — find the matching delivery by shortId, then listen to it
-        fbListen("/deliveries",(allDeliveries)=>{
+        unsub=fbListen("/deliveries",(allDeliveries)=>{
           if(!allDeliveries){setLoading(false);return;}
           const match=Object.values(allDeliveries).find(d=>d&&d.shortId&&d.shortId.toLowerCase()===shortId);
           if(match)setDelivery(match);
@@ -42,13 +44,17 @@ export function DeliveryPublicView(){
         });
       }
     });
+    return ()=>unsub();
   },[deliveryId,shortId]);
 
-  // Resolve account logo when delivery or accounts change
+  // Resolve account logo when delivery or accounts change. Same cleanup
+  // pattern — leaving this listener attached on clientName change would
+  // stack N listeners across the life of the page.
   useEffect(()=>{
     if(!delivery?.clientName)return;
+    let unsub=()=>{};
     onFB(()=>{
-      fbListen("/accounts",(acctData)=>{
+      unsub=fbListen("/accounts",(acctData)=>{
         if(!acctData)return;
         const nameLC=delivery.clientName.toLowerCase();
         const match=Object.values(acctData).find(a=>a&&(a.companyName||"").toLowerCase()===nameLC);
@@ -56,6 +62,7 @@ export function DeliveryPublicView(){
         setAccountLogoBg(match?.logoBg||"white");
       });
     });
+    return ()=>unsub();
   },[delivery?.clientName]);
 
   const flushNotifications=()=>{

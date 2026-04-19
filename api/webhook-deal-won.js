@@ -235,9 +235,11 @@ export default async function handler(req, res) {
         dealValue: dealValue || null,
         videoType: videoType || null,
         numberOfVideos: parseInt(numberOfVideos) || null,
-        stage: "scrape",
-        performanceMultiplier: 2,
-        videoReviews: {},
+        // 7-tab workflow state. Tab router keys off `tab`; approvals[key]
+        // timestamps advance each gate.
+        tab: "brandTruth",
+        approvals: {},
+        videoReview: { ticked: [], crossed: [], extraLinks: [] },
         shortlistedFormats: {},
         selectedFormats: [],
         videoCountOverride: null,
