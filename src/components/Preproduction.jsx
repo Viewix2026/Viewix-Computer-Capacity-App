@@ -129,6 +129,7 @@ export function Preproduction({ role, isFounder } = {}) {
   // Lifted so the top-header "+ New Organic Pre Production" button can
   // toggle the SocialOrganicResearch create modal.
   const [socialOrganicCreating, setSocialOrganicCreating] = useState(false);
+  const [runsheetCreating, setRunsheetCreating] = useState(false);
   const [manualCompany, setManualCompany] = useState("");
   const [manualTier, setManualTier] = useState("standard");
   const [accounts, setAccounts] = useState({});
@@ -1047,6 +1048,9 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         {subTab === "socialOrganic" && (
           <button onClick={() => setSocialOrganicCreating(true)} style={btnPrimary}>+ New Organic Pre Production</button>
         )}
+        {subTab === "runsheets" && (
+          <button onClick={() => setRunsheetCreating(true)} style={btnPrimary}>+ Create Runsheet</button>
+        )}
       </div>
 
       <div style={{ padding: "24px 28px" }}>
@@ -1094,7 +1098,14 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
           />
         )}
 
-        {subTab === "runsheets" && <Runsheets accounts={accounts} projects={runsheetSourceProjects} />}
+        {subTab === "runsheets" && (
+          <Runsheets
+            accounts={accounts}
+            projects={runsheetSourceProjects}
+            creating={runsheetCreating}
+            onCreatingChange={setRunsheetCreating}
+          />
+        )}
 
         {/* Format Library — global, cross-project. Producers contribute during Phase 2 shortlisting. */}
         {subTab === "formatLibrary" && <FormatLibrary role={role} isFounder={isFounder} />}

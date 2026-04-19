@@ -51,11 +51,18 @@ function Badge({ text, colors }) {
 }
 
 // ─── Main Component ───
-export function Runsheets({ accounts, projects }) {
+// `creating` + `onCreatingChange` are optional — when Preproduction.jsx
+// provides them the parent owns the create-modal state so the "+ Create
+// Runsheet" trigger can live in the top header alongside the Meta Ads /
+// Social Organic buttons. Falls back to local state so the component
+// keeps working standalone.
+export function Runsheets({ accounts, projects, creating: creatingProp, onCreatingChange }) {
   const [runsheets, setRunsheets] = useState({});
   const [editors, setEditors] = useState([]);
   const [activeId, setActiveId] = useState(null);
-  const [creating, setCreating] = useState(false);
+  const [creatingLocal, setCreatingLocal] = useState(false);
+  const creating = creatingProp !== undefined ? creatingProp : creatingLocal;
+  const setCreating = onCreatingChange || setCreatingLocal;
   const [createProjectId, setCreateProjectId] = useState("");
   const [createDays, setCreateDays] = useState(1);
   const [createProducerId, setCreateProducerId] = useState("");
@@ -811,7 +818,8 @@ export function Runsheets({ accounts, projects }) {
         </div>
       )}
 
-      {!creating && <button onClick={() => setCreating(true)} style={{ ...btnPrimary, marginBottom: 20 }}>+ Create Runsheet</button>}
+      {/* The "+ Create Runsheet" trigger lives in the parent Preproduction
+          header alongside the Meta Ads + Social Organic "+ New" buttons. */}
 
       {/* Runsheet cards */}
       {rsList.length === 0 && !creating && (
