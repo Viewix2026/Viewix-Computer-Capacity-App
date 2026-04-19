@@ -7,6 +7,7 @@ import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPT
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
 import { fetchInProgressParents } from "../monday";
 import { StatusSelect } from "./UIComponents";
+import { fbSet } from "../firebase";
 
 export function Deliveries({ deliveries, setDeliveries, accounts }) {
   const [activeDeliveryId, setActiveDeliveryId] = useState(null);
@@ -61,6 +62,11 @@ export function Deliveries({ deliveries, setDeliveries, accounts }) {
   };
   const updateDelivery = (updated) => setDeliveries(p => p.map(d => d.id === updated.id ? updated : d));
   const deleteDelivery = (id) => {
+    // Delete immediately in Firebase — the App-level debounced writer only
+    // iterates the local array and writes survivors back; it never knew to
+    // null out the deleted path, which let the record resurface after a
+    // tab switch once the listener rehydrated state.
+    fbSet(`/deliveries/${id}`, null);
     setDeliveries(p => p.filter(d => d.id !== id));
     if (activeDeliveryId === id) setActiveDeliveryId(null);
   };
