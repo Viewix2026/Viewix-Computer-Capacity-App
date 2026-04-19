@@ -86,7 +86,10 @@ export function Deliveries({ deliveries, setDeliveries, accounts }) {
         <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button onClick={() => setActiveDeliveryId(null)} style={{ ...NB, fontSize: 12 }}>&larr; Back</button>
-            <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{d.clientName}: {d.projectName}</span>
+            <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
+              <span style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)" }}>{d.projectName || "Untitled project"}</span>
+              <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{d.clientName}</span>
+            </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => copyLink(d.id)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>Copy Share Link</button>
@@ -204,8 +207,16 @@ export function Deliveries({ deliveries, setDeliveries, accounts }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       {logoSrc && <img key={logoSrc + bg} src={logoSrc} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: bg, padding: 3 }} />}
                       <div>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{d.clientName}</div>
-                        <div style={{ fontSize: 12, color: "var(--muted)" }}>{d.projectName} · {d.videos.length} video{d.videos.length !== 1 ? "s" : ""}</div>
+                        {/* Project name is the primary line — clients often
+                            have multiple concurrent deliveries, so the
+                            project is what distinguishes one row from
+                            another at a glance. Client name lives below
+                            as context. */}
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)", lineHeight: 1.3 }}>{d.projectName || "Untitled project"}</div>
+                        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                          <span style={{ fontWeight: 600, color: "var(--muted)" }}>{d.clientName}</span>
+                          <span style={{ opacity: 0.6 }}> · {d.videos.length} video{d.videos.length !== 1 ? "s" : ""}</span>
+                        </div>
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
