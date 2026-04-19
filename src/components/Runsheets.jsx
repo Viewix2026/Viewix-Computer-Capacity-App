@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { onFB, fbSet, fbListen } from "../firebase";
+import { fbSet, fbListenSafe } from "../firebase";
 import { generateRunsheetDocx } from "../runsheetDocx";
 import { logoBg } from "../utils";
 
@@ -66,13 +66,11 @@ export function Runsheets({ accounts, projects }) {
   const [dragOverSlot, setDragOverSlot] = useState(null);
   const [editingVideo, setEditingVideo] = useState(null);
 
-  // Firebase listeners
+  // Firebase listeners — fbListenSafe waits for auth + suppresses transient
+  // nulls, so the runsheet list doesn't blank itself on token refresh.
   useEffect(() => {
-    let u1 = () => {}, u2 = () => {};
-    onFB(() => {
-      u1 = fbListen("/runsheets", d => setRunsheets(d || {}));
-      u2 = fbListen("/editors", d => { if (d && Array.isArray(d)) setEditors(d); });
-    });
+    const u1 = fbListenSafe("/runsheets", d => setRunsheets(d || {}));
+    const u2 = fbListenSafe("/editors", d => { if (d && Array.isArray(d)) setEditors(d); });
     return () => { u1(); u2(); };
   }, []);
 

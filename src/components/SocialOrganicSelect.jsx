@@ -14,7 +14,7 @@
 // window — it's a counter for browsing, not an auth-critical number.
 
 import { useEffect, useState } from "react";
-import { onAuthReady, fbSet, fbListen } from "../firebase";
+import { fbSet, fbListenSafe } from "../firebase";
 import {
   DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   closestCenter,
@@ -53,16 +53,9 @@ export function SocialOrganicSelect({ project, onPatch }) {
   }, [JSON.stringify(selectedInit)]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Library listener (pure read; writes go through the existing hooks).
-  // onAuthReady — otherwise the listener attaches before the security rules'
-  // auth token is available, gets a null back, and silently stays empty.
+  // fbListenSafe: waits for auth, suppresses transient nulls.
   const [library, setLibrary] = useState({});
-  useEffect(() => {
-    let u1 = () => {};
-    onAuthReady(() => {
-      u1 = fbListen("/formatLibrary", d => setLibrary(d || {}));
-    });
-    return () => { u1(); };
-  }, []);
+  useEffect(() => fbListenSafe("/formatLibrary", d => setLibrary(d || {})), []);
 
   // Target count — AI-suggested if present, else numberOfVideos / 5, else manual.
   const aiCount = typeof project.suggestedFormatCount === "number" ? project.suggestedFormatCount : null;

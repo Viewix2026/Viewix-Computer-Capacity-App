@@ -11,7 +11,7 @@
 // into Viewix's institutional knowledge of what filming styles work.
 
 import { useEffect, useState } from "react";
-import { onAuthReady, fbSet, fbListen } from "../firebase";
+import { fbSet, fbListenSafe } from "../firebase";
 import { ReelPreview } from "./shared/ReelPreview";
 
 // Shared with other preproduction surfaces so the look-and-feel matches.
@@ -38,17 +38,10 @@ export function FormatLibrary({ role, isFounder }) {
   const [showArchived, setShowArchived] = useState(false);
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
 
-  useEffect(() => {
-    // Must wait for auth, not just the SDK — Firebase security rules deny
-    // reads from unauthenticated clients and return null, which the listener
-    // then caches as "empty library". Using onAuthReady ensures the token
-    // is ready before we attach.
-    let u = () => {};
-    onAuthReady(() => {
-      u = fbListen("/formatLibrary", d => setLibrary(d || {}));
-    });
-    return () => { u(); };
-  }, []);
+  // fbListenSafe waits for auth + ignores transient-null re-fires, so the
+  // library doesn't spontaneously blank itself when Firebase refreshes the
+  // token mid-session.
+  useEffect(() => fbListenSafe("/formatLibrary", d => setLibrary(d || {})), []);
 
   // Defensive — entries should all have id + name; belt-and-braces because
   // seed imports and legacy records have been through a few schema tweaks.
@@ -413,12 +406,10 @@ function PromptEditor({ onClose }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    let u1 = () => {}, u2 = () => {};
-    onAuthReady(() => {
-      u1 = fbListen("/preproductionTemplates/socialOrganicPrompt", d => setPrompt(typeof d === "string" ? d : ""));
-      u2 = fbListen("/preproductionTemplates/fantasticExample", d => setExample(typeof d === "string" ? d : ""));
-      setLoading(false);
-    });
+    const u1 = fbListenSafe("/preproductionTemplates/socialOrganicPrompt",
+      d => { setPrompt(typeof d === "string" ? d : ""); setLoading(false); });
+    const u2 = fbListenSafe("/preproductionTemplates/fantasticExample",
+      d => setExample(typeof d === "string" ? d : ""));
     return () => { u1(); u2(); };
   }, []);
 

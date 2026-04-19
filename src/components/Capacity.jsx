@@ -4,7 +4,7 @@
 // roster edits) live here to keep App.jsx focused on routing + global state.
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { onFB, fbListen } from "../firebase";
+import { fbListenSafe } from "../firebase";
 import {
   DK, DL, QT, TH, TD, BTN, NB,
   CONTENT_CATEGORIES, CAT_COLORS,
@@ -50,14 +50,10 @@ export function Capacity({
   useEffect(() => {
     if (capTab !== "timelogs") return;
     setTimeLogLoading(true);
-    let unsub = () => {};
-    onFB(() => {
-      unsub = fbListen("/timeLogs", (data) => {
-        setAllTimeLogs(data || {});
-        setTimeLogLoading(false);
-      });
+    return fbListenSafe("/timeLogs", (data) => {
+      setAllTimeLogs(data || {});
+      setTimeLogLoading(false);
     });
-    return () => unsub();
   }, [capTab]);
 
   // ─── Capacity helpers ───

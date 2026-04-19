@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { onFB, fbSet, fbListen } from "../firebase";
+import { fbSet, fbListenSafe } from "../firebase";
 import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { FormatLibrary } from "./FormatLibrary";
@@ -136,33 +136,28 @@ export function Preproduction({ role, isFounder } = {}) {
   });
   const resizeRef = useRef(null);
 
-  // Firebase listeners
+  // Firebase listeners — fbListenSafe waits for auth + suppresses transient
+  // nulls during token refresh so the preproduction / runsheets tabs don't
+  // spontaneously blank themselves after ~1hr of session time.
   useEffect(() => {
-    let unsub1 = () => {}, unsub2 = () => {}, unsub3 = () => {};
-    onFB(() => {
-      unsub1 = fbListen("/preproduction/metaAds", (data) => {
-        setProjects(data || {});
-        // Backfill shortId on existing projects (one-time per record)
-        if (data) {
-          const used = new Set();
-          Object.values(data).forEach(p => { if (p?.shortId) used.add(p.shortId); });
-          Object.values(data).forEach(p => {
-            if (p && p.id && !p.shortId) {
-              let sid = makeShortId();
-              while (used.has(sid)) sid = makeShortId();
-              used.add(sid);
-              fbSet(`/preproduction/metaAds/${p.id}/shortId`, sid);
-            }
-          });
-        }
-      });
-      unsub2 = fbListen("/accounts", (data) => {
-        setAccounts(data || {});
-      });
-      unsub3 = fbListen("/preproduction/socialOrganic", (data) => {
-        setSocialOrganicProjects(data || {});
-      });
+    const unsub1 = fbListenSafe("/preproduction/metaAds", (data) => {
+      setProjects(data || {});
+      // Backfill shortId on existing projects (one-time per record)
+      if (data) {
+        const used = new Set();
+        Object.values(data).forEach(p => { if (p?.shortId) used.add(p.shortId); });
+        Object.values(data).forEach(p => {
+          if (p && p.id && !p.shortId) {
+            let sid = makeShortId();
+            while (used.has(sid)) sid = makeShortId();
+            used.add(sid);
+            fbSet(`/preproduction/metaAds/${p.id}/shortId`, sid);
+          }
+        });
+      }
     });
+    const unsub2 = fbListenSafe("/accounts", (data) => setAccounts(data || {}));
+    const unsub3 = fbListenSafe("/preproduction/socialOrganic", (data) => setSocialOrganicProjects(data || {}));
     return () => { unsub1(); unsub2(); unsub3(); };
   }, []);
 

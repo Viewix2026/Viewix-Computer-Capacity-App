@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { onFB, fbSet, fbListen } from "../firebase";
+import { fbSet, fbListenSafe } from "../firebase";
 
 const SALESPEOPLE = ["Brandon", "Jeremy"];
 
@@ -53,13 +53,7 @@ export function MeetingFeedback() {
   const [analysing, setAnalysing] = useState(false);
   const [filterSalesperson, setFilterSalesperson] = useState("all");
 
-  useEffect(() => {
-    let u = () => {};
-    onFB(() => {
-      u = fbListen("/meetingFeedback", d => setFeedbackItems(d || {}));
-    });
-    return () => u();
-  }, []);
+  useEffect(() => fbListenSafe("/meetingFeedback", d => setFeedbackItems(d || {})), []);
 
   const list = Object.values(feedbackItems).filter(x => x && x.id)
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));

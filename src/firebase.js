@@ -85,6 +85,44 @@ export function fbListen(p, cb) {
   return () => r.off("value");
 }
 
+// Safer wrapper around fbListen for auth-gated paths:
+//   1. Waits for `authReady` before attaching (security rules return null
+//      pre-auth, which the listener would otherwise cache as "empty").
+//   2. Retains state across transient nulls. Firebase occasionally fires
+//      null on value listeners during token refresh, reconnects, or rule
+//      re-evaluations. If the caller has already received real data once,
+//      we suppress subsequent nulls so the UI doesn't flash blank.
+//   3. Returns a cleanup fn — callers use it in useEffect returns.
+//
+// Usage:
+//   useEffect(() => fbListenSafe("/formatLibrary", d => setLibrary(d || {})), []);
+//
+// The caller still chooses how to coerce null → empty (via `d || {}` or
+// whatever default makes sense). The wrapper just makes sure transient
+// nulls after a successful load don't wipe live state.
+export function fbListenSafe(path, cb) {
+  let off = () => {};
+  let hasLoaded = false;
+  const attach = () => {
+    off = fbListen(path, d => {
+      if (d != null) {
+        hasLoaded = true;
+        cb(d);
+      } else if (!hasLoaded) {
+        // First response genuinely empty (or still unauthed) — pass the
+        // null through so the caller can show the empty state.
+        cb(null);
+      }
+      // else: stale null after real data — ignore. Firebase will re-fire
+      // with fresh data once the token refresh / reconnect settles.
+    });
+  };
+  // Gate on auth — avoids the pre-auth "security rules return null" bug.
+  if (authReady) attach();
+  else authCbs.push(attach);
+  return () => off();
+}
+
 // ─── Auth helpers ───
 
 export function onAuthReady(cb) {

@@ -9,7 +9,7 @@
 // `synthesis` field on old projects is preserved but unused.
 
 import { useState, useEffect, useRef } from "react";
-import { onFB, onAuthReady, fbSet, fbUpdate, fbListen, getCurrentRole } from "../firebase";
+import { fbSet, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
@@ -109,25 +109,18 @@ export function SocialOrganicResearch({ accounts }) {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [creating, setCreating] = useState(false);
 
-  // Firebase listener — gated on auth (not just SDK load) because security
-  // rules deny unauthenticated reads and would silently cache empty data.
-  // This is what caused the "competitor research blank even though it's
-  // full" bug on reload: onFB attaches too early, listener fires with null,
-  // never retries.
-  useEffect(() => {
-    let unsub = () => {};
-    onAuthReady(() => {
-      unsub = fbListen("/preproduction/socialOrganic", (data) => {
-        // Filter internal keys (_costLog, _handleDirectory) out of the project list
-        const filtered = {};
-        Object.entries(data || {}).forEach(([k, v]) => {
-          if (!k.startsWith("_") && v && v.id) filtered[k] = v;
-        });
-        setProjects(filtered);
-      });
+  // fbListenSafe: waits for auth + suppresses transient nulls after the
+  // first real load. Fixes the "competitor research blank even though it's
+  // full" bug — which was Firebase firing null mid-session on token
+  // refresh, which the previous listener cached as "empty projects".
+  useEffect(() => fbListenSafe("/preproduction/socialOrganic", (data) => {
+    // Filter internal keys (_costLog, _handleDirectory) out of the project list
+    const filtered = {};
+    Object.entries(data || {}).forEach(([k, v]) => {
+      if (!k.startsWith("_") && v && v.id) filtered[k] = v;
     });
-    return () => unsub();
-  }, []);
+    setProjects(filtered);
+  }), []);
 
   const projectList = Object.values(projects)
     .filter(p => p && p.status !== "archived")
@@ -1769,13 +1762,7 @@ function ShortlistStep({ project, onPatch }) {
   // Global format library — listened to live so the "Add as example"
   // picker sees new library entries from other projects in real time.
   const [library, setLibrary] = useState({});
-  useEffect(() => {
-    let unsub = () => {};
-    onAuthReady(() => {
-      unsub = fbListen("/formatLibrary", (d) => setLibrary(d || {}));
-    });
-    return () => { unsub(); };
-  }, []);
+  useEffect(() => fbListenSafe("/formatLibrary", (d) => setLibrary(d || {})), []);
 
   // Which video is active in the right-hand form. Default to the first
   // ticked video that hasn't been shortlisted yet.

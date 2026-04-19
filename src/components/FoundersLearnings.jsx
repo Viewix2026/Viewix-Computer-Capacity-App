@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { onFB, fbSet, fbListen } from "../firebase";
+import { fbSet, fbListenSafe } from "../firebase";
 
 /**
  * AI Learnings tab inside the Founders dashboard.
@@ -16,11 +16,8 @@ export function FoundersLearnings() {
   const [newLearning, setNewLearning] = useState("");
 
   useEffect(() => {
-    let u1 = () => {}, u2 = () => {};
-    onFB(() => {
-      u1 = fbListen("/preproduction/feedbackLog", d => setFeedbackLog(d || {}));
-      u2 = fbListen("/preproduction/promptLearnings", d => setPromptLearnings(d || {}));
-    });
+    const u1 = fbListenSafe("/preproduction/feedbackLog", d => setFeedbackLog(d || {}));
+    const u2 = fbListenSafe("/preproduction/promptLearnings", d => setPromptLearnings(d || {}));
     return () => { u1(); u2(); };
   }, []);
 
