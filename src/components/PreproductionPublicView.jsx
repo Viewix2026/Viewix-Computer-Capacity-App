@@ -264,24 +264,11 @@ export function PreproductionPublicView() {
 
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "30px 40px" }}>
 
-          {/* Brand Truth — the context Claude extracted from the preproduction
-              meeting. Client reviews it here, flags anything off before scripts
-              get locked in. */}
-          {BT_FIELDS.some(f => bt[f.key]) && (
-            <Section title="Brand Truth">
-              {BT_FIELDS.map(f => (
-                <div key={f.key} style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 5 }}>{f.label}</div>
-                  <FeedbackCell cellKey={`brandTruth.fields.${f.key}`} label={f.label} value={bt[f.key]} multi />
-                </div>
-              ))}
-            </Section>
-          )}
-
-          {/* Client Research — the producer's scrape of the client's existing
-              reels. Shows follower counts, engagement stats, and the current
-              best-performing reel. Helps the client understand the baseline
-              we're working from before they look at the new format plan. */}
+          {/* Client Research — leads the page. The client sees their own
+              current-content snapshot (follower counts, engagement stats,
+              top-performing reel) first, so everything after it — Brand
+              Truth, Formats, Scripts — reads as a response to that
+              baseline rather than an abstract pitch. */}
           {(() => {
             const scrape = project?.clientScrape || {};
             const profile = scrape.profile || {};
@@ -367,6 +354,20 @@ export function PreproductionPublicView() {
           {takeaways && !project?.clientScrape && (
             <Section title="Producer's read on your current content">
               <FeedbackCell cellKey="clientResearch.keyTakeaways" label="Key takeaways" value={takeaways} multi />
+            </Section>
+          )}
+
+          {/* Brand Truth — the context Claude extracted from the preproduction
+              meeting. Client reviews it here, flags anything off before scripts
+              get locked in. */}
+          {BT_FIELDS.some(f => bt[f.key]) && (
+            <Section title="Brand Truth">
+              {BT_FIELDS.map(f => (
+                <div key={f.key} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 5 }}>{f.label}</div>
+                  <FeedbackCell cellKey={`brandTruth.fields.${f.key}`} label={f.label} value={bt[f.key]} multi />
+                </div>
+              ))}
             </Section>
           )}
 
