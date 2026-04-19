@@ -104,10 +104,17 @@ function defaultRange(days = DEFAULTS.dateRangeDays) {
 // ═══════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════
-export function SocialOrganicResearch({ accounts }) {
+// `creating` + `onCreatingChange` are optional — when Preproduction.jsx
+// provides them, the parent owns the "new project" modal so the trigger
+// button can live in the top header (matching the Meta Ads layout).
+// When they're omitted the component falls back to local state so this
+// file stays standalone-usable.
+export function SocialOrganicResearch({ accounts, creating: creatingProp, onCreatingChange }) {
   const [projects, setProjects] = useState({});
   const [activeProjectId, setActiveProjectId] = useState(null);
-  const [creating, setCreating] = useState(false);
+  const [creatingLocal, setCreatingLocal] = useState(false);
+  const creating = creatingProp !== undefined ? creatingProp : creatingLocal;
+  const setCreating = onCreatingChange || setCreatingLocal;
 
   // fbListenSafe: waits for auth + suppresses transient nulls after the
   // first real load. Fixes the "competitor research blank even though it's
@@ -192,17 +199,8 @@ export function SocialOrganicResearch({ accounts }) {
         />
       )}
 
-      {!creating && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <div>
-            <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>Competitor Research</div>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-              Research overperforming social content in a client's niche, review the winners, then build the pre-production brief.
-            </div>
-          </div>
-          <button onClick={() => setCreating(true)} style={btnPrimary}>+ New Research Project</button>
-        </div>
-      )}
+      {/* Header + "+ New" trigger hoisted to the parent Preproduction
+          header so it sits next to the sub-tabs (matching Meta Ads). */}
 
       {projectList.length === 0 && !creating && (
         <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>

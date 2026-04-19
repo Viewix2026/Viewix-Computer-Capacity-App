@@ -126,6 +126,9 @@ export function Preproduction({ role, isFounder } = {}) {
   const [sectionEditMode, setSectionEditMode] = useState(false);
   const [sectionRewriting, setSectionRewriting] = useState(false);
   const [manualAddOpen, setManualAddOpen] = useState(false);
+  // Lifted so the top-header "+ New Organic Pre Production" button can
+  // toggle the SocialOrganicResearch create modal.
+  const [socialOrganicCreating, setSocialOrganicCreating] = useState(false);
   const [manualCompany, setManualCompany] = useState("");
   const [manualTier, setManualTier] = useState("standard");
   const [accounts, setAccounts] = useState({});
@@ -1041,6 +1044,9 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
           </select>
           <button onClick={() => setManualAddOpen(!manualAddOpen)} style={btnPrimary}>+ New Project</button>
         </div>}
+        {subTab === "socialOrganic" && (
+          <button onClick={() => setSocialOrganicCreating(true)} style={btnPrimary}>+ New Organic Pre Production</button>
+        )}
       </div>
 
       <div style={{ padding: "24px 28px" }}>
@@ -1080,7 +1086,13 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         )}
 
         {/* Social Media Organic — competitor research, Stage 1 of social pre-prod flow */}
-        {subTab === "socialOrganic" && <SocialOrganicResearch accounts={accounts} />}
+        {subTab === "socialOrganic" && (
+          <SocialOrganicResearch
+            accounts={accounts}
+            creating={socialOrganicCreating}
+            onCreatingChange={setSocialOrganicCreating}
+          />
+        )}
 
         {subTab === "runsheets" && <Runsheets accounts={accounts} projects={runsheetSourceProjects} />}
 
