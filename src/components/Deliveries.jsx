@@ -60,7 +60,17 @@ export function Deliveries({ deliveries, setDeliveries, accounts }) {
     setActiveDeliveryId(d.id);
     setImportMode(false);
   };
-  const updateDelivery = (updated) => setDeliveries(p => p.map(d => d.id === updated.id ? updated : d));
+  // Write straight to Firebase in addition to the local state update.
+  // Without this, producer changes (revision1/revision2, viewixStatus,
+  // notes, etc.) rode only on the App.jsx debounced bulk-writer — and the
+  // 400ms debounce + 500ms skipRead-settle window opened a race where the
+  // root listener would rehydrate state with a pre-change snapshot before
+  // the bulk write committed, silently reverting the producer's edit.
+  // Direct fbSet guarantees the change lands before any listener fires.
+  const updateDelivery = (updated) => {
+    setDeliveries(p => p.map(d => d.id === updated.id ? updated : d));
+    if (updated && updated.id) fbSet(`/deliveries/${updated.id}`, updated);
+  };
   const deleteDelivery = (id) => {
     // Delete immediately in Firebase — the App-level debounced writer only
     // iterates the local array and writes survivors back; it never knew to

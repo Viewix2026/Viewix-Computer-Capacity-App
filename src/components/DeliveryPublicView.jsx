@@ -19,27 +19,34 @@ export function DeliveryPublicView(){
   const pendingChanges=useRef([]);
   const batchTimer=useRef(null);
 
+  const[notFoundReason,setNotFoundReason]=useState(null);
   useEffect(()=>{
     if(!deliveryId&&!shortId)return;
     document.title="Viewix Dashboard";
     initFB();
-    // Capture the unsubscribe so unmount / dep-change tears down the
-    // listener. Previously we leaked a /deliveries listener on every
-    // deliveryId or shortId change.
     let unsub=()=>{};
     onFB(async()=>{
       try{await signInAnonymouslyForPublic();}
       catch(e){console.warn("Anonymous auth failed, continuing:",e.message);}
       if(deliveryId){
         unsub=fbListen(`/deliveries/${deliveryId}`,(data)=>{
-          if(data)setDelivery(data);
+          if(data){setDelivery(data);setNotFoundReason(null);}
+          else{setNotFoundReason(`No delivery record at /deliveries/${deliveryId}. It may have been deleted or renamed.`);}
           setLoading(false);
         });
       }else if(shortId){
         unsub=fbListen("/deliveries",(allDeliveries)=>{
-          if(!allDeliveries){setLoading(false);return;}
+          if(!allDeliveries){
+            setNotFoundReason(`The /deliveries collection came back empty — Firebase security rules may be blocking anonymous reads, or there are simply no deliveries yet.`);
+            setLoading(false);
+            return;
+          }
           const match=Object.values(allDeliveries).find(d=>d&&d.shortId&&d.shortId.toLowerCase()===shortId);
-          if(match)setDelivery(match);
+          if(match){setDelivery(match);setNotFoundReason(null);}
+          else{
+            const total=Object.values(allDeliveries).filter(d=>d&&d.id).length;
+            setNotFoundReason(`Checked ${total} deliveries — none have shortId "${shortId}". The link may be stale or the record was deleted.`);
+          }
           setLoading(false);
         });
       }
@@ -89,7 +96,18 @@ export function DeliveryPublicView(){
   };
 
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif"}}><div style={{color:"#5A6B85",fontSize:14}}>Loading...</div></div>);
-  if(!delivery)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif"}}><div style={{color:"#5A6B85",fontSize:14}}>Delivery not found</div></div>);
+  if(!delivery)return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif",padding:20}}>
+      <div style={{maxWidth:480,textAlign:"center"}}>
+        <div style={{fontSize:48,marginBottom:16}}>🔗</div>
+        <div style={{color:"#E8ECF4",fontSize:18,fontWeight:700,marginBottom:10}}>This delivery link is broken</div>
+        {notFoundReason&&<div style={{color:"#5A6B85",fontSize:13,lineHeight:1.6,marginBottom:20}}>{notFoundReason}</div>}
+        <div style={{color:"#5A6B85",fontSize:12,lineHeight:1.6}}>
+          Please ask Viewix for a fresh link, or have a producer copy the new share URL from the Projects → Deliveries tab.
+        </div>
+      </div>
+    </div>
+  );
 
   const readyCount=delivery.videos.filter(v=>v.viewixStatus==="Ready for Review"||v.viewixStatus==="Completed").length;
   const totalCount=delivery.videos.length;
