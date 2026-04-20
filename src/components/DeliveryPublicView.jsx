@@ -25,17 +25,38 @@ export function DeliveryPublicView(){
     document.title="Viewix Dashboard";
     initFB();
     let unsub=()=>{};
+    // Safety net: if the listener never fires within 8s (rules denial
+    // that didn't invoke onError, or SDK init stuck), stop showing the
+    // "Loading…" spinner and surface the error. Without this, a silent
+    // auth failure leaves the page spinning forever.
+    const timeoutId=setTimeout(()=>{
+      setLoading(false);
+      setNotFoundReason(prev=>prev||"Timed out waiting for Firebase. The link may be invalid, or anonymous access is restricted on this deployment.");
+    },8000);
     onFB(async()=>{
-      try{await signInAnonymouslyForPublic();}
-      catch(e){console.warn("Anonymous auth failed, continuing:",e.message);}
+      let authWorked=false;
+      try{
+        await signInAnonymouslyForPublic();
+        authWorked=true;
+      }catch(e){
+        console.warn("Anonymous auth failed, continuing:",e.message);
+        setNotFoundReason(`Anonymous sign-in failed: ${e.message}. Enable anonymous auth in Firebase, or ask a producer to grant public read access to this delivery.`);
+      }
+      const onReadError=(e)=>{
+        clearTimeout(timeoutId);
+        setLoading(false);
+        setNotFoundReason(`Firebase read error: ${e.code||e.message||"unknown"}. Rules may be blocking anonymous reads of this delivery.${authWorked?"":" (Anonymous auth also failed — likely rules denial.)"}`);
+      };
       if(deliveryId){
         unsub=fbListen(`/deliveries/${deliveryId}`,(data)=>{
+          clearTimeout(timeoutId);
           if(data){setDelivery(data);setNotFoundReason(null);}
           else{setNotFoundReason(`No delivery record at /deliveries/${deliveryId}. It may have been deleted or renamed.`);}
           setLoading(false);
-        });
+        },onReadError);
       }else if(shortId){
         unsub=fbListen("/deliveries",(allDeliveries)=>{
+          clearTimeout(timeoutId);
           if(!allDeliveries){
             setNotFoundReason(`The /deliveries collection came back empty — Firebase security rules may be blocking anonymous reads, or there are simply no deliveries yet.`);
             setLoading(false);
@@ -48,10 +69,10 @@ export function DeliveryPublicView(){
             setNotFoundReason(`Checked ${total} deliveries — none have shortId "${shortId}". The link may be stale or the record was deleted.`);
           }
           setLoading(false);
-        });
+        },onReadError);
       }
     });
-    return ()=>unsub();
+    return ()=>{clearTimeout(timeoutId);unsub();};
   },[deliveryId,shortId]);
 
   // Resolve account logo when delivery or accounts change. Same cleanup

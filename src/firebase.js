@@ -86,7 +86,12 @@ export function fbUpdate(p, v) {
   if (db) db.ref(p).update(v).catch(e => console.error("Firebase update failed", p, e));
 }
 
-export function fbListen(p, cb) {
+// `cb` is called with the snapshot value. Optional `onError` is called
+// if Firebase rules deny the read (or any other read error). Without
+// an error handler, rules denials would silently never fire cb at all,
+// leaving callers hanging on "Loading…" forever (what we saw on
+// DeliveryPublicView when anonymous auth was blocked).
+export function fbListen(p, cb, onError) {
   if (!db) return () => {};
   const r = db.ref(p);
   // CRITICAL: pass the specific handler to .off(). Firebase's
@@ -98,7 +103,11 @@ export function fbListen(p, cb) {
   // others — which is the "Social Organic / Runsheets / Format Library
   // go blank after navigating away" bug that kept coming back.
   const handler = s => cb(s.val());
-  r.on("value", handler);
+  const errHandler = e => {
+    console.error("Firebase listen error on", p, e);
+    if (onError) onError(e);
+  };
+  r.on("value", handler, errHandler);
   return () => r.off("value", handler);
 }
 
