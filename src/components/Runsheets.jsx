@@ -41,6 +41,44 @@ const btnSecondary = {
   cursor: "pointer", fontFamily: "inherit",
 };
 
+// Draggable chip for an organic video. Two lines:
+//   1. Video name  — the sequential identifier ("Video 3")
+//   2. Format type — the format name as a smaller sub-line
+// `expanded` gives it more padding for the unassigned pool (where vertical
+// space is free); compact mode is used inside slot cells.
+function VideoChip({ v, onClick, onDragStart, draggable, expanded }) {
+  const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
+  const formatLine = v.formatName || v.contentStyle || "";
+  return (
+    <div
+      draggable={!!draggable}
+      onDragStart={onDragStart}
+      onClick={onClick}
+      title={formatLine ? `${v.videoName} — ${formatLine}` : v.videoName}
+      style={{
+        padding: expanded ? "8px 12px" : "4px 8px",
+        borderRadius: 6,
+        cursor: draggable ? "grab" : "pointer",
+        background: mc.bg || "var(--card)",
+        color: mc.fg || "var(--fg)",
+        border: `1px solid ${mc.fg ? `${mc.fg}33` : "var(--border)"}`,
+        minWidth: 0,
+        display: "flex", flexDirection: "column", gap: 2,
+        fontFamily: "inherit",
+        userSelect: "none",
+      }}>
+      <span style={{ fontSize: expanded ? 12 : 11, fontWeight: 700, lineHeight: 1.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {v.videoName || "Video"}
+      </span>
+      {formatLine && (
+        <span style={{ fontSize: expanded ? 10 : 9, fontWeight: 500, opacity: 0.75, lineHeight: 1.3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {formatLine}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function Badge({ text, colors }) {
   return (
     <span style={{
@@ -165,9 +203,11 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
     const projectType = isOrganic ? "organic" : "metaAds";
 
     const videos = scriptRows.map((v, i) => isOrganic ? {
-      // Social Organic shape
+      // Social Organic shape — keep videoName as "Video N" + formatName
+      // as the format type, so the Runsheet chip can display both.
       id: v.id || `v-${Date.now()}-${i}`,
-      videoName: v.formatName || v.videoName || `Video ${i + 1}`,
+      videoName: `Video ${i + 1}`,
+      formatName: v.formatName || "",
       contentStyle: v.contentStyle || "",
       hook: v.hook || "",
       textHook: v.textHook || "",
@@ -189,15 +229,24 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
       audienceType: v.audienceType || "", props: "", people: "", contentStyle: "",
     });
 
+    // Default slot template: 5 rows covering a 09:00–16:00 day with a
+    // 12:00–13:00 lunch break in the middle. Producers overwrite timings
+    // on the day; this just gets past the "what do I put here" blank
+    // state new users see on first open.
+    const makeDefaultSlots = (sdTs) => [
+      { id: `ts-${sdTs}-0`, startTime: "09:00", endTime: "10:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${sdTs}-1`, startTime: "10:30", endTime: "12:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${sdTs}-2`, startTime: "12:00", endTime: "13:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "Lunch", isBreak: true },
+      { id: `ts-${sdTs}-3`, startTime: "13:00", endTime: "14:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${sdTs}-4`, startTime: "14:30", endTime: "16:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+    ];
     const shootDays = [];
     for (let i = 0; i < Math.max(1, createDays); i++) {
-      // Empty slots for both Meta Ads and Organic — producer builds the schedule via drag-and-drop
+      const sdTs = `${Date.now()}-${i}`;
       shootDays.push({
-        id: `sd-${Date.now()}-${i}`, label: `Shoot ${i + 1}`, date: "",
-        location: "", startTime: "09:00", endTime: "17:00",
-        timeSlots: [
-          { id: `ts-${Date.now()}-${i}-0`, startTime: "09:00", endTime: "09:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
-        ],
+        id: `sd-${sdTs}`, label: `Shoot ${i + 1}`, date: "",
+        location: "", startTime: "09:00", endTime: "16:00",
+        timeSlots: makeDefaultSlots(sdTs),
       });
     }
     const rs = {
@@ -368,14 +417,23 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
   };
 
   // ─── Shoot day management ───
+  // New days drop in with the same 5-slot 09-16 template as day-one so
+  // producers don't get an empty table each time they extend the shoot.
   const addShootDay = () => {
     if (!activeRS) return;
     const days = [...(activeRS.shootDays || [])];
     const idx = days.length;
+    const sdTs = `${Date.now()}-${idx}`;
     days.push({
-      id: `sd-${Date.now()}`, label: `Shoot ${idx + 1}`, date: "",
-      location: "", startTime: "09:00", endTime: "17:00",
-      timeSlots: [{ id: `ts-${Date.now()}`, startTime: "09:00", endTime: "09:30", videoIds: [], location: "", props: "", people: "", notes: "" }],
+      id: `sd-${sdTs}`, label: `Shoot ${idx + 1}`, date: "",
+      location: "", startTime: "09:00", endTime: "16:00",
+      timeSlots: [
+        { id: `ts-${sdTs}-0`, startTime: "09:00", endTime: "10:30", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+        { id: `ts-${sdTs}-1`, startTime: "10:30", endTime: "12:00", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+        { id: `ts-${sdTs}-2`, startTime: "12:00", endTime: "13:00", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "Lunch", isBreak: true },
+        { id: `ts-${sdTs}-3`, startTime: "13:00", endTime: "14:30", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+        { id: `ts-${sdTs}-4`, startTime: "14:30", endTime: "16:00", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      ],
     });
     patchRS(activeRS.id, { shootDays: days });
     setActiveDayIdx(idx);
@@ -593,17 +651,19 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
                             onDragOver={e => { e.preventDefault(); setDragOverSlot({ dayIdx: activeDayIdx, slotIdx: si }); }}
                             onDragLeave={() => setDragOverSlot(null)}
                             onDrop={e => { e.preventDefault(); handleDropOnSlot(activeDayIdx, si); }}>
-                            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", minHeight: 28 }}>
-                              {slotVideos.map(v => {
-                                const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
-                                return (
-                                  <span key={v.id} draggable onDragStart={() => handleDragStart({ videoId: v.id }, { dayIdx: activeDayIdx, slotIdx: si })}
-                                    onClick={() => setEditingVideo(v.id)}
-                                    style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}22` }}>
-                                    {v.videoName}
-                                  </span>
-                                );
-                              })}
+                            {/* Organic — each assigned video renders as a two-line box
+                                (video name above, format type below) so the producer
+                                can glance at the shoot schedule and know what's being
+                                filmed without clicking through. Mirrors the info density
+                                of the Meta Ads scene chips. */}
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", minHeight: 28 }}>
+                              {slotVideos.map(v => (
+                                <VideoChip key={v.id} v={v}
+                                  draggable
+                                  onDragStart={() => handleDragStart({ videoId: v.id }, { dayIdx: activeDayIdx, slotIdx: si })}
+                                  onClick={() => setEditingVideo(v.id)}
+                                />
+                              ))}
                               {!slotVideos.length && !isBreak && <span style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>Drop videos here</span>}
                             </div>
                           </td>
@@ -647,18 +707,15 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
             <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 10 }}>
               Unassigned Videos ({unassignedVideos.length})
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", minHeight: 40 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 8, minHeight: 40 }}>
               {unassignedVideos.length === 0 && <span style={{ color: "var(--muted)", fontSize: 11, fontStyle: "italic" }}>All videos assigned</span>}
-              {unassignedVideos.map(v => {
-                const mc = MOTIVATOR_COLORS[v.motivatorType] || {};
-                return (
-                  <span key={v.id} draggable onDragStart={() => handleDragStart({ videoId: v.id }, null)}
-                    onClick={() => setEditingVideo(v.id)}
-                    style={{ padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "grab", background: mc.bg || "var(--bg)", color: mc.fg || "var(--fg)", border: `1px solid ${mc.fg || "var(--border)"}33` }}>
-                    {v.videoName}
-                  </span>
-                );
-              })}
+              {unassignedVideos.map(v => (
+                <VideoChip key={v.id} v={v} expanded
+                  draggable
+                  onDragStart={() => handleDragStart({ videoId: v.id }, null)}
+                  onClick={() => setEditingVideo(v.id)}
+                />
+              ))}
             </div>
           </div>
         )}
@@ -716,8 +773,13 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
               onClick={() => setEditingVideo(null)}>
               <div style={{ background: "var(--card)", borderRadius: 12, padding: 24, maxWidth: 500, width: "90%", border: "1px solid var(--border)" }}
                 onClick={e => e.stopPropagation()}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{v.videoName}</span>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{v.videoName}</div>
+                    {v.formatName && (
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{v.formatName}</div>
+                    )}
+                  </div>
                   <button onClick={() => setEditingVideo(null)} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 18, cursor: "pointer" }}>×</button>
                 </div>
                 {/* Organic runsheets carry the full script shape — expose every

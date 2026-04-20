@@ -2052,9 +2052,15 @@ async function handlePushToRunsheet(req, res) {
   // results/etc.) — we carry across formatName, the spoken hook, text/visual
   // hooks, script notes, and props. The other fields stay as empty strings
   // so the Runsheet UI doesn't crash on them.
+  // Runsheet videos carry both a sequential video name ("Video 1") AND the
+  // format type as separate fields, so the Runsheet UI can render both
+  // in the unassigned pool + assigned-slot chips. Previously videoName
+  // collapsed into formatName which lost the "which of the N videos is
+  // this" identity producers need on set.
   const videos = scriptTable.map((row, i) => ({
     id: `v-${Date.now()}-${i}`,
-    videoName: row.formatName || `Video ${i + 1}`,
+    videoName: `Video ${i + 1}`,
+    formatName: row.formatName || "",
     contentStyle: row.contentStyle || "",
     hook: row.hook || "",
     textHook: row.textHook || "",
@@ -2068,15 +2074,23 @@ async function handlePushToRunsheet(req, res) {
     motivatorType: "", audienceType: "",
   }));
 
+  // Default template: 5 time slots with sensible AU-production timings,
+  // middle slot is a lunch break. Producers tweak / extend on the day;
+  // this just gets them past the "what do I put here" blank state.
+  const tsBase = Date.now();
   const shootDays = [{
-    id: `sd-${Date.now()}-0`,
+    id: `sd-${tsBase}-0`,
     label: "Shoot 1",
     date: "",
     location: "",
     startTime: "09:00",
-    endTime: "17:00",
+    endTime: "16:00",
     timeSlots: [
-      { id: `ts-${Date.now()}-0-0`, startTime: "09:00", endTime: "09:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${tsBase}-0`, startTime: "09:00", endTime: "10:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${tsBase}-1`, startTime: "10:30", endTime: "12:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${tsBase}-2`, startTime: "12:00", endTime: "13:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "Lunch", isBreak: true },
+      { id: `ts-${tsBase}-3`, startTime: "13:00", endTime: "14:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${tsBase}-4`, startTime: "14:30", endTime: "16:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
     ],
   }];
 
