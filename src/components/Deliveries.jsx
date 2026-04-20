@@ -60,16 +60,20 @@ export function Deliveries({ deliveries, setDeliveries, accounts }) {
     setActiveDeliveryId(d.id);
     setImportMode(false);
   };
-  // Write straight to Firebase in addition to the local state update.
-  // Without this, producer changes (revision1/revision2, viewixStatus,
-  // notes, etc.) rode only on the App.jsx debounced bulk-writer — and the
-  // 400ms debounce + 500ms skipRead-settle window opened a race where the
-  // root listener would rehydrate state with a pre-change snapshot before
-  // the bulk write committed, silently reverting the producer's edit.
-  // Direct fbSet guarantees the change lands before any listener fires.
+  // Producer-side edits go through two paths:
+  //   1. Local state update (so the UI reflects the change instantly).
+  //   2. Per-field direct fbSet for video-column edits (link / name /
+  //      viewixStatus / revision1 / revision2 / notes) via updateVideo
+  //      below — writing only the leaf path keeps each keystroke cheap
+  //      AND avoids the mid-typing wipe bug we saw when the whole
+  //      delivery object got rewritten on every keystroke (Firebase
+  //      echoed stale snapshots back through the live listener, which
+  //      clobbered keystrokes in flight).
+  //   3. Everything else (clientName, logoUrl, notes header, etc.)
+  //      rides on the App.jsx debounced bulk-writer, which sets
+  //      skipRead so the listener won't race it.
   const updateDelivery = (updated) => {
     setDeliveries(p => p.map(d => d.id === updated.id ? updated : d));
-    if (updated && updated.id) fbSet(`/deliveries/${updated.id}`, updated);
   };
   const deleteDelivery = (id) => {
     // Delete immediately in Firebase — the App-level debounced writer only
@@ -93,7 +97,19 @@ export function Deliveries({ deliveries, setDeliveries, accounts }) {
     const d = activeDelivery;
     const setD = (patch) => updateDelivery({ ...d, ...patch });
     const addVideo = () => setD({ videos: [...d.videos, newVideo()] });
-    const updateVideo = (vid, patch) => setD({ videos: d.videos.map(v => v.id === vid ? { ...v, ...patch } : v) });
+    // Per-field write for every video-column edit. We write /deliveries/
+    // {id}/videos/{idx}/{field} directly instead of rewriting the whole
+    // delivery on every keystroke — means Firebase echoes back only the
+    // leaf change, so it can't clobber neighbouring in-flight keystrokes
+    // via the root listener.
+    const updateVideo = (vid, patch) => {
+      const videoIndex = d.videos.findIndex(v => v.id === vid);
+      if (videoIndex < 0) return;
+      setD({ videos: d.videos.map(v => v.id === vid ? { ...v, ...patch } : v) });
+      Object.entries(patch).forEach(([k, val]) => {
+        fbSet(`/deliveries/${d.id}/videos/${videoIndex}/${k}`, val == null ? "" : val);
+      });
+    };
     const removeVideo = (vid) => setD({ videos: d.videos.filter(v => v.id !== vid) });
     const inputSt = { padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none", width: "100%" };
 
