@@ -166,6 +166,31 @@ export function deliveryShareUrl(d) {
   return `${origin}/?d=${d.id}`;
 }
 
+export function saleShareUrl(s) {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  if (!s) return origin;
+  if (s.shortId) {
+    const slug = slugify(s.clientName || "");
+    return `${origin}/s/${s.shortId}${slug ? "/" + slug : ""}`;
+  }
+  return `${origin}/?s=${s.id}`;
+}
+
+export function newSale() {
+  return {
+    id: `sale-${Date.now()}`,
+    shortId: makeShortId(),
+    videoType: "metaAds",
+    packageKey: "starter",
+    clientName: "",
+    logoUrl: "",
+    scopeNotes: "",
+    depositAmount: 0,
+    paid: false,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 export function preproductionShareUrl(p) {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   if (!p) return origin;

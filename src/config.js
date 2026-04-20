@@ -144,6 +144,31 @@ export const DEFAULT_RATE_CARDS = [
   { id: "rc-d2c", name: "D2C", rates: { "Scheduling": 100, "Crewing": 100, "Site Recce": 100, "Scriptwriting": 100, "Cinematographer": 80, "Producer": 80, "PA/Runner": 80, "AC": 80, "Second Shooter": 80, "Shooter/Editor": 80, "Editor (Internal)": 50, "VFX/Graphics": 187.5, "External Editor": 75, "Scripting": 100, "Storyboarding": 150, "Animator": 150, "Music": 80, "Travel (p/km)": 0.72, "VO Artist": 350, "Overheads": 38, "Data Storage (1TB)": 63.5 } },
 ];
 
+// ─── Sale Packages ───
+// Two video types, each with 4 package tiers. Deposit amounts are NOT defined
+// here — they live in Firebase at /salePricing and are edited in the Founders
+// tab's "Pricing" subtab. Seeded at $0 on first load so founders must set real
+// numbers before closers can send live payment links.
+export const SALE_VIDEO_TYPES = [
+  { key: "metaAds", label: "Meta Ads", packages: [
+    { key: "starter", label: "Starter" },
+    { key: "standard", label: "Standard" },
+    { key: "premium", label: "Premium" },
+    { key: "deluxe", label: "Deluxe" },
+  ]},
+  { key: "socialRetainer", label: "Social Media Retainer", packages: [
+    { key: "starter", label: "Starter" },
+    { key: "brandBuilder", label: "Brand Builder" },
+    { key: "marketLeader", label: "Market Leader" },
+    { key: "marketDominator", label: "Market Dominator" },
+  ]},
+];
+
+export const DEFAULT_SALE_PRICING = {
+  metaAds: { starter: 0, standard: 0, premium: 0, deluxe: 0 },
+  socialRetainer: { starter: 0, brandBuilder: 0, marketLeader: 0, marketDominator: 0 },
+};
+
 // ─── Shared Styles ───
 export const TH = { padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "2px solid var(--border)", background: "var(--card)" };
 export const TD = { padding: "6px 10px", borderBottom: "1px solid var(--border-light)" };

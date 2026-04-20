@@ -232,6 +232,17 @@ export function Deliveries({ deliveries, setDeliveries, accounts }) {
                         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
                           <span style={{ fontWeight: 600, color: "var(--muted)" }}>{d.clientName}</span>
                           <span style={{ opacity: 0.6 }}> · {d.videos.length} video{d.videos.length !== 1 ? "s" : ""}</span>
+                          {/* Surface the shortId so producers can tell multiple
+                              deliveries for the same client apart (e.g. repeat
+                              engagements that each spawn a new /deliveries/{id}
+                              via the Attio webhook). The shortId here should
+                              match the /d/{HASH}/... segment in whatever share
+                              URL you gave the client. */}
+                          {d.shortId && (
+                            <span style={{ opacity: 0.6, marginLeft: 6, fontFamily: "'JetBrains Mono',monospace" }}>
+                              · /d/{d.shortId}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
