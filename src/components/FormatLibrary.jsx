@@ -37,6 +37,7 @@ export function FormatLibrary({ role, isFounder }) {
   const [tagFilter, setTagFilter] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   // Load-tracking so the UI can distinguish "genuinely empty library" from
   // "listener hasn't fired yet / is stuck". Bumped-on-demand via listenTick
@@ -114,8 +115,17 @@ export function FormatLibrary({ role, isFounder }) {
           {isFounder && (
             <button onClick={() => setPromptEditorOpen(true)} style={btnSecondary}>Edit Script prompts</button>
           )}
+          <button onClick={() => setAddOpen(true)} style={btnPrimary}>+ Add Format</button>
         </div>
       </div>
+
+      {addOpen && (
+        <AddFormatModal
+          existing={library}
+          onClose={() => setAddOpen(false)}
+          onCreated={(id) => { setAddOpen(false); setActiveId(id); }}
+        />
+      )}
 
       {/* Filter bar */}
       <FormatFilterBar
@@ -282,6 +292,7 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
   const [structure, setStructure] = useState(format.structureInstructions || "");
   const [tags, setTags] = useState(Array.isArray(format.tags) ? format.tags : []);
   const [tagInput, setTagInput] = useState("");
+  const [newExampleUrl, setNewExampleUrl] = useState("");
 
   useEffect(() => {
     setName(format.name || "");
@@ -373,27 +384,56 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>Examples ({examples.length})</div>
           {examples.length === 0 ? (
             <div style={{ padding: 16, background: "var(--bg)", border: "1px dashed var(--border)", borderRadius: 8, fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
-              No examples yet. Shortlist a video in a project and pick "Add as example" to append one here.
+              No examples yet. Shortlist a video in a project and pick "Add as example", or paste a URL via "+ Add example" below.
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            // Full 9:16 embeds instead of 56px thumbnails — matches the
+            // previews on the Select step + Video Review so reviewing a
+            // format in depth doesn't require clicking through to IG.
+            // Stacked in a single column down the right side.
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {examples.map((ex, i) => (
-                <a key={i} href={ex.url} target="_blank" rel="noopener noreferrer"
-                  style={{ display: "flex", gap: 10, padding: 8, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, textDecoration: "none" }}>
-                  <div style={{ width: 56, height: 56, borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
-                    <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="1 / 1" compact />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>{ex.sourceAccount}</div>
-                    <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-                      {ex.viewCount != null && `${formatBigLocal(ex.viewCount)} views`}
-                      {ex.sourceClient && ` · ${ex.sourceClient}`}
+                <div key={i} style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                  <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="9 / 16" />
+                  <div style={{ padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--border)", gap: 8 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      {ex.sourceAccount && (
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {ex.sourceAccount}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                        {ex.viewCount != null && `${formatBigLocal(ex.viewCount)} views`}
+                        {ex.sourceClient && (ex.viewCount != null ? ` · ${ex.sourceClient}` : ex.sourceClient)}
+                      </div>
                     </div>
+                    <a href={ex.url} target="_blank" rel="noopener noreferrer"
+                      style={{ fontSize: 10, color: "var(--accent)", textDecoration: "none", fontWeight: 700, flexShrink: 0 }}>
+                      Open ↗
+                    </a>
                   </div>
-                </a>
+                </div>
               ))}
             </div>
           )}
+
+          {/* Manual "+ Add example" — paste a URL to append a new example to
+              this format's examples array. Saves immediately so the new
+              embed appears below without needing a full-form Save. */}
+          <div style={{ marginTop: 12, padding: 10, background: "var(--bg)", border: "1px dashed var(--border)", borderRadius: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+              Add example
+            </div>
+            <input type="text" value={newExampleUrl} onChange={e => setNewExampleUrl(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && newExampleUrl.trim()) {
+                const url = newExampleUrl.trim();
+                const next = [...(Array.isArray(format.examples) ? format.examples : []), { url, addedAt: new Date().toISOString(), sourceAccount: "", sourceClient: "" }];
+                fbSet(`/formatLibrary/${format.id}/examples`, next);
+                setNewExampleUrl("");
+              } }}
+              placeholder="Paste an IG / TikTok / YouTube URL and press Enter"
+              style={{ ...inputSt, fontSize: 11 }} />
+          </div>
         </div>
       </div>
     </div>
@@ -417,6 +457,132 @@ function formatBigLocal(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
   return String(n);
+}
+
+// Manual "+ Add Format" modal. Lets anyone create a library entry
+// without going through the Social Organic shortlist flow — handy for
+// seeding a new format the producer spotted in the wild, or editing
+// a format spec directly. Each example URL becomes a new entry in the
+// examples array; a shortCode is auto-derived for Instagram URLs.
+function AddFormatModal({ existing, onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [analysis, setAnalysis] = useState("");
+  const [filming, setFilming] = useState("");
+  const [structure, setStructure] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
+  const [exampleUrls, setExampleUrls] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const save = () => {
+    setError(null);
+    if (!name.trim()) { setError("Format name is required."); return; }
+    // Collision check — warn if the producer's about to duplicate a name.
+    const dupe = Object.values(existing || {}).find(f =>
+      f && (f.name || "").trim().toLowerCase() === name.trim().toLowerCase()
+    );
+    if (dupe) { setError(`A format called "${dupe.name}" already exists. Pick a different name.`); return; }
+
+    const now = new Date().toISOString();
+    const id = `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const tags = tagsInput.split(/[,\n]/).map(t => t.trim().replace(/^#/, "")).filter(Boolean);
+    const examples = exampleUrls.split(/\n/).map(l => l.trim()).filter(Boolean).map(url => ({
+      url,
+      addedAt: now,
+      sourceAccount: "",
+      sourceClient: "",
+    }));
+
+    setSaving(true);
+    try {
+      fbSet(`/formatLibrary/${id}`, {
+        id,
+        name: name.trim(),
+        videoAnalysis: analysis.trim(),
+        filmingInstructions: filming.trim(),
+        structureInstructions: structure.trim(),
+        tags,
+        examples,
+        sourceProjectId: null,
+        sourceClient: "Manual entry",
+        createdAt: now,
+        createdBy: "producer",
+        usageCount: 0,
+        archived: false,
+        updatedAt: now,
+      });
+      onCreated?.(id);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "var(--card)", borderRadius: 12, padding: 22, maxWidth: 640, width: "100%",
+        maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>New format</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              Add a format manually. You can edit every field after saving from the detail view.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer" }}>×</button>
+        </div>
+
+        <FieldRow label="Format name" hint="e.g. Subject Matter Expert Ranks X">
+          <input value={name} onChange={e => setName(e.target.value)} autoFocus
+            placeholder="Required"
+            style={inputSt} />
+        </FieldRow>
+
+        <FieldRow label="Tags" hint="Comma or newline-separated. No # prefix needed.">
+          <input value={tagsInput} onChange={e => setTagsInput(e.target.value)}
+            placeholder="subject-matter-expert, ranking, talking-head"
+            style={inputSt} />
+        </FieldRow>
+
+        <FieldRow label="Example URLs" hint="One per line. Instagram / TikTok / YouTube.">
+          <textarea value={exampleUrls} onChange={e => setExampleUrls(e.target.value)}
+            rows={3} placeholder={`https://www.instagram.com/reel/...\nhttps://www.tiktok.com/...`}
+            style={{ ...inputSt, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }} />
+        </FieldRow>
+
+        <FieldRow label="Video analysis" hint="The 'why it works' breakdown.">
+          <textarea value={analysis} onChange={e => setAnalysis(e.target.value)} rows={4}
+            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+        </FieldRow>
+
+        <FieldRow label="Filming instructions" hint="How the crew should shoot it.">
+          <textarea value={filming} onChange={e => setFilming(e.target.value)} rows={3}
+            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+        </FieldRow>
+
+        <FieldRow label="Structure" hint="Hook → beats → close.">
+          <textarea value={structure} onChange={e => setStructure(e.target.value)} rows={3}
+            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+        </FieldRow>
+
+        {error && (
+          <div style={{ marginBottom: 12, padding: "8px 12px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, fontSize: 11, color: "#EF4444" }}>
+            {error}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={btnSecondary}>Cancel</button>
+          <button onClick={save} disabled={saving || !name.trim()}
+            style={{ ...btnPrimary, opacity: (saving || !name.trim()) ? 0.5 : 1 }}>
+            {saving ? "Saving…" : "Create format"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 
