@@ -1,9 +1,27 @@
-import {
-  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
-  Header, AlignmentType, LevelFormat, BorderStyle, WidthType, ShadingType,
-  HeadingLevel, PageBreak,
-} from "docx";
-import { saveAs } from "file-saver";
+// docx + file-saver are loaded lazily — they only matter when a
+// producer hits "Export DOCX" and they're huge (docx alone is ~300 KB
+// minified). Module-level `let`s get populated by ensureDocxLoaded()
+// the first time the export runs, so the rest of the file's code
+// keeps using the same symbol names.
+let Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun;
+let Header, AlignmentType, LevelFormat, BorderStyle, WidthType, ShadingType;
+let HeadingLevel, PageBreak, saveAs;
+
+async function ensureDocxLoaded() {
+  if (Document) return;
+  const [docx, fs] = await Promise.all([
+    import("docx"),
+    import("file-saver"),
+  ]);
+  ({ Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
+     Header, AlignmentType, LevelFormat, BorderStyle, WidthType, ShadingType,
+     HeadingLevel, PageBreak } = docx);
+  saveAs = fs.saveAs || fs.default?.saveAs || fs.default;
+  border = { style: BorderStyle.SINGLE, size: 1, color: BORDER_GREY };
+  borders = { top: border, bottom: border, left: border, right: border };
+  noBorder = { style: BorderStyle.NONE, size: 0, color: WHITE };
+  noBorders = { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder };
+}
 
 // ─── Brand colours ───
 const ORANGE = "F27A1A";
@@ -14,10 +32,9 @@ const LIGHT_GREY = "F0F2F5";
 const BORDER_GREY = "D1D5DB";
 const WHITE = "FFFFFF";
 
-const border = { style: BorderStyle.SINGLE, size: 1, color: BORDER_GREY };
-const borders = { top: border, bottom: border, left: border, right: border };
-const noBorder = { style: BorderStyle.NONE, size: 0, color: WHITE };
-const noBorders = { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder };
+// border / borders / noBorder / noBorders depend on BorderStyle from
+// docx (lazy-loaded), so they're populated by ensureDocxLoaded() too.
+let border, borders, noBorder, noBorders;
 const cellMargins = { top: 60, bottom: 60, left: 100, right: 100 };
 
 // Content width for A4 portrait with 1" margins = 9026 DXA
@@ -63,6 +80,9 @@ async function fetchImageBuffer(url) {
 
 // ─── Main export function ───
 export async function generateRunsheetDocx(runsheet, producer, director, clientLogoUrl) {
+  // Lazy-load the heavy docx + file-saver libs on first use. Initial
+  // dashboard load doesn't pay the ~300 KB cost.
+  await ensureDocxLoaded();
   // Load logos
   let viewixLogoData = null;
   try {

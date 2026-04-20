@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
 import { initFB, onFB, fbSet, fbListen, onAuthReady, signOutUser } from "./firebase";
 import { fetchMondayUsers, fetchActiveProjectCount, fetchInProgressParents } from "./monday";
 import {
@@ -17,21 +17,27 @@ import {
 import { Logo } from "./components/Logo";
 import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./components/UIComponents";
 import { Grid } from "./components/Grid";
+// Eager imports — needed on first render or tiny enough that lazy-load
+// adds more cost (in extra HTTP round-trips) than it saves.
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
-import { Sale } from "./components/Sale";
-import { SalePublicView } from "./components/SalePublicView";
-import { EditorDashboard } from "./components/EditorDashboard";
-import { AccountsDashboard } from "./components/AccountsDashboard";
-import { Founders } from "./components/Founders";
 import { Home } from "./components/Home";
-import { Capacity } from "./components/Capacity";
-import { Projects } from "./components/Projects";
-import { Training } from "./components/Training";
-import { DeliveryPublicView } from "./components/DeliveryPublicView";
-import { Preproduction } from "./components/Preproduction";
-import { PreproductionPublicView } from "./components/PreproductionPublicView";
-import { RoasCalculator, RoasCalculatorPublicView } from "./components/RoasCalculator";
 import { Login } from "./components/Login";
+
+// Lazy imports — heavy tab components only mount when their tool is
+// active. Cuts the initial JS payload roughly in half.
+const Sale                     = lazy(() => import("./components/Sale").then(m => ({ default: m.Sale })));
+const SalePublicView           = lazy(() => import("./components/SalePublicView").then(m => ({ default: m.SalePublicView })));
+const EditorDashboard          = lazy(() => import("./components/EditorDashboard").then(m => ({ default: m.EditorDashboard })));
+const AccountsDashboard        = lazy(() => import("./components/AccountsDashboard").then(m => ({ default: m.AccountsDashboard })));
+const Founders                 = lazy(() => import("./components/Founders").then(m => ({ default: m.Founders })));
+const Capacity                 = lazy(() => import("./components/Capacity").then(m => ({ default: m.Capacity })));
+const Projects                 = lazy(() => import("./components/Projects").then(m => ({ default: m.Projects })));
+const Training                 = lazy(() => import("./components/Training").then(m => ({ default: m.Training })));
+const DeliveryPublicView       = lazy(() => import("./components/DeliveryPublicView").then(m => ({ default: m.DeliveryPublicView })));
+const Preproduction            = lazy(() => import("./components/Preproduction").then(m => ({ default: m.Preproduction })));
+const PreproductionPublicView  = lazy(() => import("./components/PreproductionPublicView").then(m => ({ default: m.PreproductionPublicView })));
+const RoasCalculator           = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculator })));
+const RoasCalculatorPublicView = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculatorPublicView })));
 
 export default function App(){
   const[role,setRole]=useState(null); // "founder" | "closer"
@@ -260,21 +266,34 @@ export default function App(){
   const pathname=window.location.pathname;
   const prettyDelivery=pathname.match(/^\/d\/([a-z0-9]{4,12})(?:\/|$)/i);
   const deliveryParam=new URLSearchParams(window.location.search).get("d");
-  if(prettyDelivery||deliveryParam)return(<><style>{CSS}</style><DeliveryPublicView/></>);
+  // Suspense fallback shared across the lazy-loaded public views + main
+  // content area. Shows the Viewix logo over a "Loading…" caption while
+  // the next chunk fetches — typically <300ms on a warm cache.
+  const lazyFallback = (
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}>
+      <style>{CSS}</style>
+      <div style={{textAlign:"center"}}>
+        <Logo h={36}/>
+        <div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading…</div>
+      </div>
+    </div>
+  );
+
+  if(prettyDelivery||deliveryParam)return(<Suspense fallback={lazyFallback}><style>{CSS}</style><DeliveryPublicView/></Suspense>);
 
   // Check for public preproduction link — supports both /p/HASH/slug and ?p=ID
   const prettyPreprod=pathname.match(/^\/p\/([a-z0-9]{4,12})(?:\/|$)/i);
   const preprodParam=new URLSearchParams(window.location.search).get("p");
-  if(prettyPreprod||preprodParam)return(<><style>{CSS}</style><PreproductionPublicView/></>);
+  if(prettyPreprod||preprodParam)return(<Suspense fallback={lazyFallback}><style>{CSS}</style><PreproductionPublicView/></Suspense>);
 
   // Check for public sale payment link — supports both /s/HASH/slug and ?s=ID
   const prettySale=pathname.match(/^\/s\/([a-z0-9]{4,12})(?:\/|$)/i);
   const saleParam=new URLSearchParams(window.location.search).get("s");
-  if(prettySale||saleParam)return(<><style>{CSS}</style><SalePublicView/></>);
+  if(prettySale||saleParam)return(<Suspense fallback={lazyFallback}><style>{CSS}</style><SalePublicView/></Suspense>);
 
   // Check for public ROAS calculator link (no auth required, pure client-side state)
   const roasParam=new URLSearchParams(window.location.search).get("roas");
-  if(roasParam)return(<RoasCalculatorPublicView/>);
+  if(roasParam)return(<Suspense fallback={lazyFallback}><RoasCalculatorPublicView/></Suspense>);
 
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
@@ -299,8 +318,12 @@ export default function App(){
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
 
-    {/* Main content */}
+    {/* Main content. Wrapped in Suspense so lazy-loaded tab modules
+        can fetch their chunk on first activation without blocking the
+        sidebar render. The fallback re-uses the dashboard "Loading…"
+        screen so the visual transition is consistent. */}
     <div style={{flex:1,overflow:"auto"}}>
+    <Suspense fallback={<div style={{padding:40,color:"var(--muted)",fontSize:13}}>Loading…</div>}>
 
     {/* ═══ CAPACITY PLANNER ═══ */}
     {tool==="capacity"&&isFounder&&(
@@ -602,6 +625,7 @@ export default function App(){
     )}
 
 
+    </Suspense>
     </div>
   </div>);
 }

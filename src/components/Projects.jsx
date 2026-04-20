@@ -13,7 +13,7 @@
 // to Firebase via fbSet to avoid the App.jsx debounced bulk-write clobbering
 // webhook-created records that haven't hit local state yet.
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, memo } from "react";
 import { BTN } from "../config";
 import { fmtCur, fmtD } from "../utils";
 import { fbSet } from "../firebase";
@@ -56,7 +56,7 @@ function Chip({ children, color = "var(--accent)" }) {
   );
 }
 
-function ProjectCard({ project, onClick }) {
+const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   const links = project.links || {};
   const dests = Array.isArray(project.destinations) ? project.destinations : [];
   const descPreview = (project.description || "").trim();
@@ -114,7 +114,7 @@ function ProjectCard({ project, onClick }) {
       </div>
     </div>
   );
-}
+});
 
 function ProjectDetail({ project, onBack, onDelete }) {
   const [notes, setNotes] = useState(project.producerNotes || "");

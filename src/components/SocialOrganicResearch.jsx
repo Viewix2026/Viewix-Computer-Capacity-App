@@ -8,7 +8,7 @@
 // Data shape at /preproduction/socialOrganic/{projectId}. The legacy
 // `synthesis` field on old projects is preserved but unused.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import { fbSet, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
@@ -1716,7 +1716,10 @@ function FilterChip({ label, active, colour, onClick }) {
 }
 
 // Ticked → green border. Crossed → dimmed + strikethrough. Unreviewed → neutral.
-function ReviewCard({ post, status, onTick, onCross }) {
+// memo'd because the parent re-renders on every tick/cross/sort change
+// but only the affected card actually needs to update — without memo
+// every IG embed iframe re-renders, dropping frame rate to a crawl.
+const ReviewCard = memo(function ReviewCard({ post, status, onTick, onCross }) {
   const isTicked = status === "ticked";
   const isCrossed = status === "crossed";
   const border = isTicked ? "2px solid #22C55E" : isCrossed ? "1px solid var(--border)" : "1px solid var(--border)";
@@ -1768,7 +1771,7 @@ function ReviewCard({ post, status, onTick, onCross }) {
       </div>
     </div>
   );
-}
+});
 
 // ═══════════════════════════════════════════
 // SHORTLIST STEP — per-video form writes to the global Format Library

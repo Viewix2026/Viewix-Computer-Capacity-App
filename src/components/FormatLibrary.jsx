@@ -10,7 +10,7 @@
 // Lives inside the Pre-Production tab as its own sub-tab. Meant to grow
 // into Viewix's institutional knowledge of what filming styles work.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo } from "react";
 import { fbSet, fbListenSafe } from "../firebase";
 import { ReelPreview } from "./shared/ReelPreview";
 
@@ -225,7 +225,10 @@ export function FormatFilterBar({ search, setSearch, tagFilter, setTagFilter, al
   );
 }
 
-function FormatCard({ format, onClick }) {
+// memo'd — the library can have hundreds of cards and the parent
+// re-renders on every filter / search keystroke. Without memo each card
+// re-renders the IG embed iframe, which kills frame rate.
+const FormatCard = memo(function FormatCard({ format, onClick }) {
   const examples = Array.isArray(format.examples) ? format.examples : [];
   const firstExample = examples.find(e => e.url || e.thumbnail) || null;
   const topTag = (format.tags || [])[0] || null;
@@ -283,7 +286,7 @@ function FormatCard({ format, onClick }) {
       </div>
     </button>
   );
-}
+});
 
 function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
   const [name, setName] = useState(format.name || "");

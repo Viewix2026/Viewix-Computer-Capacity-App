@@ -19,8 +19,7 @@
     "firebase-admin": "^13.8.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "stripe": "^22.0.2",
-    "xlsx": "^0.18.5"
+    "stripe": "^22.0.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
