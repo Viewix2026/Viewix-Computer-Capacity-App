@@ -223,6 +223,7 @@ export default function App(){
 
   const isFounder=role==="founder"||role==="founders";
   const isFounders=role==="founders";
+  const isLead=role==="lead";
 
   // Auto-update active projects from Monday.com
   useEffect(()=>{
@@ -272,7 +273,7 @@ export default function App(){
       {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
-      {isFounder&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
+      {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
@@ -446,7 +447,7 @@ export default function App(){
     </>)}
 
     {/* ═══ PREPRODUCTION ═══ */}
-    {tool==="preproduction"&&isFounder&&(<Preproduction role={role} isFounder={isFounder}/>)}
+    {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder}/>)}
 
     {/* ═══ RESOURCES ═══ */}
     {tool==="resources"&&(isFounder||role==="closer")&&(<>
