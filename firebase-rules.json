@@ -59,6 +59,15 @@
       ".read": "auth != null"
     },
 
+    "sales": {
+      // Public payment page at /s/{shortId} scans this collection by shortId
+      // (same pattern as /deliveries). The page itself never writes — writes
+      // happen server-side via the admin SDK (create-payment-intent creates
+      // no record; stripe-webhook marks `paid` after signature verification).
+      ".read": "auth != null",
+      ".indexOn": ["shortId"]
+    },
+
     "foundersData": {
       ".read": "auth != null && auth.token.role == 'founders'",
       ".write": "auth != null && auth.token.role == 'founders'"

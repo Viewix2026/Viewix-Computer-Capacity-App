@@ -17,6 +17,9 @@
     },
     "api/apify-webhook.js": {
       "maxDuration": 300
+    },
+    "api/stripe-webhook.js": {
+      "maxDuration": 30
     }
   },
   "crons": [
@@ -27,6 +30,7 @@
   ],
   "rewrites": [
     { "source": "/d/:rest*", "destination": "/index.html" },
-    { "source": "/p/:rest*", "destination": "/index.html" }
+    { "source": "/p/:rest*", "destination": "/index.html" },
+    { "source": "/s/:rest*", "destination": "/index.html" }
   ]
 }

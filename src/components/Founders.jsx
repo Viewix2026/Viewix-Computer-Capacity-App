@@ -3,7 +3,7 @@
 // own components). Only the dual-founder role (password "Sanpel") sees this tab.
 
 import { useState } from "react";
-import { BTN } from "../config";
+import { BTN, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING } from "../config";
 import { pct, fmtCur } from "../utils";
 import { fbSet } from "../firebase";
 import { FoundersData } from "./FoundersData";
@@ -14,6 +14,7 @@ export function Founders({
   foundersMetrics, setFoundersMetrics,
   foundersTab, setFoundersTab,
   attioDeals, setAttioDeals,
+  salePricing, setSalePricing,
 }) {
   const [attioLoading, setAttioLoading] = useState(false);
   const [revenueTableExpanded, setRevenueTableExpanded] = useState(false);
@@ -126,7 +127,7 @@ export function Founders({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Founders Dashboard</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "pricing", label: "Pricing" }].map(t => (
             <button key={t.key} onClick={() => setFoundersTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: foundersTab === t.key ? "var(--card)" : "transparent", color: foundersTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
@@ -332,7 +333,61 @@ export function Founders({
 
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
+        {foundersTab === "pricing" && <PricingEditor salePricing={salePricing} setSalePricing={setSalePricing} />}
       </div>
     </>
+  );
+}
+
+// Deposit-amount defaults for the Sale → Payment Intake form. Seeded at zero
+// and required-to-be-set before a closer can create a live payment link.
+// Written to /salePricing in the same debounced bulk-write from App.jsx.
+function PricingEditor({ salePricing, setSalePricing }) {
+  const pricing = salePricing || DEFAULT_SALE_PRICING;
+  const update = (videoType, packageKey, value) => {
+    const next = {
+      ...pricing,
+      [videoType]: { ...(pricing[videoType] || {}), [packageKey]: Number(value) || 0 },
+    };
+    setSalePricing(next);
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", marginBottom: 4 }}>Sale Pricing — Deposit Defaults</div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>Set the default deposit amount that pre-fills the Sale → Payment Intake form for each package. Closers can override per-sale.</div>
+      </div>
+      <div style={{ display: "grid", gap: 16 }}>
+        {SALE_VIDEO_TYPES.map(vt => (
+          <div key={vt.key} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 12 }}>{vt.label}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+              {vt.packages.map(p => {
+                const amount = Number(pricing?.[vt.key]?.[p.key] ?? 0);
+                return (
+                  <div key={p.key}>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>{p.label}</label>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", background: "var(--input-bg)", border: `1px solid ${amount > 0 ? "var(--border)" : "#F59E0B55"}`, borderRadius: 8 }}>
+                      <span style={{ fontSize: 13, color: "var(--muted)" }}>$</span>
+                      <input
+                        type="number" value={amount || ""}
+                        onChange={e => update(vt.key, p.key, e.target.value)}
+                        placeholder="0" step={50}
+                        style={{ flex: 1, width: "100%", border: "none", background: "transparent", color: "var(--fg)", fontSize: 14, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none" }}
+                      />
+                    </div>
+                    <div style={{ fontSize: 10, color: amount > 0 ? "var(--muted)" : "#F59E0B", marginTop: 4 }}>{amount > 0 ? `Deposit: ${fmtCur(amount)}` : "Not set"}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 16, padding: "12px 16px", background: "rgba(0,130,250,0.08)", border: "1px solid rgba(0,130,250,0.25)", borderRadius: 8, fontSize: 12, color: "var(--muted)" }}>
+        Changes auto-save. New payment links use the latest defaults; already-sent links keep their captured amount.
+      </div>
+    </div>
   );
 }

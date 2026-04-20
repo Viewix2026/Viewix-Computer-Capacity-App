@@ -18,6 +18,8 @@ import { Logo } from "./components/Logo";
 import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./components/UIComponents";
 import { Grid } from "./components/Grid";
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
+import { Sale } from "./components/Sale";
+import { SalePublicView } from "./components/SalePublicView";
 import { EditorDashboard } from "./components/EditorDashboard";
 import { AccountsDashboard } from "./components/AccountsDashboard";
 import { Founders } from "./components/Founders";
@@ -38,6 +40,11 @@ export default function App(){
   const[capTab,setCapTab]=useState("dashboard");
   const[foundersTab,setFoundersTab]=useState("dashboard");
   const[resourceTab,setResourceTab]=useState("roas");
+  const[saleTab,setSaleTab]=useState("payment");
+
+  // Sale (Payment Intake) state — records at /sales, defaults at /salePricing
+  const[sales,setSales]=useState([]);
+  const[salePricing,setSalePricing]=useState(null);
 
   // Capacity state
   const[inputs,setInputs]=useState(DEF_IN);
@@ -198,6 +205,11 @@ export default function App(){
             if(data.foundersData){
               setFoundersData(data.foundersData);
             }
+            if(data.sales){
+              const sArr=Object.values(data.sales).filter(s=>s&&s.id);
+              setSales(sArr);
+            }
+            if(data.salePricing){setSalePricing(data.salePricing);}
             if(data.attioCache&&data.attioCache.data){
               setAttioDeals({data:data.attioCache.data,total:data.attioCache.total||data.attioCache.data.length,lastSyncedAt:data.attioCache.lastSyncedAt||null});
             }
@@ -212,7 +224,7 @@ export default function App(){
 
   const wt=useRef(null);
   const deletedPaths=useRef([]);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);const saleObj={};sales.forEach(s=>{if(s&&s.id)saleObj[s.id]=s;});fbSet("/sales",saleObj);if(salePricing)fbSet("/salePricing",salePricing);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,sales,salePricing]);
 
   // Backfill shortId on existing deliveries (one-time per record). Also handles
   // dedup if two records ever generate the same hash.
@@ -255,6 +267,11 @@ export default function App(){
   const preprodParam=new URLSearchParams(window.location.search).get("p");
   if(prettyPreprod||preprodParam)return(<><style>{CSS}</style><PreproductionPublicView/></>);
 
+  // Check for public sale payment link — supports both /s/HASH/slug and ?s=ID
+  const prettySale=pathname.match(/^\/s\/([a-z0-9]{4,12})(?:\/|$)/i);
+  const saleParam=new URLSearchParams(window.location.search).get("s");
+  if(prettySale||saleParam)return(<><style>{CSS}</style><SalePublicView/></>);
+
   // Check for public ROAS calculator link (no auth required, pure client-side state)
   const roasParam=new URLSearchParams(window.location.search).get("roas");
   if(roasParam)return(<RoasCalculatorPublicView/>);
@@ -270,7 +287,7 @@ export default function App(){
       <SideIcon icon="🏠" label="Home" active={tool==="home"} onClick={()=>setTool("home")}/>
       {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
-      {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Quoting" active={tool==="quoting"} onClick={()=>setTool("quoting")}/>}
+      {(isFounder||role==="closer"||isLead)&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
@@ -301,8 +318,28 @@ export default function App(){
     )}
 
 
-    {/* ═══ QUOTING TOOL ═══ */}
-    {tool==="quoting"&&(<>
+    {/* ═══ SALE (Payment Intake + Quotes) ═══ */}
+    {(tool==="sale"||tool==="quoting")&&(isFounder||role==="closer"||isLead)&&(
+      <Sale
+        sales={sales} setSales={setSales} salePricing={salePricing}
+        saleTab={saleTab} setSaleTab={setSaleTab}
+        quotes={quotes} setQuotes={setQuotes}
+        activeQuoteId={activeQuoteId} setActiveQuoteId={setActiveQuoteId}
+        clientRateCards={clientRateCards} setClientRateCards={setClientRateCards}
+        clientFilter={clientFilter} setClientFilter={setClientFilter}
+        qTab={qTab} setQTab={setQTab}
+        rcAdding={rcAdding} setRcAdding={setRcAdding}
+        rcNewName={rcNewName} setRcNewName={setRcNewName} rcAddRef={rcAddRef}
+        rcEditId={rcEditId} setRcEditId={setRcEditId}
+        rcConfirmDelete={rcConfirmDelete} setRcConfirmDelete={setRcConfirmDelete}
+        rcShowArchive={rcShowArchive} setRcShowArchive={setRcShowArchive}
+        createQuote={createQuote} duplicateQuote={duplicateQuote}
+        updateQuote={updateQuote} deleteQuote={deleteQuote}
+      />
+    )}
+
+    {/* ═══ LEGACY QUOTING (unreachable — kept inert for diff safety, delete in cleanup pass) ═══ */}
+    {false&&(<>
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Quoting Tool</span>
@@ -560,6 +597,7 @@ export default function App(){
         foundersMetrics={foundersMetrics} setFoundersMetrics={setFoundersMetrics}
         foundersTab={foundersTab} setFoundersTab={setFoundersTab}
         attioDeals={attioDeals} setAttioDeals={setAttioDeals}
+        salePricing={salePricing} setSalePricing={setSalePricing}
       />
     )}
 
