@@ -103,11 +103,19 @@ export function DeliveryPublicView(){
 
   const updateField=(videoId,field,value)=>{
     if(!delivery)return;
-    const video=delivery.videos.find(v=>v.id===videoId);
+    const videoIndex=delivery.videos.findIndex(v=>v.id===videoId);
+    if(videoIndex<0)return;
+    const video=delivery.videos[videoIndex];
     const updated={...delivery,videos:delivery.videos.map(v=>v.id===videoId?{...v,[field]:value}:v)};
     setDelivery(updated);
     setSaving(true);
-    fbSet(`/deliveries/${delivery.id}`,updated);
+    // Write the single field path instead of the whole delivery record.
+    // Firebase rules only permit anonymous writes to .../videos/{idx}/revision1
+    // and .../videos/{idx}/revision2 — writing the whole /deliveries/{id}
+    // object would fail with PERMISSION_DENIED and the listener would then
+    // rehydrate state back to the server version, producing the "status
+    // flickers then goes blank" bug clients were seeing.
+    fbSet(`/deliveries/${delivery.id}/videos/${videoIndex}/${field}`,value);
     setTimeout(()=>setSaving(false),800);
     if(field==="revision1"||field==="revision2"){
       pendingChanges.current.push({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});
