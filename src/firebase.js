@@ -89,8 +89,17 @@ export function fbUpdate(p, v) {
 export function fbListen(p, cb) {
   if (!db) return () => {};
   const r = db.ref(p);
-  r.on("value", s => cb(s.val()));
-  return () => r.off("value");
+  // CRITICAL: pass the specific handler to .off(). Firebase's
+  // `ref.off("value")` with no callback detaches EVERY listener on that
+  // ref, not just the one we attached here. If two components listened
+  // to the same path (e.g. /formatLibrary is read by FormatLibrary,
+  // SocialOrganicResearch shortlist "add as example", and
+  // SocialOrganicSelect), unmounting one would silently blank the
+  // others — which is the "Social Organic / Runsheets / Format Library
+  // go blank after navigating away" bug that kept coming back.
+  const handler = s => cb(s.val());
+  r.on("value", handler);
+  return () => r.off("value", handler);
 }
 
 // Safer wrapper around fbListen for auth-gated paths:

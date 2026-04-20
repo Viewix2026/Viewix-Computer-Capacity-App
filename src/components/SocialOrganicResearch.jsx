@@ -1509,19 +1509,40 @@ function VideoReviewStep({ project, onPatch }) {
 
   const [filter, setFilter] = useState("all");
   const [newLink, setNewLink] = useState("");
+  // Sort metric + "View More" page size. Default: overperformance (the
+  // score the server computed against each handle's baseline). The rest
+  // sort by raw engagement counts from the scrape, so producers can find
+  // the best video on the signal they care about in that moment.
+  const [sortBy, setSortBy] = useState("overperformance");
+  const [visibleCount, setVisibleCount] = useState(25);
 
-  // Top 25, strictly by topOverperformers order (computed server-side).
-  // If topOverperformers is missing or came back empty (legacy scrapes, or
-  // runs where nothing exceeded the threshold), fall back to sorting the
-  // raw posts by overperformanceScore / views so the grid isn't blank
-  // when the data is actually there.
-  let topPosts = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 25);
-  if (topPosts.length === 0 && posts.length > 0) {
-    topPosts = [...posts]
-      .sort((a, b) => (b.overperformanceScore || 0) - (a.overperformanceScore || 0)
-        || (b.views || 0) - (a.views || 0))
-      .slice(0, 25);
-  }
+  const SORT_METRICS = [
+    { key: "overperformance", label: "Overperformance", pick: p => p.overperformanceScore || 0 },
+    { key: "views",           label: "Views",           pick: p => p.views || 0 },
+    { key: "likes",           label: "Likes",           pick: p => p.likes || 0 },
+    { key: "comments",        label: "Comments",        pick: p => p.comments || 0 },
+    { key: "shares",          label: "Shares",          pick: p => p.shares || p.reshares || 0 },
+    { key: "engagement",      label: "Engagement",      pick: p => (p.likes || 0) + (p.comments || 0) + (p.shares || p.reshares || 0) },
+  ];
+  const sortMetric = SORT_METRICS.find(s => s.key === sortBy) || SORT_METRICS[0];
+
+  // The raw posts array, sorted by the current metric. The server
+  // pre-computes topOverperformers for the default "overperformance"
+  // sort — we fall back to that ordering when available to keep the
+  // top tiles identical to what producers saw before. Every other
+  // metric sorts the whole posts array client-side.
+  const sortedPosts = (() => {
+    if (sortBy === "overperformance" && topIds.length > 0) {
+      const byId = new Map(posts.map(p => [p.id, p]));
+      const ordered = topIds.map(id => byId.get(id)).filter(Boolean);
+      const rest = posts.filter(p => !topIds.includes(p.id))
+        .sort((a, b) => sortMetric.pick(b) - sortMetric.pick(a));
+      return [...ordered, ...rest];
+    }
+    return [...posts].sort((a, b) => sortMetric.pick(b) - sortMetric.pick(a));
+  })();
+  const topPosts = sortedPosts.slice(0, visibleCount);
+  const hasMore = sortedPosts.length > visibleCount;
 
   const setStatus = (postId, status) => {
     const nextTicked = new Set(ticked);
@@ -1585,35 +1606,55 @@ function VideoReviewStep({ project, onPatch }) {
         </div>
       )}
 
-      {/* Filter chips */}
+      {/* Filter chips + sort selector */}
       {topPosts.length > 0 && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-          <FilterChip label={`All (${topPosts.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
-          <FilterChip label={`✓ Ticked (${ticked.size})`} active={filter === "ticked"} colour="#22C55E" onClick={() => setFilter("ticked")} />
-          <FilterChip label={`✗ Crossed (${crossed.size})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
-          <FilterChip label={`Unreviewed`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <FilterChip label={`All (${topPosts.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
+            <FilterChip label={`✓ Ticked (${ticked.size})`} active={filter === "ticked"} colour="#22C55E" onClick={() => setFilter("ticked")} />
+            <FilterChip label={`✗ Crossed (${crossed.size})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
+            <FilterChip label={`Unreviewed`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Sort</label>
+            <select value={sortBy} onChange={e => { setSortBy(e.target.value); setVisibleCount(25); }}
+              style={{ ...inputSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
+              {SORT_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+          </div>
         </div>
       )}
 
-      {/* Top-25 grid */}
+      {/* Top-N grid — visibleCount starts at 25, "View more" bumps to show more. */}
       {topPosts.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 18 }}>
-          {filtered.map(p => {
-            const status = ticked.has(p.id) ? "ticked" : crossed.has(p.id) ? "crossed" : null;
-            return (
-              <ReviewCard key={p.id} post={p}
-                status={status}
-                onTick={() => setStatus(p.id, "ticked")}
-                onCross={() => setStatus(p.id, "crossed")}
-              />
-            );
-          })}
-          {filtered.length === 0 && (
-            <div style={{ gridColumn: "1 / -1", padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
-              No videos match this filter.
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 14 }}>
+            {filtered.map(p => {
+              const status = ticked.has(p.id) ? "ticked" : crossed.has(p.id) ? "crossed" : null;
+              return (
+                <ReviewCard key={p.id} post={p}
+                  status={status}
+                  onTick={() => setStatus(p.id, "ticked")}
+                  onCross={() => setStatus(p.id, "crossed")}
+                />
+              );
+            })}
+            {filtered.length === 0 && (
+              <div style={{ gridColumn: "1 / -1", padding: 20, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+                No videos match this filter.
+              </div>
+            )}
+          </div>
+          {/* View more — stepping 25 videos at a time so the DOM doesn't
+              choke on hundreds of IG embed iframes at once. */}
+          {hasMore && filter === "all" && (
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
+              <button onClick={() => setVisibleCount(v => v + 25)} style={btnSecondary}>
+                View more ({sortedPosts.length - visibleCount} remaining)
+              </button>
             </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Extra links — producer can paste their own picks */}
@@ -2299,9 +2340,13 @@ function ScriptStep({ project, onPatch }) {
               <tbody>
                 {(doc.scriptTable || []).map((row, i) => {
                   const feedback = doc.clientFeedback || {};
+                  // Alternating row tint — every other row gets a slight
+                  // lift above the dark card background so producers can
+                  // scan across a wide table without losing their row.
+                  const rowBg = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.025)";
                   return (
-                    <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td style={tdStyle}>{row.videoNumber || i + 1}</td>
+                    <tr key={i} style={{ borderTop: "1px solid var(--border)", background: rowBg }}>
+                      <td style={{ ...tdStyle, color: "var(--muted)", fontWeight: 700, fontFamily: "'JetBrains Mono',monospace" }}>{row.videoNumber || i + 1}</td>
                       {SCRIPT_COLUMNS.map(c => {
                         // Client-feedback cell key: matches what the public
                         // view writes — `scriptTable.{i}.{c.key}`.
@@ -2329,6 +2374,58 @@ function ScriptStep({ project, onPatch }) {
           </div>
         )}
       </SectionCard>
+
+      {/* Client feedback queue — mirrors the Meta Ads producer view. Every
+          left-by-client feedback entry is listed here with a checkbox the
+          producer can tick once resolved (same checkbox pattern Meta Ads
+          uses). Entries written by the public view land at
+          preproductionDoc.clientFeedback.{cellKey_underscored}. */}
+      {doc.clientFeedback && Object.keys(doc.clientFeedback).length > 0 && (
+        <SectionCard title={`Client Feedback (${Object.values(doc.clientFeedback).filter(f => f && !f.resolved).length} outstanding)`}>
+          <div style={{ display: "grid", gap: 6 }}>
+            {Object.entries(doc.clientFeedback)
+              .sort(([, a], [, b]) => (a?.resolved ? 1 : 0) - (b?.resolved ? 1 : 0))
+              .map(([key, fb]) => {
+                if (!fb || !fb.text) return null;
+                // cellKey stored with "." replaced by "_"; decode for display.
+                const displayPath = key.replace(/_/g, ".");
+                // Map the field key back to a human label where we can.
+                const scriptCol = SCRIPT_COLUMNS.find(c => displayPath.endsWith(`.${c.key}`));
+                const brandTruthField = BRAND_TRUTH_FIELDS.find(f => displayPath.endsWith(`.${f.key}`));
+                const colLabel = scriptCol?.label
+                  || brandTruthField?.label
+                  || (displayPath.includes("clientResearch") ? "Key takeaways" : displayPath);
+                const basePath = `/preproduction/socialOrganic/${project.id}/preproductionDoc/clientFeedback/${key}`;
+                return (
+                  <div key={key} style={{
+                    padding: "10px 14px",
+                    background: fb.resolved ? "var(--bg)" : "var(--card)",
+                    border: `1px solid ${fb.resolved ? "var(--border)" : "rgba(245,158,11,0.35)"}`,
+                    borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 10,
+                    opacity: fb.resolved ? 0.6 : 1,
+                  }}>
+                    <input type="checkbox" checked={!!fb.resolved}
+                      onChange={e => {
+                        fbSet(`${basePath}/resolved`, e.target.checked);
+                        fbSet(`${basePath}/resolvedAt`, e.target.checked ? new Date().toISOString() : null);
+                      }}
+                      style={{ marginTop: 3, cursor: "pointer", accentColor: "var(--accent)" }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 3, lineHeight: 1.5, textDecoration: fb.resolved ? "line-through" : "none" }}>
+                        {fb.text}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                        {colLabel}
+                        {fb.submittedAt && ` · ${new Date(fb.submittedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}`}
+                      </div>
+                    </div>
+                    {fb.resolved && <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 600 }}>Resolved</span>}
+                  </div>
+                );
+              })}
+          </div>
+        </SectionCard>
+      )}
 
       {rewriteTarget && (
         <CellRewriteModal

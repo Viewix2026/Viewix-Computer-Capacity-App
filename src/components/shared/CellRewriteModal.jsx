@@ -42,6 +42,14 @@ const btnSecondary = {
 export function Clickable({ value, onClick, multi, feedback }) {
   const [hover, setHover] = useState(false);
   const empty = !value || !value.toString().trim();
+  const str = value == null ? "" : String(value);
+  // Multi-line values render as bullet points. We strip any leading
+  // bullet glyphs the source may already contain so the list is visually
+  // consistent regardless of whether Claude returned dashes, asterisks,
+  // or bullets.
+  const bulletLines = multi && !empty
+    ? str.split(/\r?\n/).map(l => l.replace(/^\s*[•\-\*\u2022]\s*/, "").trim()).filter(Boolean)
+    : null;
   return (
     <div
       onClick={onClick}
@@ -54,8 +62,8 @@ export function Clickable({ value, onClick, multi, feedback }) {
         outline: hover ? "1px solid var(--accent)" : "1px solid transparent",
         cursor: "pointer",
         fontSize: 12, color: empty ? "var(--muted)" : "var(--fg)",
-        lineHeight: 1.5,
-        whiteSpace: multi ? "pre-wrap" : "normal",
+        lineHeight: 1.55,
+        whiteSpace: (multi && !bulletLines) ? "pre-wrap" : "normal",
         minHeight: 20,
         fontStyle: empty ? "italic" : "normal",
         transition: "outline 0.1s, background 0.1s",
@@ -64,7 +72,15 @@ export function Clickable({ value, onClick, multi, feedback }) {
       {feedback?.text && (
         <span style={{ position: "absolute", top: 4, right: 4, width: 8, height: 8, borderRadius: "50%", background: "#F59E0B" }} />
       )}
-      {empty ? "(empty — click to fill)" : value}
+      {empty ? "(empty — click to fill)"
+       : bulletLines && bulletLines.length > 0 ? (
+          <ul style={{ margin: 0, paddingLeft: 18, listStyle: "disc" }}>
+            {bulletLines.map((line, i) => (
+              <li key={i} style={{ marginBottom: 3 }}>{line}</li>
+            ))}
+          </ul>
+        )
+       : str}
     </div>
   );
 }

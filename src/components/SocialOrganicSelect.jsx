@@ -71,6 +71,8 @@ export function SocialOrganicSelect({ project, onPatch }) {
   // (These are derived views, not per-format categories — naming kept for
   // backwards-compat with Phase 4 spec.)
   const [categoryMode, setCategoryMode] = useState("all");
+  // Modal state for the per-format "Details" drill-in. null = closed.
+  const [detailsId, setDetailsId] = useState(null);
 
   // Suggest action — asks Claude to rank the library against the project.
   const [suggesting, setSuggesting] = useState(false);
@@ -313,9 +315,9 @@ export function SocialOrganicSelect({ project, onPatch }) {
           {shortlistCards.length === 0 ? (
             <EmptyPanel msg="No shortlisted formats left — either nothing was shortlisted or everything has already been selected." />
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
               {shortlistCards.map(c => (
-                <DraggableFormatCard key={c.dragId} card={c} onClick={() => addFormat(c)} />
+                <DraggableFormatCard key={c.dragId} card={c} onClick={() => addFormat(c)} onOpenDetails={setDetailsId} />
               ))}
             </div>
           )}
@@ -339,9 +341,9 @@ export function SocialOrganicSelect({ project, onPatch }) {
           {libraryCards.length === 0 ? (
             <EmptyPanel msg={categoryMode === "over" ? "Over Performers needs analytics data — coming later." : "No library formats match — clear filters or shortlist more videos."} />
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "45vh", overflowY: "auto", paddingRight: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10, maxHeight: "70vh", overflowY: "auto", paddingRight: 4 }}>
               {libraryCards.map(c => (
-                <DraggableFormatCard key={c.dragId} card={c} onClick={() => addFormat(c)} />
+                <DraggableFormatCard key={c.dragId} card={c} onClick={() => addFormat(c)} onOpenDetails={setDetailsId} />
               ))}
             </div>
           )}
@@ -376,7 +378,80 @@ export function SocialOrganicSelect({ project, onPatch }) {
           </button>
         )}
       </div>
+      {detailsId && library[detailsId] && (
+        <FormatDetailsModal format={library[detailsId]} onClose={() => setDetailsId(null)} />
+      )}
     </DndContext>
+  );
+}
+
+// Read-only drill-in modal for the "Details" button on library cards.
+// Shows the full format record — all examples (with embeds) + the
+// analysis / filming / structure blocks. Producers can audition more
+// than just the first example without leaving the Select step.
+function FormatDetailsModal({ format, onClose }) {
+  const examples = Array.isArray(format.examples) ? format.examples : [];
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "var(--card)", borderRadius: 12, padding: 20, maxWidth: 900, width: "100%",
+        maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>{format.name}</div>
+            {(format.tags || []).length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                {format.tags.map(t => (
+                  <span key={t} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)" }}>#{t}</span>
+                ))}
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer" }}>×</button>
+        </div>
+
+        {examples.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+              Examples ({examples.length})
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+              {examples.map((ex, i) => (
+                <div key={i} style={{ background: "var(--bg)", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+                  <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="9 / 16" />
+                  {ex.sourceAccount && (
+                    <div style={{ padding: "6px 10px", fontSize: 10, color: "var(--muted)", borderTop: "1px solid var(--border)" }}>
+                      {ex.sourceAccount}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {[
+          { label: "Video analysis",         key: "videoAnalysis" },
+          { label: "Filming instructions",   key: "filmingInstructions" },
+          { label: "Structure",              key: "structureInstructions" },
+        ].map(s => format[s.key] && (
+          <div key={s.key} style={{ marginBottom: 12, padding: 12, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+              {s.label}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+              {format[s.key]}
+            </div>
+          </div>
+        ))}
+
+        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 8 }}>
+          {format.usageCount ? `Used ${format.usageCount}× in previous briefs.` : "Not yet used in any brief."}
+          {format.sourceClient && ` Originally from ${format.sourceClient}.`}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -432,27 +507,67 @@ function EmptyPanel({ msg }) {
   );
 }
 
-function DraggableFormatCard({ card, onClick }) {
+// Richer card for the Global Library panel: portrait embed at the top so
+// the producer can play the example inline, 1-sentence description below,
+// small "Details" affordance to open the full Format Library record. The
+// drag handle sits on the top-right so the card body stays clickable for
+// the details link + the embed plays without kicking off a drag.
+function DraggableFormatCard({ card, onClick, onOpenDetails }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: card.dragId });
+  // First sentence of the description (or the whole thing if short) —
+  // gives the producer a glanceable "what is this format" line without
+  // making them click into details.
+  const str = (card.description || "").trim();
+  const firstSentence = str ? (str.match(/^[^.!?\n]*[.!?]?/)?.[0] || str).slice(0, 140) : "";
   return (
     <div ref={setNodeRef}
-      {...listeners} {...attributes}
       style={{
         transform: CSS.Translate.toString(transform),
         opacity: isDragging ? 0.5 : 1,
-        padding: 10, background: "var(--bg)", border: "1px solid var(--border)",
-        borderRadius: 8, cursor: "grab", fontFamily: "inherit", display: "flex", gap: 10,
-        userSelect: "none",
+        background: "var(--bg)", border: "1px solid var(--border)",
+        borderRadius: 8, fontFamily: "inherit",
+        userSelect: "none", display: "flex", flexDirection: "column", overflow: "hidden",
+        position: "relative",
       }}
       onDoubleClick={onClick}
-      title="Drag into the selected queue, or double-click to add">
-      <div style={{ width: 40, height: 40, borderRadius: 4, flexShrink: 0, overflow: "hidden" }}>
-        <ReelPreview url={card.exampleUrl} thumbnail={card.thumbnail} aspectRatio="1 / 1" compact />
+      title="Double-click or drag into the selected queue">
+      {/* Drag handle — isolated so the card body doesn't swallow clicks */}
+      <div {...listeners} {...attributes}
+        style={{ position: "absolute", top: 4, right: 4, zIndex: 2, cursor: "grab",
+          padding: "2px 6px", borderRadius: 4, background: "rgba(0,0,0,0.55)",
+          color: "#fff", fontSize: 12, fontWeight: 700, lineHeight: 1, userSelect: "none" }}
+        title="Drag to selected queue">⋮⋮</div>
+      {/* Embed — plays inline so producers can audition formats from this grid */}
+      <div style={{ background: "#000" }}>
+        <ReelPreview url={card.exampleUrl} thumbnail={card.thumbnail} aspectRatio="9 / 16" />
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.name}</div>
-        <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {card.source === "project" ? "📁 project" : "📚 library"}{(card.tags && card.tags[0]) ? ` · #${card.tags[0]}` : ""}
+      <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+          {card.name}
+        </div>
+        {firstSentence && (
+          <div style={{ fontSize: 10, color: "var(--muted)", lineHeight: 1.4, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+            {firstSentence}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: "auto" }}>
+          <span style={{ fontSize: 9, color: "var(--muted)", fontWeight: 600 }}>
+            {card.source === "project" ? "📁 project" : "📚 library"}{(card.tags && card.tags[0]) ? ` · #${card.tags[0]}` : ""}
+          </span>
+          {card.source === "library" && onOpenDetails && (
+            <button onClick={(e) => { e.stopPropagation(); onOpenDetails(card.formatLibraryId); }}
+              style={{ marginLeft: "auto", padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)",
+                background: "transparent", color: "var(--accent)", fontSize: 9, fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit" }}>
+              Details ↗
+            </button>
+          )}
+          <button onClick={(e) => { e.stopPropagation(); onClick?.(); }}
+            style={{ padding: "2px 8px", borderRadius: 4, border: "none",
+              background: "var(--accent)", color: "#fff", fontSize: 9, fontWeight: 700,
+              cursor: "pointer", fontFamily: "inherit" }}>
+            + Add
+          </button>
         </div>
       </div>
     </div>

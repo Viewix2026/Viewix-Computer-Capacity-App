@@ -1118,15 +1118,15 @@ RULES:
 - Never use em dashes. Use commas, full stops, or rewrite.
 - Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
 
-STRUCTURE:
+STRUCTURE — every field is a list of 3-5 short bullet-style lines, one idea per line, separated by a newline character ("\n"). Do NOT output prose paragraphs. Do NOT include leading bullet markers (no •, no dashes, no numbers) — the frontend renders the bullets automatically. Each line is one specific, concrete claim or observation. Keep lines under 25 words where possible.
 {
-  "brandTruths": "2-4 sentences on what the brand is known for, what it does best, and what makes it credible. Concrete claims, not fluff.",
-  "brandAmbitions": "2-3 sentences on where this content should take the brand — a pointed direction, not a mission statement.",
-  "clientGoals": "3-5 bullet-style lines, one per line, on what the client explicitly wants this content round to achieve.",
-  "keyConsiderations": "3-5 bullet-style lines on constraints or preferences: what they won't do, who they won't speak to, tone rules, topics to avoid.",
-  "targetViewerDemographic": "2-4 sentences on age, gender skew, consumption habits, platforms they live on.",
-  "painPoints": "3-5 bullet-style lines, each capturing a specific viewer pain point. Use direct viewer-voice quotes where the transcript supports it.",
-  "language": "2-4 sentences describing the tone + vocabulary + phrase patterns the target viewer uses and responds to. Include specific words/phrases where possible."
+  "brandTruths":             "3-5 lines on what the brand is known for, does best, what makes it credible. Concrete claims, one per line.",
+  "brandAmbitions":          "3-5 lines on where this content should take the brand. Pointed directions, not mission statements, one per line.",
+  "clientGoals":             "3-5 lines on what the client explicitly wants this content round to achieve.",
+  "keyConsiderations":       "3-5 lines on constraints or preferences: what they won't do, who they won't speak to, tone rules, topics to avoid.",
+  "targetViewerDemographic": "3-5 lines on age, gender skew, consumption habits, platforms they live on.",
+  "painPoints":              "3-5 lines, each a specific viewer pain point. Use direct viewer-voice quotes where the transcript supports it.",
+  "language":                "3-5 lines on the tone + vocabulary + phrase patterns the target viewer uses. Quote specific words/phrases where possible."
 }`;
 
 async function getBrandTruthPromptOverride() {

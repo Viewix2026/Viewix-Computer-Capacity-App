@@ -215,8 +215,17 @@ export function PreproductionPublicView() {
     // Helper: render a feedback-capable block. cellKey is the dot-path we
     // write under preproductionDoc.clientFeedback; same convention as the
     // producer-side Clickable so yellow-dot indicators line up.
+    //
+    // Multi-line values render as bullet points for readability — same
+    // treatment as the producer-side Clickable. Any leading bullet glyph
+    // from the source text is stripped so the markers are visually
+    // consistent.
     const FeedbackCell = ({ cellKey, label, value, multi }) => {
       const existing = fb[cellKey.replace(/\./g, "_")];
+      const str = value == null ? "" : String(value);
+      const bulletLines = multi && str.trim()
+        ? str.split(/\r?\n/).map(l => l.replace(/^\s*[•\-\*\u2022]\s*/, "").trim()).filter(Boolean)
+        : null;
       return (
         <div
           onClick={() => setFeedbackCell({ cellKey, cellId: cellKey, column: label })}
@@ -226,13 +235,22 @@ export function PreproductionPublicView() {
             border: existing ? "1px solid rgba(245,158,11,0.4)" : "1px solid #1E2A3A",
             cursor: "pointer",
             color: value ? "#E8ECF4" : "#5A6B85",
-            fontSize: 13, lineHeight: 1.6, whiteSpace: multi ? "pre-wrap" : "normal",
+            fontSize: 13, lineHeight: 1.6,
+            whiteSpace: (multi && !bulletLines) ? "pre-wrap" : "normal",
             fontStyle: value ? "normal" : "italic",
             transition: "background 0.15s, border 0.15s",
+            position: "relative",
           }}>
-          {value || "(empty)"}
           {existing && (
-            <div style={{ marginTop: 6, fontSize: 11, color: "#F59E0B", fontStyle: "italic", lineHeight: 1.5 }}>
+            <span style={{ position: "absolute", top: 8, right: 10, width: 8, height: 8, borderRadius: "50%", background: "#F59E0B" }} />
+          )}
+          {bulletLines && bulletLines.length > 0 ? (
+            <ul style={{ margin: 0, paddingLeft: 20, listStyle: "disc" }}>
+              {bulletLines.map((line, i) => <li key={i} style={{ marginBottom: 3 }}>{line}</li>)}
+            </ul>
+          ) : (value || "(empty)")}
+          {existing && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "#F59E0B", fontStyle: "italic", lineHeight: 1.5 }}>
               Your feedback: "{existing.text}"
             </div>
           )}
@@ -262,7 +280,7 @@ export function PreproductionPublicView() {
           <Logo />
         </div>
 
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "30px 40px" }}>
+        <div style={{ maxWidth: 1400, margin: "0 auto", padding: "30px 40px" }}>
 
           {/* Client Research — leads the page. The client sees their own
               current-content snapshot (follower counts, engagement stats,
@@ -435,34 +453,45 @@ export function PreproductionPublicView() {
             </Section>
           )}
 
-          {/* Script table — the actual per-video content plan. */}
-          <Section title={`Scripts (${rows.length})`}>
+          {/* Script table — the actual per-video content plan. Matches
+              the Meta Ads public layout: tighter outer wrapper with a
+              card-style background + border, per-row striping, and a
+              "has your feedback" legend up top. */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, marginTop: 10 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#E8ECF4" }}>Scripts ({rows.length})</div>
+            {rows.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B" }} />
+                <span style={{ fontSize: 11, color: "#5A6B85" }}>Has your feedback</span>
+              </div>
+            )}
+          </div>
           {rows.length === 0 ? (
-            <div style={{ padding: 30, textAlign: "center", color: "#5A6B85", fontSize: 13 }}>
+            <div style={{ padding: 30, textAlign: "center", color: "#5A6B85", fontSize: 13, background: "#131825", borderRadius: 12, border: "1px solid #1E2A3A", marginBottom: 24 }}>
               The producer is still writing the scripts — check back shortly.
             </div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
+            <div style={{ overflowX: "auto", background: "#131825", borderRadius: 12, border: "1px solid #1E2A3A", marginBottom: 24 }}>
               <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
                 <thead>
-                  <tr style={{ background: "#0B0F1A" }}>
-                    <th style={{ textAlign: "left", padding: "10px 12px", fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", width: 40 }}>#</th>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "12px 14px", fontSize: 10, fontWeight: 700, color: "#5A6B85", borderBottom: "2px solid #1E2A3A", textTransform: "uppercase", letterSpacing: "0.06em", width: 40 }}>#</th>
                     {SO_COLS.map(c => (
-                      <th key={c.key} style={{ textAlign: "left", padding: "10px 12px", fontSize: 11, fontWeight: 700, color: "#5A6B85", textTransform: "uppercase", letterSpacing: "0.04em", minWidth: 160 }}>{c.label}</th>
+                      <th key={c.key} style={{ textAlign: "left", padding: "12px 14px", fontSize: 10, fontWeight: 700, color: "#5A6B85", borderBottom: "2px solid #1E2A3A", textTransform: "uppercase", letterSpacing: "0.06em", minWidth: 180, whiteSpace: "nowrap" }}>{c.label}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row, i) => (
-                    <tr key={i} style={{ borderTop: "1px solid #1E2A3A" }}>
-                      <td style={{ padding: "8px 12px", color: "#5A6B85", fontSize: 11, fontFamily: "'JetBrains Mono',monospace" }}>{row.videoNumber || i + 1}</td>
+                    <tr key={i} style={{ background: i % 2 === 1 ? "rgba(255,255,255,0.018)" : "transparent" }}>
+                      <td style={{ padding: "12px 14px", color: "#5A6B85", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", verticalAlign: "top", borderBottom: "1px solid #1E2A3A" }}>{row.videoNumber || i + 1}</td>
                       {SO_COLS.map(c => {
                         const cellKey = `scriptTable.${i}.${c.key}`;
                         const existing = fb[cellKey.replace(/\./g, "_")];
                         const editable = c.editable !== false;
                         const value = row[c.key] || "";
                         return (
-                          <td key={c.key} style={{ padding: "4px 6px", verticalAlign: "top", position: "relative" }}>
+                          <td key={c.key} style={{ padding: "10px 12px", verticalAlign: "top", borderBottom: "1px solid #1E2A3A", position: "relative" }}>
                             <div
                               onClick={() => editable && setFeedbackCell({ cellKey, cellId: `row_${i}`, column: c.key })}
                               style={{
@@ -470,12 +499,18 @@ export function PreproductionPublicView() {
                                 background: existing ? "rgba(245,158,11,0.08)" : "transparent",
                                 outline: existing ? "1px solid rgba(245,158,11,0.4)" : "1px solid transparent",
                                 cursor: editable ? "pointer" : "default",
-                                color: value ? "#E8ECF4" : "#5A6B85",
-                                fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap",
+                                color: value ? "#C8D2DE" : "#5A6B85",
+                                fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap",
+                                position: "relative",
                               }}>
-                              {value || (editable ? "(empty)" : "—")}
+                              <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                                {existing && (
+                                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginTop: 5 }} />
+                                )}
+                                <span style={{ flex: 1 }}>{value || (editable ? "(empty)" : "—")}</span>
+                              </div>
                               {existing && (
-                                <div style={{ marginTop: 4, fontSize: 10, color: "#F59E0B", fontStyle: "italic" }}>
+                                <div style={{ marginTop: 6, padding: "6px 8px", fontSize: 10, color: "#F59E0B", fontStyle: "italic", background: "rgba(245,158,11,0.05)", borderRadius: 3, borderLeft: "2px solid #F59E0B" }}>
                                   Your feedback: "{existing.text}"
                                 </div>
                               )}
@@ -489,7 +524,6 @@ export function PreproductionPublicView() {
               </table>
             </div>
           )}
-          </Section>
 
           {feedbackCell && (
             <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setFeedbackCell(null)}>
