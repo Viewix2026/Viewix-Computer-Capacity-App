@@ -42,14 +42,20 @@ export function SalePublicView() {
     document.title = "Viewix — Deposit Payment";
     initFB();
     let unsub = () => {};
+    // `cancelled` guard: if the effect re-fires (or the component
+    // unmounts) before the async `onFB` resolves, the fresh listener
+    // attached inside that callback would write to a stale unsub ref
+    // and leak. Checking the flag inside onFB prevents the attach.
+    let cancelled = false;
     const timeoutId = setTimeout(() => {
       setLoading(false);
       setError(prev => prev || "Timed out loading payment details. The link may be invalid.");
     }, 8000);
     onFB(async () => {
       try { await signInAnonymouslyForPublic(); } catch (e) {
-        setError(`Anonymous sign-in failed: ${e.message}`);
+        if (!cancelled) setError(`Anonymous sign-in failed: ${e.message}`);
       }
+      if (cancelled) return;
       const onReadError = (e) => {
         clearTimeout(timeoutId);
         setLoading(false);
@@ -73,7 +79,7 @@ export function SalePublicView() {
         }, onReadError);
       }
     });
-    return () => { clearTimeout(timeoutId); unsub(); };
+    return () => { cancelled = true; clearTimeout(timeoutId); unsub(); };
   }, [shortId, saleIdParam]);
 
   // Thank-you content — read once the sale is resolved (don't block the
@@ -82,10 +88,12 @@ export function SalePublicView() {
   useEffect(() => {
     if (!sale) return;
     let unsub = () => {};
+    let cancelled = false;
     onFB(() => {
+      if (cancelled) return;
       unsub = fbListen("/saleThankYou", (data) => setThankYou(data || null));
     });
-    return () => unsub();
+    return () => { cancelled = true; unsub(); };
   }, [sale?.id]);
 
   // Once we have the sale, request a PaymentIntent. Only re-request if the

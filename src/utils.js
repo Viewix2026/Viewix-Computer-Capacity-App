@@ -172,32 +172,49 @@ export function deliveryShareUrl(d) {
 // or CSP frame-ancestors — an iframe on those would silently render
 // blank. Providers on this list have been verified to permit framing as
 // of 2026: TidyCal, Calendly, Cal.com, SavvyCal.
+//
+// Matching is hostname-based (not substring) so a URL like
+// `https://attacker.example/?x=tidycal.com` can't slip through the
+// allow-list and get iframed — a real audit finding from 2026-04.
+const EMBEDDABLE_BOOKING_HOSTS = ["tidycal.com", "calendly.com", "cal.com", "savvycal.com"];
 export function isEmbeddableBookingUrl(url) {
   if (!url || typeof url !== "string") return false;
-  const u = url.toLowerCase();
-  return (
-    u.includes("tidycal.com") ||
-    u.includes("calendly.com") ||
-    u.includes("cal.com") ||
-    u.includes("savvycal.com")
-  );
+  let parsed;
+  try { parsed = new URL(url); } catch { return false; }
+  if (parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  return EMBEDDABLE_BOOKING_HOSTS.some(h => host === h || host.endsWith("." + h));
 }
 
-// Convert a YouTube or Loom share URL to its iframe-embed URL. Pass through
-// anything we don't recognise (if Jeremy pastes an already-embeddable URL,
-// or some other video host's share link, we just iframe it as-is). Returns
-// empty string for a falsy input so callers can test `if (embedUrl(url))`.
+// Convert a YouTube or Loom share URL to its iframe-embed URL. Returns
+// empty string for anything else — callers iframe this directly so we
+// CANNOT fall through to arbitrary URLs (that would let a founder with
+// a typo paste a `javascript:` or attacker-controlled URL into the
+// iframe src on the customer-facing thank-you page). Audit finding 2026-04.
+const YT_EMBED_HOSTS = ["youtube.com", "youtu.be", "youtube-nocookie.com"];
+const LOOM_EMBED_HOSTS = ["loom.com"];
 export function embedUrl(url) {
   if (!url || typeof url !== "string") return "";
   const trimmed = url.trim();
   if (!trimmed) return "";
+  let parsed;
+  try { parsed = new URL(trimmed); } catch { return ""; }
+  if (parsed.protocol !== "https:") return "";
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+
   // YouTube: watch?v=X  /  youtu.be/X  /  youtube.com/shorts/X
-  const ytWatch = trimmed.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{6,})/);
-  if (ytWatch) return `https://www.youtube.com/embed/${ytWatch[1]}`;
+  if (YT_EMBED_HOSTS.some(h => host === h || host.endsWith("." + h))) {
+    const ytWatch = trimmed.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{6,})/);
+    if (ytWatch) return `https://www.youtube.com/embed/${ytWatch[1]}`;
+  }
   // Loom: loom.com/share/HASH  →  loom.com/embed/HASH
-  const loomShare = trimmed.match(/loom\.com\/share\/([a-f0-9]{16,})/);
-  if (loomShare) return `https://www.loom.com/embed/${loomShare[1]}`;
-  return trimmed;
+  if (LOOM_EMBED_HOSTS.some(h => host === h || host.endsWith("." + h))) {
+    const loomShare = trimmed.match(/loom\.com\/share\/([a-f0-9]{16,})/);
+    if (loomShare) return `https://www.loom.com/embed/${loomShare[1]}`;
+  }
+  // Unrecognised host or URL shape — refuse rather than blindly iframe
+  // something that might be hostile or render blank.
+  return "";
 }
 
 export function saleShareUrl(s) {

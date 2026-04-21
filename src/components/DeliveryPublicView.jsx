@@ -25,6 +25,10 @@ export function DeliveryPublicView(){
     document.title="Viewix Dashboard";
     initFB();
     let unsub=()=>{};
+    // `cancelled` guard against the onFB async race — if the effect
+    // re-runs (deliveryId/shortId change) before onFB resolves, the
+    // fresh listener would write to a stale unsub and leak.
+    let cancelled=false;
     // Safety net: if the listener never fires within 8s (rules denial
     // that didn't invoke onError, or SDK init stuck), stop showing the
     // "Loading…" spinner and surface the error. Without this, a silent
@@ -40,8 +44,9 @@ export function DeliveryPublicView(){
         authWorked=true;
       }catch(e){
         console.warn("Anonymous auth failed, continuing:",e.message);
-        setNotFoundReason(`Anonymous sign-in failed: ${e.message}. Enable anonymous auth in Firebase, or ask a producer to grant public read access to this delivery.`);
+        if(!cancelled)setNotFoundReason(`Anonymous sign-in failed: ${e.message}. Enable anonymous auth in Firebase, or ask a producer to grant public read access to this delivery.`);
       }
+      if(cancelled)return;
       const onReadError=(e)=>{
         clearTimeout(timeoutId);
         setLoading(false);
@@ -72,7 +77,9 @@ export function DeliveryPublicView(){
         },onReadError);
       }
     });
-    return ()=>{clearTimeout(timeoutId);unsub();};
+    // Cleanup also clears the notify batch timer so navigating away
+    // with pending revision edits doesn't leave a 2-minute timer alive.
+    return ()=>{cancelled=true;clearTimeout(timeoutId);unsub();if(batchTimer.current){clearTimeout(batchTimer.current);batchTimer.current=null;}};
   },[deliveryId,shortId]);
 
   // Resolve account logo when delivery or accounts change. Same cleanup
@@ -81,7 +88,9 @@ export function DeliveryPublicView(){
   useEffect(()=>{
     if(!delivery?.clientName)return;
     let unsub=()=>{};
+    let cancelled=false;
     onFB(()=>{
+      if(cancelled)return;
       unsub=fbListen("/accounts",(acctData)=>{
         if(!acctData)return;
         const nameLC=delivery.clientName.toLowerCase();
@@ -90,7 +99,7 @@ export function DeliveryPublicView(){
         setAccountLogoBg(match?.logoBg||"white");
       });
     });
-    return ()=>unsub();
+    return ()=>{cancelled=true;unsub();};
   },[delivery?.clientName]);
 
   const flushNotifications=()=>{

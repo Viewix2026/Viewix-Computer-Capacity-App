@@ -49,46 +49,57 @@ export function PreproductionPublicView() {
     if (!projectId && !shortId) return;
     document.title = "Viewix - Script Review";
     initFB();
+    // Track every listener + timer so the cleanup can tear them all
+    // down on unmount. Previously this effect attached up to 4 Firebase
+    // listeners with NO cleanup and a bare setTimeout that also leaked —
+    // every share-link visit pinned the whole preproduction tree in
+    // memory for the life of the tab.
+    const unsubs = [];
+    let cancelled = false;
+    let foundAny = false;
+    let fallbackTimer = null;
     onFB(async () => {
       try { await signInAnonymouslyForPublic(); }
       catch (e) { console.warn("Anonymous auth failed, continuing:", e.message); }
-
-      // Try metaAds first (legacy default). If we don't find a match within
-      // a reasonable window, fall back to socialOrganic. We wire both
-      // listeners so hot-swaps land live — whichever responds with a real
-      // match wins.
-      let foundAny = false;
+      if (cancelled) return;
 
       if (projectId) {
-        fbListen(`/preproduction/metaAds/${projectId}`, (data) => {
+        unsubs.push(fbListen(`/preproduction/metaAds/${projectId}`, (data) => {
           if (data) { setProject(data); setProjectType("metaAds"); foundAny = true; setLoading(false); }
-        });
-        fbListen(`/preproduction/socialOrganic/${projectId}`, (data) => {
+        }));
+        unsubs.push(fbListen(`/preproduction/socialOrganic/${projectId}`, (data) => {
           if (data && !foundAny) { setProject(data); setProjectType("socialOrganic"); foundAny = true; setLoading(false); }
-        });
+        }));
       } else if (shortId) {
-        fbListen(`/preproduction/metaAds`, (allProjects) => {
+        unsubs.push(fbListen(`/preproduction/metaAds`, (allProjects) => {
           if (!allProjects) return;
           const match = Object.values(allProjects).find(p => p && p.shortId && p.shortId.toLowerCase() === shortId);
           if (match) { setProject(match); setProjectType("metaAds"); foundAny = true; setLoading(false); }
-        });
-        fbListen(`/preproduction/socialOrganic`, (allProjects) => {
+        }));
+        unsubs.push(fbListen(`/preproduction/socialOrganic`, (allProjects) => {
           if (!allProjects) return;
           const match = Object.values(allProjects).find(p => p && p.shortId && p.shortId.toLowerCase() === shortId);
           if (match && !foundAny) { setProject(match); setProjectType("socialOrganic"); foundAny = true; setLoading(false); }
-        });
+        }));
       }
       // Loading timeout — 3s should be more than enough to see if either
       // path has data. After that, show the "not found" error state.
-      setTimeout(() => { if (!foundAny) setLoading(false); }, 3000);
+      fallbackTimer = setTimeout(() => { if (!foundAny) setLoading(false); }, 3000);
     });
+    return () => {
+      cancelled = true;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      unsubs.forEach(u => { try { u(); } catch {} });
+    };
   }, [projectId, shortId]);
 
   // Resolve account logo
   useEffect(() => {
     if (!project?.companyName) return;
     let unsub = () => {};
+    let cancelled = false;
     onFB(() => {
+      if (cancelled) return;
       unsub = fbListen("/accounts", (acctData) => {
         if (!acctData) return;
         const nameLC = project.companyName.toLowerCase();
@@ -97,7 +108,7 @@ export function PreproductionPublicView() {
         setAccountLogoBg(match?.logoBg || "white");
       });
     });
-    return () => unsub();
+    return () => { cancelled = true; unsub(); };
   }, [project?.companyName]);
 
   // Send Slack notification 2 minutes after last feedback submission
