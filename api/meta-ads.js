@@ -528,6 +528,124 @@ Produce the scriptTable JSON now.`;
 }
 
 // ────────────────────────────────────────────────────────────────
+// Cell-level rewrite
+// ────────────────────────────────────────────────────────────────
+// Producer clicks any cell in the script table, types a free-text
+// instruction ("make this shorter", "more aggressive hook", "use
+// specific dollar numbers"), and Claude rewrites just that field.
+// Brand Truth + the rest of the row is passed in as context so the
+// rewrite stays consistent with the other cells.
+
+// Human-friendly column labels + writing-rule hints used in the
+// rewrite prompt. Keeping this server-side so clients can't smuggle
+// rules that'd confuse Claude (e.g. asking for a 500-word headline).
+const COLUMN_RULES = {
+  hook:         { label: "Hook",            rule: "One or two sentences max. Confrontational, direct, second-person. Pattern-interrupt, not soft." },
+  explainPain:  { label: "Explain the Pain", rule: "One sentence only. Metaphor or telling moment. Don't explain at length." },
+  results:      { label: "Results",          rule: "One sentence. Viewer's world only — no company name, no product mention. Bridges from Pain." },
+  offer:        { label: "The Offer",        rule: "Two sentences max. Opens with \"At {company}, we...\". Spoken natural language." },
+  whyOffer:     { label: "Why the Offer",    rule: "One or two short sentences. Emotional reason to want it, not a logical summary." },
+  cta:          { label: "CTA",              rule: "One short sentence. Must use \"tap\" (never click). Relates to the pain." },
+  headline:     { label: "Meta Ad Headline", rule: "Punchy, 35-character hard limit. Don't exceed." },
+  adCopy:       { label: "Meta Ad Copy",     rule: "60-120 words. No em dashes. One idea per ad (Pain → Insight → Outcome → Simple action). Write like a person, not a brand." },
+  videoName:    { label: "Video Name",       rule: "{number}_{motivator}_{topic}_{audience}. TM/AF/TB × PA/PU. CamelCase topic, no spaces." },
+  motivatorType:{ label: "Motivator Type",    rule: "Enum: toward / awayFrom / triedBefore / other. Lowercase, no other values." },
+  audienceType: { label: "Audience Type",     rule: "Enum: problemAware / problemUnaware. Lowercase, no other values." },
+  formatName:   { label: "Format Name",      rule: "Must match one of the project's selectedFormats names verbatim." },
+};
+
+async function handleRewriteCell(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, rowId, column, instruction, currentValue } = req.body || {};
+  if (!projectId || !rowId || !column || !instruction) {
+    return res.status(400).json({ error: "Missing projectId / rowId / column / instruction" });
+  }
+  const colMeta = COLUMN_RULES[column];
+  if (!colMeta) return res.status(400).json({ error: `Unknown column: ${column}` });
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const scriptTable = Array.isArray(project.scriptTable) ? project.scriptTable : [];
+  const rowIndex = scriptTable.findIndex(r => r && r.id === rowId);
+  if (rowIndex < 0) return res.status(404).json({ error: "Row not found in script table" });
+  const row = scriptTable[rowIndex];
+  const bt = project.brandTruth?.fields || {};
+
+  const systemPrompt = `You rewrite a single field in a Meta Ad script row. You are given the client's Brand Truth, the full existing row so you can keep voice consistent, the specific field to rewrite, and a free-text instruction from the producer. Return ONLY the rewritten field value as plain text — no JSON, no markdown, no preamble, no quotes around the value.
+
+FIELD: ${colMeta.label}
+FIELD RULE: ${colMeta.rule}
+
+HARD CONSTRAINTS:
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Use contractions.
+- Match the tone of the rest of the row.
+- Respect the field rule above — if it says one sentence, write one sentence.`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+
+BRAND TRUTH:
+- Brand Truths: ${bt.brandTruths || "(none)"}
+- Product / Offer: ${bt.productOffer || "(none)"}
+- Unique Value Prop: ${bt.uniqueValueProp || "(none)"}
+- Target Customer: ${bt.targetCustomer || "(none)"}
+- Pain Points: ${bt.painPoints || "(none)"}
+- Desired Outcome: ${bt.desiredOutcome || "(none)"}
+- Proof Points: ${bt.proofPoints || "(none)"}
+
+EXISTING ROW (for voice consistency):
+- Video Name: ${row.videoName || ""}
+- Format: ${row.formatName || ""}
+- Motivator: ${row.motivatorType || ""} · Audience: ${row.audienceType || ""}
+- Hook: ${row.hook || ""}
+- Explain the Pain: ${row.explainPain || ""}
+- Results: ${row.results || ""}
+- Offer: ${row.offer || ""}
+- Why Offer: ${row.whyOffer || ""}
+- CTA: ${row.cta || ""}
+- Headline: ${row.headline || ""}
+- Ad Copy: ${row.adCopy || ""}
+
+CURRENT VALUE OF ${colMeta.label}:
+${currentValue || row[column] || "(empty)"}
+
+PRODUCER'S INSTRUCTION:
+${instruction}
+
+Return the rewritten ${colMeta.label} only.`;
+
+  let rewritten;
+  try {
+    rewritten = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 800,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  // Trim surrounding whitespace + quotes the model sometimes adds.
+  let cleaned = (rewritten || "").trim();
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  // Headline hard 35-char limit (trim rather than fail)
+  if (column === "headline" && cleaned.length > 35) cleaned = cleaned.slice(0, 35);
+
+  // Write the single field back.
+  await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${rowIndex}/${column}`, cleaned);
+  await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, value: cleaned });
+}
+
+// ────────────────────────────────────────────────────────────────
 // Handler
 // ────────────────────────────────────────────────────────────────
 
@@ -544,6 +662,7 @@ export default async function handler(req, res) {
       case "scrapeAdLibrary": return await handleScrapeAdLibrary(req, res);
       case "addManualAd":     return await handleAddManualAd(req, res);
       case "scriptGenerate":  return await handleScriptGenerate(req, res);
+      case "rewriteCell":     return await handleRewriteCell(req, res);
       default:                return res.status(400).json({ error: `Unknown action: ${action}` });
     }
   } catch (e) {

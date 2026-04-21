@@ -1193,6 +1193,9 @@ function SelectStep({ project, onPatch }) {
 function ScriptStep({ project, onPatch }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
+  // Click-to-rewrite — stores the cell currently being edited.
+  // { rowId, column, label, currentValue } | null
+  const [rewriteTarget, setRewriteTarget] = useState(null);
   const scripts = project.scriptTable || [];
 
   const generate = async () => {
@@ -1244,36 +1247,146 @@ function ScriptStep({ project, onPatch }) {
           </div>
         </div>
       ) : (
-        <div style={{ overflowX: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
-          <table style={{ width: "100%", minWidth: 1400, borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr>
-                {["#", "Name", "Format", "Hook", "Explain the Pain", "Results", "Offer", "CTA", "Headline", "Ad Copy"].map(h => (
-                  <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: "2px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {scripts.map((row, i) => (
-                <tr key={row.id || i}>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, verticalAlign: "top" }}>{String(i + 1).padStart(2, "0")}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top" }}>
-                    <div style={{ fontSize: 11, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{row.videoName || "—"}</div>
-                  </td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", color: "var(--muted)", fontSize: 11 }}>{row.formatName || "—"}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 240 }}>{row.hook || ""}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 220 }}>{row.explainPain || ""}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 220 }}>{row.results || ""}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 220 }}>{row.offer || ""}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 180 }}>{row.cta || ""}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>{row.headline || ""}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 320, fontSize: 11, lineHeight: 1.5 }}>{row.adCopy || ""}</td>
+        <>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
+            Click any cell to rewrite it with AI. Your instruction + the row's current content + Brand Truth feed into Claude; just that field gets replaced.
+          </div>
+          <div style={{ overflowX: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <table style={{ width: "100%", minWidth: 1400, borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  {["#", "Name", "Format", "Hook", "Explain the Pain", "Results", "Offer", "CTA", "Headline", "Ad Copy"].map(h => (
+                    <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: "2px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {scripts.map((row, i) => {
+                  // Renders a clickable cell that opens the rewrite modal.
+                  // Plain-text cells (Name/#/Format) aren't clickable —
+                  // they're metadata, producer rewrites them via regenerate
+                  // or manual edit if ever needed.
+                  const Cell = ({ column, label, content, width, extraStyle }) => (
+                    <td
+                      style={{ padding: 0, borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: width, cursor: "pointer" }}
+                      onClick={() => setRewriteTarget({ rowId: row.id, column, label, currentValue: content || "" })}
+                      title="Click to rewrite with AI"
+                    >
+                      <div style={{ padding: "10px 12px", minHeight: 40, ...(extraStyle || {}) }}>
+                        {content || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>empty · click to fill</span>}
+                      </div>
+                    </td>
+                  );
+                  return (
+                    <tr key={row.id || i}>
+                      <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, verticalAlign: "top" }}>{String(i + 1).padStart(2, "0")}</td>
+                      <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top" }}>
+                        <div style={{ fontSize: 11, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{row.videoName || "—"}</div>
+                      </td>
+                      <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", color: "var(--muted)", fontSize: 11 }}>{row.formatName || "—"}</td>
+                      <Cell column="hook"         label="Hook"            content={row.hook}         width={240} />
+                      <Cell column="explainPain"  label="Explain the Pain" content={row.explainPain} width={220} />
+                      <Cell column="results"      label="Results"          content={row.results}     width={220} />
+                      <Cell column="offer"        label="The Offer"        content={row.offer}       width={220} />
+                      <Cell column="cta"          label="CTA"              content={row.cta}         width={180} />
+                      <Cell column="headline"     label="Meta Ad Headline" content={row.headline}    width={160} extraStyle={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }} />
+                      <Cell column="adCopy"       label="Meta Ad Copy"     content={row.adCopy}      width={320} extraStyle={{ fontSize: 11, lineHeight: 1.5 }} />
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
+
+      {rewriteTarget && (
+        <RewriteModal
+          project={project}
+          target={rewriteTarget}
+          onClose={() => setRewriteTarget(null)}
+          onDone={() => setRewriteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Rewrite modal — free-text instruction → Claude rewrites that one
+// field → Firebase update → modal closes. No preview / diff view in
+// v1; producer sees the update land in the table when Firebase
+// listener rehydrates.
+function RewriteModal({ project, target, onClose, onDone }) {
+  const [instruction, setInstruction] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!instruction.trim()) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rewriteCell",
+          projectId: project.id,
+          rowId: target.rowId,
+          column: target.column,
+          instruction: instruction.trim(),
+          currentValue: target.currentValue,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      onDone?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "var(--card)", borderRadius: 12, padding: 24, maxWidth: 520, width: "100%", border: "1px solid var(--border)" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
+          Rewrite with AI
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)", marginBottom: 10 }}>
+          {target.label}
+        </div>
+        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", marginBottom: 14, maxHeight: 120, overflowY: "auto" }}>
+          <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>Current</div>
+          <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+            {target.currentValue || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>(empty)</span>}
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>
+          Instruction
+        </div>
+        <textarea value={instruction} onChange={e => setInstruction(e.target.value)} autoFocus rows={4}
+          placeholder="e.g. Make this more aggressive, lead with a specific dollar amount. Or: tighten to one sentence. Or: reframe as a Tried Before hook."
+          style={{ ...textareaSt, marginBottom: 12 }} />
+        {error && (
+          <div style={{ padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444", marginBottom: 12 }}>
+            {error}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} disabled={submitting}
+            style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 600, cursor: submitting ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+            Cancel
+          </button>
+          <button onClick={submit} disabled={submitting || !instruction.trim()}
+            style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: submitting || !instruction.trim() ? "#374151" : "var(--accent)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: submitting || !instruction.trim() ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+            {submitting ? "Rewriting…" : "Rewrite"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
