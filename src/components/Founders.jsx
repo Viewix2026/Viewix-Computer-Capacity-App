@@ -484,9 +484,12 @@ function ThankYouEditor({ saleThankYou, setSaleThankYou }) {
                         <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
                           Next Steps Copy (what happens next, shown to customer)
                         </label>
-                        <textarea value={slot.nextStepsCopy || ""} onChange={e => updateSlot(vt.key, p.key, "nextStepsCopy", e.target.value)} rows={5}
-                          placeholder={`e.g. Thanks for choosing ${p.label}! Here's what happens next:\n\n1. Watch the welcome video above\n2. Book your kickoff meeting\n3. We'll send a pre-production questionnaire`}
+                        <textarea value={slot.nextStepsCopy || ""} onChange={e => updateSlot(vt.key, p.key, "nextStepsCopy", e.target.value)} rows={8}
+                          placeholder={`Supports **bold** and bullet lists.\n\nExample:\n\n**Welcome to Viewix.**\n\nHere's what happens next:\n\n- Watch the welcome video\n- Book your Pre-Production meeting\n- We'll send your onboarding pack within 24 hours`}
                           style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }} />
+                        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                          Supports <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 3 }}>**bold**</code> and bullet lines starting with <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 3 }}>-</code> or <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 3 }}>•</code>. Blank lines become paragraphs.
+                        </div>
                       </div>
                     )}
                   </div>

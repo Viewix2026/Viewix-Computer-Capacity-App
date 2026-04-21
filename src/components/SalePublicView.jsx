@@ -248,11 +248,15 @@ function PaidCard({ sale, thankYou, justPaid }) {
         </div>
       )}
 
-      {/* Next-steps copy */}
+      {/* Next-steps copy — MarkdownLite handles **bold**, bullet lists
+          (- item / • item), and blank-line paragraph breaks so founders
+          can write structured copy from the Thank-You Pages editor. */}
       {nextSteps && (
         <div style={{ marginBottom: 24, padding: "20px 22px", background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 12, textAlign: "left" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>What happens next</div>
-          <div style={{ fontSize: 14, color: "#0B0F1A", lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{nextSteps}</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>What happens next</div>
+          <div style={{ fontSize: 14, color: "#0B0F1A" }}>
+            <MarkdownLite text={nextSteps} />
+          </div>
         </div>
       )}
 
@@ -310,6 +314,53 @@ function Shell({ children }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Tiny safe markdown subset for thank-you page copy. We don't pull in a
+// full markdown library — the surface area founders need is small:
+//   **bold**              → <strong>
+//   - item / • item       → <ul><li>
+//   blank line            → <p>…</p>
+// Rendering is pure React (no dangerouslySetInnerHTML) so user-authored
+// copy can't inject HTML. Anything that isn't bold or a bullet line is
+// emitted as a paragraph; unrecognised markdown characters render
+// literally, which is better than silently swallowing them.
+function renderInline(text) {
+  const parts = text.split(/(\*\*[^*\n]+\*\*)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) {
+      return <strong key={i}>{p.slice(2, -2)}</strong>;
+    }
+    return <span key={i}>{p}</span>;
+  });
+}
+function MarkdownLite({ text }) {
+  if (!text) return null;
+  const paragraphs = String(text).split(/\n\s*\n/);
+  return (
+    <>
+      {paragraphs.map((p, i) => {
+        const lines = p.split(/\n/);
+        const isList = lines.length > 0 && lines.every(l => /^\s*[-•]\s+/.test(l));
+        if (isList) {
+          return (
+            <ul key={i} style={{ margin: "0 0 14px", paddingLeft: 22 }}>
+              {lines.map((l, j) => (
+                <li key={j} style={{ marginBottom: 6, lineHeight: 1.6 }}>
+                  {renderInline(l.replace(/^\s*[-•]\s+/, ""))}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={i} style={{ margin: "0 0 14px", lineHeight: 1.65 }}>
+            {renderInline(p)}
+          </p>
+        );
+      })}
+    </>
   );
 }
 
