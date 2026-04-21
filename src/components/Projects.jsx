@@ -19,11 +19,25 @@ import { fmtCur, fmtD } from "../utils";
 import { fbSet } from "../firebase";
 import { Deliveries } from "./Deliveries";
 
+// Monday.com-style status values — matches the screenshot Jeremy shared.
+// Legacy records stored "active" / "onHold" — see normaliseStatus() below
+// which maps those onto the new keys so nothing becomes unreadable.
 const STATUS_OPTIONS = [
-  { key: "active",   label: "Active",   color: "#10B981" },
-  { key: "onHold",   label: "On Hold",  color: "#F59E0B" },
-  { key: "archived", label: "Archived", color: "#6B7280" },
+  { key: "notStarted",    label: "Not Started",       color: "#6B7280" },
+  { key: "inProgress",    label: "In Progress",       color: "#F97316" },
+  { key: "scheduled",     label: "Scheduled",         color: "#3B82F6" },
+  { key: "waitingClient", label: "Waiting on Client", color: "#8B5CF6" },
+  { key: "stuck",         label: "Stuck",             color: "#EC4899" },
+  { key: "done",          label: "Done",              color: "#10B981" },
+  { key: "archived",      label: "Archived",          color: "#475569" },
 ];
+const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map(s => [s.key, s]));
+// Legacy → new keys so pre-refactor records still render a sensible pill.
+const LEGACY_STATUS = { active: "inProgress", onHold: "waitingClient" };
+function normaliseStatus(raw) {
+  const key = LEGACY_STATUS[raw] || raw || "notStarted";
+  return STATUS_MAP[key] ? key : "notStarted";
+}
 
 function StatusPill({ label, done, color = "#10B981" }) {
   return (
@@ -55,6 +69,154 @@ function Chip({ children, color = "var(--accent)" }) {
     }}>{children}</span>
   );
 }
+
+// ─── Monday-style table ────────────────────────────────────────────
+// Row columns: checkbox · Project (client : name + count badge) ·
+// Start Date · Due Date · Timeline · Status pill. Inline status
+// dropdown so producers can reclassify a project without opening the
+// detail view. Clicking the project name opens the detail view.
+
+function StatusCell({ value, onChange }) {
+  const key = normaliseStatus(value);
+  const opt = STATUS_MAP[key];
+  return (
+    <select
+      value={key}
+      onClick={e => e.stopPropagation()}
+      onChange={e => { e.stopPropagation(); onChange(e.target.value); }}
+      style={{
+        width: "100%", padding: "8px 12px", border: "none",
+        background: opt.color, color: "#fff",
+        fontSize: 11, fontWeight: 800, letterSpacing: 0.4,
+        textTransform: "uppercase", cursor: "pointer",
+        textAlign: "center", appearance: "none",
+        fontFamily: "inherit",
+      }}>
+      {STATUS_OPTIONS.map(s => (
+        <option key={s.key} value={s.key} style={{ background: "var(--card)", color: "var(--fg)" }}>
+          {s.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// "Timeline" column renders a thin horizontal bar showing the span
+// between closeDate / startDate and dueDate. Shows "-" if either
+// endpoint is missing so the cell doesn't go empty.
+function TimelineCell({ start, end }) {
+  if (!start || !end) {
+    return <span style={{ display: "inline-block", padding: "6px 16px", background: "var(--bg)", borderRadius: 999, color: "var(--muted)", fontSize: 10, fontFamily: "'JetBrains Mono',monospace" }}>—</span>;
+  }
+  const s = new Date(start); const e = new Date(end); const now = new Date();
+  const totalMs = Math.max(1, e - s);
+  const elapsedMs = Math.max(0, Math.min(totalMs, now - s));
+  const pct = Math.round((elapsedMs / totalMs) * 100);
+  const overdue = now > e;
+  const col = overdue ? "#EF4444" : pct > 80 ? "#F59E0B" : "#3B82F6";
+  return (
+    <div style={{ width: "100%", minWidth: 100 }} title={`${start} → ${end} (${pct}% elapsed)`}>
+      <div style={{ height: 6, background: "var(--bg)", borderRadius: 999, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: col, borderRadius: 999 }} />
+      </div>
+      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 3, fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>{pct}%</div>
+    </div>
+  );
+}
+
+function ProjectRow({ project, onOpen, onStatusChange, striped }) {
+  const videoCount = project.numberOfVideos;
+  const clientPart = project.clientName || "—";
+  const namePart = project.projectName || "Untitled project";
+  const startDate = project.closeDate || project.createdAt;
+  const dueDate = project.dueDate;
+  return (
+    <tr
+      onClick={() => onOpen(project.id)}
+      style={{
+        cursor: "pointer",
+        background: striped ? "rgba(255,255,255,0.015)" : "transparent",
+        borderBottom: "1px solid var(--border)",
+      }}
+      onMouseEnter={e => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
+      onMouseLeave={e => e.currentTarget.style.background = striped ? "rgba(255,255,255,0.015)" : "transparent"}>
+      <td style={tdStyle} onClick={e => e.stopPropagation()}>
+        <input type="checkbox" disabled style={{ cursor: "not-allowed", opacity: 0.4 }} title="Bulk actions coming soon" />
+      </td>
+      <td style={{ ...tdStyle, minWidth: 320 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: "var(--muted)", fontSize: 14, lineHeight: 1 }}>›</span>
+          <span style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.3 }}>
+            <span style={{ fontWeight: 700 }}>{clientPart}:</span>{" "}
+            <span style={{ fontWeight: 500 }}>{namePart}</span>
+          </span>
+          {videoCount != null && (
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+              {videoCount}
+            </span>
+          )}
+        </div>
+      </td>
+      <td style={{ ...tdStyle, width: 120, textAlign: "center" }}>
+        <span style={dateCellStyle}>{startDate ? fmtD(startDate) : "—"}</span>
+      </td>
+      <td style={{ ...tdStyle, width: 120, textAlign: "center" }}>
+        <span style={dateCellStyle}>{dueDate ? fmtD(dueDate) : "—"}</span>
+      </td>
+      <td style={{ ...tdStyle, width: 140 }}>
+        <TimelineCell start={startDate} end={dueDate} />
+      </td>
+      <td style={{ ...tdStyle, width: 180, padding: 0 }}>
+        <StatusCell value={project.status} onChange={(s) => onStatusChange(project.id, s)} />
+      </td>
+    </tr>
+  );
+}
+
+const tdStyle = { padding: "10px 14px", verticalAlign: "middle" };
+const dateCellStyle = {
+  display: "inline-block", padding: "4px 14px", borderRadius: 999,
+  background: "var(--bg)", border: "1px solid var(--border)",
+  color: "var(--muted)", fontSize: 11, fontWeight: 600,
+  fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
+};
+
+function ProjectTable({ projects, onOpen, onStatusChange }) {
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", position: "relative" }}>
+      {/* Thin pink accent stripe on the left — matches the Monday-style
+          "this is a project table" affordance in Jeremy's reference. */}
+      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "#EC4899" }} />
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "var(--bg)" }}>
+              <th style={thStyle}></th>
+              <th style={{ ...thStyle, textAlign: "left" }}>Project</th>
+              <th style={thStyle}>Start Date</th>
+              <th style={thStyle}>Due date</th>
+              <th style={thStyle}>Timeline</th>
+              <th style={thStyle}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {projects.map((p, i) => (
+              <ProjectRow key={p.id} project={p} onOpen={onOpen} onStatusChange={onStatusChange} striped={i % 2 === 1} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const thStyle = {
+  padding: "10px 14px", textAlign: "center",
+  fontSize: 10, fontWeight: 800, color: "var(--muted)",
+  letterSpacing: 0.6, textTransform: "uppercase",
+  borderBottom: "1px solid var(--border)",
+  whiteSpace: "nowrap",
+};
 
 const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   const links = project.links || {};
@@ -118,7 +280,9 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
 
 function ProjectDetail({ project, onBack, onDelete }) {
   const [notes, setNotes] = useState(project.producerNotes || "");
-  const [status, setStatus] = useState(project.status || "active");
+  // Normalise so legacy "active" / "onHold" records open with a sensible
+  // current-status value instead of falling through to "Not Started".
+  const [status, setStatus] = useState(normaliseStatus(project.status));
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
 
   const saveField = async (patch) => {
@@ -153,16 +317,11 @@ function ProjectDetail({ project, onBack, onDelete }) {
             {project.projectName}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {STATUS_OPTIONS.map(s => (
-            <button key={s.key} onClick={() => { setStatus(s.key); saveField({ status: s.key }); }}
-              style={{
-                padding: "6px 12px", borderRadius: 6, border: "none",
-                background: status === s.key ? "var(--card)" : "transparent",
-                color: status === s.key ? s.color : "var(--muted)",
-                fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase",
-              }}>{s.label}</button>
-          ))}
+        {/* Seven-status taxonomy — swapped to a coloured dropdown so all
+            options fit without horizontal overflow. Background colour
+            reflects current selection (matches the row pill). */}
+        <div style={{ minWidth: 200 }}>
+          <StatusCell value={status} onChange={(s) => { setStatus(s); saveField({ status: s }); }} />
         </div>
       </div>
 
@@ -268,10 +427,18 @@ export function Projects({ projects, deliveries, setDeliveries, accounts }) {
 
   const active = projects.find(p => p.id === activeProjectId);
 
+  // `filter` now maps to status groups rather than the 3 legacy keys.
+  // "active" = everything except Done + Archived (the workable pipeline).
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return projects
-      .filter(p => filter === "all" ? (p.status || "active") !== "archived" : (p.status || "active") === filter)
+      .map(p => ({ ...p, _status: normaliseStatus(p.status) }))
+      .filter(p => {
+        if (filter === "active")   return p._status !== "done" && p._status !== "archived";
+        if (filter === "done")     return p._status === "done";
+        if (filter === "archived") return p._status === "archived";
+        return p._status !== "archived";  // "all"
+      })
       .filter(p => !q || (p.projectName || "").toLowerCase().includes(q) || (p.clientName || "").toLowerCase().includes(q))
       .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   }, [projects, filter, search]);
@@ -299,9 +466,10 @@ export function Projects({ projects, deliveries, setDeliveries, accounts }) {
               style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, width: 200, outline: "none" }}/>
             <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
               {[
-                { key: "all", label: "Active" },
-                { key: "onHold", label: "On Hold" },
+                { key: "active",   label: "Active" },
+                { key: "done",     label: "Done" },
                 { key: "archived", label: "Archived" },
+                { key: "all",      label: "All" },
               ].map(f => (
                 <button key={f.key} onClick={() => setFilter(f.key)}
                   style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: filter === f.key ? "var(--card)" : "transparent", color: filter === f.key ? "var(--fg)" : "var(--muted)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
@@ -314,25 +482,31 @@ export function Projects({ projects, deliveries, setDeliveries, accounts }) {
       </div>
 
       {subTab === "projects" && !active && (
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
+        <div style={{ padding: "16px 28px 60px" }}>
           {filtered.length === 0 ? (
             <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", borderRadius: 12, border: "1px solid var(--border)" }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>📁</div>
               <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
-                {search ? "No matches" : filter === "archived" ? "No archived projects" : filter === "onHold" ? "No projects on hold" : "No projects yet"}
+                {search ? "No matches" : filter === "archived" ? "No archived projects" : filter === "done" ? "No projects done" : "No projects yet"}
               </div>
-              {!search && filter === "all" && (
+              {!search && filter === "active" && (
                 <div style={{ fontSize: 13, maxWidth: 400, margin: "0 auto" }}>
                   Projects appear here automatically when a deal moves to <strong>Won</strong> in Attio.
                 </div>
               )}
             </div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-              {filtered.map(p => (
-                <ProjectCard key={p.id} project={p} onClick={() => setActiveProjectId(p.id)}/>
-              ))}
-            </div>
+            <ProjectTable
+              projects={filtered}
+              onOpen={(id) => setActiveProjectId(id)}
+              onStatusChange={(id, status) => {
+                // Write the status leaf directly so the change lands before
+                // any listener race — same pattern as the Deliveries
+                // per-field write fix. Also bump updatedAt for sort keys.
+                fbSet(`/projects/${id}/status`, status);
+                fbSet(`/projects/${id}/updatedAt`, new Date().toISOString());
+              }}
+            />
           )}
         </div>
       )}
