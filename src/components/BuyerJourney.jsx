@@ -124,6 +124,12 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
   const [subTab, setSubTab] = useState("journey");      // journey | turnaround
   const [offer, setOffer] = useState("meta");
   const [editingId, setEditingId] = useState(null);
+  // Inline connector editing — { stageId, field: "days" | "pct" } | null.
+  // When set, the corresponding connector label renders an input instead
+  // of the static pill. Blur or Enter writes + closes. Linked stages
+  // can still inline-edit days (it flows to /turnaround), but pct for
+  // linked stages stays read-only live data.
+  const [inlineEdit, setInlineEdit] = useState(null);
 
   const metaStages = data?.meta?.length > 0 ? data.meta : DEFAULT_META;
   const socialStages = data?.social?.length > 0 ? data.social : DEFAULT_SOCIAL;
@@ -154,29 +160,82 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
   const smallBtn = { background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 10, padding: "2px 4px" };
 
   // Enhanced connector between two stages — shows days-to-next and
-  // optional % conversion stacked above the arrow. Both are optional;
-  // when neither is set we fall back to a minimal arrow.
-  const StageConnector = ({ days, pctValue, pctSource }) => {
+  // optional % conversion stacked above the arrow. Both chips click-to-
+  // edit: click days → numeric input; click pct → text input (unless
+  // the pct is computed live from accounts data, in which case the pill
+  // is read-only and shows a tooltip explaining why).
+  const StageConnector = ({ stage, days, pctValue, pctSource }) => {
     const hasDays = days != null && !isNaN(days);
     const hasPct = pctValue != null && pctValue !== "";
+    const daysEditing = inlineEdit?.stageId === stage?.id && inlineEdit?.field === "days";
+    const pctEditing  = inlineEdit?.stageId === stage?.id && inlineEdit?.field === "pct";
+    const canEditPct = pctSource !== "live"; // live % is derived — not editable
+    const pctBgColor = pctSource === "live" ? "rgba(16,185,129,0.12)" : "rgba(0,130,250,0.12)";
+    const pctFgColor = pctSource === "live" ? "#10B981" : "#0082FA";
+    const pctTitle = pctSource === "live"
+      ? "Live conversion from client milestone data (auto-computed — link/unlink milestones on the stages to change)"
+      : (canEditPct ? "Click to edit manual % label" : "");
+
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", alignSelf: "center", flexShrink: 0, gap: 2, padding: "0 6px", minWidth: 60 }}>
-        {hasPct && (
-          <div style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "rgba(0,130,250,0.12)", color: "#0082FA", whiteSpace: "nowrap", fontFamily: "'JetBrains Mono',monospace" }}
-               title={pctSource === "live" ? "Live conversion from client milestone data" : "Manually entered"}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", alignSelf: "center", flexShrink: 0, gap: 2, padding: "0 6px", minWidth: 70 }}>
+        {/* Percent pill (above arrow). Empty-state click-to-add when
+            nothing is set but the stage is unlinked — gives producers
+            a fast way to drop a "~30%" note without entering edit mode. */}
+        {pctEditing ? (
+          <input autoFocus type="text"
+            defaultValue={typeof pctValue === "number" ? `${pctValue}%` : (pctValue || "")}
+            onBlur={e => { updateItem(stage.id, { pct: e.target.value.trim() }); setInlineEdit(null); }}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") e.target.blur(); }}
+            placeholder="e.g. 65%"
+            style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--accent)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none", textAlign: "center" }}
+          />
+        ) : hasPct ? (
+          <div
+            onClick={() => { if (canEditPct) setInlineEdit({ stageId: stage.id, field: "pct" }); }}
+            title={pctTitle}
+            style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: pctBgColor, color: pctFgColor, whiteSpace: "nowrap", fontFamily: "'JetBrains Mono',monospace", cursor: canEditPct ? "pointer" : "help" }}>
             {typeof pctValue === "number" ? `${pctValue}%` : pctValue}
             {pctSource === "live" && <span style={{ marginLeft: 4, opacity: 0.6 }}>●</span>}
           </div>
-        )}
+        ) : (stage && canEditPct) ? (
+          <button
+            onClick={() => setInlineEdit({ stageId: stage.id, field: "pct" })}
+            title="Add % conversion"
+            style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "transparent", color: "var(--muted)", border: "1px dashed var(--border)", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace" }}>
+            + %
+          </button>
+        ) : null}
+
         <div style={{ display: "flex", alignItems: "center" }}>
           <div style={{ height: 2, width: 20, background: "var(--border)" }} />
           <div style={{ width: 0, height: 0, borderTop: "5px solid transparent", borderBottom: "5px solid transparent", borderLeft: "6px solid var(--border)" }} />
         </div>
-        {hasDays && (
-          <div style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", whiteSpace: "nowrap", fontFamily: "'JetBrains Mono',monospace" }}>
-            {days}d
+
+        {/* Days chip (below arrow). Linked stages show a subtle ↻ to
+            remind producers that editing here also bumps /turnaround. */}
+        {daysEditing ? (
+          <input autoFocus type="number" min={0}
+            defaultValue={hasDays ? days : ""}
+            onBlur={e => { updateStageDays(stage, e.target.value); setInlineEdit(null); }}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") e.target.blur(); }}
+            placeholder="days"
+            style={{ width: 55, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--accent)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 10, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none", textAlign: "center" }}
+          />
+        ) : hasDays ? (
+          <div
+            onClick={() => setInlineEdit({ stageId: stage.id, field: "days" })}
+            title={stage?.milestoneKey ? "Click to edit — also writes to /turnaround (syncs with client due dates)" : "Click to edit days to next stage"}
+            style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", whiteSpace: "nowrap", fontFamily: "'JetBrains Mono',monospace", cursor: "pointer", padding: "1px 4px", borderRadius: 3 }}>
+            {days}d{stage?.milestoneKey && <span style={{ marginLeft: 3, opacity: 0.6, color: "#0082FA" }}>↻</span>}
           </div>
-        )}
+        ) : stage ? (
+          <button
+            onClick={() => setInlineEdit({ stageId: stage.id, field: "days" })}
+            title="Add days to next stage"
+            style={{ fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 3, background: "transparent", color: "var(--muted)", border: "1px dashed var(--border)", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace" }}>
+            + d
+          </button>
+        ) : null}
       </div>
     );
   };
@@ -342,7 +401,7 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                   </div>
                 )}
               </div>
-              {showConnector && <StageConnector days={connectorDays} pctValue={pctValue} pctSource={pctSource} />}
+              {showConnector && <StageConnector stage={item} days={connectorDays} pctValue={pctValue} pctSource={pctSource} />}
             </div>
           );
         })}
