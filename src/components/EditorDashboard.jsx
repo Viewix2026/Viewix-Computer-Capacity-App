@@ -27,15 +27,23 @@ export function EditorDashboard({embedded,onLogout}){
   const justStoppedRef=useRef({}); // guard: {taskId: timestamp} prevents listener from re-enabling stopped timers
   const today=todayKey();
 
-  // Init Firebase and load editors
+  // Init Firebase and load editors. Cleanup on unmount so the /mondayEditors
+  // listener doesn't stack when the producer switches in and out of the
+  // Editors tab. The bug was: each mount attached a fresh listener without
+  // ever calling off(), so over a long session listeners accumulated —
+  // eventually contributing to memory pressure that other tabs inherited.
   useEffect(()=>{
     initFB();
+    let unsub=()=>{};
+    let cancelled=false;
     onFB(()=>{
-      fbListen("/mondayEditors",(data)=>{
+      if(cancelled)return;
+      unsub=fbListen("/mondayEditors",(data)=>{
         if(data&&Array.isArray(data)&&data.length>0){setMondayEditors(data);setEditorsLoading(false);}
-        else{fetchMondayUsers().then(users=>{if(users&&users.length>0){setMondayEditors(users);fbSet("/mondayEditors",users);}setEditorsLoading(false);}).catch(()=>setEditorsLoading(false));}
+        else{fetchMondayUsers().then(users=>{if(cancelled)return;if(users&&users.length>0){setMondayEditors(users);fbSet("/mondayEditors",users);}setEditorsLoading(false);}).catch(()=>{if(!cancelled)setEditorsLoading(false);});}
       });
     });
+    return()=>{cancelled=true;unsub();};
   },[]);
 
   // Load tasks when editor selected
@@ -47,12 +55,16 @@ export function EditorDashboard({embedded,onLogout}){
     fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));
   },[editorId]);
 
-  // Listen to Firebase time logs for this editor + today, resume running timer
+  // Listen to Firebase time logs for this editor + today, resume running timer.
+  // `cancelled` guard prevents the onFB callback from attaching a fresh
+  // listener AFTER the cleanup has already run — previously if the effect
+  // re-fired (editorId change) before onFB resolved, the old listener leaked.
   useEffect(()=>{
     if(!editorId)return;
     const path=`/timeLogs/${editorId}/${today}`;
     let unsub=()=>{};
-    onFB(()=>{unsub=fbListen(path,(data)=>{
+    let cancelled=false;
+    onFB(()=>{if(cancelled)return;unsub=fbListen(path,(data)=>{
       if(data){
         const{_running,...logs}=data;
         setTimeLogs(logs);
@@ -67,7 +79,7 @@ export function EditorDashboard({embedded,onLogout}){
         }
       }else{setTimeLogs({});}
     });});
-    return()=>unsub();
+    return()=>{cancelled=true;unsub();};
   },[editorId,today]);
 
   // Timer tick
