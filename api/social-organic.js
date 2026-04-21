@@ -863,7 +863,9 @@ STRUCTURE TO RETURN:
 }
 
 IMPORTANT:
-- Total rows must equal numberOfVideos. Distribute rows across formats roughly evenly (3-6 videos per format is the norm).
+- Total rows must equal numberOfVideos.
+- The Selected Formats input tells you EXACTLY how many videos of each format to produce. Respect those counts precisely — do not redistribute them. If a format says "Count: 5" produce 5 script rows for that format, in order, before moving to the next format.
+- If a format says "Count: (not set)" (fallback case), distribute remaining rows roughly evenly across un-set formats.
 - Use formatName values verbatim from the Selected Formats input.
 - Hook, textHook and visualHook must be concrete enough to read aloud on set.`;
 
@@ -890,8 +892,16 @@ function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExamp
 
   const formatsBlock = selectedFormatObjects.map((fmt, i) => {
     const ex = Array.isArray(fmt.examples) ? fmt.examples : [];
+    // _videoCount comes from the project's selectedFormats[].videoCount.
+    // "Count: X" is the instruction Claude keys off for per-format
+    // distribution (see prompt line "If a format says Count: 5 produce
+    // 5 script rows").
+    const countLine = fmt._videoCount != null
+      ? `Count: ${fmt._videoCount}`
+      : `Count: (not set — fall back to equal distribution)`;
     return [
       `FORMAT ${i + 1}: ${fmt.name}`,
+      countLine,
       fmt.category ? `Category: ${fmt.category}` : null,
       fmt.videoAnalysis ? `Analysis: ${fmt.videoAnalysis}` : null,
       fmt.filmingInstructions ? `Filming: ${fmt.filmingInstructions}` : null,
@@ -952,11 +962,14 @@ async function handleGenerateScript(req, res) {
   }
 
   // Resolve each selected format to the full library entry so we have the
-  // analysis / filming / structure / examples available to Claude.
+  // analysis / filming / structure / examples available to Claude. We
+  // also carry the per-project videoCount forward (how many videos of
+  // this format to generate) so the prompt can give Claude exact counts
+  // rather than hoping for even distribution.
   const selectedFormatObjects = [];
   for (const s of selected) {
     const fmt = await fbGet(`/formatLibrary/${s.formatLibraryId}`);
-    if (fmt) selectedFormatObjects.push(fmt);
+    if (fmt) selectedFormatObjects.push({ ...fmt, _videoCount: s.videoCount ?? null });
   }
 
   const systemPrompt = await getPromptOverride();

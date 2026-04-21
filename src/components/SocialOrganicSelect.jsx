@@ -199,6 +199,43 @@ export function SocialOrganicSelect({ project, onPatch }) {
     onPatch({ selectedFormats: next });
   };
 
+  // Per-format video counts. Each selected entry can carry an explicit
+  // videoCount — producer sets how many videos of that format to shoot.
+  // When unset, we auto-fill with an equal-split default so the generator
+  // has a number to go on. Sum across entries should equal
+  // numberOfVideos; we surface red/green indicator below.
+  const totalTarget = numberOfVideos || 0;
+  const totalAssigned = selected.reduce((sum, s) => sum + (s.videoCount || 0), 0);
+  const countsBalanced = totalTarget > 0 && totalAssigned === totalTarget;
+
+  // Setter for a single row's videoCount.
+  const setFormatCount = (formatLibraryId, value) => {
+    const n = Math.max(0, parseInt(value, 10) || 0);
+    writeSelected(selected.map(s => s.formatLibraryId === formatLibraryId ? { ...s, videoCount: n } : s));
+  };
+
+  // Reset / equal-split action — distributes totalTarget across all
+  // selected formats as evenly as possible, remainder added to the first
+  // few entries. Used both for the initial auto-fill and the manual
+  // "Reset to equal split" button.
+  const applyEqualSplit = () => {
+    if (selected.length === 0 || !totalTarget) return;
+    const base = Math.floor(totalTarget / selected.length);
+    const remainder = totalTarget % selected.length;
+    writeSelected(selected.map((s, i) => ({ ...s, videoCount: base + (i < remainder ? 1 : 0) })));
+  };
+
+  // One-shot auto-fill: when ANY selected entry has no videoCount set,
+  // initialise the whole set to equal split. Fires on first mount after
+  // formats are selected (e.g. after AI suggest) and whenever a new
+  // format is dragged in with no explicit count yet.
+  useEffect(() => {
+    if (!totalTarget || selected.length === 0) return;
+    const hasUnset = selected.some(s => s.videoCount == null);
+    if (!hasUnset) return;
+    applyEqualSplit();
+  }, [selected.length, totalTarget]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   const addFormat = ({ source, formatLibraryId }) => {
     if (selected.some(s => s.formatLibraryId === formatLibraryId)) return;
     const entry = {
@@ -357,6 +394,11 @@ export function SocialOrganicSelect({ project, onPatch }) {
         shortlisted={shortlisted}
         onRemove={removeFormat}
         targetCount={targetCount}
+        totalTarget={totalTarget}
+        totalAssigned={totalAssigned}
+        countsBalanced={countsBalanced}
+        setFormatCount={setFormatCount}
+        applyEqualSplit={applyEqualSplit}
       />
 
       {/* Approval bar */}
@@ -574,7 +616,7 @@ function DraggableFormatCard({ card, onClick, onOpenDetails }) {
   );
 }
 
-function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCount }) {
+function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCount, totalTarget, totalAssigned, countsBalanced, setFormatCount, applyEqualSplit }) {
   const { setNodeRef, isOver } = useDroppable({ id: "selected-dropzone" });
   return (
     <div ref={setNodeRef}
@@ -583,10 +625,32 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
         border: `2px dashed ${isOver ? "var(--accent)" : "var(--border)"}`, borderRadius: 10,
         minHeight: 140, transition: "background 0.15s, border 0.15s",
       }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 10, display: "flex", justifyContent: "space-between" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <span>Selected for this brief{targetCount != null ? ` — target ${targetCount}` : ""}</span>
         <span style={{ color: "var(--muted)", fontWeight: 500, fontFamily: "'JetBrains Mono',monospace" }}>{selected.length}</span>
       </div>
+
+      {/* Video count allocator: how many of each format should be shot.
+          Sum must match numberOfVideos from the deal. Red when off,
+          green when balanced. "Reset to equal split" one-clicks back to
+          the auto default. */}
+      {totalTarget > 0 && selected.length > 0 && (
+        <div style={{
+          marginBottom: 12, padding: "8px 12px", borderRadius: 6,
+          background: countsBalanced ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)",
+          border: `1px solid ${countsBalanced ? "rgba(16,185,129,0.4)" : "rgba(239,68,68,0.4)"}`,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap",
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: countsBalanced ? "#10B981" : "#EF4444", fontFamily: "'JetBrains Mono',monospace" }}>
+            {totalAssigned} / {totalTarget} videos allocated {countsBalanced ? "✓" : `(${totalAssigned - totalTarget > 0 ? "+" : ""}${totalAssigned - totalTarget})`}
+          </div>
+          <button onClick={applyEqualSplit}
+            style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--card)", color: "var(--muted)", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            Reset to equal split
+          </button>
+        </div>
+      )}
+
       {selected.length === 0 ? (
         <div style={{ padding: 30, textAlign: "center", fontSize: 12, color: "var(--muted)" }}>
           Drag formats here, or double-click in either panel above.
@@ -607,6 +671,8 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
                   source={s.source}
                   thumbnail={thumb}
                   exampleUrl={exampleUrl}
+                  videoCount={s.videoCount}
+                  onChangeCount={v => setFormatCount(s.formatLibraryId, v)}
                   onRemove={() => onRemove(s.formatLibraryId)}
                 />
               );
@@ -618,7 +684,7 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
   );
 }
 
-function SortableSelectedRow({ id, index, name, source, thumbnail, exampleUrl, onRemove }) {
+function SortableSelectedRow({ id, index, name, source, thumbnail, exampleUrl, videoCount, onChangeCount, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   return (
     <div ref={setNodeRef}
@@ -641,6 +707,21 @@ function SortableSelectedRow({ id, index, name, source, thumbnail, exampleUrl, o
         <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
         <div style={{ fontSize: 10, color: "var(--muted)" }}>{source === "project" ? "📁 project" : "📚 library"}</div>
       </div>
+      {/* Per-format video count — how many videos of this format to shoot.
+          Click to edit. Sum must match project.numberOfVideos (indicator
+          above the list shows red/green). onChangeCount missing means
+          read-only (e.g. legacy usage elsewhere). */}
+      {onChangeCount && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }} title="How many videos of this format to shoot">
+          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>×</span>
+          <input type="number" min={0} max={99}
+            value={videoCount ?? ""}
+            onChange={e => onChangeCount(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            onPointerDown={e => e.stopPropagation()}
+            style={{ width: 40, padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none", textAlign: "center" }} />
+        </div>
+      )}
       <button onClick={onRemove} title="Remove"
         style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 14, cursor: "pointer", padding: "2px 6px" }}>×</button>
     </div>
