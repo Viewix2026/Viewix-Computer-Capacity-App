@@ -153,14 +153,23 @@ export const DEFAULT_RATE_CARDS = [
 // keep working.
 export {
   META_ADS_TIERS,
-  SOCIAL_RETAINER_TIERS,
+  SOCIAL_PREMIUM_TIERS,
+  SOCIAL_ORGANIC_TIERS,
+  SOCIAL_RETAINER_TIERS,   // legacy alias → SOCIAL_PREMIUM_TIERS
+  ONE_OFF_TYPES,
   TIER_COLORS,
   tierColor,
   tierLabel,
+  productLineLabel,
   PACKAGE_CONFIGS,
+  identifyDeal,
   normaliseTier,
   isMetaAdsDeal,
-  isSocialRetainerDeal,
+  isSocialPremiumDeal,
+  isSocialOrganicDeal,
+  isSocialDeal,
+  isOneOffDeal,
+  isSocialRetainerDeal,    // legacy alias
   SALE_VIDEO_TYPES,
   DEFAULT_SALE_PRICING,
 } from "../api/_tiers.js";

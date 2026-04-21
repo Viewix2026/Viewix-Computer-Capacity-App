@@ -4,7 +4,7 @@
 // Writes to Firebase via admin SDK (falls back to REST if service account not configured)
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
-import { isMetaAdsDeal, isSocialRetainerDeal, normaliseTier } from "./_tiers.js";
+import { identifyDeal, productLineLabel } from "./_tiers.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = "viewix-webhook-2026";
@@ -148,11 +148,14 @@ export default async function handler(req, res) {
     links.accountId = acctId;
 
     // --- 2. DELIVERIES ---
-    // Meta Ads packages skip delivery creation here — delivery is auto-created
-    // when the preproduction scripts are approved in the dashboard. Tier
-    // detection is delegated to api/_tiers.js so adding new tiers is a
-    // single-file change instead of editing this webhook every time.
-    const isMetaAds = isMetaAdsDeal(videoType);
+    // One identifyDeal() call routes the entire webhook. Returns
+    //   { productLine, tier }
+    // where productLine is "metaAds" | "socialPremium" | "socialOrganic"
+    // | "oneOff" | null. Meta Ads packages skip delivery creation here —
+    // delivery is auto-created when preproduction scripts are approved.
+    // Everything else gets a delivery placeholder.
+    const deal = identifyDeal(videoType);
+    const isMetaAds = deal.productLine === "metaAds";
 
     if (!isMetaAds) {
       const delId = "del-" + Date.now();
@@ -214,16 +217,21 @@ export default async function handler(req, res) {
     }
 
     // --- 4. PREPRODUCTION ---
+    // Three branches driven by the identifyDeal() result:
+    //   metaAds                → /preproduction/metaAds/{id}
+    //   socialPremium / organic → /preproduction/socialOrganic/{id}
+    //                             (shared tree, productLine field disambiguates)
+    //   oneOff / unrecognised  → no preprod record; deal lives in /projects
+    //                             + /deliveries only.
     if (isMetaAds) {
       const projectId = `meta_${Date.now()}`;
       links.preprodId = projectId;
       links.preprodType = "metaAds";
-      const tier = normaliseTier(videoType, "metaAds");
       await fbSet(`/preproduction/metaAds/${projectId}`, {
         id: projectId,
         shortId: makeShortId(),
         companyName: companyName,
-        packageTier: tier,
+        packageTier: deal.tier,
         status: "draft",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -241,21 +249,20 @@ export default async function handler(req, res) {
       results.preproduction = "metaAds created";
     }
 
-    if (isSocialRetainerDeal(videoType)) {
+    if (deal.productLine === "socialPremium" || deal.productLine === "socialOrganic") {
       const projectId = `social_${Date.now()}`;
       links.preprodId = projectId;
       links.preprodType = "socialOrganic";
-      const tier = normaliseTier(videoType, "socialRetainer");
-      // Persist deal-level fields mirror of the Meta Ads branch (above):
-      // numberOfVideos drives the target count in the Select step (Phase 4),
-      // videoType/dealValue/attioCompanyId feed the Phase 5 Script Builder
-      // context. Legacy projects without these fields fall back to an
-      // in-app videoCountOverride input.
+      // Both Social Premium and Social Organic share the same 7-tab flow
+      // under /preproduction/socialOrganic. productLine persists on the
+      // record so any future divergence (different prompts, different
+      // deliverable counts) can branch on it without a path migration.
       await fbSet(`/preproduction/socialOrganic/${projectId}`, {
         id: projectId,
         shortId: makeShortId(),
         companyName: companyName,
-        packageTier: tier,
+        packageTier: deal.tier,
+        productLine: deal.productLine,
         status: "draft",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -272,7 +279,14 @@ export default async function handler(req, res) {
         selectedFormats: [],
         videoCountOverride: null,
       });
-      results.preproduction = "socialOrganic created";
+      results.preproduction = `${productLineLabel(deal.productLine)} created`;
+    }
+
+    if (deal.productLine === "oneOff") {
+      // No preproduction tree for one-off types (Live Action / 90 Day
+      // Gameplan / Animation) — they go straight to production, tracked
+      // via /projects + /deliveries below.
+      results.preproduction = "skipped (one-off)";
     }
 
     // --- 4b. PROJECTS ---
@@ -287,7 +301,12 @@ export default async function handler(req, res) {
       clientName: companyName,
       projectName: (dealName || "").trim() || "Untitled project",
       dealValue: dealValue != null ? Number(dealValue) || null : null,
+      // `videoType` keeps the raw Attio label for human readability;
+      // `productLine` + `packageTier` are the canonical machine keys for
+      // filtering / colour lookup / future per-product branching.
       videoType: videoType || "",
+      productLine: deal.productLine,
+      packageTier: deal.tier,
       numberOfVideos: parseInt(numberOfVideos) || null,
       description,                    // scope of work from Attio "Description"
       destinations,                   // array, split from Attio comma-separated "Destination"
