@@ -4,6 +4,10 @@ import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { FormatLibrary } from "./FormatLibrary";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
+// tierColor() looks up bg/fg per packageTier from the canonical tier
+// list at api/_tiers.js. Adding a new tier doesn't need a code change
+// here — this fallback returns neutral grey for anything unknown.
+import { tierColor } from "../config";
 
 // ─── Constants ───
 const STATUS_COLORS = {
@@ -17,12 +21,6 @@ const STATUS_COLORS = {
 const STATUS_LABELS = {
   draft: "Draft", processing: "Processing", review: "In Review",
   approved: "Approved", exported: "Exported",
-};
-
-const TIER_COLORS = {
-  standard: { bg: "rgba(59,130,246,0.12)", fg: "#3B82F6" },
-  premium: { bg: "rgba(251,191,36,0.12)", fg: "#F59E0B" },
-  deluxe: { bg: "rgba(139,92,246,0.12)", fg: "#8B5CF6" },
 };
 
 const MOTIVATOR_COLORS = {
@@ -635,7 +633,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             <button onClick={() => setActiveProjectId(null)} style={NB}>&larr; Back</button>
             {(()=>{const s=getAccountLogo(p);const bg=logoBg(getAccountLogoBg(p));return s?<img key={s+bg} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 32, borderRadius: 6, objectFit: "contain", background: bg, padding: 3 }} />:null;})()}
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
-            <PBadge text={p.packageTier} colors={TIER_COLORS[p.packageTier] || TIER_COLORS.standard} />
+            <PBadge text={p.packageTier} colors={tierColor(p.packageTier)} />
             <PBadge text={STATUS_LABELS[p.status] || p.status} colors={STATUS_COLORS[p.status] || STATUS_COLORS.draft} />
             {getProjectLead(p) && <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>Lead: <span style={{ color: "var(--fg)", fontWeight: 600 }}>{getProjectLead(p)}</span></span>}
           </div>
@@ -1147,7 +1145,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{p.companyName}</span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-                    <PBadge text={p.packageTier} colors={TIER_COLORS[p.packageTier] || TIER_COLORS.standard} />
+                    <PBadge text={p.packageTier} colors={tierColor(p.packageTier)} />
                     <PBadge text={STATUS_LABELS[p.status] || p.status} colors={STATUS_COLORS[p.status] || STATUS_COLORS.draft} />
                   </div>
                   <div style={{ fontSize: 11, color: "var(--muted)" }}>

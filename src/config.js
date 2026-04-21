@@ -145,29 +145,25 @@ export const DEFAULT_RATE_CARDS = [
 ];
 
 // ─── Sale Packages ───
-// Two video types, each with 4 package tiers. Deposit amounts are NOT defined
-// here — they live in Firebase at /salePricing and are edited in the Founders
-// tab's "Pricing" subtab. Seeded at $0 on first load so founders must set real
-// numbers before closers can send live payment links.
-export const SALE_VIDEO_TYPES = [
-  { key: "metaAds", label: "Meta Ads", packages: [
-    { key: "starter", label: "Starter" },
-    { key: "standard", label: "Standard" },
-    { key: "premium", label: "Premium" },
-    { key: "deluxe", label: "Deluxe" },
-  ]},
-  { key: "socialRetainer", label: "Social Media Retainer", packages: [
-    { key: "starter", label: "Starter" },
-    { key: "brandBuilder", label: "Brand Builder" },
-    { key: "marketLeader", label: "Market Leader" },
-    { key: "marketDominator", label: "Market Dominator" },
-  ]},
-];
-
-export const DEFAULT_SALE_PRICING = {
-  metaAds: { starter: 0, standard: 0, premium: 0, deluxe: 0 },
-  socialRetainer: { starter: 0, brandBuilder: 0, marketLeader: 0, marketDominator: 0 },
-};
+// Tier definitions (Meta Ads + Social Retainer), per-tier colours, the
+// PACKAGE_CONFIGS used by the Meta Ads script generator, and the default
+// $0 pricing seed all live in api/_tiers.js — single source of truth so
+// adding a new tier doesn't require hunting through six files. We
+// re-export here so existing client-side imports (`from "./config"`)
+// keep working.
+export {
+  META_ADS_TIERS,
+  SOCIAL_RETAINER_TIERS,
+  TIER_COLORS,
+  tierColor,
+  tierLabel,
+  PACKAGE_CONFIGS,
+  normaliseTier,
+  isMetaAdsDeal,
+  isSocialRetainerDeal,
+  SALE_VIDEO_TYPES,
+  DEFAULT_SALE_PRICING,
+} from "../api/_tiers.js";
 
 // ─── Shared Styles ───
 export const TH = { padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "2px solid var(--border)", background: "var(--card)" };

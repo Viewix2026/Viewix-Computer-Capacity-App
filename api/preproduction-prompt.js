@@ -1,12 +1,11 @@
 // api/preproduction-prompt.js
-// Builds the system prompt for Meta Ad script generation
-// Derived from Meta Ad Maker V8 — restructured for single-pass JSON output
-
-const PACKAGE_CONFIGS = {
-  standard: { motivatorsPerType: 3, hooks: ["problemAware"], totalAds: 9 },
-  premium:  { motivatorsPerType: 5, hooks: ["problemAware"], totalAds: 15 },
-  deluxe:   { motivatorsPerType: 5, hooks: ["problemAware", "problemUnaware"], totalAds: 30 },
-};
+// Builds the system prompt for Meta Ad script generation.
+// Derived from Meta Ad Maker V8 — restructured for single-pass JSON output.
+//
+// PACKAGE_CONFIGS used to live here. Moved to api/_tiers.js so adding a
+// new Meta Ads tier is a single-file change instead of editing this file
+// + the webhook + the Sale form + config.js.
+import { PACKAGE_CONFIGS } from "./_tiers.js";
 
 function buildSystemPrompt({ packageTier, companyName, promptLearnings }) {
   const config = PACKAGE_CONFIGS[packageTier] || PACKAGE_CONFIGS.standard;

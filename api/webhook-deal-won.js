@@ -4,6 +4,7 @@
 // Writes to Firebase via admin SDK (falls back to REST if service account not configured)
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { isMetaAdsDeal, isSocialRetainerDeal, normaliseTier } from "./_tiers.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = "viewix-webhook-2026";
@@ -148,9 +149,10 @@ export default async function handler(req, res) {
 
     // --- 2. DELIVERIES ---
     // Meta Ads packages skip delivery creation here — delivery is auto-created
-    // when the preproduction scripts are approved in the dashboard.
-    const metaAdsTiers = ["standard", "premium", "deluxe"];
-    const isMetaAds = metaAdsTiers.some(t => (videoType || "").toLowerCase().includes(t));
+    // when the preproduction scripts are approved in the dashboard. Tier
+    // detection is delegated to api/_tiers.js so adding new tiers is a
+    // single-file change instead of editing this webhook every time.
+    const isMetaAds = isMetaAdsDeal(videoType);
 
     if (!isMetaAds) {
       const delId = "del-" + Date.now();
@@ -212,14 +214,11 @@ export default async function handler(req, res) {
     }
 
     // --- 4. PREPRODUCTION ---
-    const socialRetainerTiers = ["starter pack", "brand builder", "market leader", "market dominator"];
-    const dealTypeLower = (videoType || "").toLowerCase();
-
     if (isMetaAds) {
       const projectId = `meta_${Date.now()}`;
       links.preprodId = projectId;
       links.preprodType = "metaAds";
-      const tier = metaAdsTiers.find(t => dealTypeLower.includes(t));
+      const tier = normaliseTier(videoType, "metaAds");
       await fbSet(`/preproduction/metaAds/${projectId}`, {
         id: projectId,
         shortId: makeShortId(),
@@ -242,11 +241,11 @@ export default async function handler(req, res) {
       results.preproduction = "metaAds created";
     }
 
-    if (socialRetainerTiers.some(t => dealTypeLower.includes(t))) {
+    if (isSocialRetainerDeal(videoType)) {
       const projectId = `social_${Date.now()}`;
       links.preprodId = projectId;
       links.preprodType = "socialOrganic";
-      const tier = socialRetainerTiers.find(t => dealTypeLower.includes(t));
+      const tier = normaliseTier(videoType, "socialRetainer");
       // Persist deal-level fields mirror of the Meta Ads branch (above):
       // numberOfVideos drives the target count in the Select step (Phase 4),
       // videoType/dealValue/attioCompanyId feed the Phase 5 Script Builder

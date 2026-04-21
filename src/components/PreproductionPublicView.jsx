@@ -10,9 +10,9 @@ const MOTIVATOR_COLORS = {
   triedBefore: { bg: "rgba(59,130,246,0.10)", border: "rgba(59,130,246,0.25)", fg: "#3B82F6", label: "Tried Before" },
 };
 
-const TIER_COLORS = {
-  standard: "#3B82F6", premium: "#F59E0B", deluxe: "#8B5CF6",
-};
+// Tier colours come from the canonical list at api/_tiers.js so adding
+// a new package tier is a single-place change.
+import { tierColor } from "../config";
 
 const SCRIPT_COLUMNS = [
   { key: "videoName", label: "Video Name", width: 140 },
@@ -550,7 +550,9 @@ export function PreproductionPublicView() {
 
   const p = project;
   const hasScripts = p.scriptTable && p.scriptTable.length > 0;
-  const tierColor = TIER_COLORS[p.packageTier] || "#3B82F6";
+  // Local rename — the imported helper is `tierColor` and we want a
+  // single object here for the badge below.
+  const tc = tierColor(p.packageTier);
 
   return (
     <div style={{ minHeight: "100vh", background: "#0B0F1A", fontFamily: "'DM Sans',-apple-system,sans-serif", color: "#E8ECF4" }}>
@@ -564,7 +566,7 @@ export function PreproductionPublicView() {
             <div style={{ fontSize: 18, fontWeight: 800, color: "#E8ECF4" }}>{p.companyName}</div>
             <div style={{ fontSize: 13, color: "#5A6B85" }}>Meta Ads Script Review</div>
           </div>
-          <span style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: 700, background: `${tierColor}20`, color: tierColor, textTransform: "capitalize" }}>
+          <span style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: 700, background: tc.bg, color: tc.fg, textTransform: "capitalize" }}>
             {p.packageTier}
           </span>
         </div>
