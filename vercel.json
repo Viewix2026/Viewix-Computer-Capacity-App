@@ -20,6 +20,9 @@
     },
     "api/stripe-webhook.js": {
       "maxDuration": 30
+    },
+    "api/meta-ads.js": {
+      "maxDuration": 300
     }
   },
   "crons": [

@@ -105,8 +105,7 @@ export function MetaAdsResearch({ project, onBack, onPatch, onDelete }) {
         <BrandTruthStep project={project} onPatch={onPatch} />
       )}
       {tab === "research" && (
-        <ComingSoonTab tabNum={2} title="Ad Library Research"
-          hint="Scrape Facebook Ad Library for competitor ads, or paste ad URLs manually. Ticked ads feed into Video Review." />
+        <ResearchStep project={project} onPatch={onPatch} />
       )}
       {tab === "videoReview" && (
         <ComingSoonTab tabNum={3} title="Video Review"
@@ -270,6 +269,329 @@ function FieldBox({ label, hint, children }) {
       </label>
       {hint && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>{hint}</div>}
       {children}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// TAB 2 — Ad Library Research
+// ────────────────────────────────────────────────────────────────
+// Collects competitor ad inspiration two ways:
+//   (a) Scrape FB Ad Library by page-name or page-URL list. Producer
+//       sets date range + country; we kick off an Apify actor run that
+//       reports back ad metadata (creative, copy, headline, CTA, run
+//       period). See api/meta-ads.js for the actor + input schema.
+//   (b) Manual paste — producer pastes individual FB Ad Library URLs,
+//       we extract the ad id and store as a lightweight record.
+// Both sources land in /preproduction/metaAds/{id}/adLibraryResearch/ads
+// keyed by adId, distinguished by `source` ("apify" | "manual").
+//
+// Tab 3 (Video Review) iterates this dictionary so producers can
+// tick/cross each ad. Nothing here writes to Video Review directly —
+// that routing happens at the Video Review level.
+function ResearchStep({ project, onPatch }) {
+  const research = project.adLibraryResearch || {};
+  const ads = research.ads || {};
+  const adList = Object.values(ads).filter(a => a && a.id);
+  const approvals = project.approvals || {};
+  const isApproved = !!approvals.research;
+  const scrapeStatus = research.scrapeStatus || "idle";
+  const isRunning = scrapeStatus === "running";
+
+  // Inputs — local state while editing, persisted on save-handle /
+  // run-scrape so producers don't have their partial typing written
+  // mid-keystroke.
+  const inputs = research.inputs || {};
+  const [pageInput, setPageInput] = useState("");
+  const [country, setCountry] = useState(inputs.country || "AU");
+  const [dateFrom, setDateFrom] = useState(inputs.dateRange?.from || "");
+  const [dateTo, setDateTo] = useState(inputs.dateRange?.to || "");
+  const [manualUrl, setManualUrl] = useState("");
+  const [scrapeError, setScrapeError] = useState(null);
+  const [manualError, setManualError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const pages = Array.isArray(inputs.pages) ? inputs.pages : [];
+
+  const patchInputs = (patch) => {
+    fbSet(`/preproduction/metaAds/${project.id}/adLibraryResearch/inputs`, { ...inputs, ...patch });
+  };
+
+  const addPage = () => {
+    const trimmed = pageInput.trim();
+    if (!trimmed) return;
+    // Accept either a bare page name or a facebook.com/... URL. Normalise
+    // to a displayable name + keep the original string around for the
+    // scraper (the Apify actor accepts both handle names and URLs).
+    const pageName = trimmed.replace(/^https?:\/\/(?:www\.)?facebook\.com\//i, "").replace(/\/$/, "").split(/[?#]/)[0];
+    if (pages.some(p => p.pageUrl === trimmed || p.pageName.toLowerCase() === pageName.toLowerCase())) {
+      setPageInput("");
+      return;
+    }
+    const next = [...pages, { pageName, pageUrl: trimmed.startsWith("http") ? trimmed : "" }];
+    patchInputs({ pages: next });
+    setPageInput("");
+  };
+  const removePage = (pageName) => {
+    patchInputs({ pages: pages.filter(p => p.pageName !== pageName) });
+  };
+
+  const runScrape = async () => {
+    setScrapeError(null);
+    if (pages.length === 0) { setScrapeError("Add at least one competitor page before scraping."); return; }
+    patchInputs({ country, dateRange: { from: dateFrom, to: dateTo } });
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "scrapeAdLibrary",
+          projectId: project.id,
+          pages,
+          country,
+          dateRange: { from: dateFrom, to: dateTo },
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener will rehydrate with the scrape status + ads as they arrive.
+    } catch (e) {
+      setScrapeError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const addManualAd = async () => {
+    setManualError(null);
+    const trimmed = manualUrl.trim();
+    if (!trimmed) return;
+    // Extract ad id from a FB Ad Library URL. Common shapes:
+    //   https://www.facebook.com/ads/library/?id=123456789
+    //   https://www.facebook.com/ads/library/?active_status=...&id=123
+    let adId = null;
+    try {
+      const u = new URL(trimmed);
+      adId = u.searchParams.get("id");
+    } catch {}
+    if (!adId) {
+      setManualError("Couldn't find an ad id in that URL. Paste the full FB Ad Library URL with the id= query param.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "addManualAd", projectId: project.id, adUrl: trimmed, adId }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      setManualUrl("");
+    } catch (e) {
+      setManualError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const removeAd = (adId) => {
+    if (!window.confirm("Remove this ad from the research pool?")) return;
+    fbSet(`/preproduction/metaAds/${project.id}/adLibraryResearch/ads/${adId}`, null);
+  };
+
+  const approve = () => {
+    fbSet(`/preproduction/metaAds/${project.id}/approvals/research`, new Date().toISOString());
+    onPatch({ tab: "videoReview" });
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Ad Library Research</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, maxWidth: 720 }}>
+          Pull competitor ads two ways: scrape the Facebook Ad Library by page, or paste individual ad URLs. Both sources flow into the Video Review tab next, where you tick the ones worth shortlisting.
+        </div>
+      </div>
+
+      {/* Scrape input panel */}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 10 }}>Scrape Facebook Ad Library</div>
+
+        {/* Page list */}
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 6 }}>Competitor Pages</label>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <input type="text" value={pageInput} onChange={e => setPageInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addPage(); } }}
+              placeholder="Page name or facebook.com/pagename URL"
+              style={{ ...textareaSt, padding: "8px 12px", fontSize: 13 }} />
+            <button onClick={addPage}
+              style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--fg)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+              + Add
+            </button>
+          </div>
+          {pages.length > 0 ? (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {pages.map(p => (
+                <span key={p.pageName} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 11, color: "var(--fg)" }}>
+                  {p.pageName}
+                  <button onClick={() => removePage(p.pageName)} title="Remove"
+                    style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>No pages yet. Add a few competitor page names to scrape their active ads.</div>
+          )}
+        </div>
+
+        {/* Date range + country */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 140px", gap: 10, marginBottom: 12 }}>
+          <div>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>From</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              style={{ ...textareaSt, padding: "8px 12px", fontSize: 13, colorScheme: "dark" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>To</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              style={{ ...textareaSt, padding: "8px 12px", fontSize: 13, colorScheme: "dark" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Country</label>
+            <select value={country} onChange={e => setCountry(e.target.value)}
+              style={{ ...textareaSt, padding: "8px 12px", fontSize: 13 }}>
+              <option value="AU">AU · Australia</option>
+              <option value="US">US · United States</option>
+              <option value="GB">GB · United Kingdom</option>
+              <option value="NZ">NZ · New Zealand</option>
+              <option value="CA">CA · Canada</option>
+              <option value="ALL">All countries</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={runScrape} disabled={submitting || isRunning || pages.length === 0}
+            style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: (isRunning || pages.length === 0) ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: (submitting || isRunning || pages.length === 0) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: submitting ? 0.6 : 1 }}>
+            {isRunning ? "Scrape running…" : submitting ? "Submitting…" : "Run scrape"}
+          </button>
+          {scrapeStatus === "done" && research.scrapeFinishedAt && (
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>Last scrape finished {new Date(research.scrapeFinishedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
+          )}
+          {scrapeStatus === "error" && research.scrapeError && (
+            <span style={{ fontSize: 11, color: "#EF4444" }}>Error: {research.scrapeError}</span>
+          )}
+        </div>
+        {scrapeError && (
+          <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+            {scrapeError}
+          </div>
+        )}
+      </div>
+
+      {/* Manual URL paste panel */}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>Or paste an ad URL manually</div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>
+          Paste a full FB Ad Library URL (the one with <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 3 }}>?id=...</code>) to add a single ad without running a scrape. Useful when you've already found a specific ad you want to reference.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="text" value={manualUrl} onChange={e => setManualUrl(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addManualAd(); } }}
+            placeholder="https://www.facebook.com/ads/library/?id=1234567890"
+            style={{ ...textareaSt, padding: "8px 12px", fontSize: 13 }} />
+          <button onClick={addManualAd} disabled={submitting || !manualUrl.trim()}
+            style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--fg)", fontSize: 12, fontWeight: 700, cursor: (submitting || !manualUrl.trim()) ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap", opacity: !manualUrl.trim() ? 0.5 : 1 }}>
+            + Add
+          </button>
+        </div>
+        {manualError && (
+          <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+            {manualError}
+          </div>
+        )}
+      </div>
+
+      {/* Ad list */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <span>Research pool</span>
+          <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 500, fontFamily: "'JetBrains Mono',monospace" }}>
+            {adList.length} ad{adList.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        {adList.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", fontSize: 12, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 10 }}>
+            {isRunning ? "Scrape running — ads will appear here as they're pulled." : "No ads yet. Run a scrape above, or paste individual URLs."}
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+            {adList.map(ad => <AdCard key={ad.id} ad={ad} onRemove={() => removeAd(ad.id)} />)}
+          </div>
+        )}
+      </div>
+
+      {/* Approve → unlocks Video Review */}
+      <div style={{ padding: "14px 18px", background: "var(--card)", border: `1px solid ${isApproved ? "rgba(34,197,94,0.4)" : "var(--border)"}`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          {isApproved
+            ? "Research approved. Move to Video Review next."
+            : adList.length < 3
+              ? `You've got ${adList.length} ad${adList.length === 1 ? "" : "s"} in the pool — usually 10+ is a good minimum for Video Review. Add more before approving.`
+              : "When you've got a good pool of ads to review, approve to unlock Video Review."}
+        </div>
+        <button onClick={approve} disabled={adList.length === 0}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : adList.length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: adList.length === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          {isApproved ? "→ Video Review" : "Approve Research"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Compact card for a single ad. Shows thumbnail if the scrape got one,
+// otherwise a placeholder + page name + ad snippet. Manual entries
+// typically only have an ad URL until the producer visits it — they
+// render with a FB-logo placeholder.
+function AdCard({ ad, onRemove }) {
+  const thumb = ad.thumbnailUrl || ad.snapshotUrl || null;
+  const pageName = ad.pageName || ad.advertiserName || "Unknown advertiser";
+  const body = (ad.bodyText || ad.headline || "").slice(0, 160);
+  const adLink = ad.adUrl || (ad.adId ? `https://www.facebook.com/ads/library/?id=${ad.adId}` : null);
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ position: "relative", aspectRatio: "9 / 16", background: "#0F1520", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        {thumb ? (
+          <img src={thumb} alt={pageName} style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />
+        ) : (
+          <div style={{ fontSize: 32, color: "#374151" }}>📘</div>
+        )}
+        <div style={{ position: "absolute", top: 6, left: 6, padding: "3px 8px", background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          {ad.source === "manual" ? "MANUAL" : "SCRAPED"}
+        </div>
+        {onRemove && (
+          <button onClick={onRemove} title="Remove from research pool"
+            style={{ position: "absolute", top: 6, right: 6, padding: "2px 8px", background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 3, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>×</button>
+        )}
+      </div>
+      <div style={{ padding: "10px 12px" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pageName}</div>
+        {body && (
+          <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+            {body}{(ad.bodyText || "").length > 160 ? "…" : ""}
+          </div>
+        )}
+        {adLink && (
+          <a href={adLink} target="_blank" rel="noopener noreferrer"
+            style={{ display: "inline-block", marginTop: 6, fontSize: 10, color: "var(--accent)", textDecoration: "none", fontFamily: "'JetBrains Mono',monospace" }}>
+            View on FB Ad Library →
+          </a>
+        )}
+      </div>
     </div>
   );
 }
