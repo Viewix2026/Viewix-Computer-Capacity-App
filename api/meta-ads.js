@@ -14,6 +14,7 @@
 // upgrade if producers need >300-ad pulls.
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { PACKAGE_CONFIGS } from "./_tiers.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -268,6 +269,265 @@ async function handleAddManualAd(req, res) {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Script generator
+// ────────────────────────────────────────────────────────────────
+// Takes the project's approved Brand Truth + selected formats + package
+// tier and produces a scriptTable using Claude Opus. Hormozi-aware:
+// for the Hormozi format specifically, emits motivator-tagged rows
+// (Toward / AwayFrom / TriedBefore × PA/PU) in the count the package
+// config expects. Other Meta Ads formats get N plain rows as set by
+// the producer's videoCount allocation.
+
+const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+
+async function callClaude({ model, systemPrompt, userMessage, maxTokens, apiKey }) {
+  const r = await fetch(ANTHROPIC_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model, max_tokens: maxTokens,
+      system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  });
+  if (!r.ok) {
+    const err = await r.text();
+    throw new Error(`Anthropic ${r.status}: ${err.slice(0, 400)}`);
+  }
+  const d = await r.json();
+  return d.content?.[0]?.text || "";
+}
+function parseJSON(raw) {
+  let cleaned = (raw || "").trim();
+  if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+  return JSON.parse(cleaned);
+}
+
+const META_ADS_SCRIPT_PROMPT = `You are a senior Meta ad script writer at Viewix, a Sydney-based video production agency. You produce direct-response Meta ad scripts designed to run on Facebook and Instagram, built around Alex Hormozi's motivator framework (Toward / Away From / Tried Before) and audience-awareness targeting (Problem Aware / Problem Unaware).
+
+Each script you write is a single 30-60s video scripted through the Hormozi seven-column blueprint:
+  Hook · Explain the Pain · Results · Offer · Why the Offer · CTA · Meta Headline + Ad Copy
+
+═══════════════════════════════════════════════════
+HOOK — the most important line
+═══════════════════════════════════════════════════
+The hook interrupts, confronts or challenges the viewer in the first 3 seconds. Default slightly more aggressive than safe. Prioritise memorability over neutrality. Use second person, lead with tension not explanation, use declarative language. Match the brand personality — Challenger (confrontation), Authoritative (direct certainty), Refined (sharp control), Friendly (direct warmth), Playful (clever, not goofy).
+
+Avoid soft hook patterns:
+- "If you're struggling with..."
+- "You might be experiencing..."
+- "Sometimes businesses find..."
+
+Aim for hooks like:
+- "One winning Meta ad is not a strategy."
+- "If your ads don't look credible, clients will scroll."
+- "Invisible brands die."
+
+For Problem Unaware (PU) hooks, the viewer doesn't yet know they have this problem. Create awareness via curiosity, surprise, or a reframe that makes them realise something they hadn't considered.
+
+═══════════════════════════════════════════════════
+EXPLAIN THE PAIN
+═══════════════════════════════════════════════════
+One sentence only. Name the core frustration via a metaphor, specific physical detail, or telling moment. Do NOT explain at length.
+
+Bad: "Some weeks your phone rings nonstop. Other weeks, silence..."
+Good: "You're running a business on hope, and hope isn't a pipeline."
+Good: "It's 9:30pm, your phone propped on a coffee cup, filming take seven of a video you'll never post."
+
+═══════════════════════════════════════════════════
+RESULTS
+═══════════════════════════════════════════════════
+One sentence. The aspirational outcome in the viewer's world. Do NOT name the client's company, do NOT pitch the product, do NOT describe what the client delivers. Bridge naturally from Explain the Pain (feels like a continuation, not a reset).
+
+Bad: "At [Company], our clients use our high performing videos..."
+Good: "You need a clear, straightforward path from no idea to the perfect ring."
+
+═══════════════════════════════════════════════════
+THE OFFER
+═══════════════════════════════════════════════════
+Always open with "At {company}, we..." or "Here at {company}, we've built...". Two sentences max. Spoken, natural language. Focus on what the client receives, not how it's made. Accurate to the offer described in Brand Truth — do NOT invent services.
+
+═══════════════════════════════════════════════════
+WHY THE OFFER
+═══════════════════════════════════════════════════
+One or two short sentences. The emotional reason to want the product — feeling behind the decision, not a logical summary.
+
+═══════════════════════════════════════════════════
+CALL TO ACTION
+═══════════════════════════════════════════════════
+One short sentence. Must relate to the pain raised at the top. Always use "tap" (never click or similar).
+
+Good: "If you want consistent leads every month, tap the link below."
+
+═══════════════════════════════════════════════════
+META AD HEADLINE
+═══════════════════════════════════════════════════
+One punchy line. Hard 35-character limit. Do NOT exceed — longer headlines get truncated on mobile.
+
+═══════════════════════════════════════════════════
+META AD COPY
+═══════════════════════════════════════════════════
+60-120 words. No em dashes. Write like a person explaining something to a mate, not a brand pitching a product. Structure every ad body around ONE idea: Pain → Insight → Outcome → Simple action. Replace claims with reasoning.
+
+═══════════════════════════════════════════════════
+MOTIVATOR FRAMING (Hormozi format only)
+═══════════════════════════════════════════════════
+Toward Motivator (TM) — write to the outcome they want, paint the future state, use forward-looking aspirational language.
+Away From (AF) — write to the pain they want to avoid, name the risk, use consequence-driven framing.
+Tried Before (TB) — write to their scepticism, call out past failures, explain why this approach is structurally different.
+
+═══════════════════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════════════════
+Return STRICTLY valid JSON. No markdown, no code fences, no preamble.
+
+{
+  "scriptTable": [
+    {
+      "videoNumber": 1,
+      "videoName": "01_TM_PipelineCertainty_PA",  // {n}_{motivator}_{topic}_{audience}
+      "formatName": "Hormozi",                      // must match one of the selected formats verbatim
+      "motivatorType": "toward" | "awayFrom" | "triedBefore" | "other",
+      "audienceType": "problemAware" | "problemUnaware",
+      "hook": "...",
+      "explainPain": "...",
+      "results": "...",
+      "offer": "...",
+      "whyOffer": "...",
+      "cta": "...",
+      "headline": "...",   // <=35 chars
+      "adCopy": "..."
+    }
+  ]
+}
+
+RULES:
+- Total rows must match the counts specified per format in the Selected Formats block.
+- formatName must match a selected format's name verbatim.
+- For Hormozi-format rows: motivatorType and audienceType follow the package's rules (see input). For non-Hormozi formats: set motivatorType:"other", audienceType:"problemAware" by default.
+- Headlines >35 chars will be rejected. Count characters before returning.
+- Every row must be specific — cite real business details from the Brand Truth, not generic advice.
+`;
+
+async function handleScriptGenerate(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
+  if (selected.length === 0) return res.status(400).json({ error: "No selected formats. Pick some on the Selection tab first." });
+
+  // Resolve library entries for each selected format so Claude gets
+  // the full structure guidance.
+  const selectedFormatObjects = [];
+  for (const s of selected) {
+    let fmt = null;
+    if (s.formatLibraryId) fmt = await fbGet(`/formatLibrary/${s.formatLibraryId}`);
+    selectedFormatObjects.push({
+      name: s.formatName,
+      videoCount: s.videoCount ?? null,
+      videoAnalysis: fmt?.videoAnalysis || s.description || "",
+      filmingInstructions: fmt?.filmingInstructions || "",
+      structureInstructions: fmt?.structureInstructions || "",
+      isHormozi: (s.formatName || "").trim().toLowerCase() === "hormozi",
+    });
+  }
+
+  const totalAds = selectedFormatObjects.reduce((n, f) => n + (f.videoCount || 0), 0)
+    || project.numberOfVideos
+    || (PACKAGE_CONFIGS[project.packageTier]?.totalAds ?? 6);
+
+  const pkg = PACKAGE_CONFIGS[project.packageTier] || PACKAGE_CONFIGS.standard;
+  const bt = project.brandTruth?.fields || {};
+
+  const formatsBlock = selectedFormatObjects.map((f, i) => {
+    const count = f.videoCount != null ? `Count: ${f.videoCount}` : `Count: (not set — distribute evenly over remaining rows)`;
+    const hormoziRule = f.isHormozi
+      ? `Hormozi rules apply: generate ${pkg.motivatorsPerType} rows per motivator type (Toward, Away From, Tried Before) = ${pkg.motivatorsPerType * 3} base rows, ${pkg.hooks.includes("problemUnaware") ? "DOUBLED for Problem Aware + Problem Unaware audiences" : "Problem Aware only"}.`
+      : "Non-Hormozi format: use motivatorType: 'other' and audienceType: 'problemAware'.";
+    return [
+      `FORMAT ${i + 1}: ${f.name}`,
+      count,
+      hormoziRule,
+      f.videoAnalysis ? `Analysis: ${f.videoAnalysis}` : null,
+      f.structureInstructions ? `Structure: ${f.structureInstructions}` : null,
+    ].filter(Boolean).join("\n");
+  }).join("\n\n");
+
+  const userMessage = `CLIENT: ${project.companyName}
+PACKAGE TIER: ${project.packageTier || "(not set)"}
+TOTAL ADS TO PRODUCE: ${totalAds}
+
+BRAND TRUTH:
+- Brand Truths: ${bt.brandTruths || "(none)"}
+- Product / Offer: ${bt.productOffer || "(none)"}
+- Unique Value Prop: ${bt.uniqueValueProp || "(none)"}
+- Target Customer: ${bt.targetCustomer || "(none)"}
+- Pain Points: ${bt.painPoints || "(none)"}
+- Desired Outcome: ${bt.desiredOutcome || "(none)"}
+- Proof Points: ${bt.proofPoints || "(none)"}
+- Competitors: ${bt.competitors || "(none)"}
+
+${project.brandTruth?.transcript ? `\nONBOARDING TRANSCRIPT (excerpt):\n${project.brandTruth.transcript.slice(0, 6000)}\n` : ""}
+${project.brandTruth?.producerNotes ? `\nPRODUCER NOTES:\n${project.brandTruth.producerNotes}\n` : ""}
+
+SELECTED FORMATS:
+${formatsBlock}
+
+Produce the scriptTable JSON now.`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt: META_ADS_SCRIPT_PROMPT,
+      userMessage,
+      maxTokens: 16000,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
+  }
+
+  // Post-process: stable ids, headline length trim, default numbering
+  const scriptTable = (parsed.scriptTable || []).map((row, i) => ({
+    id: `meta_${Date.now()}_${i}`,
+    videoNumber: row.videoNumber || i + 1,
+    videoName: row.videoName || `${String(i + 1).padStart(2, "0")}_AD`,
+    formatName: row.formatName || "Hormozi",
+    motivatorType: row.motivatorType || "other",
+    audienceType: row.audienceType || "problemAware",
+    hook: row.hook || "",
+    explainPain: row.explainPain || "",
+    results: row.results || "",
+    offer: row.offer || "",
+    whyOffer: row.whyOffer || "",
+    cta: row.cta || "",
+    headline: (row.headline || "").slice(0, 35),
+    adCopy: row.adCopy || "",
+  }));
+
+  await fbPatch(`/preproduction/metaAds/${projectId}`, {
+    scriptTable,
+    updatedAt: new Date().toISOString(),
+    scriptGeneratedAt: new Date().toISOString(),
+  });
+
+  return res.status(200).json({ success: true, rows: scriptTable.length });
+}
+
+// ────────────────────────────────────────────────────────────────
 // Handler
 // ────────────────────────────────────────────────────────────────
 
@@ -283,6 +543,7 @@ export default async function handler(req, res) {
     switch (action) {
       case "scrapeAdLibrary": return await handleScrapeAdLibrary(req, res);
       case "addManualAd":     return await handleAddManualAd(req, res);
+      case "scriptGenerate":  return await handleScriptGenerate(req, res);
       default:                return res.status(400).json({ error: `Unknown action: ${action}` });
     }
   } catch (e) {

@@ -15,7 +15,7 @@
 // them natively.
 
 import { useState, useEffect, useRef } from "react";
-import { fbSet, fbUpdate } from "../firebase";
+import { fbSet, fbUpdate, fbListenSafe } from "../firebase";
 
 // Tab registry — edit this list + a switch arm below to add/rename
 // tabs. Each entry has a key (matches project.tab), label (shown in
@@ -108,20 +108,16 @@ export function MetaAdsResearch({ project, onBack, onPatch, onDelete }) {
         <ResearchStep project={project} onPatch={onPatch} />
       )}
       {tab === "videoReview" && (
-        <ComingSoonTab tabNum={3} title="Video Review"
-          hint="Producer ticks / crosses each scraped or pasted ad to decide which go to the shortlist." />
+        <VideoReviewStep project={project} onPatch={onPatch} />
       )}
       {tab === "shortlist" && (
-        <ComingSoonTab tabNum={4} title="Shortlist"
-          hint="Group ticked ads by format (Hook style, motivator angle, scene type). Add promising formats to the Meta Ads Format Library." />
+        <ShortlistStep project={project} onPatch={onPatch} />
       )}
       {tab === "select" && (
-        <ComingSoonTab tabNum={5} title="Selection"
-          hint="Pick the exact Meta Ads Format Library entries to script for this shoot. Pulls from shortlist + global Meta Ads library (including Hormozi)." />
+        <SelectStep project={project} onPatch={onPatch} />
       )}
       {tab === "script" && (
-        <ComingSoonTab tabNum={6} title="Scripting"
-          hint="Generate the full Hormozi-style script table (motivators × audience awareness × the 7-column blueprint) using the selected formats." />
+        <ScriptStep project={project} onPatch={onPatch} />
       )}
     </div>
   );
@@ -592,6 +588,692 @@ function AdCard({ ad, onRemove }) {
           </a>
         )}
       </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// TAB 3 — Video Review
+// ────────────────────────────────────────────────────────────────
+// Producer works through every ad in the research pool deciding
+// which are worth shortlisting. Mirrors Social Organic's Video Review
+// but adapted for the ad-shape records — no overperformance scoring
+// (FB Ad Library doesn't expose engagement metrics), so sort is
+// limited to recency and source (manual first, then scraped).
+function VideoReviewStep({ project, onPatch }) {
+  const research = project.adLibraryResearch || {};
+  const ads = research.ads || {};
+  const review = project.adReview || {};
+  const ticked = new Set(review.ticked || []);
+  const crossed = new Set(review.crossed || []);
+  const approvals = project.approvals || {};
+  const isApproved = !!approvals.videoReview;
+
+  const [filter, setFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("recent");
+  const [maxPerPage, setMaxPerPage] = useState(
+    typeof project.adReview?.maxPerPage === "number" ? project.adReview.maxPerPage : 8
+  );
+
+  const adList = Object.values(ads).filter(a => a && a.id);
+
+  // Sort — manual entries first (producer cared enough to paste them
+  // individually), then by startedRunning desc, then by adId.
+  const sorted = (() => {
+    const arr = [...adList];
+    if (sortBy === "recent") {
+      arr.sort((a, b) => {
+        if ((a.source === "manual") !== (b.source === "manual")) return a.source === "manual" ? -1 : 1;
+        const aD = a.startedRunning ? new Date(a.startedRunning).getTime() : 0;
+        const bD = b.startedRunning ? new Date(b.startedRunning).getTime() : 0;
+        return bD - aD;
+      });
+    } else if (sortBy === "advertiser") {
+      arr.sort((a, b) => (a.pageName || "").localeCompare(b.pageName || ""));
+    }
+    return arr;
+  })();
+
+  // Per-page cap — prevents one advertiser dominating. Same pattern as
+  // Social Organic's Video Review. Zero = unlimited.
+  const capped = (() => {
+    if (!maxPerPage || maxPerPage <= 0) return sorted;
+    const counts = new Map();
+    const out = [];
+    for (const ad of sorted) {
+      const h = (ad.pageName || "unknown").toLowerCase();
+      const n = counts.get(h) || 0;
+      if (n >= maxPerPage) continue;
+      counts.set(h, n + 1);
+      out.push(ad);
+    }
+    return out;
+  })();
+  const droppedByCap = sorted.length - capped.length;
+
+  // Filter chips
+  const filtered = capped.filter(a => {
+    if (filter === "ticked") return ticked.has(a.id);
+    if (filter === "crossed") return crossed.has(a.id);
+    if (filter === "unreviewed") return !ticked.has(a.id) && !crossed.has(a.id);
+    return true;
+  });
+
+  const setStatus = (adId, status) => {
+    const nextTicked = new Set(ticked);
+    const nextCrossed = new Set(crossed);
+    nextTicked.delete(adId);
+    nextCrossed.delete(adId);
+    if (status === "ticked") nextTicked.add(adId);
+    else if (status === "crossed") nextCrossed.add(adId);
+    fbUpdate(`/preproduction/metaAds/${project.id}/adReview`, {
+      ticked: Array.from(nextTicked),
+      crossed: Array.from(nextCrossed),
+    });
+  };
+
+  const saveMaxPerPage = (v) => {
+    setMaxPerPage(v);
+    fbSet(`/preproduction/metaAds/${project.id}/adReview/maxPerPage`, v);
+  };
+
+  const approve = () => {
+    fbSet(`/preproduction/metaAds/${project.id}/approvals/videoReview`, new Date().toISOString());
+    onPatch({ tab: "shortlist" });
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Video Review</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, maxWidth: 720 }}>
+          Work through each ad in the pool — tick the ones worth shortlisting, cross the rest. Ticked ads carry forward to the Shortlist tab where you'll label them as formats.
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          <FilterChip label={`All (${adList.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterChip label={`✓ Ticked (${ticked.size})`} active={filter === "ticked"} colour="#22C55E" onClick={() => setFilter("ticked")} />
+          <FilterChip label={`✗ Crossed (${crossed.size})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
+          <FilterChip label={`Unreviewed`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }} title="Max ads to show from any single advertiser. Prevents one brand dominating the pool.">
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Max / page</label>
+            <select value={maxPerPage} onChange={e => saveMaxPerPage(parseInt(e.target.value, 10))}
+              style={{ ...textareaSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
+              <option value={0}>Unlimited</option>
+              <option value={3}>3</option>
+              <option value={5}>5</option>
+              <option value={8}>8</option>
+              <option value={12}>12</option>
+              <option value={20}>20</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Sort</label>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+              style={{ ...textareaSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
+              <option value="recent">Recency</option>
+              <option value="advertiser">Advertiser</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      {droppedByCap > 0 && (
+        <div style={{ marginBottom: 10, fontSize: 11, color: "var(--muted)" }}>
+          {droppedByCap} ad{droppedByCap === 1 ? "" : "s"} hidden by per-page cap.
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", fontSize: 12, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 10 }}>
+          {adList.length === 0
+            ? "No ads in the research pool yet. Run a scrape or paste URLs on the Ad Library tab first."
+            : `No ${filter === "all" ? "" : filter + " "}ads match the current filter.`}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 20 }}>
+          {filtered.map(ad => {
+            const status = ticked.has(ad.id) ? "ticked" : crossed.has(ad.id) ? "crossed" : null;
+            return (
+              <ReviewAdCard key={ad.id} ad={ad} status={status}
+                onTick={() => setStatus(ad.id, status === "ticked" ? null : "ticked")}
+                onCross={() => setStatus(ad.id, status === "crossed" ? null : "crossed")}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* Approve */}
+      <div style={{ padding: "14px 18px", background: "var(--card)", border: `1px solid ${isApproved ? "rgba(34,197,94,0.4)" : "var(--border)"}`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          {isApproved
+            ? "Video Review approved. Move to Shortlist next."
+            : `${ticked.size} ticked · ${crossed.size} crossed · ${adList.length - ticked.size - crossed.size} unreviewed. Tick at least a few ads you'd want to script against before approving.`}
+        </div>
+        <button onClick={approve} disabled={ticked.size === 0}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : ticked.size === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: ticked.size === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          {isApproved ? "→ Shortlist" : "Approve Video Review"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewAdCard({ ad, status, onTick, onCross }) {
+  const thumb = ad.thumbnailUrl || ad.snapshotUrl || null;
+  const adLink = ad.adUrl || (ad.adId ? `https://www.facebook.com/ads/library/?id=${ad.adId}` : null);
+  const border = status === "ticked" ? "rgba(34,197,94,0.6)" : status === "crossed" ? "rgba(239,68,68,0.6)" : "var(--border)";
+  return (
+    <div style={{ background: "var(--card)", border: `1px solid ${border}`, borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ position: "relative", aspectRatio: "9 / 16", background: "#0F1520", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        {thumb ? (
+          <img src={thumb} alt={ad.pageName} style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />
+        ) : (
+          <div style={{ fontSize: 32, color: "#374151" }}>📘</div>
+        )}
+        {/* Tick / Cross quick actions */}
+        <div style={{ position: "absolute", bottom: 6, left: 6, right: 6, display: "flex", gap: 6 }}>
+          <button onClick={onTick} title="Shortlist this ad"
+            style={{ flex: 1, padding: "5px 8px", background: status === "ticked" ? "#22C55E" : "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            ✓
+          </button>
+          <button onClick={onCross} title="Skip this ad"
+            style={{ flex: 1, padding: "5px 8px", background: status === "crossed" ? "#EF4444" : "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            ✗
+          </button>
+        </div>
+      </div>
+      <div style={{ padding: "10px 12px" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ad.pageName || "Unknown"}</div>
+        {(ad.bodyText || ad.headline) && (
+          <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+            {(ad.bodyText || ad.headline || "").slice(0, 200)}
+          </div>
+        )}
+        {adLink && (
+          <a href={adLink} target="_blank" rel="noopener noreferrer"
+            style={{ display: "inline-block", marginTop: 6, fontSize: 10, color: "var(--accent)", textDecoration: "none", fontFamily: "'JetBrains Mono',monospace" }}>
+            View on FB →
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FilterChip({ label, active, colour, onClick }) {
+  return (
+    <button onClick={onClick}
+      style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid var(--border)", background: active ? (colour || "var(--accent)") : "var(--bg)", color: active ? "#fff" : "var(--muted)", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+      {label}
+    </button>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// TAB 4 — Shortlist
+// ────────────────────────────────────────────────────────────────
+// Producer labels each ticked ad as a named format. Formats can be
+// saved directly to the Meta Ads Format Library (for reuse across
+// future projects) or kept project-local. Either way, they flow
+// forward into Selection as source="project".
+function ShortlistStep({ project, onPatch }) {
+  const ads = project.adLibraryResearch?.ads || {};
+  const review = project.adReview || {};
+  const ticked = review.ticked || [];
+  const shortlisted = project.shortlistedFormats || {};
+  const approvals = project.approvals || {};
+  const isApproved = !!approvals.shortlist;
+
+  const tickedAds = ticked.map(id => ads[id]).filter(Boolean);
+
+  const approve = () => {
+    const count = Object.keys(shortlisted).length;
+    if (count === 0) { alert("Label at least one ticked ad as a format before approving."); return; }
+    fbSet(`/preproduction/metaAds/${project.id}/approvals/shortlist`, new Date().toISOString());
+    onPatch({ tab: "select" });
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Shortlist</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, maxWidth: 720 }}>
+          For each ticked ad, write what format it represents: what's the hook pattern, what's the structural move that makes it work. Optional — save formats you like to the Meta Ads Format Library so you can reuse them on future projects.
+        </div>
+      </div>
+
+      {tickedAds.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", fontSize: 12, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 10 }}>
+          No ticked ads to shortlist yet. Go back to Video Review and tick some ads first.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 12, marginBottom: 20 }}>
+          {tickedAds.map(ad => (
+            <ShortlistRow key={ad.id} ad={ad} project={project} existing={shortlisted[`sl_${ad.id}`]} />
+          ))}
+        </div>
+      )}
+
+      {/* Approve */}
+      <div style={{ padding: "14px 18px", background: "var(--card)", border: `1px solid ${isApproved ? "rgba(34,197,94,0.4)" : "var(--border)"}`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          {isApproved
+            ? "Shortlist approved. Move to Selection next."
+            : `${Object.keys(shortlisted).length} of ${tickedAds.length} ticked ads labelled as formats.`}
+        </div>
+        <button onClick={approve} disabled={Object.keys(shortlisted).length === 0}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : Object.keys(shortlisted).length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: Object.keys(shortlisted).length === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          {isApproved ? "→ Selection" : "Approve Shortlist"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ShortlistRow({ ad, project, existing }) {
+  const [formatName, setFormatName] = useState(existing?.formatName || "");
+  const [description, setDescription] = useState(existing?.description || "");
+  const [tags, setTags] = useState(existing?.tags || []);
+  const [tagInput, setTagInput] = useState("");
+  const [savingLibrary, setSavingLibrary] = useState(false);
+  const shortlistId = `sl_${ad.id}`;
+
+  const save = () => {
+    if (!formatName.trim()) return;
+    const libraryId = existing?.formatLibraryId || null;
+    fbSet(`/preproduction/metaAds/${project.id}/shortlistedFormats/${shortlistId}`, {
+      adId: ad.id,
+      shortlistId,
+      formatLibraryId: libraryId,
+      formatName: formatName.trim(),
+      description: description.trim(),
+      tags,
+      thumbnail: ad.thumbnailUrl || null,
+      videoUrl: ad.videoUrl || null,
+      adUrl: ad.adUrl || null,
+      pageName: ad.pageName,
+      addedAt: existing?.addedAt || new Date().toISOString(),
+    });
+  };
+
+  const saveToLibrary = () => {
+    if (!formatName.trim()) { alert("Name the format first."); return; }
+    setSavingLibrary(true);
+    const now = new Date().toISOString();
+    const libraryId = existing?.formatLibraryId || `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    fbSet(`/formatLibrary/${libraryId}`, {
+      id: libraryId,
+      formatType: "metaAds",
+      name: formatName.trim(),
+      videoAnalysis: description.trim(),
+      filmingInstructions: "",
+      structureInstructions: "",
+      tags,
+      examples: [
+        {
+          adId: ad.id,
+          url: ad.adUrl || null,
+          thumbnail: ad.thumbnailUrl || null,
+          sourceAccount: ad.pageName,
+          sourceProjectId: project.id,
+          sourceClient: project.companyName,
+          addedAt: now,
+        },
+      ],
+      sourceProjectId: project.id,
+      sourceClient: project.companyName,
+      createdAt: now,
+      createdBy: "producer",
+      usageCount: 0,
+      archived: false,
+      updatedAt: now,
+    });
+    // Write back to shortlist with the new library id
+    fbSet(`/preproduction/metaAds/${project.id}/shortlistedFormats/${shortlistId}`, {
+      adId: ad.id,
+      shortlistId,
+      formatLibraryId: libraryId,
+      formatName: formatName.trim(),
+      description: description.trim(),
+      tags,
+      thumbnail: ad.thumbnailUrl || null,
+      videoUrl: ad.videoUrl || null,
+      adUrl: ad.adUrl || null,
+      pageName: ad.pageName,
+      addedAt: existing?.addedAt || now,
+      libraryCreatedAt: now,
+    });
+    setSavingLibrary(false);
+  };
+
+  const addTag = () => {
+    const t = tagInput.trim().replace(/^#/, "");
+    if (!t || tags.includes(t)) return;
+    setTags([...tags, t]);
+    setTagInput("");
+  };
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 12, display: "grid", gridTemplateColumns: "120px 1fr", gap: 14 }}>
+      {/* Thumbnail */}
+      <div style={{ position: "relative", aspectRatio: "9 / 16", background: "#0F1520", borderRadius: 6, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {ad.thumbnailUrl ? (
+          <img src={ad.thumbnailUrl} alt={ad.pageName} style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />
+        ) : (
+          <div style={{ fontSize: 24, color: "#374151" }}>📘</div>
+        )}
+      </div>
+      {/* Form */}
+      <div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>{ad.pageName}</div>
+        {ad.bodyText && (
+          <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4, marginBottom: 8, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", fontStyle: "italic" }}>
+            "{ad.bodyText.slice(0, 180)}{ad.bodyText.length > 180 ? "…" : ""}"
+          </div>
+        )}
+        <input type="text" value={formatName} onChange={e => setFormatName(e.target.value)} onBlur={save}
+          placeholder="Format name (e.g. Big Promise, Before/After, Objection Flip)"
+          style={{ ...textareaSt, padding: "6px 10px", fontSize: 13, fontWeight: 700, marginBottom: 6 }} />
+        <textarea value={description} onChange={e => setDescription(e.target.value)} onBlur={save} rows={2}
+          placeholder="What makes this format work? What's the hook move?"
+          style={{ ...textareaSt, fontSize: 12, marginBottom: 6 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {tags.map(t => (
+            <span key={t} style={{ padding: "2px 8px", background: "var(--bg)", borderRadius: 3, fontSize: 10, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+              {t}
+              <button onClick={() => { setTags(tags.filter(x => x !== t)); save(); }} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 11 }}>×</button>
+            </span>
+          ))}
+          <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTag(); save(); } }}
+            placeholder="+ Tag"
+            style={{ ...textareaSt, width: 100, padding: "3px 8px", fontSize: 11 }} />
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {existing?.formatLibraryId ? (
+              <span style={{ padding: "4px 10px", fontSize: 10, color: "#22C55E", background: "rgba(34,197,94,0.08)", borderRadius: 4, fontWeight: 700 }}>✓ In library</span>
+            ) : (
+              <button onClick={saveToLibrary} disabled={!formatName.trim() || savingLibrary}
+                style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, background: "var(--bg)", color: "var(--accent)", border: "1px solid var(--border)", borderRadius: 4, cursor: !formatName.trim() || savingLibrary ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+                + Save to Meta Ads library
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// TAB 5 — Selection
+// ────────────────────────────────────────────────────────────────
+// Drag-drop picker from shortlisted formats + Meta Ads library.
+// Per-format videoCount allocator matches Social Organic. Auto-fills
+// with equal split on first mount; producer can override.
+function SelectStep({ project, onPatch }) {
+  const shortlisted = project.shortlistedFormats || {};
+  const numberOfVideos = project.numberOfVideos || 0;
+  const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
+  const approvals = project.approvals || {};
+  const isApproved = !!approvals.select;
+
+  const [library, setLibrary] = useState({});
+  useEffect(() => fbListenSafe("/formatLibrary", d => setLibrary(d || {})), []);
+
+  // Sources panel — both shortlisted (project-local) and Meta Ads library entries.
+  // Filter library to metaAds-only (legacy fallback -> organic, which is excluded).
+  const libraryEntries = Object.values(library || {})
+    .filter(f => f && f.id && !f.archived && (f.formatType || "organic") === "metaAds")
+    .filter(f => !selected.some(s => s.formatLibraryId === f.id));
+  const shortlistEntries = Object.values(shortlisted)
+    .filter(s => s && s.shortlistId)
+    .filter(s => !selected.some(x => x.formatLibraryId === s.formatLibraryId || x.shortlistId === s.shortlistId));
+
+  const totalTarget = numberOfVideos;
+  const totalAssigned = selected.reduce((sum, s) => sum + (s.videoCount || 0), 0);
+  const countsBalanced = totalTarget > 0 && totalAssigned === totalTarget;
+
+  const writeSelected = (next) => {
+    fbSet(`/preproduction/metaAds/${project.id}/selectedFormats`, next);
+  };
+  const addFormat = (entry) => {
+    if (selected.some(s => s.formatLibraryId && s.formatLibraryId === entry.formatLibraryId)) return;
+    const next = [...selected, { ...entry, order: selected.length, addedAt: new Date().toISOString() }];
+    writeSelected(next);
+  };
+  const removeFormat = (key) => {
+    writeSelected(selected.filter((s, i) => `${s.formatLibraryId || s.shortlistId || i}` !== key));
+  };
+  const setCount = (key, count) => {
+    const n = Math.max(0, parseInt(count, 10) || 0);
+    writeSelected(selected.map((s, i) => `${s.formatLibraryId || s.shortlistId || i}` === key ? { ...s, videoCount: n } : s));
+  };
+  const applyEqualSplit = () => {
+    if (selected.length === 0 || !totalTarget) return;
+    const base = Math.floor(totalTarget / selected.length);
+    const remainder = totalTarget % selected.length;
+    writeSelected(selected.map((s, i) => ({ ...s, videoCount: base + (i < remainder ? 1 : 0) })));
+  };
+  useEffect(() => {
+    if (!totalTarget || selected.length === 0) return;
+    if (selected.every(s => s.videoCount != null)) return;
+    applyEqualSplit();
+  }, [selected.length, totalTarget]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const approve = () => {
+    if (selected.length === 0) return;
+    fbSet(`/preproduction/metaAds/${project.id}/approvals/select`, new Date().toISOString());
+    onPatch({ tab: "script" });
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Selection</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, maxWidth: 720 }}>
+          Pick the formats you want to script against. Sources: this project's shortlist (labelled in the previous tab) plus every entry in the Meta Ads Format Library. Allocate how many of each format to produce on the right.
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        {/* Sources */}
+        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>
+            Sources <span style={{ color: "var(--muted)", fontWeight: 500, marginLeft: 6 }}>({shortlistEntries.length + libraryEntries.length} available)</span>
+          </div>
+          {shortlistEntries.length === 0 && libraryEntries.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", fontSize: 11, color: "var(--muted)" }}>
+              No sources available. Shortlist some ads in the previous tab, or add entries to the Meta Ads Format Library.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 6, maxHeight: 480, overflowY: "auto" }}>
+              {shortlistEntries.length > 0 && (
+                <div style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>
+                  From this project's shortlist
+                </div>
+              )}
+              {shortlistEntries.map(s => (
+                <button key={s.shortlistId} onClick={() => addFormat({ shortlistId: s.shortlistId, formatLibraryId: s.formatLibraryId || null, source: "project", formatName: s.formatName, description: s.description })}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.formatName}</span>
+                  <span style={{ fontSize: 10, color: "var(--accent)" }}>+ Add</span>
+                </button>
+              ))}
+              {libraryEntries.length > 0 && (
+                <div style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginTop: 8, marginBottom: 2 }}>
+                  From Meta Ads Format Library
+                </div>
+              )}
+              {libraryEntries.map(f => (
+                <button key={f.id} onClick={() => addFormat({ formatLibraryId: f.id, source: "library", formatName: f.name, description: f.videoAnalysis })}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                  <span style={{ fontSize: 10, color: "var(--accent)" }}>+ Add</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Selected */}
+        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Selected ({selected.length})</span>
+          </div>
+          {totalTarget > 0 && selected.length > 0 && (
+            <div style={{ marginBottom: 10, padding: "6px 10px", borderRadius: 6, background: countsBalanced ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)", border: `1px solid ${countsBalanced ? "rgba(16,185,129,0.4)" : "rgba(239,68,68,0.4)"}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: countsBalanced ? "#10B981" : "#EF4444", fontFamily: "'JetBrains Mono',monospace" }}>
+                {totalAssigned} / {totalTarget} ads {countsBalanced ? "✓" : `(${totalAssigned - totalTarget > 0 ? "+" : ""}${totalAssigned - totalTarget})`}
+              </div>
+              <button onClick={applyEqualSplit}
+                style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--card)", color: "var(--muted)", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                Equal split
+              </button>
+            </div>
+          )}
+          {selected.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", fontSize: 11, color: "var(--muted)" }}>
+              Click formats on the left to add them.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 6 }}>
+              {selected.map((s, i) => {
+                const key = `${s.formatLibraryId || s.shortlistId || i}`;
+                return (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6 }}>
+                    <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", minWidth: 18 }}>{String(i + 1).padStart(2, "0")}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.formatName}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }} title="How many ads of this format to script">
+                      <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>×</span>
+                      <input type="number" min={0} max={99} value={s.videoCount ?? ""}
+                        onChange={e => setCount(key, e.target.value)}
+                        style={{ width: 40, padding: "3px 6px", borderRadius: 3, border: "1px solid var(--border)", background: "var(--card)", color: "var(--fg)", fontSize: 12, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none", textAlign: "center" }} />
+                    </div>
+                    <button onClick={() => removeFormat(key)} title="Remove"
+                      style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 14, padding: 0 }}>×</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Approve */}
+      <div style={{ padding: "14px 18px", background: "var(--card)", border: `1px solid ${isApproved ? "rgba(34,197,94,0.4)" : "var(--border)"}`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          {isApproved
+            ? "Selection approved. Move to Scripting next."
+            : selected.length === 0
+              ? "Pick at least one format before approving."
+              : !countsBalanced && totalTarget > 0
+                ? "Allocated count doesn't match the total video count yet — adjust or Equal split to balance."
+                : "Ready to approve."}
+        </div>
+        <button onClick={approve} disabled={selected.length === 0}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : selected.length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: selected.length === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          {isApproved ? "→ Scripting" : "Approve Selection"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// TAB 6 — Scripting
+// ────────────────────────────────────────────────────────────────
+// Generates the Hormozi-style script table from Brand Truth + selected
+// formats. Backend lives at /api/meta-ads scriptGenerate.
+function ScriptStep({ project, onPatch }) {
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState(null);
+  const scripts = project.scriptTable || [];
+
+  const generate = async () => {
+    setError(null);
+    setGenerating(true);
+    try {
+      const r = await fetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "scriptGenerate", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener rehydrates scriptTable.
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Scripting</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, maxWidth: 720 }}>
+            Generate the full script table from your Brand Truth + selected formats. Each script lands in the Hormozi 7-column blueprint (Hook, Pain, Results, Offer, Why, CTA, Headline + Ad Copy).
+          </div>
+        </div>
+        <button onClick={generate} disabled={generating}
+          style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: generating ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: generating ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          {generating ? "Generating…" : scripts.length > 0 ? "Regenerate scripts" : "Generate scripts"}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+          {error}
+        </div>
+      )}
+
+      {scripts.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 10 }}>
+          <div style={{ fontSize: 28, marginBottom: 10 }}>📝</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>No scripts yet</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", maxWidth: 520, margin: "0 auto 16px", lineHeight: 1.5 }}>
+            Click Generate. Takes 30-60s on Opus. Uses your Brand Truth fields + the selected format library entries to produce one row per ad.
+          </div>
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
+          <table style={{ width: "100%", minWidth: 1400, borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr>
+                {["#", "Name", "Format", "Hook", "Explain the Pain", "Results", "Offer", "CTA", "Headline", "Ad Copy"].map(h => (
+                  <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: "2px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {scripts.map((row, i) => (
+                <tr key={row.id || i}>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, verticalAlign: "top" }}>{String(i + 1).padStart(2, "0")}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top" }}>
+                    <div style={{ fontSize: 11, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{row.videoName || "—"}</div>
+                  </td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", color: "var(--muted)", fontSize: 11 }}>{row.formatName || "—"}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 240 }}>{row.hook || ""}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 220 }}>{row.explainPain || ""}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 220 }}>{row.results || ""}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 220 }}>{row.offer || ""}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 180 }}>{row.cta || ""}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>{row.headline || ""}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: 320, fontSize: 11, lineHeight: 1.5 }}>{row.adCopy || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
