@@ -399,6 +399,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
         countsBalanced={countsBalanced}
         setFormatCount={setFormatCount}
         applyEqualSplit={applyEqualSplit}
+        setNumberOfVideos={(n) => onPatch({ numberOfVideos: Math.max(0, parseInt(n, 10) || 0) })}
       />
 
       {/* Approval bar */}
@@ -616,7 +617,7 @@ function DraggableFormatCard({ card, onClick, onOpenDetails }) {
   );
 }
 
-function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCount, totalTarget, totalAssigned, countsBalanced, setFormatCount, applyEqualSplit }) {
+function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCount, totalTarget, totalAssigned, countsBalanced, setFormatCount, applyEqualSplit, setNumberOfVideos }) {
   const { setNodeRef, isOver } = useDroppable({ id: "selected-dropzone" });
   return (
     <div ref={setNodeRef}
@@ -632,8 +633,10 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
 
       {/* Video count allocator: how many of each format should be shot.
           Sum must match numberOfVideos from the deal. Red when off,
-          green when balanced. "Reset to equal split" one-clicks back to
-          the auto default. */}
+          green when balanced. Total is click-to-edit — producers who
+          realise they need 28 videos not 20 (or vice versa) can bump
+          the target here rather than re-editing Attio. "Reset to equal
+          split" one-clicks the per-format counts back to auto. */}
       {totalTarget > 0 && selected.length > 0 && (
         <div style={{
           marginBottom: 12, padding: "8px 12px", borderRadius: 6,
@@ -641,8 +644,18 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
           border: `1px solid ${countsBalanced ? "rgba(16,185,129,0.4)" : "rgba(239,68,68,0.4)"}`,
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap",
         }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: countsBalanced ? "#10B981" : "#EF4444", fontFamily: "'JetBrains Mono',monospace" }}>
-            {totalAssigned} / {totalTarget} videos allocated {countsBalanced ? "✓" : `(${totalAssigned - totalTarget > 0 ? "+" : ""}${totalAssigned - totalTarget})`}
+          <div style={{ fontSize: 11, fontWeight: 600, color: countsBalanced ? "#10B981" : "#EF4444", fontFamily: "'JetBrains Mono',monospace", display: "flex", alignItems: "center", gap: 6 }}>
+            <span>{totalAssigned} /</span>
+            {setNumberOfVideos ? (
+              <input type="number" min={1} max={999}
+                value={totalTarget}
+                onChange={e => setNumberOfVideos(e.target.value)}
+                title="Total videos for this deal — click to change"
+                style={{ width: 48, padding: "2px 4px", borderRadius: 3, border: "1px solid var(--border)", background: "var(--input-bg)", color: "inherit", fontSize: 11, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none", textAlign: "center" }} />
+            ) : (
+              <span>{totalTarget}</span>
+            )}
+            <span>videos allocated {countsBalanced ? "✓" : `(${totalAssigned - totalTarget > 0 ? "+" : ""}${totalAssigned - totalTarget})`}</span>
           </div>
           <button onClick={applyEqualSplit}
             style={{ padding: "3px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--card)", color: "var(--muted)", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
