@@ -529,8 +529,8 @@ export default function App(){
     {/* ═══ EDITOR DASHBOARD ═══ */}
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}
 
-    {/* ═══ ACCOUNTS (includes Buyer Journey sub-tab) ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} setTurnaround={setTurnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} buyerJourney={buyerJourney} setBuyerJourney={setBuyerJourney} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
     {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>)}
@@ -626,6 +626,9 @@ export default function App(){
         attioDeals={attioDeals} setAttioDeals={setAttioDeals}
         salePricing={salePricing} setSalePricing={setSalePricing}
         saleThankYou={saleThankYou} setSaleThankYou={setSaleThankYou}
+        buyerJourney={buyerJourney} setBuyerJourney={setBuyerJourney}
+        turnaround={turnaround} setTurnaround={setTurnaround}
+        accounts={accounts}
       />
     )}
 

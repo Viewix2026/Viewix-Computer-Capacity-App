@@ -1,29 +1,11 @@
 import React, { useState } from "react";
 import { fbSet } from "../firebase";
-import { BTN, TH, TD } from "../config";
+import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS } from "../config";
 import { logoBg } from "../utils";
-import { BuyerJourney } from "./BuyerJourney";
 
-const MILESTONE_DEFS = [
-  { key: "signing", label: "Signing" },
-  { key: "preProductionMeeting", label: "Pre Prod Meeting" },
-  { key: "preProductionPresentation", label: "Pre Prod Presentation" },
-  { key: "shoot", label: "Shoot" },
-  { key: "posting", label: "Posting" },
-  { key: "resultsReview", label: "Results Review" },
-  { key: "partnershipReview", label: "Partnership Review" },
-  { key: "growthStrategy", label: "Growth Strategy" },
-];
-
-const DEFAULT_GAPS = {
-  preProductionMeeting: 3,
-  preProductionPresentation: 7,
-  shoot: 7,
-  posting: 14,
-  resultsReview: 28,
-  partnershipReview: 28,
-  growthStrategy: 28,
-};
+// Alias kept so local references to DEFAULT_GAPS inside this file read
+// naturally — the canonical export in config.js is DEFAULT_MILESTONE_GAPS.
+const DEFAULT_GAPS = DEFAULT_MILESTONE_GAPS;
 
 const PARTNERSHIP_TYPES = [
   "Live Action", "Standard - Meta Ads", "Premium - Meta Ads", "Deluxe - Meta Ads",
@@ -80,8 +62,12 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnaround, onSyncAttio, editors, clients, setClients, onDeletePath, buyerJourney, setBuyerJourney }) {
-  const [tab, setTab] = useState("clients");
+export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAttio, editors, clients, setClients, onDeletePath }) {
+  // Buyer Journey + Turnaround sub-tabs have moved to the Founders tab
+  // (founders > buyerJourney). This component is now Clients-only; the
+  // tab state is retained as a no-op to minimise downstream churn in
+  // case anything else references it.
+  const [tab] = useState("clients");
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [syncing, setSyncing] = useState(false);
@@ -205,11 +191,6 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
     setSyncing(false);
   };
 
-  const updateGap = (key, val) => {
-    const v = Math.max(0, parseInt(val) || 0);
-    setTurnaround(prev => ({ ...prev, [key]: v }));
-  };
-
   const inputSt = { padding: "5px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "'DM Sans',sans-serif" };
   const selectSt = { padding: "4px 6px", borderRadius: 4, border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer", outline: "none", appearance: "auto" };
   const managerCounts = {};
@@ -219,57 +200,11 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, setTurnar
     <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
       <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Accounts</span>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          <button onClick={() => setTab("clients")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: tab === "clients" ? "var(--card)" : "transparent", color: tab === "clients" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Clients</button>
-          <button onClick={() => setTab("turnaround")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: tab === "turnaround" ? "var(--card)" : "transparent", color: tab === "turnaround" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Turnaround</button>
-          <button onClick={() => setTab("buyerjourney")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: tab === "buyerjourney" ? "var(--card)" : "transparent", color: tab === "buyerjourney" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Buyer Journey</button>
-        </div>
-        {tab === "clients" && (<div style={{ display: "flex", gap: 6 }}>
-          {/* Sync from Attio button removed — new-account creation now flows
-              through the webhook-deal-won path; accounts are created
-              automatically when a deal is won in Attio. Producers can
-              still add manually if needed. */}
-          <button onClick={() => setAdding(true)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>+ Add Client</button>
-        </div>)}
+        {/* Sub-tab bar removed — Turnaround and Buyer Journey now live under
+            the Founders tab. This view is Clients-only. */}
+        <button onClick={() => setAdding(true)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>+ Add Client</button>
       </div>
     </div>
-
-    {/* ═══ TURNAROUND TAB ═══ */}
-    {tab === "turnaround" && (
-      <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 28px 60px" }}>
-        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Standard Turnaround Times</div>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>Days between each stage. Used when a signing date is set.</div>
-          <div style={{ display: "grid", gap: 0 }}>
-            {MILESTONE_DEFS.slice(1).map((m, i) => {
-              const prevLabel = MILESTONE_DEFS[i].label;
-              return (
-                <div key={m.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-                  <div style={{ flex: 1, fontSize: 13, color: "var(--fg)" }}>{prevLabel} → {m.label}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <input type="number" value={gaps[m.key]} onChange={e => updateGap(m.key, e.target.value)} min={0} style={{ width: 48, padding: "4px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 14, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none", textAlign: "center" }} />
-                    <span style={{ fontSize: 11, color: "var(--muted)", minWidth: 28 }}>days</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ marginTop: 16, display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {MILESTONE_DEFS.map(m => (
-              <div key={m.key} style={{ padding: "4px 8px", background: "var(--bg)", borderRadius: 4, display: "flex", alignItems: "baseline", gap: 4 }}>
-                <span style={{ fontSize: 10, color: "var(--muted)" }}>{m.label}</span>
-                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", color: "var(--accent)" }}>{offsets[m.key]}d</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* ═══ BUYER JOURNEY TAB ═══ */}
-    {tab === "buyerjourney" && (
-      <BuyerJourney data={buyerJourney || {}} onChange={setBuyerJourney} />
-    )}
 
     {/* ═══ CLIENTS TAB ═══ */}
     {tab === "clients" && (

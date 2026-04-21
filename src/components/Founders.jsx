@@ -8,6 +8,7 @@ import { pct, fmtCur } from "../utils";
 import { fbSet } from "../firebase";
 import { FoundersData } from "./FoundersData";
 import { FoundersLearnings } from "./FoundersLearnings";
+import { BuyerJourney } from "./BuyerJourney";
 
 export function Founders({
   foundersData, setFoundersData,
@@ -16,6 +17,13 @@ export function Founders({
   attioDeals, setAttioDeals,
   salePricing, setSalePricing,
   saleThankYou, setSaleThankYou,
+  // Buyer Journey + Turnaround relocated here from the Accounts tab
+  // (unified editor at Founders → Buyer Journey). Accounts is now
+  // clients-only; timing data still reads from /turnaround via the
+  // BuyerJourney Turnaround sub-tab.
+  buyerJourney, setBuyerJourney,
+  turnaround, setTurnaround,
+  accounts,
 }) {
   const [attioLoading, setAttioLoading] = useState(false);
   const [revenueTableExpanded, setRevenueTableExpanded] = useState(false);
@@ -128,12 +136,23 @@ export function Founders({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Founders Dashboard</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "pricing", label: "Pricing" }, { key: "thankyou", label: "Thank-You Pages" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "pricing", label: "Pricing" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }].map(t => (
             <button key={t.key} onClick={() => setFoundersTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: foundersTab === t.key ? "var(--card)" : "transparent", color: foundersTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
       </div>
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
+      {/* Buyer Journey renders outside the maxWidth wrapper so its
+          horizontal scroll can stretch the full viewport width — the
+          swim-lane view is meaningless if capped at 1200px. */}
+      {foundersTab === "buyerJourney" && (
+        <BuyerJourney
+          data={buyerJourney || {}} onChange={setBuyerJourney}
+          turnaround={turnaround} setTurnaround={setTurnaround}
+          accounts={accounts}
+        />
+      )}
+
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px", display: foundersTab === "buyerJourney" ? "none" : "block" }}>
 
         {foundersTab === "dashboard" && (<>
 
@@ -336,6 +355,8 @@ export function Founders({
         {foundersTab === "learnings" && <FoundersLearnings />}
         {foundersTab === "pricing" && <PricingEditor salePricing={salePricing} setSalePricing={setSalePricing} />}
         {foundersTab === "thankyou" && <ThankYouEditor saleThankYou={saleThankYou} setSaleThankYou={setSaleThankYou} />}
+        {/* Buyer Journey is rendered above the maxWidth wrapper to allow
+            full-width horizontal scroll — see top of this component. */}
       </div>
     </>
   );

@@ -175,6 +175,36 @@ export {
   DEFAULT_SALE_THANKYOU,
 } from "../api/_tiers.js";
 
+// ─── Client Milestones ─────────────────────────────────────────────
+// The fixed post-sale milestone sequence used in two places:
+//   1. AccountsDashboard — computes per-account "next milestone due"
+//      dates from the client's signing date + these gap defaults.
+//   2. BuyerJourney — stages can link to a milestoneKey so editing
+//      "days to next stage" there writes to /turnaround and auto-syncs
+//      with AccountsDashboard's due-date calculations.
+//
+// DEFAULT_MILESTONE_GAPS is the fallback when /turnaround has no entry
+// for a given key — typically the first-load bootstrap.
+export const MILESTONE_DEFS = [
+  { key: "signing",                   label: "Signing" },
+  { key: "preProductionMeeting",      label: "Pre Prod Meeting" },
+  { key: "preProductionPresentation", label: "Pre Prod Presentation" },
+  { key: "shoot",                     label: "Shoot" },
+  { key: "posting",                   label: "Posting" },
+  { key: "resultsReview",             label: "Results Review" },
+  { key: "partnershipReview",         label: "Partnership Review" },
+  { key: "growthStrategy",            label: "Growth Strategy" },
+];
+export const DEFAULT_MILESTONE_GAPS = {
+  preProductionMeeting: 3,
+  preProductionPresentation: 7,
+  shoot: 7,
+  posting: 14,
+  resultsReview: 28,
+  partnershipReview: 28,
+  growthStrategy: 28,
+};
+
 // ─── Shared Styles ───
 export const TH = { padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "2px solid var(--border)", background: "var(--card)" };
 export const TD = { padding: "6px 10px", borderBottom: "1px solid var(--border-light)" };
