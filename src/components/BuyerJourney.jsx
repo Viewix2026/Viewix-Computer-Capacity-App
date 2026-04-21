@@ -82,7 +82,14 @@ export function BuyerJourney({ data, onChange }) {
   const descSt = { ...inputSt, fontSize: 12, minHeight: 50, resize: "vertical" };
   const smallBtn = { background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 10, padding: "2px 4px" };
 
-  const Arrow = () => (<div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}><div style={{ width: 2, height: 16, background: "var(--border)" }} /><div style={{ width: 0, height: 0, borderLeft: "4px solid transparent", borderRight: "4px solid transparent", borderTop: "5px solid var(--border)" }} /></div>);
+  // Horizontal right-pointing arrow between stages. Aligns with the
+  // vertical midpoint of the surrounding stage cards via flex alignSelf.
+  const Arrow = () => (
+    <div style={{ display: "flex", alignItems: "center", alignSelf: "center", flexShrink: 0 }}>
+      <div style={{ height: 2, width: 16, background: "var(--border)" }} />
+      <div style={{ width: 0, height: 0, borderTop: "4px solid transparent", borderBottom: "4px solid transparent", borderLeft: "5px solid var(--border)" }} />
+    </div>
+  );
 
   return (<>
     <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
@@ -93,84 +100,128 @@ export function BuyerJourney({ data, onChange }) {
         ))}
       </div>
     </div>
-    <div style={{ maxWidth: 520, margin: "0 auto", padding: "24px 28px 60px" }}>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0 }}>
+    {/* Horizontal swim-lane — stages flow left-to-right; wraps when the
+        viewport runs out of width so we don't force a long horizontal
+        scrollbar on smaller screens. Sections insert as inline labelled
+        dividers between stage groups. Branches keep their internal two-
+        column split (they're already horizontal within). */}
+    <div style={{ padding: "24px 28px 60px", overflowX: "auto" }}>
+      <div style={{
+        display: "flex", flexDirection: "row", flexWrap: "wrap",
+        alignItems: "stretch", gap: 8, minWidth: "min-content",
+      }}>
         {stages.map((item, i) => {
           const isEditing = editingId === item.id;
           const nextItem = stages[i + 1];
 
           if (item.type === "section") {
             const sc = SECTION_COLORS[item.label] || "var(--accent)";
-            return (<div key={item.id} style={{ width: "100%", marginTop: i > 0 ? 20 : 0, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              {isEditing ? <input defaultValue={item.label} autoFocus onBlur={e => { updateItem(item.id, { label: e.target.value.trim() || item.label }); setEditingId(null); }} onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }} style={{ ...inputSt, fontSize: 11, fontWeight: 700, textTransform: "uppercase", maxWidth: 200 }} />
-              : <span style={{ fontSize: 11, fontWeight: 700, color: sc, textTransform: "uppercase", letterSpacing: "0.05em", cursor: "pointer" }} onClick={() => setEditingId(item.id)}>{item.label}</span>}
-              <div style={{ display: "flex", gap: 2 }}>
-                <button onClick={() => moveItem(item.id, -1)} style={smallBtn}>▲</button>
-                <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▼</button>
-                <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
+            // Section becomes a vertical labelled divider between stage
+            // groups. Writing-mode rotates the label 90° so it reads up the
+            // divider; small up/down buttons stay inline above the label.
+            return (
+              <div key={item.id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, paddingLeft: i > 0 ? 8 : 0, paddingRight: 8, alignSelf: "stretch", flexShrink: 0 }}>
+                {isEditing ? (
+                  <input defaultValue={item.label} autoFocus onBlur={e => { updateItem(item.id, { label: e.target.value.trim() || item.label }); setEditingId(null); }} onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+                    style={{ ...inputSt, fontSize: 11, fontWeight: 700, textTransform: "uppercase", maxWidth: 140 }} />
+                ) : (
+                  <span onClick={() => setEditingId(item.id)}
+                    style={{ fontSize: 11, fontWeight: 700, color: sc, textTransform: "uppercase", letterSpacing: "0.08em", cursor: "pointer", writingMode: "vertical-rl", transform: "rotate(180deg)", padding: "4px 2px", whiteSpace: "nowrap" }}>
+                    {item.label}
+                  </span>
+                )}
+                <div style={{ flex: 1, width: 2, background: sc, opacity: 0.35, borderRadius: 2, minHeight: 40 }} />
+                <div style={{ display: "flex", gap: 2 }}>
+                  <button onClick={() => moveItem(item.id, -1)} style={smallBtn}>◀</button>
+                  <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▶</button>
+                  <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
+                </div>
               </div>
-            </div>);
+            );
           }
 
           if (item.type === "branch") {
-            return (<div key={item.id} style={{ width: "100%" }}>
-              <div style={{ display: "flex", gap: 10, width: "100%" }}>
-                {["left", "right"].map(side => {
-                  const b = item[side];
-                  const isWon = b.title.toLowerCase() === "won";
-                  const isLost = b.title.toLowerCase() === "lost";
-                  const bc = isWon ? "rgba(16,185,129,0.5)" : isLost ? "rgba(239,68,68,0.5)" : "var(--border)";
-                  return (<div key={side} style={{ flex: 1, background: "var(--card)", border: `1px solid ${bc}`, borderRadius: 10, padding: "12px 14px" }}>
-                    {isEditing ? (<><input defaultValue={b.title} onBlur={e => updateItem(item.id, { [side]: { ...b, title: e.target.value.trim() || b.title } })} style={{ ...inputSt, fontSize: 12, fontWeight: 700, marginBottom: 4 }} /><textarea defaultValue={b.desc} onBlur={e => updateItem(item.id, { [side]: { ...b, desc: e.target.value } })} style={descSt} /></>)
-                    : (<><div style={{ fontSize: 12, fontWeight: 700, color: isWon ? "#10B981" : isLost ? "#EF4444" : "var(--fg)", marginBottom: 2 }}>{b.title}</div><div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>{b.desc}</div></>)}
-                  </div>);
-                })}
+            return (
+              <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 0 }}>
+                <div style={{ display: "flex", flexDirection: "column", width: 260 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {["left", "right"].map(side => {
+                      const b = item[side];
+                      const isWon = b.title.toLowerCase() === "won";
+                      const isLost = b.title.toLowerCase() === "lost";
+                      const bc = isWon ? "rgba(16,185,129,0.5)" : isLost ? "rgba(239,68,68,0.5)" : "var(--border)";
+                      return (
+                        <div key={side} style={{ background: "var(--card)", border: `1px solid ${bc}`, borderRadius: 10, padding: "12px 14px" }}>
+                          {isEditing ? (<>
+                            <input defaultValue={b.title} onBlur={e => updateItem(item.id, { [side]: { ...b, title: e.target.value.trim() || b.title } })} style={{ ...inputSt, fontSize: 12, fontWeight: 700, marginBottom: 4 }} />
+                            <textarea defaultValue={b.desc} onBlur={e => updateItem(item.id, { [side]: { ...b, desc: e.target.value } })} style={descSt} />
+                          </>) : (<>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: isWon ? "#10B981" : isLost ? "#EF4444" : "var(--fg)", marginBottom: 2 }}>{b.title}</div>
+                            <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>{b.desc}</div>
+                          </>)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 4 }}>
+                    <button onClick={() => setEditingId(isEditing ? null : item.id)} style={{ ...smallBtn, color: "var(--accent)", fontWeight: 600 }}>{isEditing ? "Done" : "Edit"}</button>
+                    <button onClick={() => moveItem(item.id, -1)} style={smallBtn}>◀</button>
+                    <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▶</button>
+                    <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
+                  </div>
+                  {isEditing && (
+                    <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                      <button onClick={() => addStage(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Stage</button>
+                      <button onClick={() => addBranch(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Branch</button>
+                      <button onClick={() => addSection(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Section</button>
+                    </div>
+                  )}
+                </div>
+                {i < stages.length - 1 && nextItem?.type !== "section" && <Arrow />}
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 4 }}>
-                <button onClick={() => setEditingId(isEditing ? null : item.id)} style={{ ...smallBtn, color: "var(--accent)", fontWeight: 600 }}>{isEditing ? "Done" : "Edit"}</button>
-                <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
-              </div>
-              {isEditing && (<div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 6 }}>
-                <button onClick={() => addStage(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Stage</button>
-                <button onClick={() => addBranch(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Branch</button>
-                <button onClick={() => addSection(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Section</button>
-              </div>)}
-              {i < stages.length - 1 && nextItem?.type !== "section" && <Arrow />}
-            </div>);
+            );
           }
 
-          return (<div key={item.id} style={{ width: "100%" }}>
-            <div style={{ background: "var(--card)", border: `1px solid ${item.diff ? "var(--accent)" : "var(--border)"}`, borderRadius: item.diff ? 0 : 10, padding: "14px 18px", borderLeft: item.diff ? "3px solid var(--accent)" : undefined }}>
-              {isEditing ? (<>
-                <input defaultValue={item.title} onBlur={e => updateItem(item.id, { title: e.target.value.trim() || item.title })} style={{ ...inputSt, fontSize: 14, fontWeight: 700, marginBottom: 6 }} autoFocus />
-                <textarea defaultValue={item.desc} onBlur={e => updateItem(item.id, { desc: e.target.value })} style={descSt} />
-                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                  <input defaultValue={item.tag || ""} onBlur={e => updateItem(item.id, { tag: e.target.value.trim() })} placeholder="Tag (e.g. 7 to 10 days)" style={{ ...inputSt, fontSize: 11, maxWidth: 200 }} />
-                  <input defaultValue={item.pct || ""} onBlur={e => updateItem(item.id, { pct: e.target.value.trim() })} placeholder="Percentage (e.g. 65% convert)" style={{ ...inputSt, fontSize: 11, maxWidth: 200 }} />
-                  <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 4 }}><input type="checkbox" checked={!!item.diff} onChange={e => updateItem(item.id, { diff: e.target.checked })} /> Differs between offers</label>
+          // Plain stage card — fixed width so the horizontal flow stays
+          // tidy. Description wraps within.
+          return (
+            <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 0 }}>
+              <div style={{ display: "flex", flexDirection: "column", width: 240 }}>
+                <div style={{ background: "var(--card)", border: `1px solid ${item.diff ? "var(--accent)" : "var(--border)"}`, borderRadius: item.diff ? 0 : 10, padding: "14px 18px", borderLeft: item.diff ? "3px solid var(--accent)" : undefined }}>
+                  {isEditing ? (<>
+                    <input defaultValue={item.title} onBlur={e => updateItem(item.id, { title: e.target.value.trim() || item.title })} style={{ ...inputSt, fontSize: 14, fontWeight: 700, marginBottom: 6 }} autoFocus />
+                    <textarea defaultValue={item.desc} onBlur={e => updateItem(item.id, { desc: e.target.value })} style={descSt} />
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                      <input defaultValue={item.tag || ""} onBlur={e => updateItem(item.id, { tag: e.target.value.trim() })} placeholder="Tag (e.g. 7 to 10 days)" style={{ ...inputSt, fontSize: 11 }} />
+                      <input defaultValue={item.pct || ""} onBlur={e => updateItem(item.id, { pct: e.target.value.trim() })} placeholder="Percentage (e.g. 65% convert)" style={{ ...inputSt, fontSize: 11 }} />
+                      <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 4 }}><input type="checkbox" checked={!!item.diff} onChange={e => updateItem(item.id, { diff: e.target.checked })} /> Differs between offers</label>
+                    </div>
+                  </>) : (<>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{item.title}</span>
+                      {item.pct && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(0,130,250,0.12)", color: "#0082FA" }}>{item.pct}</span>}
+                      {item.tag && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)" }}>{item.tag}</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>{item.desc}</div>
+                  </>)}
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 6 }}>
+                    <button onClick={() => setEditingId(isEditing ? null : item.id)} style={{ ...smallBtn, color: "var(--accent)", fontWeight: 600 }}>{isEditing ? "Done" : "Edit"}</button>
+                    <button onClick={() => moveItem(item.id, -1)} style={smallBtn}>◀</button>
+                    <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▶</button>
+                    <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
+                  </div>
                 </div>
-              </>) : (<>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{item.title}</span>
-                  {item.pct && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "rgba(0,130,250,0.12)", color: "#0082FA" }}>{item.pct}</span>}
-                  {item.tag && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)" }}>{item.tag}</span>}
-                </div>
-                <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>{item.desc}</div>
-              </>)}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 6 }}>
-                <button onClick={() => setEditingId(isEditing ? null : item.id)} style={{ ...smallBtn, color: "var(--accent)", fontWeight: 600 }}>{isEditing ? "Done" : "Edit"}</button>
-                <button onClick={() => moveItem(item.id, -1)} style={smallBtn}>▲</button>
-                <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▼</button>
-                <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
+                {isEditing && (
+                  <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => addStage(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Stage</button>
+                    <button onClick={() => addBranch(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Branch</button>
+                    <button onClick={() => addSection(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Section</button>
+                  </div>
+                )}
               </div>
+              {i < stages.length - 1 && nextItem?.type !== "section" && <Arrow />}
             </div>
-            {isEditing && (<div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 8 }}>
-              <button onClick={() => addStage(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Stage</button>
-              <button onClick={() => addBranch(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Branch</button>
-              <button onClick={() => addSection(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Section</button>
-            </div>)}
-            {i < stages.length - 1 && nextItem?.type !== "section" && <Arrow />}
-          </div>);
+          );
         })}
       </div>
     </div>
