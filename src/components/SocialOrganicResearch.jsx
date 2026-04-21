@@ -1515,6 +1515,12 @@ function VideoReviewStep({ project, onPatch }) {
   // the best video on the signal they care about in that moment.
   const [sortBy, setSortBy] = useState("overperformance");
   const [visibleCount, setVisibleCount] = useState(25);
+  // Per-handle cap prevents one viral account (Huberman, Shaan Puri, etc.)
+  // from dominating the review pool. Default 8 — keeps the top few videos
+  // from every handle while reserving space for diversity. 0 = unlimited.
+  const [maxPerHandle, setMaxPerHandle] = useState(
+    typeof project.maxPerHandle === "number" ? project.maxPerHandle : 8
+  );
 
   const SORT_METRICS = [
     { key: "overperformance", label: "Overperformance", pick: p => p.overperformanceScore || 0 },
@@ -1541,8 +1547,28 @@ function VideoReviewStep({ project, onPatch }) {
     }
     return [...posts].sort((a, b) => sortMetric.pick(b) - sortMetric.pick(a));
   })();
-  const topPosts = sortedPosts.slice(0, visibleCount);
-  const hasMore = sortedPosts.length > visibleCount;
+
+  // Per-handle cap pass — walk the sorted list keeping the first N from
+  // each handle. Zero means unlimited (the old behaviour). Applied before
+  // the visibleCount slice so "show more" always reveals additional
+  // diverse content, not just more of the same handle's tail.
+  const cappedPosts = (() => {
+    if (!maxPerHandle || maxPerHandle <= 0) return sortedPosts;
+    const counts = new Map();
+    const out = [];
+    for (const p of sortedPosts) {
+      const h = (p.handle || "unknown").toLowerCase();
+      const n = counts.get(h) || 0;
+      if (n >= maxPerHandle) continue;
+      counts.set(h, n + 1);
+      out.push(p);
+    }
+    return out;
+  })();
+  const droppedByCap = sortedPosts.length - cappedPosts.length;
+
+  const topPosts = cappedPosts.slice(0, visibleCount);
+  const hasMore = cappedPosts.length > visibleCount;
 
   const setStatus = (postId, status) => {
     const nextTicked = new Set(ticked);
@@ -1615,13 +1641,34 @@ function VideoReviewStep({ project, onPatch }) {
             <FilterChip label={`✗ Crossed (${crossed.size})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
             <FilterChip label={`Unreviewed`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Sort</label>
-            <select value={sortBy} onChange={e => { setSortBy(e.target.value); setVisibleCount(25); }}
-              style={{ ...inputSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
-              {SORT_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-            </select>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {/* Per-handle cap — prevents one viral account from dominating. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }} title="Max videos to show from any single handle. Prevents a viral account from dominating the pool.">
+              <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Max / handle</label>
+              <select value={maxPerHandle} onChange={e => { const v = parseInt(e.target.value, 10); setMaxPerHandle(v); onPatch({ maxPerHandle: v }); setVisibleCount(25); }}
+                style={{ ...inputSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
+                <option value={0}>Unlimited</option>
+                <option value={3}>3</option>
+                <option value={5}>5</option>
+                <option value={6}>6</option>
+                <option value={8}>8</option>
+                <option value={10}>10</option>
+                <option value={15}>15</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Sort</label>
+              <select value={sortBy} onChange={e => { setSortBy(e.target.value); setVisibleCount(25); }}
+                style={{ ...inputSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
+                {SORT_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+              </select>
+            </div>
           </div>
+        </div>
+      )}
+      {droppedByCap > 0 && (
+        <div style={{ marginBottom: 10, fontSize: 11, color: "var(--muted)" }}>
+          {droppedByCap} video{droppedByCap === 1 ? "" : "s"} hidden by per-handle cap — raise it above if you want to see more from the dominant accounts.
         </div>
       )}
 
