@@ -327,12 +327,20 @@ function Shell({ children }) {
 // emitted as a paragraph; unrecognised markdown characters render
 // literally, which is better than silently swallowing them.
 function renderInline(text) {
-  const parts = text.split(/(\*\*[^*\n]+\*\*)/g);
-  return parts.map((p, i) => {
-    if (p.startsWith("**") && p.endsWith("**")) {
-      return <strong key={i}>{p.slice(2, -2)}</strong>;
-    }
-    return <span key={i}>{p}</span>;
+  // Inside-paragraph line breaks: a single \n (that isn't a paragraph
+  // boundary — those are handled upstream) becomes a <br/>. This lets
+  // sign-offs like "Talk soon,\nThe Viewix Team" render as two lines
+  // without needing a full blank-line paragraph break between them.
+  const lines = text.split(/\n/);
+  return lines.flatMap((line, li) => {
+    const parts = line.split(/(\*\*[^*\n]+\*\*)/g);
+    const nodes = parts.map((p, i) => {
+      if (p.startsWith("**") && p.endsWith("**")) {
+        return <strong key={`${li}-${i}`}>{p.slice(2, -2)}</strong>;
+      }
+      return <span key={`${li}-${i}`}>{p}</span>;
+    });
+    return li < lines.length - 1 ? [...nodes, <br key={`br-${li}`} />] : nodes;
   });
 }
 function MarkdownLite({ text }) {
