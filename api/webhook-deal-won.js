@@ -5,6 +5,7 @@
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { identifyDeal, productLineLabel } from "./_tiers.js";
+import { computeFoundersMetrics } from "./_attio-metrics.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = "viewix-webhook-2026";
@@ -360,6 +361,33 @@ export default async function handler(req, res) {
           lastTriggerCompany: companyName,
         });
         results.attioCache = `refreshed (${allDeals.length} deals)`;
+
+        // Auto-populate Founders KPIs from the fresh deal list. Mirrors
+        // the Founders.jsx syncAttio button — same helper is used there
+        // so the manual button and the webhook can't drift. We patch
+        // /foundersData (not set) so founder-entered fields we don't
+        // compute (revenueTarget, etc.) survive. Zero-valued metrics
+        // are skipped so a transient empty-deals response can't blank
+        // out a previously-good figure.
+        try {
+          const metrics = computeFoundersMetrics(allDeals);
+          const patch = {};
+          if (metrics.ytdRevenue > 0)         patch.currentRevenue    = metrics.ytdRevenue;
+          if (metrics.monthlyRevenue > 0)     patch.monthlyRevenue    = metrics.monthlyRevenue;
+          if (metrics.activeClients > 0)      patch.activeClients     = metrics.activeClients;
+          if (metrics.avgRetainerValue > 0)   patch.avgRetainerValue  = metrics.avgRetainerValue;
+          if (metrics.leadPipelineValue > 0)  patch.leadPipelineValue = metrics.leadPipelineValue;
+          if (metrics.closingRate > 0)        patch.closingRate       = metrics.closingRate;
+          if (Object.keys(patch).length > 0) {
+            await fbPatch("/foundersData", patch);
+            results.foundersMetrics = `populated (${Object.keys(patch).join(", ")})`;
+          } else {
+            results.foundersMetrics = "no values computed";
+          }
+        } catch (metricsErr) {
+          console.error("Founders metrics calc failed:", metricsErr);
+          results.foundersMetrics = `failed: ${metricsErr.message}`;
+        }
       } else {
         results.attioCache = "skipped (no ATTIO_API_KEY)";
       }

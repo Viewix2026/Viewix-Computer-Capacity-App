@@ -9,6 +9,7 @@ import { fbSet } from "../firebase";
 import { FoundersData } from "./FoundersData";
 import { FoundersLearnings } from "./FoundersLearnings";
 import { BuyerJourney } from "./BuyerJourney";
+import { computeFoundersMetrics } from "../../api/_attio-metrics";
 
 export function Founders({
   foundersData, setFoundersData,
@@ -55,76 +56,20 @@ export function Founders({
         if (data?.data) {
           fbSet("/attioCache", { data: data.data, total: data.total || data.data.length, lastSyncedAt, lastSyncTrigger: "manual" });
         }
-        // Auto-calculate north-star metrics from deals
+        // Auto-calculate north-star metrics. Shared helper is also used
+        // by api/webhook-deal-won.js so the manual button and the
+        // webhook's auto-populate can't drift in what they compute.
         if (data?.data) {
-          const extractVal = d => { const v = d.values; const candidates = [v?.deal_value, v?.amount, v?.value, v?.revenue, v?.contract_value]; for (const c of candidates) { if (c?.[0] != null) { const n = c[0].currency_value ?? c[0].value; if (n != null) return typeof n === "number" ? n : parseFloat(n) || 0; } } return 0; };
-          const extractDate = d => { const v = d.values; const candidates = [v?.close_date, v?.closed_at, v?.won_date, v?.created_at]; for (const c of candidates) { if (c?.[0]?.value) return c[0].value; } return d.created_at || null; };
-          const extractStage = d => { const v = d.values; const candidates = [v?.stage, v?.status, v?.deal_stage, v?.pipeline_stage]; for (const c of candidates) { const t = c?.[0]?.status?.title || c?.[0]?.value; if (t) return (typeof t === "string" ? t : "").toLowerCase(); } return ""; };
-          const extractCompany = d => { const v = d.values; const candidates = [v?.company, v?.client, v?.account, v?.organisation, v?.name, v?.deal_name]; for (const c of candidates) { const t = c?.[0]?.value; if (t) { if (typeof t === "string") return t; if (t?.name) return t.name; } } return null; };
-
-          const thisYear = now.getFullYear();
-          const thisMonth = now.getMonth();
-          const wonKeywords = ["won", "closed won", "closed", "completed", "signed"];
-          const lostKeywords = ["lost", "closed lost", "rejected", "cancelled"];
-
-          let ytdRevenue = 0;
-          let currentMonthRevenue = 0;
-          let activeCompanies = new Set();
-          let pipelineValue = 0;
-          let wonCount = 0;
-          let totalClosed = 0;
-          let activeRetainerTotal = 0;
-          let activeRetainerCount = 0;
-          let recentWon = 0;
-          let recentClosed = 0;
-          const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-
-          data.data.forEach(d => {
-            const val = extractVal(d);
-            const dateStr = extractDate(d);
-            const stage = extractStage(d);
-            const company = extractCompany(d);
-            const isWon = wonKeywords.some(k => stage.includes(k));
-            const isLost = lostKeywords.some(k => stage.includes(k));
-            const isOpen = !isWon && !isLost;
-
-            if (isWon || isLost) totalClosed++;
-            if (isWon) wonCount++;
-
-            if ((isWon || isLost) && dateStr) {
-              const dt = new Date(dateStr);
-              if (!isNaN(dt) && dt >= threeMonthsAgo) {
-                recentClosed++;
-                if (isWon) recentWon++;
-              }
-            }
-
-            if (isWon && dateStr) {
-              const dt = new Date(dateStr);
-              if (!isNaN(dt)) {
-                if (dt.getFullYear() === thisYear) ytdRevenue += val;
-                if (dt.getFullYear() === thisYear && dt.getMonth() === thisMonth) currentMonthRevenue += val;
-              }
-            }
-            if (isOpen) {
-              pipelineValue += val;
-              if (company) activeCompanies.add(company);
-            }
-            if (isWon && val > 0) { activeRetainerTotal += val; activeRetainerCount++; }
-          });
-
-          const closingRate = recentClosed > 0 ? Math.round((recentWon / recentClosed) * 100) : 0;
-          const avgRetainer = activeRetainerCount > 0 ? Math.round(activeRetainerTotal / activeRetainerCount) : 0;
-
+          const m = computeFoundersMetrics(data.data, now);
           setFoundersData(p => ({
             ...p,
-            monthlyRevenue: currentMonthRevenue || p.monthlyRevenue,
-            activeClients: activeCompanies.size || p.activeClients,
-            avgRetainerValue: avgRetainer || p.avgRetainerValue,
-            leadPipelineValue: pipelineValue || p.leadPipelineValue,
-            closingRate: closingRate || p.closingRate,
+            monthlyRevenue:    m.monthlyRevenue    || p.monthlyRevenue,
+            activeClients:     m.activeClients     || p.activeClients,
+            avgRetainerValue:  m.avgRetainerValue  || p.avgRetainerValue,
+            leadPipelineValue: m.leadPipelineValue || p.leadPipelineValue,
+            closingRate:       m.closingRate       || p.closingRate,
           }));
-          if (ytdRevenue > 0) updateRevenue(ytdRevenue);
+          if (m.ytdRevenue > 0) updateRevenue(m.ytdRevenue);
         }
         setAttioLoading(false);
       })
