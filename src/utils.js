@@ -166,6 +166,23 @@ export function deliveryShareUrl(d) {
   return `${origin}/?d=${d.id}`;
 }
 
+// Does the given URL belong to a scheduling provider known to allow iframe
+// embedding? We maintain a small allow-list rather than trying to iframe
+// any arbitrary URL, because many sites block framing via X-Frame-Options
+// or CSP frame-ancestors — an iframe on those would silently render
+// blank. Providers on this list have been verified to permit framing as
+// of 2026: TidyCal, Calendly, Cal.com, SavvyCal.
+export function isEmbeddableBookingUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  const u = url.toLowerCase();
+  return (
+    u.includes("tidycal.com") ||
+    u.includes("calendly.com") ||
+    u.includes("cal.com") ||
+    u.includes("savvycal.com")
+  );
+}
+
 // Convert a YouTube or Loom share URL to its iframe-embed URL. Pass through
 // anything we don't recognise (if Jeremy pastes an already-embeddable URL,
 // or some other video host's share link, we just iframe it as-is). Returns

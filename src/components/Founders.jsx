@@ -403,6 +403,7 @@ function ThankYouEditor({ saleThankYou, setSaleThankYou }) {
   const [expanded, setExpanded] = useState(null); // videoType:tier currently open
 
   const updateBooking = (url) => setSaleThankYou({ ...ty, bookingUrl: url });
+  const updateEmbed = (val) => setSaleThankYou({ ...ty, bookingEmbed: !!val });
   const updateSlot = (videoType, tier, field, value) => {
     const packages = ty.packages || {};
     const vtSlot = packages[videoType] || {};
@@ -432,10 +433,17 @@ function ThankYouEditor({ saleThankYou, setSaleThankYou }) {
           Kickoff Booking URL (shared across all packages)
         </label>
         <input type="url" value={ty.bookingUrl || ""} onChange={e => updateBooking(e.target.value)}
-          placeholder="https://calendly.com/viewix/kickoff..."
+          placeholder="https://tidycal.com/... or calendly.com/... or cal.com/..."
           style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none" }} />
-        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
-          The "Book your kickoff call" button on every thank-you page links here.
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 12, color: "var(--fg)", cursor: "pointer" }}>
+          <input type="checkbox" checked={ty.bookingEmbed !== false} onChange={e => updateEmbed(e.target.checked)}
+            style={{ width: 16, height: 16, cursor: "pointer" }} />
+          <span>
+            <strong>Embed calendar inline</strong> on the thank-you page (recommended — higher booking conversion)
+          </span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+          Inline embed works with TidyCal, Calendly, Cal.com and SavvyCal. Other providers fall back to a button that opens the URL in a new tab.
         </div>
       </div>
 

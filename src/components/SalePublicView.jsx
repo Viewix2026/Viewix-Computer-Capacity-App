@@ -8,7 +8,7 @@ import { useState, useEffect, useMemo } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 import { SALE_VIDEO_TYPES } from "../config";
-import { fmtCur, logoBg, embedUrl } from "../utils";
+import { fmtCur, logoBg, embedUrl, isEmbeddableBookingUrl } from "../utils";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
@@ -256,13 +256,27 @@ function PaidCard({ sale, thankYou, justPaid }) {
         </div>
       )}
 
-      {/* Booking CTA */}
-      {bookingUrl && (
+      {/* Booking CTA — inline embed for recognised providers (opt-in via
+          bookingEmbed flag), otherwise a button that opens a new tab.
+          The embed is kept out of the scroll-into-view of the video to
+          avoid an auto-playing iframe competing with the video player. */}
+      {bookingUrl && thankYou?.bookingEmbed !== false && isEmbeddableBookingUrl(bookingUrl) ? (
+        <div style={{ marginTop: 8, borderRadius: 12, overflow: "hidden", border: "1px solid #E5E7EB", background: "white" }}>
+          <div style={{ padding: "14px 18px", background: "#F8FAFC", borderBottom: "1px solid #E5E7EB", fontSize: 12, fontWeight: 700, color: "#0B0F1A", textAlign: "left", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Book your kickoff call
+          </div>
+          <iframe
+            src={bookingUrl} title="Book your kickoff call"
+            style={{ width: "100%", height: 760, border: "none", display: "block" }}
+            loading="lazy"
+          />
+        </div>
+      ) : bookingUrl ? (
         <a href={bookingUrl} target="_blank" rel="noopener noreferrer"
           style={{ display: "inline-block", padding: "14px 28px", borderRadius: 10, background: "#0082FA", color: "white", fontSize: 15, fontWeight: 700, textDecoration: "none" }}>
           Book your kickoff call →
         </a>
-      )}
+      ) : null}
 
       {/* Fallback copy if nothing is configured for this tier yet */}
       {!videoSrc && !nextSteps && !bookingUrl && (

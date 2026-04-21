@@ -142,6 +142,14 @@ export const DEFAULT_SALE_PRICING = {
 const emptyTierSlot = () => ({ videoUrl: "", nextStepsCopy: "" });
 export const DEFAULT_SALE_THANKYOU = {
   bookingUrl: "",
+  // When true, the thank-you page renders the booking URL as an inline
+  // iframe below the welcome video (higher booking conversion, customer
+  // doesn't leave the branded page). When false, shows a "Book your
+  // kickoff call" button that opens the URL in a new tab. Iframe is
+  // only attempted for recognised providers — see isEmbeddableBookingUrl
+  // in utils; unknown providers fall back to the button even with
+  // embed=true so the page can't break from a non-embeddable URL.
+  bookingEmbed: true,
   packages: {
     metaAds:       Object.fromEntries(META_ADS_TIERS.map(t => [t.key, emptyTierSlot()])),
     socialPremium: Object.fromEntries(SOCIAL_PREMIUM_TIERS.map(t => [t.key, emptyTierSlot()])),
