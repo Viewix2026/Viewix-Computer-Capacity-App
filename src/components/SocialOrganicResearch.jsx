@@ -2036,6 +2036,10 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
         libraryId = existing?.formatLibraryId || `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const libEntry = {
           id: libraryId,
+          // Partition tag — Social Organic shortlists always land in
+          // the "organic" half of the Format Library. Meta Ads pre-prod
+          // will tag its own shortlists "metaAds" when that flow ships.
+          formatType: "organic",
           name: formatName.trim(),
           videoAnalysis: description,
           filmingInstructions: filming,

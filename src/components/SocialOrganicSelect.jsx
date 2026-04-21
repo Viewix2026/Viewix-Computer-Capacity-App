@@ -156,8 +156,12 @@ export function SocialOrganicSelect({ project, onPatch }) {
   const suggestedIdSet = new Set(suggestedIds);
 
   // Library items (source B), filtered.
+  // Scope to organic-tagged formats — the Format Library is now split
+  // between organic and metaAds. Legacy entries without a formatType
+  // default to organic so pre-split formats still appear here.
   const libraryCards = Object.values(library || {})
     .filter(f => f && f.id && !f.archived)
+    .filter(f => (f.formatType || "organic") === "organic")
     .filter(f => {
       if (categoryMode === "all") return true;
       if (categoryMode === "suggested") return suggestedIdSet.has(f.id);

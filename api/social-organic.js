@@ -1840,7 +1840,12 @@ async function handleSuggestFormats(req, res) {
   if (!project) return res.status(404).json({ error: "Project not found" });
 
   const library = await fbGet("/formatLibrary");
-  const libraryEntries = Object.values(library || {}).filter(f => f && f.id && !f.archived);
+  // Scope the suggestion to the organic half of the library — legacy
+  // entries without a formatType default to organic. Meta Ads formats
+  // never show up as suggestions for Social Organic projects.
+  const libraryEntries = Object.values(library || {})
+    .filter(f => f && f.id && !f.archived)
+    .filter(f => (f.formatType || "organic") === "organic");
   if (libraryEntries.length === 0) {
     return res.status(200).json({ success: true, count: 0, formatIds: [], reason: "library_empty" });
   }

@@ -30,6 +30,15 @@ const btnSecondary = {
   cursor: "pointer", fontFamily: "inherit",
 };
 
+// Supported format-library partitions. Each entry is an independent
+// collection inside /formatLibrary — filtered at render time by the
+// `formatType` field on each format record. Legacy entries without a
+// formatType default to "organic" (see filtered derivation below).
+const FORMAT_TYPES = [
+  { key: "organic", label: "Social Media Organic", emptyHint: "Shortlist a video in any Social Media Organic project to add the first entry." },
+  { key: "metaAds", label: "Meta Ads",             emptyHint: "Shortlist a video in any Meta Ads project to add the first entry — or click + Add Format to create one manually." },
+];
+
 export function FormatLibrary({ role, isFounder }) {
   const [library, setLibrary] = useState({});
   const [activeId, setActiveId] = useState(null);
@@ -38,6 +47,10 @@ export function FormatLibrary({ role, isFounder }) {
   const [showArchived, setShowArchived] = useState(false);
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  // Sub-tab. Legacy entries (pre-split) default to "organic" via the
+  // filter below, so flipping between tabs gives the right subset
+  // without a data migration.
+  const [formatTypeTab, setFormatTypeTab] = useState("organic");
 
   // Load-tracking so the UI can distinguish "genuinely empty library" from
   // "listener hasn't fired yet / is stuck". Bumped-on-demand via listenTick
@@ -58,7 +71,12 @@ export function FormatLibrary({ role, isFounder }) {
 
   // Defensive — entries should all have id + name; belt-and-braces because
   // seed imports and legacy records have been through a few schema tweaks.
-  const list = Object.values(library || {}).filter(f => f && f.id);
+  // Filter by the active sub-tab's formatType here (before tag / search /
+  // archive filters) so the sub-tab acts like a hard partition — tags
+  // and counts below only reflect the active type.
+  const list = Object.values(library || {})
+    .filter(f => f && f.id)
+    .filter(f => (f.formatType || "organic") === formatTypeTab);
 
   // Derive the tag cloud from all non-archived formats.
   const allTags = Array.from(new Set(
@@ -108,7 +126,7 @@ export function FormatLibrary({ role, isFounder }) {
         <div>
           <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)" }}>Format Library</div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-            Cross-project library of social video formats. Producers add entries from the Shortlist step; anyone can browse and reuse them.
+            Cross-project library of video formats. Producers add entries from the Shortlist step; anyone can browse and reuse them.
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -119,9 +137,21 @@ export function FormatLibrary({ role, isFounder }) {
         </div>
       </div>
 
+      {/* Sub-tab bar — splits the library into Social Organic vs Meta Ads
+          pools. formatType filter above keys off this. */}
+      <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3, marginBottom: 14, width: "fit-content" }}>
+        {FORMAT_TYPES.map(t => (
+          <button key={t.key} onClick={() => { setFormatTypeTab(t.key); setSearch(""); setTagFilter([]); setActiveId(null); }}
+            style={{ padding: "7px 16px", borderRadius: 6, border: "none", background: formatTypeTab === t.key ? "var(--card)" : "transparent", color: formatTypeTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {addOpen && (
         <AddFormatModal
           existing={library}
+          formatType={formatTypeTab}
           onClose={() => setAddOpen(false)}
           onCreated={(id) => { setAddOpen(false); setActiveId(id); }}
         />
@@ -149,7 +179,7 @@ export function FormatLibrary({ role, isFounder }) {
             {!listenerFired
               ? "Firebase is still responding — if this takes more than a few seconds, hit Reload."
               : list.length === 0
-                ? "Shortlist a video in any Social Media Organic project to add the first entry."
+                ? (FORMAT_TYPES.find(t => t.key === formatTypeTab)?.emptyHint || "No formats yet — click + Add Format to create the first one.")
                 : "Clear the search / tags / archive toggle to see everything."}
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 14, flexWrap: "wrap" }}>
@@ -467,7 +497,7 @@ function formatBigLocal(n) {
 // seeding a new format the producer spotted in the wild, or editing
 // a format spec directly. Each example URL becomes a new entry in the
 // examples array; a shortCode is auto-derived for Instagram URLs.
-function AddFormatModal({ existing, onClose, onCreated }) {
+function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }) {
   const [name, setName] = useState("");
   const [analysis, setAnalysis] = useState("");
   const [filming, setFilming] = useState("");
@@ -480,11 +510,13 @@ function AddFormatModal({ existing, onClose, onCreated }) {
   const save = () => {
     setError(null);
     if (!name.trim()) { setError("Format name is required."); return; }
-    // Collision check — warn if the producer's about to duplicate a name.
+    // Collision check — scoped to the same formatType so an organic and
+    // meta-ads format with the same label can co-exist cleanly.
     const dupe = Object.values(existing || {}).find(f =>
-      f && (f.name || "").trim().toLowerCase() === name.trim().toLowerCase()
+      f && (f.formatType || "organic") === formatType
+        && (f.name || "").trim().toLowerCase() === name.trim().toLowerCase()
     );
-    if (dupe) { setError(`A format called "${dupe.name}" already exists. Pick a different name.`); return; }
+    if (dupe) { setError(`A format called "${dupe.name}" already exists in this library. Pick a different name.`); return; }
 
     const now = new Date().toISOString();
     const id = `fmt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -500,6 +532,7 @@ function AddFormatModal({ existing, onClose, onCreated }) {
     try {
       fbSet(`/formatLibrary/${id}`, {
         id,
+        formatType,  // "organic" | "metaAds" — drives sub-tab filter + which preproduction flow pulls this entry.
         name: name.trim(),
         videoAnalysis: analysis.trim(),
         filmingInstructions: filming.trim(),
