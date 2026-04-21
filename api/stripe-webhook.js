@@ -51,6 +51,10 @@ export default async function handler(req, res) {
         paidAt: new Date().toISOString(),
         stripePaymentIntentId: intent.id,
         amountReceived: intent.amount_received / 100,
+        // Clear the dedup cache field set by create-payment-intent —
+        // the paid check happens first on subsequent calls, but
+        // leaving this stale is confusing during debugging.
+        stripeActiveIntentId: null,
       });
 
       const slackUrl = process.env.SLACK_SALES_WEBHOOK_URL;
