@@ -82,13 +82,39 @@ const DEFAULT_SOCIAL = [
   { id: "s26", type: "stage", title: "Ongoing catch ups", desc: "Understand what content is performing. Identify when a new batch of content is needed for the next month.", milestoneKey: "partnershipReview" },
 ];
 
+// Title-based fallback for auto-linking stages to milestones when the
+// user's /buyerJourney data predates the milestoneKey field. Producers
+// can still override by picking "(none)" in edit mode — stored as
+// milestoneKey: null, which beats this derivation.
+const TITLE_TO_MILESTONE = [
+  { match: ["invoice paid"],                                          key: "signing" },
+  { match: ["pre production meeting", "pre-production meeting"],      key: "preProductionMeeting" },
+  { match: ["pre production call", "pre-production call",
+            "pre production presentation"],                           key: "preProductionPresentation" },
+  { match: ["shoot day"],                                             key: "shoot" },
+  { match: ["final delivery", "upload to metricool"],                 key: "posting" },
+  { match: ["monthly performance review", "results review"],          key: "resultsReview" },
+  { match: ["ongoing catch ups", "ongoing catchups",
+            "partnership review"],                                    key: "partnershipReview" },
+  { match: ["growth strategy"],                                       key: "growthStrategy" },
+];
+function deriveMilestoneKey(stage) {
+  // Explicit null wins (producer unlinked). Explicit string wins too.
+  if (stage?.milestoneKey !== undefined) return stage.milestoneKey || null;
+  const title = (stage?.title || "").toLowerCase().trim();
+  if (!title) return null;
+  const match = TITLE_TO_MILESTONE.find(m => m.match.some(t => title === t));
+  return match?.key || null;
+}
+
 // Convert a stage + turnaround-gap map to a display-ready days value.
 // Milestone-linked stages pull from /turnaround (editing them there
 // writes back to /turnaround); unlinked stages store their own days
 // on the stage object. Returns null when no value is set either way.
 function getDaysToNext(stage, turnaround) {
-  if (stage?.milestoneKey) {
-    const v = turnaround?.[stage.milestoneKey];
+  const mk = deriveMilestoneKey(stage);
+  if (mk) {
+    const v = turnaround?.[mk];
     return v != null ? Number(v) : null;
   }
   if (stage?.daysToNext != null) return Number(stage.daysToNext);
@@ -115,7 +141,7 @@ function computeLivePct(accounts, fromKey, toKey) {
 // break the chain.
 function findNextMilestoneStage(stages, idx) {
   for (let j = idx + 1; j < stages.length; j++) {
-    if (stages[j].type === "stage" && stages[j].milestoneKey) return stages[j];
+    if (stages[j].type === "stage" && deriveMilestoneKey(stages[j])) return stages[j];
   }
   return null;
 }
@@ -148,8 +174,9 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
   // unlinked stages persist on the stage itself. Empty string clears.
   const updateStageDays = (stage, value) => {
     const num = value === "" || value == null ? null : Number(value);
-    if (stage.milestoneKey) {
-      setTurnaround(prev => ({ ...(prev || {}), [stage.milestoneKey]: num ?? 0 }));
+    const mk = deriveMilestoneKey(stage);
+    if (mk) {
+      setTurnaround(prev => ({ ...(prev || {}), [mk]: num ?? 0 }));
     } else {
       updateItem(stage.id, { daysToNext: num });
     }
@@ -224,9 +251,9 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
         ) : hasDays ? (
           <div
             onClick={() => setInlineEdit({ stageId: stage.id, field: "days" })}
-            title={stage?.milestoneKey ? "Click to edit — also writes to /turnaround (syncs with client due dates)" : "Click to edit days to next stage"}
+            title={deriveMilestoneKey(stage) ? "Click to edit — also writes to /turnaround (syncs with client due dates)" : "Click to edit days to next stage"}
             style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", whiteSpace: "nowrap", fontFamily: "'JetBrains Mono',monospace", cursor: "pointer", padding: "1px 4px", borderRadius: 3 }}>
-            {days}d{stage?.milestoneKey && <span style={{ marginLeft: 3, opacity: 0.6, color: "#0082FA" }}>↻</span>}
+            {days}d{deriveMilestoneKey(stage) && <span style={{ marginLeft: 3, opacity: 0.6, color: "#0082FA" }}>↻</span>}
           </div>
         ) : stage ? (
           <button
@@ -261,9 +288,11 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
           // stage's manual pct text below.
           let pctValue = null, pctSource = null;
           if (item.type === "stage") {
-            const nextLinked = item.milestoneKey ? findNextMilestoneStage(stages, i) : null;
-            if (item.milestoneKey && nextLinked?.milestoneKey) {
-              const live = computeLivePct(accounts, item.milestoneKey, nextLinked.milestoneKey);
+            const itemMk = deriveMilestoneKey(item);
+            const nextLinked = itemMk ? findNextMilestoneStage(stages, i) : null;
+            const nextMk = nextLinked ? deriveMilestoneKey(nextLinked) : null;
+            if (itemMk && nextMk) {
+              const live = computeLivePct(accounts, itemMk, nextMk);
               if (live != null) { pctValue = live; pctSource = "live"; }
             }
             if (pctValue == null && item.pct) { pctValue = item.pct; pctSource = "manual"; }
@@ -348,7 +377,13 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                         sub-tab and AccountsDashboard due dates. */}
                     <div style={{ marginTop: 8 }}>
                       <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Linked Milestone</label>
-                      <select value={item.milestoneKey || ""} onChange={e => updateItem(item.id, { milestoneKey: e.target.value || null, daysToNext: e.target.value ? null : item.daysToNext })}
+                      {/* Pre-fills with the auto-derived milestone when no
+                          explicit choice has been made, so producers see
+                          "Pre Prod Meeting" already selected on a stage
+                          titled "Pre production meeting". Saving from here
+                          persists the choice explicitly so it wins next
+                          time even if the title changes. */}
+                      <select value={deriveMilestoneKey(item) || ""} onChange={e => updateItem(item.id, { milestoneKey: e.target.value || null, daysToNext: e.target.value ? null : item.daysToNext })}
                         style={{ ...inputSt, fontSize: 12 }}>
                         <option value="">(none — standalone stage)</option>
                         {MILESTONE_DEFS.map(m => (
@@ -366,7 +401,7 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                         onBlur={e => updateStageDays(item, e.target.value)}
                         style={{ ...inputSt, width: 70, fontSize: 12, textAlign: "center", fontFamily: "'JetBrains Mono',monospace" }} />
                     </div>
-                    {item.milestoneKey && (
+                    {deriveMilestoneKey(item) && (
                       <div style={{ fontSize: 10, color: "var(--accent)", marginTop: 4 }}>
                         ↻ Synced with Turnaround tab · shared with client due dates
                       </div>
@@ -379,10 +414,14 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                   </>) : (<>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{item.title}</span>
-                      {item.milestoneKey && <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: "rgba(0,130,250,0.12)", color: "#0082FA", letterSpacing: "0.04em" }} title={`Linked to ${MILESTONE_DEFS.find(m => m.key === item.milestoneKey)?.label || item.milestoneKey} milestone`}>↻</span>}
+                      {(() => {
+                        const mk = deriveMilestoneKey(item);
+                        if (!mk) return null;
+                        return <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: "rgba(0,130,250,0.12)", color: "#0082FA", letterSpacing: "0.04em" }} title={`Linked to ${MILESTONE_DEFS.find(m => m.key === mk)?.label || mk} milestone`}>↻</span>;
+                      })()}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>{item.desc}</div>
-                    {item.tag && !item.milestoneKey && getDaysToNext(item, turnaround) == null && (
+                    {item.tag && !deriveMilestoneKey(item) && getDaysToNext(item, turnaround) == null && (
                       <div style={{ marginTop: 6, fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)", display: "inline-block" }}>{item.tag}</div>
                     )}
                   </>)}
