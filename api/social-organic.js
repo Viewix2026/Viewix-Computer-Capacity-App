@@ -845,7 +845,50 @@ RULES:
 - Never use em dashes. Use commas, full stops, or rewrite.
 - Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
 
-STRUCTURE TO RETURN:
+═══════════════════════════════════════════════════
+SCRIPT DEPTH — read this carefully, producers are complaining about lazy outputs
+═══════════════════════════════════════════════════
+
+The \`scriptNotes\` field is where most of the value lives. Default mode is FULL SCRIPT — the actual words the presenter will say, written out in the order they say them, plus any b-roll/visual direction in square brackets inline.
+
+DO (default mode):
+- Write the spoken script verbatim, paragraph by paragraph, 120-220 words typical for a 30-60s video.
+- Use [brackets] for visual cues and b-roll notes inline. Example: "Most people think sleep quality is about duration. [cut to stock footage of someone tossing in bed] It isn't. [cut to host, direct to camera] It's about the first 90 minutes."
+- Include specific numbers, names, places, and quotes wherever the Brand Truth / research provides them. A script without specifics is a failed script.
+- If you genuinely don't have enough research to write a full script on a topic, say so explicitly in the script with a [RESEARCH NEEDED: specific question] marker, rather than falling back to generic filler.
+
+DO NOT (unless the format type justifies it):
+- Do NOT return "talking point bullets" or "questions for the client to riff on" as the script. That's the producer's cop-out, not yours.
+- Do NOT write "use pain point language here" or "mention their product" as placeholders — fill them in from the Brand Truth.
+- Do NOT write "scripts will be developed in pre-production" — the producer IS in pre-production, and you ARE the development.
+
+EXCEPTIONS — when bullets/questions ARE appropriate:
+- Client interview / Q&A formats → provide the interview question list (6-10 open-ended questions the producer will ask on camera, not a verbatim script the client reads).
+- Behind-the-scenes / day-in-the-life → provide a shot list + beat outline, not a verbatim script.
+- Customer testimonial prompts → provide the prompt questions the client responds to, not a script.
+
+For these exceptions, still be concrete and specific — the questions should be tailored to THIS client's business, not generic.
+
+═══════════════════════════════════════════════════
+ARTICLE REVIEWS / NEWS REACTIONS / STUDY BREAKDOWNS
+═══════════════════════════════════════════════════
+
+For any format that references external source material (news article review, study breakdown, book/podcast reaction, research commentary), you MUST source a specific, real article/study/paper relevant to the Brand Truth topic — using your training knowledge of real publications in the niche.
+
+Required format for the scriptNotes field on these:
+
+  SOURCE: [article / study title]
+  URL: [best-known URL from training data — if uncertain, write BEST-GUESS-URL: <url> so the producer knows to verify]
+  PUBLICATION: [e.g. Harvard Business Review, The Lancet, TechCrunch]
+  KEY CLAIM: [one-sentence summary of what the source says]
+
+  [Then the full script reacting to / breaking down / explaining the source]
+
+Never return "find an article on this topic" or "source to be determined" — that's a failure mode. If you genuinely cannot confidently name a real source, pick an adjacent specific source you DO know and flag it clearly.
+
+═══════════════════════════════════════════════════
+STRUCTURE TO RETURN
+═══════════════════════════════════════════════════
 {
   "scriptTable": [
     {
@@ -855,7 +898,7 @@ STRUCTURE TO RETURN:
       "hook": "The spoken opening line (verbatim or template with __client__ placeholders).",
       "textHook": "The on-screen text at the opening.",
       "visualHook": "What the viewer sees in frame for the first 2-3 seconds.",
-      "scriptNotes": "Question prompts or talking-point bullets the producer should walk the client through on set.",
+      "scriptNotes": "Full spoken script with inline [visual cues] — see SCRIPT DEPTH section above. Default mode is verbatim dialogue, not bullets.",
       "props": "Physical props, outfits, or location cues. Use 'N/A' if none."
     }
     // one entry per selected format — may span multiple rows if numberOfVideos > selectedFormats.length
