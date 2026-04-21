@@ -228,6 +228,10 @@ export default async function handler(req, res) {
       const projectId = `meta_${Date.now()}`;
       links.preprodId = projectId;
       links.preprodType = "metaAds";
+      // New records default to the tab-based flow (Phase 2 of the
+      // Meta Ads rebuild). `tab: "brandTruth"` is what MetaAdsResearch
+      // keys off to render — legacy records without this field keep
+      // using the single-page UI in Preproduction.jsx.
       await fbSet(`/preproduction/metaAds/${projectId}`, {
         id: projectId,
         shortId: makeShortId(),
@@ -239,6 +243,13 @@ export default async function handler(req, res) {
         attioCompanyId: companyId || null,
         attioDealId: null,
         dealValue: dealValue || null,
+        numberOfVideos: parseInt(numberOfVideos) || null,
+        // New-flow fields — see MetaAdsResearch.META_TABS for the order
+        tab: "brandTruth",
+        approvals: {},
+        brandTruth: { fields: {}, transcript: "", producerNotes: "" },
+        // Legacy fields left on the record for forward-compat; the
+        // Scripting tab (Phase 6) will populate scriptTable when ready.
         transcript: null,
         brandAnalysis: null,
         targetCustomer: null,
@@ -247,7 +258,7 @@ export default async function handler(req, res) {
         scriptTable: null,
         rewriteHistory: [],
       });
-      results.preproduction = "metaAds created";
+      results.preproduction = "metaAds created (new tab flow)";
     }
 
     if (deal.productLine === "socialPremium" || deal.productLine === "socialOrganic") {

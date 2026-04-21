@@ -3,6 +3,7 @@ import { fbSet, fbSetAsync, fbListenSafe } from "../firebase";
 import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { FormatLibrary } from "./FormatLibrary";
+import { MetaAdsResearch } from "./MetaAdsResearch";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 // tierColor() looks up bg/fg per packageTier from the canonical tier
 // list at api/_tiers.js. Adding a new tier doesn't need a code change
@@ -619,7 +620,35 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
     fbPatchProject(p.id, { status: "exported" });
   }
 
-  // ─── DETAIL VIEW ───
+  // ─── NEW-FLOW DETAIL VIEW (tab-based) ───
+  // New Meta Ads projects (those with a `tab` field set by the Attio
+  // deal-won webhook) route to MetaAdsResearch — same tab-based
+  // structure as Social Organic, but the tab bodies are Meta-Ads-
+  // specific. Legacy records without a `tab` field fall through to
+  // the old inline render below.
+  if (activeProject && activeProject.tab) {
+    return (
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
+        <MetaAdsResearch
+          project={activeProject}
+          onBack={() => setActiveProjectId(null)}
+          onPatch={(patch) => fbPatchProject(activeProject.id, patch)}
+          onDelete={() => {
+            if (!window.confirm(`Delete "${activeProject.companyName}" Meta Ads project? This cannot be undone.`)) return;
+            fbSet(`/preproduction/metaAds/${activeProject.id}`, null);
+            setActiveProjectId(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // ─── LEGACY DETAIL VIEW ───
+  // Pre-tab-split records — single-page UI with generate-everything
+  // transcript → brandAnalysis + motivators + visuals + scriptTable
+  // flow. Kept as-is so in-flight projects don't lose their UI on
+  // deploy; migration to the new tab flow happens per-project as
+  // each one gets a `tab` field.
   if (activeProject) {
     const p = activeProject;
     const hasScripts = p.scriptTable && p.scriptTable.length > 0;
