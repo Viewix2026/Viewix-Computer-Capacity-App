@@ -8,7 +8,7 @@ import { useState, useEffect, useMemo } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 import { SALE_VIDEO_TYPES } from "../config";
-import { fmtCur, logoBg } from "../utils";
+import { fmtCur, logoBg, embedUrl } from "../utils";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
@@ -31,6 +31,7 @@ export function SalePublicView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [clientSecret, setClientSecret] = useState(null);
+  const [thankYou, setThankYou] = useState(null);
 
   const prettyMatch = window.location.pathname.match(/^\/s\/([a-z0-9]{4,12})/i);
   const shortId = prettyMatch ? prettyMatch[1].toLowerCase() : null;
@@ -75,6 +76,18 @@ export function SalePublicView() {
     return () => { clearTimeout(timeoutId); unsub(); };
   }, [shortId, saleIdParam]);
 
+  // Thank-you content — read once the sale is resolved (don't block the
+  // payment form waiting for it). Nullish is fine; PaidCard falls back to
+  // the generic copy for tiers that haven't had their slot filled in yet.
+  useEffect(() => {
+    if (!sale) return;
+    let unsub = () => {};
+    onFB(() => {
+      unsub = fbListen("/saleThankYou", (data) => setThankYou(data || null));
+    });
+    return () => unsub();
+  }, [sale?.id]);
+
   // Once we have the sale, request a PaymentIntent. Only re-request if the
   // sale id changes (not every re-render). If the sale is already paid we
   // skip this — the confirmation view renders instead.
@@ -110,7 +123,7 @@ export function SalePublicView() {
   if (!sale) return (<Shell><ErrorCard title="Not found" detail="This payment link is invalid." /></Shell>);
 
   if (sale.paid) {
-    return (<Shell><PaidCard sale={sale} /></Shell>);
+    return (<Shell><PaidCard sale={sale} thankYou={thankYou} /></Shell>);
   }
 
   return (
@@ -119,7 +132,7 @@ export function SalePublicView() {
       {error && <ErrorCard title="Could not load payment form" detail={error} />}
       {!error && clientSecret && stripePromise && (
         <Elements stripe={stripePromise} options={{ clientSecret, appearance: stripeAppearance }}>
-          <CheckoutForm sale={sale} />
+          <CheckoutForm sale={sale} thankYou={thankYou} />
         </Elements>
       )}
       {!error && !clientSecret && (<div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13 }}>Preparing secure payment form…</div>)}
@@ -127,7 +140,7 @@ export function SalePublicView() {
   );
 }
 
-function CheckoutForm({ sale }) {
+function CheckoutForm({ sale, thankYou }) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
@@ -155,7 +168,7 @@ function CheckoutForm({ sale }) {
     setSubmitting(false);
   };
 
-  if (succeeded) return <PaidCard sale={sale} justPaid />;
+  if (succeeded) return <PaidCard sale={sale} thankYou={thankYou} justPaid />;
 
   return (
     <form onSubmit={submit} style={{ padding: "0 28px 40px" }}>
@@ -199,13 +212,62 @@ function SaleSummary({ sale }) {
   );
 }
 
-function PaidCard({ sale, justPaid }) {
+function PaidCard({ sale, thankYou, justPaid }) {
+  // Per-package thank-you slot. Falls back to an empty object (no video,
+  // no copy) so an un-configured tier still renders a working page — the
+  // customer sees the confirmation, receipt badge, and booking button.
+  const slot = thankYou?.packages?.[sale.videoType]?.[sale.packageKey] || {};
+  const bookingUrl = thankYou?.bookingUrl?.trim() || "";
+  const videoSrc = embedUrl(slot.videoUrl);
+  const nextSteps = (slot.nextStepsCopy || "").trim();
+
   return (
-    <div style={{ padding: "60px 28px", textAlign: "center" }}>
-      <div style={{ fontSize: 56, marginBottom: 16 }}>✓</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: "#0B0F1A", marginBottom: 6 }}>{justPaid ? "Payment received" : "Payment already received"}</div>
-      <div style={{ fontSize: 14, color: "#64748B", marginBottom: 20 }}>Thank you, {sale.clientName}. The Viewix team will be in touch shortly.</div>
-      <div style={{ display: "inline-block", padding: "10px 16px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 8, color: "#166534", fontSize: 13, fontWeight: 600 }}>{fmtCur(sale.depositAmount)} · {packageLabel(sale.videoType, sale.packageKey)} deposit</div>
+    <div style={{ padding: "40px 28px 32px", textAlign: "center" }}>
+      <div style={{ fontSize: 48, marginBottom: 10 }}>✓</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: "#0B0F1A", marginBottom: 6 }}>
+        {justPaid ? "Payment received" : "Payment already received"}
+      </div>
+      <div style={{ fontSize: 14, color: "#64748B", marginBottom: 20 }}>
+        Thank you, {sale.clientName}.
+      </div>
+
+      {/* Receipt badge */}
+      <div style={{ display: "inline-block", padding: "10px 16px", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 8, color: "#166534", fontSize: 13, fontWeight: 600, marginBottom: 28 }}>
+        {fmtCur(sale.depositAmount)} · {packageLabel(sale.videoType, sale.packageKey)} deposit
+      </div>
+
+      {/* Welcome video */}
+      {videoSrc && (
+        <div style={{ marginBottom: 24, borderRadius: 12, overflow: "hidden", border: "1px solid #E5E7EB", background: "#000", aspectRatio: "16 / 9" }}>
+          <iframe
+            src={videoSrc} title="Welcome from Viewix"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+          />
+        </div>
+      )}
+
+      {/* Next-steps copy */}
+      {nextSteps && (
+        <div style={{ marginBottom: 24, padding: "20px 22px", background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 12, textAlign: "left" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>What happens next</div>
+          <div style={{ fontSize: 14, color: "#0B0F1A", lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{nextSteps}</div>
+        </div>
+      )}
+
+      {/* Booking CTA */}
+      {bookingUrl && (
+        <a href={bookingUrl} target="_blank" rel="noopener noreferrer"
+          style={{ display: "inline-block", padding: "14px 28px", borderRadius: 10, background: "#0082FA", color: "white", fontSize: 15, fontWeight: 700, textDecoration: "none" }}>
+          Book your kickoff call →
+        </a>
+      )}
+
+      {/* Fallback copy if nothing is configured for this tier yet */}
+      {!videoSrc && !nextSteps && !bookingUrl && (
+        <div style={{ fontSize: 13, color: "#64748B" }}>The Viewix team will be in touch shortly.</div>
+      )}
     </div>
   );
 }

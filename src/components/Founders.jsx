@@ -3,7 +3,7 @@
 // own components). Only the dual-founder role (password "Sanpel") sees this tab.
 
 import { useState } from "react";
-import { BTN, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING } from "../config";
+import { BTN, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING, DEFAULT_SALE_THANKYOU } from "../config";
 import { pct, fmtCur } from "../utils";
 import { fbSet } from "../firebase";
 import { FoundersData } from "./FoundersData";
@@ -15,6 +15,7 @@ export function Founders({
   foundersTab, setFoundersTab,
   attioDeals, setAttioDeals,
   salePricing, setSalePricing,
+  saleThankYou, setSaleThankYou,
 }) {
   const [attioLoading, setAttioLoading] = useState(false);
   const [revenueTableExpanded, setRevenueTableExpanded] = useState(false);
@@ -127,7 +128,7 @@ export function Founders({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Founders Dashboard</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "pricing", label: "Pricing" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "pricing", label: "Pricing" }, { key: "thankyou", label: "Thank-You Pages" }].map(t => (
             <button key={t.key} onClick={() => setFoundersTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: foundersTab === t.key ? "var(--card)" : "transparent", color: foundersTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
@@ -334,6 +335,7 @@ export function Founders({
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
         {foundersTab === "pricing" && <PricingEditor salePricing={salePricing} setSalePricing={setSalePricing} />}
+        {foundersTab === "thankyou" && <ThankYouEditor saleThankYou={saleThankYou} setSaleThankYou={setSaleThankYou} />}
       </div>
     </>
   );
@@ -387,6 +389,108 @@ function PricingEditor({ salePricing, setSalePricing }) {
       </div>
       <div style={{ marginTop: 16, padding: "12px 16px", background: "rgba(0,130,250,0.08)", border: "1px solid rgba(0,130,250,0.25)", borderRadius: 8, fontSize: 12, color: "var(--muted)" }}>
         Changes auto-save. New payment links use the latest defaults; already-sent links keep their captured amount.
+      </div>
+    </div>
+  );
+}
+
+// Per-package thank-you content shown on the branded payment page after the
+// customer's deposit clears. One shared bookingUrl at the top (same kickoff
+// meeting for everyone) + per-tier welcome video URL + next-steps copy.
+// Persisted to /saleThankYou in the same bulk-write from App.jsx.
+function ThankYouEditor({ saleThankYou, setSaleThankYou }) {
+  const ty = saleThankYou || DEFAULT_SALE_THANKYOU;
+  const [expanded, setExpanded] = useState(null); // videoType:tier currently open
+
+  const updateBooking = (url) => setSaleThankYou({ ...ty, bookingUrl: url });
+  const updateSlot = (videoType, tier, field, value) => {
+    const packages = ty.packages || {};
+    const vtSlot = packages[videoType] || {};
+    const tierSlot = vtSlot[tier] || { videoUrl: "", nextStepsCopy: "" };
+    setSaleThankYou({
+      ...ty,
+      packages: {
+        ...packages,
+        [videoType]: {
+          ...vtSlot,
+          [tier]: { ...tierSlot, [field]: value },
+        },
+      },
+    });
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", marginBottom: 4 }}>Thank-You Pages</div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>What the customer sees after their deposit clears. Booking link is shared; welcome video + next-steps copy is per-package.</div>
+      </div>
+
+      {/* Shared booking URL */}
+      <div style={{ marginBottom: 20, padding: "16px 20px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
+        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+          Kickoff Booking URL (shared across all packages)
+        </label>
+        <input type="url" value={ty.bookingUrl || ""} onChange={e => updateBooking(e.target.value)}
+          placeholder="https://calendly.com/viewix/kickoff..."
+          style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none" }} />
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+          The "Book your kickoff call" button on every thank-you page links here.
+        </div>
+      </div>
+
+      {/* Per-package accordion */}
+      <div style={{ display: "grid", gap: 12 }}>
+        {SALE_VIDEO_TYPES.map(vt => (
+          <div key={vt.key} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+            <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--border)", fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>
+              {vt.label}
+            </div>
+            <div style={{ padding: "8px 0" }}>
+              {vt.packages.map(p => {
+                const key = `${vt.key}:${p.key}`;
+                const isOpen = expanded === key;
+                const slot = ty.packages?.[vt.key]?.[p.key] || { videoUrl: "", nextStepsCopy: "" };
+                const hasContent = !!(slot.videoUrl?.trim() || slot.nextStepsCopy?.trim());
+                return (
+                  <div key={p.key} style={{ borderTop: "1px solid var(--border-light)" }}>
+                    <button
+                      onClick={() => setExpanded(isOpen ? null : key)}
+                      style={{ width: "100%", padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", background: "transparent", border: "none", color: "var(--fg)", cursor: "pointer", textAlign: "left" }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        {p.label}
+                        {!hasContent && <span style={{ marginLeft: 8, fontSize: 10, color: "#F59E0B", fontWeight: 700 }}>NOT SET</span>}
+                        {hasContent && <span style={{ marginLeft: 8, fontSize: 10, color: "#22C55E", fontWeight: 700 }}>✓</span>}
+                      </span>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>{isOpen ? "−" : "+"}</span>
+                    </button>
+                    {isOpen && (
+                      <div style={{ padding: "0 20px 16px" }}>
+                        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                          Welcome Video URL (YouTube or Loom)
+                        </label>
+                        <input type="url" value={slot.videoUrl || ""} onChange={e => updateSlot(vt.key, p.key, "videoUrl", e.target.value)}
+                          placeholder="https://www.loom.com/share/... or https://youtu.be/..."
+                          style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none", marginBottom: 12 }} />
+
+                        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
+                          Next Steps Copy (what happens next, shown to customer)
+                        </label>
+                        <textarea value={slot.nextStepsCopy || ""} onChange={e => updateSlot(vt.key, p.key, "nextStepsCopy", e.target.value)} rows={5}
+                          placeholder={`e.g. Thanks for choosing ${p.label}! Here's what happens next:\n\n1. Watch the welcome video above\n2. Book your kickoff meeting\n3. We'll send a pre-production questionnaire`}
+                          style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 16, padding: "12px 16px", background: "rgba(0,130,250,0.08)", border: "1px solid rgba(0,130,250,0.25)", borderRadius: 8, fontSize: 12, color: "var(--muted)" }}>
+        Changes auto-save. Rendered live on /s/... payment pages once the deposit clears.
       </div>
     </div>
   );

@@ -128,6 +128,29 @@ export const DEFAULT_SALE_PRICING = {
   socialRetainer: Object.fromEntries(SOCIAL_PREMIUM_TIERS.map(t => [t.key, 0])),
 };
 
+// ─── DEFAULT_SALE_THANKYOU ─────────────────────────────────────────
+// Per-package thank-you content shown on the branded payment page once a
+// deposit clears. Derived from the same taxonomy as pricing so adding a
+// new tier automatically gets a thank-you slot.
+//   bookingUrl   — single kickoff-meeting booking link shared across
+//                  every package (one Calendly / meeting type for all)
+//   packages     — { videoType → { tier → { videoUrl, nextStepsCopy } } }
+//                  videoUrl: YouTube or Loom URL (embedUrl() normalises
+//                  share URLs → iframe src at render time)
+//                  nextStepsCopy: free-text "what happens next" markdown
+// Edited in Founders → Thank-You Pages. Persisted at /saleThankYou.
+const emptyTierSlot = () => ({ videoUrl: "", nextStepsCopy: "" });
+export const DEFAULT_SALE_THANKYOU = {
+  bookingUrl: "",
+  packages: {
+    metaAds:       Object.fromEntries(META_ADS_TIERS.map(t => [t.key, emptyTierSlot()])),
+    socialPremium: Object.fromEntries(SOCIAL_PREMIUM_TIERS.map(t => [t.key, emptyTierSlot()])),
+    socialOrganic: Object.fromEntries(SOCIAL_ORGANIC_TIERS.map(t => [t.key, emptyTierSlot()])),
+    // One-off types have a single "base" tier (matches DEFAULT_SALE_PRICING shape)
+    ...Object.fromEntries(ONE_OFF_TYPES.map(t => [t.key, { base: emptyTierSlot() }])),
+  },
+};
+
 // ─── identifyDeal(rawAttioString) ──────────────────────────────────
 // Normalise whatever Attio sent us into { productLine, tier } the rest
 // of the system understands. Returns { productLine: null, tier: null }

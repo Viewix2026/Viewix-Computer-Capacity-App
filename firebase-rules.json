@@ -68,6 +68,14 @@
       ".indexOn": ["shortId"]
     },
 
+    "saleThankYou": {
+      // Per-package thank-you page content (welcome video, next-steps copy,
+      // shared booking URL) rendered on /s/{shortId} after payment clears.
+      // Read-only from the public view; edits happen founder-side through
+      // the standard authenticated rules at the root.
+      ".read": "auth != null"
+    },
+
     "foundersData": {
       ".read": "auth != null && auth.token.role == 'founders'",
       ".write": "auth != null && auth.token.role == 'founders'"

@@ -172,6 +172,7 @@ export {
   isSocialRetainerDeal,    // legacy alias
   SALE_VIDEO_TYPES,
   DEFAULT_SALE_PRICING,
+  DEFAULT_SALE_THANKYOU,
 } from "../api/_tiers.js";
 
 // ─── Shared Styles ───

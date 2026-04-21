@@ -166,6 +166,23 @@ export function deliveryShareUrl(d) {
   return `${origin}/?d=${d.id}`;
 }
 
+// Convert a YouTube or Loom share URL to its iframe-embed URL. Pass through
+// anything we don't recognise (if Jeremy pastes an already-embeddable URL,
+// or some other video host's share link, we just iframe it as-is). Returns
+// empty string for a falsy input so callers can test `if (embedUrl(url))`.
+export function embedUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  // YouTube: watch?v=X  /  youtu.be/X  /  youtube.com/shorts/X
+  const ytWatch = trimmed.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{6,})/);
+  if (ytWatch) return `https://www.youtube.com/embed/${ytWatch[1]}`;
+  // Loom: loom.com/share/HASH  →  loom.com/embed/HASH
+  const loomShare = trimmed.match(/loom\.com\/share\/([a-f0-9]{16,})/);
+  if (loomShare) return `https://www.loom.com/embed/${loomShare[1]}`;
+  return trimmed;
+}
+
 export function saleShareUrl(s) {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   if (!s) return origin;

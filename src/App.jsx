@@ -48,9 +48,12 @@ export default function App(){
   const[resourceTab,setResourceTab]=useState("roas");
   const[saleTab,setSaleTab]=useState("payment");
 
-  // Sale (Payment Intake) state — records at /sales, defaults at /salePricing
+  // Sale (Payment Intake) state — records at /sales, defaults at /salePricing,
+  // per-package thank-you content at /saleThankYou (booking link + welcome
+  // video + next-steps copy shown to customer after payment clears).
   const[sales,setSales]=useState([]);
   const[salePricing,setSalePricing]=useState(null);
+  const[saleThankYou,setSaleThankYou]=useState(null);
 
   // Capacity state
   const[inputs,setInputs]=useState(DEF_IN);
@@ -216,6 +219,7 @@ export default function App(){
               setSales(sArr);
             }
             if(data.salePricing){setSalePricing(data.salePricing);}
+            if(data.saleThankYou){setSaleThankYou(data.saleThankYou);}
             if(data.attioCache&&data.attioCache.data){
               setAttioDeals({data:data.attioCache.data,total:data.attioCache.total||data.attioCache.data.length,lastSyncedAt:data.attioCache.lastSyncedAt||null});
             }
@@ -230,7 +234,7 @@ export default function App(){
 
   const wt=useRef(null);
   const deletedPaths=useRef([]);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);const saleObj={};sales.forEach(s=>{if(s&&s.id)saleObj[s.id]=s;});fbSet("/sales",saleObj);if(salePricing)fbSet("/salePricing",salePricing);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,sales,salePricing]);
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);const saleObj={};sales.forEach(s=>{if(s&&s.id)saleObj[s.id]=s;});fbSet("/sales",saleObj);if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,sales,salePricing,saleThankYou]);
 
   // Backfill shortId on existing deliveries (one-time per record). Also handles
   // dedup if two records ever generate the same hash.
@@ -621,6 +625,7 @@ export default function App(){
         foundersTab={foundersTab} setFoundersTab={setFoundersTab}
         attioDeals={attioDeals} setAttioDeals={setAttioDeals}
         salePricing={salePricing} setSalePricing={setSalePricing}
+        saleThankYou={saleThankYou} setSaleThankYou={setSaleThankYou}
       />
     )}
 
