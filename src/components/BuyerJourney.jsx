@@ -83,27 +83,38 @@ const DEFAULT_SOCIAL = [
 ];
 
 // Title-based fallback for auto-linking stages to milestones when the
-// user's /buyerJourney data predates the milestoneKey field. Producers
-// can still override by picking "(none)" in edit mode — stored as
-// milestoneKey: null, which beats this derivation.
+// user's /buyerJourney data predates the milestoneKey field. Matches
+// are substring and case-insensitive so renamed stages still link as
+// long as the core phrase is present ("Pre-Prod Meeting", "pre prod
+// kickoff", etc. all match).
+//
+// Order matters: more specific patterns appear first. "pre prod
+// presentation" beats "pre prod" which would otherwise grab everything.
+// Producers can override by picking "(none)" in edit mode — stored as
+// explicit milestoneKey: null, which wins over this derivation.
 const TITLE_TO_MILESTONE = [
-  { match: ["invoice paid"],                                          key: "signing" },
-  { match: ["pre production meeting", "pre-production meeting"],      key: "preProductionMeeting" },
-  { match: ["pre production call", "pre-production call",
-            "pre production presentation"],                           key: "preProductionPresentation" },
-  { match: ["shoot day"],                                             key: "shoot" },
-  { match: ["final delivery", "upload to metricool"],                 key: "posting" },
-  { match: ["monthly performance review", "results review"],          key: "resultsReview" },
-  { match: ["ongoing catch ups", "ongoing catchups",
-            "partnership review"],                                    key: "partnershipReview" },
-  { match: ["growth strategy"],                                       key: "growthStrategy" },
+  // Specific phrases first
+  { match: ["pre prod presentation", "pre-production presentation", "pre production presentation",
+            "pre prod call", "pre-production call", "pre production call",
+            "blueprint call", "content blueprint"],                   key: "preProductionPresentation" },
+  { match: ["pre prod meeting", "pre-production meeting", "pre production meeting",
+            "kickoff meeting", "kickoff call", "kick off meeting"],   key: "preProductionMeeting" },
+  { match: ["invoice paid", "deposit paid", "first invoice", "signing"], key: "signing" },
+  { match: ["shoot day", "shooting day", "shoot date", "production day"], key: "shoot" },
+  { match: ["final delivery", "upload to metricool", "posting", "go live", "campaign live"], key: "posting" },
+  { match: ["monthly performance review", "results review",
+            "performance review", "monthly review", "review call"],   key: "resultsReview" },
+  { match: ["ongoing catch", "partnership review", "quarterly review"], key: "partnershipReview" },
+  { match: ["growth strategy", "growth plan", "strategy session"],    key: "growthStrategy" },
 ];
 function deriveMilestoneKey(stage) {
   // Explicit null wins (producer unlinked). Explicit string wins too.
   if (stage?.milestoneKey !== undefined) return stage.milestoneKey || null;
   const title = (stage?.title || "").toLowerCase().trim();
   if (!title) return null;
-  const match = TITLE_TO_MILESTONE.find(m => m.match.some(t => title === t));
+  // Substring match — covers renames like "Pre-Prod Meeting" or
+  // "Kickoff call" without needing the exact default wording.
+  const match = TITLE_TO_MILESTONE.find(m => m.match.some(t => title.includes(t)));
   return match?.key || null;
 }
 
@@ -495,6 +506,33 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                 <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", color: "var(--accent)" }}>{offsets[m.key]}d</span>
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* Diagnostic: which Journey stages each milestone is currently
+            linked to (explicit or auto-derived). Makes it obvious when a
+            stage title doesn't auto-match — producer can either rename the
+            stage or use the Edit UI to link manually. */}
+        <div style={{ marginTop: 20, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Journey Stage Links</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
+            Which stages on the Journey tab are linked to each milestone. Stages auto-link by title (fuzzy match) or explicitly via the Edit menu.
+          </div>
+          <div style={{ display: "grid", gap: 6 }}>
+            {MILESTONE_DEFS.map(m => {
+              const metaMatches = metaStages.filter(s => s.type === "stage" && deriveMilestoneKey(s) === m.key);
+              const socialMatches = socialStages.filter(s => s.type === "stage" && deriveMilestoneKey(s) === m.key);
+              const uniqueTitles = Array.from(new Set([...metaMatches, ...socialMatches].map(s => s.title)));
+              const hasAny = uniqueTitles.length > 0;
+              return (
+                <div key={m.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", background: "var(--bg)", borderRadius: 6 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: hasAny ? "var(--accent)" : "#F59E0B", minWidth: 140 }}>{m.label}</div>
+                  <div style={{ flex: 1, fontSize: 11, color: "var(--muted)" }}>
+                    {hasAny ? uniqueTitles.map(t => `"${t}"`).join(" · ") : <em style={{ color: "#F59E0B" }}>No journey stage linked — rename a stage to include "{m.label.toLowerCase()}" or use Edit → Linked Milestone</em>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
