@@ -11,7 +11,9 @@
 import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
 
 const ONE_SHOT_TOKEN = "inspect-editors-9a4c8e17b3d24f16b8e03f4719a5d2e1";
-const TARGET_IDS = ["97345986", "101620167", "85363605"];
+// Narrowed per Jeremy: delete Matt Healey (97345986) + Mia Wolczak
+// (85363605). 101620167 is kept pending identification.
+const TARGET_IDS = ["97345986", "85363605"];
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
