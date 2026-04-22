@@ -1,3 +1,5 @@
+import { GST_RATE, scheduleForVideoType } from "../api/_tiers.js";
+
 // ─── Date Helpers ───
 export function todayKey() {
   const d = new Date();
@@ -249,16 +251,121 @@ export function saleShareUrl(s) {
   return `${origin}/?s=${s.id}`;
 }
 
+// ─── Sale pricing + GST + schedule ─────────────────────────────────
+// All founder-entered sale prices live in /salePricing as EX-GST
+// numbers. The customer always pays INC-GST (10% on top). Slice
+// amounts stored on the sale record are already INC-GST — that's the
+// number Stripe charges the card on each instalment.
+// (Imports hoisted to the top of the file.)
+
+// Format with cents — for payment page totals, GST lines, invoices.
+// (fmtCur above is whole-dollar for dashboard chrome.)
+export function fmtCurExact(v) {
+  const n = Number(v) || 0;
+  return n.toLocaleString("en-AU", { style: "currency", currency: "AUD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Round to cents — avoid the floating-point crumbs that creep in
+// when you multiply e.g. 3000.01 * 0.10.
+function round2(n) { return Math.round(Number(n || 0) * 100) / 100; }
+
+// Inputs: totalExGst (number, AUD).
+// Returns: { totalExGst, gstAmount, grandTotal } — all rounded to cents.
+export function computeGst(totalExGst) {
+  const ex   = round2(totalExGst);
+  const gst  = round2(ex * GST_RATE);
+  const inc  = round2(ex + gst);
+  return { totalExGst: ex, gstAmount: gst, grandTotal: inc };
+}
+
+// Build the instalment schedule for a sale. Slice amounts are derived
+// from the inc-GST grand total, with the final slice absorbing
+// rounding so the sum equals grandTotal exactly.
+//
+//   videoType  — "metaAds" | "socialPremium" | "socialOrganic" | one-off key
+//   totalExGst — the ex-GST project total (from /salePricing, may be overridden)
+//   depositDate — Date|string|null; dueAt for auto slices is depositDate + dueDaysOffset.
+//                 Defaults to now. Manual-trigger slices get dueAt: null.
+//
+// Each slice: { idx, label, trigger, pct, amount, dueDaysOffset,
+//               dueAt, dueLabel, status }
+// status is "pending" for every slice at build time — the webhook
+// flips it to "paid" with paidAt + stripe refs as Stripe fires events.
+export function buildSchedule(videoType, totalExGst, depositDate) {
+  const { grandTotal } = computeGst(totalExGst);
+  const cfg = scheduleForVideoType(videoType);
+  const anchor = depositDate ? new Date(depositDate) : new Date();
+
+  // Compute all slice amounts, then adjust the last one to absorb any
+  // rounding drift so Σ slices === grandTotal (in cents).
+  const rawAmounts = cfg.slices.map(s => round2(grandTotal * s.pct / 100));
+  const sumFirstN  = round2(rawAmounts.slice(0, -1).reduce((a, b) => a + b, 0));
+  const lastAmount = round2(grandTotal - sumFirstN);
+  const amounts    = [...rawAmounts.slice(0, -1), lastAmount];
+
+  return cfg.slices.map((s, idx) => {
+    let dueAt = null;
+    let dueLabel = "";
+    if (s.trigger === "now") {
+      dueAt = anchor.toISOString();
+      dueLabel = "Today";
+    } else if (s.trigger === "auto" && typeof s.dueDaysOffset === "number") {
+      const d = new Date(anchor.getTime());
+      d.setDate(d.getDate() + s.dueDaysOffset);
+      dueAt = d.toISOString();
+      dueLabel = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    } else if (s.trigger === "manual") {
+      dueAt = null;
+      dueLabel = "On project completion";
+    }
+    return {
+      idx,
+      label: s.label,
+      trigger: s.trigger,
+      pct: s.pct,
+      amount: amounts[idx],
+      dueDaysOffset: s.dueDaysOffset ?? null,
+      dueAt,
+      dueLabel,
+      status: "pending",
+    };
+  });
+}
+
+// Re-derive the schedule if something on the sale changed (e.g.
+// founder edited the total after creation but before deposit paid).
+// If any slice is already paid, we refuse to rebuild — the record is
+// locked once money has moved. Call this before saving totalExGst
+// changes to a sale.
+export function canRebuildSchedule(sale) {
+  return !Array.isArray(sale?.schedule) || sale.schedule.every(s => s.status !== "paid");
+}
+
 export function newSale() {
+  const videoType  = "metaAds";
+  const packageKey = "starter";
+  const totalExGst = 0;
+  const { gstAmount, grandTotal } = computeGst(totalExGst);
   return {
     id: `sale-${Date.now()}`,
     shortId: makeShortId(),
-    videoType: "metaAds",
-    packageKey: "starter",
+    videoType,
+    packageKey,
     clientName: "",
     logoUrl: "",
     scopeNotes: "",
-    depositAmount: 0,
+    // New money fields — totals-based, GST-aware, schedule-driven.
+    totalExGst,
+    gstAmount,
+    grandTotal,
+    schedule: buildSchedule(videoType, totalExGst, null),
+    // Stripe linkage filled in as checkout completes.
+    stripeCustomerId: null,
+    stripePaymentMethodId: null,
+    stripeSubscriptionId: null,        // socialPremium / socialOrganic only
+    stripeSubscriptionScheduleId: null,
+    // Top-level paid flag — flipped true once every slice is settled.
+    // Kept for dashboard filtering; per-slice state is the source of truth.
     paid: false,
     createdAt: new Date().toISOString(),
   };

@@ -272,3 +272,74 @@ export const SALE_VIDEO_TYPES = [
     packages: [{ key: "base", label: t.label }],
   })),
 ];
+
+// ─── GST (Australia) ────────────────────────────────────────────────
+// All founder-entered sale prices are stored EX-GST. GST is added at
+// 10% on every customer-facing total. Single constant so it's easy to
+// find if the rate ever changes (unlikely but not impossible).
+export const GST_RATE = 0.10;
+
+// ─── SALE_SCHEDULES ────────────────────────────────────────────────
+// Per-product-line billing schedule. Used by buildSchedule() in utils
+// to produce the array of instalments on each Sale record.
+//
+//   kind:
+//     "deposit_plus_manual"   — first slice auto-charged at checkout;
+//                               remaining slices charged manually from
+//                               the Sale row's "Charge Balance" button
+//                               (founder decides when). Card is saved
+//                               via Stripe setup_future_usage so the
+//                               later charge is off-session.
+//     "subscription_monthly"  — first slice charged at checkout via
+//                               Stripe Embedded Checkout subscription
+//                               mode; subsequent slices auto-charged by
+//                               Stripe's subscription engine on the
+//                               dueDaysOffset cadence. Subscription
+//                               auto-cancels after the last slice.
+//     "paid_in_full"          — single slice, charged at checkout. No
+//                               card saving needed.
+//
+//   pcts must sum to 100. The last slice absorbs rounding so slice
+//   amounts * 100 / grandTotal is exact.
+export const SALE_SCHEDULES = {
+  metaAds: {
+    kind: "deposit_plus_manual",
+    slices: [
+      { pct: 50, label: "Deposit",  trigger: "now" },
+      { pct: 50, label: "Balance",  trigger: "manual", dueDaysOffset: null },
+    ],
+  },
+  socialPremium: {
+    kind: "subscription_monthly",
+    slices: [
+      { pct: 33.34, label: "Payment 1", trigger: "now" },
+      { pct: 33.33, label: "Payment 2", trigger: "auto", dueDaysOffset: 30 },
+      { pct: 33.33, label: "Payment 3", trigger: "auto", dueDaysOffset: 60 },
+    ],
+  },
+  socialOrganic: {
+    kind: "subscription_monthly",
+    slices: [
+      { pct: 33.34, label: "Payment 1", trigger: "now" },
+      { pct: 33.33, label: "Payment 2", trigger: "auto", dueDaysOffset: 30 },
+      { pct: 33.33, label: "Payment 3", trigger: "auto", dueDaysOffset: 60 },
+    ],
+  },
+  // One-off types (liveAction, explainer, etc.) all default to 50/50
+  // with manual balance — same as Meta Ads. Individual types can be
+  // overridden here if a particular one-off needs a different shape.
+  _default: {
+    kind: "deposit_plus_manual",
+    slices: [
+      { pct: 50, label: "Deposit",  trigger: "now" },
+      { pct: 50, label: "Balance",  trigger: "manual", dueDaysOffset: null },
+    ],
+  },
+};
+
+// Helper: look up the schedule config for a videoType key. Falls back
+// to _default if the key isn't explicitly mapped (covers every one-off
+// type without needing to enumerate them here).
+export function scheduleForVideoType(videoType) {
+  return SALE_SCHEDULES[videoType] || SALE_SCHEDULES._default;
+}
