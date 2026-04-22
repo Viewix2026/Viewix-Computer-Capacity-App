@@ -188,7 +188,22 @@ export function SalePublicView() {
   // CheckoutForm's stripe.confirmPayment resolution) render the Studio
   // thank-you layout directly — no Shell wrapper. The component ships
   // its own masthead + footer.
-  if (sale.paid || optimisticPaid) {
+  // Thank-you renders as soon as the FIRST slice has been paid —
+  // not just when sale.paid (which only flips true after ALL slices
+  // settle for multi-slice flows). Otherwise a Meta Ads customer who
+  // refreshes after paying the deposit would see the payment form
+  // again, which is wrong: they've paid, the balance is a founder-
+  // triggered manual charge, and the public page should show them a
+  // receipt + booking, not ask them to pay again.
+  //
+  // Three paths into the thank-you:
+  //   - optimisticPaid       → just-paid-on-this-page flip
+  //   - sale.paid            → fully-paid (all slices settled)
+  //   - first slice paid     → partial-paid (covers deposit+manual
+  //                             mid-project, and 1-of-3 / 2-of-3
+  //                             states for Social Media subs)
+  const firstSlicePaid = sale.schedule?.[0]?.status === "paid";
+  if (sale.paid || optimisticPaid || firstSlicePaid) {
     return <StudioThankYou sale={sale} thankYou={thankYou} roster={roster} justPaid={optimisticPaid && !sale.paid} />;
   }
 
