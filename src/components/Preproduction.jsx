@@ -492,6 +492,12 @@ export function Preproduction({ role, isFounder } = {}) {
         companyName: manualCompany.trim(),
         packageTier: manualTier,
         status: "draft",
+        // Route manually-created projects into the new 6-tab flow
+        // (Brand Truth → Ad Library → Video Review → Shortlist →
+        // Selection → Scripting). Without this they fell through to
+        // the legacy single-page view and looked like the tabs
+        // didn't exist.
+        tab: "brandTruth",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         attioCompanyId: null,
