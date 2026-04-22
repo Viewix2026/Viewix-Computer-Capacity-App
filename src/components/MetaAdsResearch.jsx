@@ -131,28 +131,73 @@ export function MetaAdsResearch({ project, onBack, onPatch, onDelete }) {
 // blueprint. Data lives at /preproduction/metaAds/{id}/brandTruth/*
 // so it sits alongside the legacy top-level brandAnalysis / motivators
 // / scriptTable fields without colliding.
+const META_BRAND_TRUTH_FIELDS = [
+  { key: "brandTruths",     label: "Brand Truths",            hint: "What's actually true about this business? Not marketing fluff — the real version." },
+  { key: "productOffer",    label: "Product / Offer",         hint: "What exactly is being sold in these ads? Deliverable, format, price point." },
+  { key: "uniqueValueProp", label: "Unique Value Proposition", hint: "What makes this different from every other agency / provider in the space?" },
+  { key: "targetCustomer",  label: "Target Customer",          hint: "Who is seeing these ads? Demographic + psychographic. Be specific." },
+  { key: "painPoints",      label: "Pain Points",              hint: "What are they struggling with right now? What keeps them up at night?" },
+  { key: "desiredOutcome",  label: "Desired Outcome",          hint: "What do they want to be true after buying? The toward state — aspirational, concrete." },
+  { key: "proofPoints",     label: "Proof Points",             hint: "Specific case studies, numbers, named clients, testimonials the scripts can cite." },
+  { key: "competitors",     label: "Competitors / Category",   hint: "Who are they up against? What does the prospect's feed look like filled with competitor content?" },
+];
+
 function BrandTruthStep({ project, onPatch }) {
-  const bt = project?.brandTruth?.fields || {};
-  const [transcript, setTranscript] = useState(project?.brandTruth?.transcript || "");
-  const [producerNotes, setProducerNotes] = useState(project?.brandTruth?.producerNotes || "");
+  const bt = project?.brandTruth || {};
+  const fields = bt.fields || {};
+  const [transcript, setTranscript] = useState(bt.transcript || "");
+  const [producerNotes, setProducerNotes] = useState(bt.producerNotes || "");
+  const [processing, setProcessing] = useState(false);
+  const [procError, setProcError] = useState(null);
 
   // Debounced writes for transcript + notes so the producer can type
-  // without fighting the network. 500ms matches Social Organic's
-  // Brand Truth step.
+  // without fighting the network. 500ms matches Social Organic.
   useEffect(() => {
-    if (transcript === (project?.brandTruth?.transcript || "")) return;
+    if (transcript === (bt.transcript || "")) return;
     const t = setTimeout(() => {
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/transcript`, transcript);
     }, 500);
     return () => clearTimeout(t);
   }, [transcript]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (producerNotes === (project?.brandTruth?.producerNotes || "")) return;
+    if (producerNotes === (bt.producerNotes || "")) return;
     const t = setTimeout(() => {
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/producerNotes`, producerNotes);
     }, 500);
     return () => clearTimeout(t);
   }, [producerNotes]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Begin Processing — sends transcript + notes to Claude via
+  // /api/meta-ads action=generateBrandTruth. Mirrors the Social
+  // Organic Brand Truth flow: the server writes the 8 fields to
+  // /preproduction/metaAds/{id}/brandTruth/fields/*, the listener
+  // rehydrates the project, and this component re-renders showing
+  // the populated bullet lists.
+  const beginProcessing = async () => {
+    setProcError(null);
+    setProcessing(true);
+    try {
+      // Make sure the latest transcript + notes are on disk before the
+      // server reads them. Debounce is 500ms — we wait a hair beyond
+      // that so a just-typed paste is definitely landed.
+      fbSet(`/preproduction/metaAds/${project.id}/brandTruth/transcript`, transcript);
+      fbSet(`/preproduction/metaAds/${project.id}/brandTruth/producerNotes`, producerNotes);
+      await new Promise(res => setTimeout(res, 150));
+
+      const r = await fetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener rehydrates fields automatically.
+    } catch (e) {
+      setProcError(e.message);
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   const updateField = (fieldKey, value) => {
     fbSet(`/preproduction/metaAds/${project.id}/brandTruth/fields/${fieldKey}`, value);
@@ -165,50 +210,59 @@ function BrandTruthStep({ project, onPatch }) {
 
   const approvals = project?.approvals || {};
   const isApproved = !!approvals.brandTruth;
+  const hasGenerated = !!bt.generatedAt;
+  const canProcess = transcript.trim().length > 0;
 
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Brand Truth</div>
         <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, maxWidth: 720 }}>
-          Capture everything the script generator needs: who this brand is, what they sell, who they're selling to, and what proof they've got. This replaces the single-shot onboarding transcript → generate-everything flow we used to use; you can still paste a transcript below and it'll feed into the Scripting step.
+          Paste the pre-production meeting transcript plus any producer notes, then click <strong>Begin Processing</strong>. Claude reads both and fills the 8 brand fields below with bullet-pointed truths drawn directly from the transcript. Edit any cell after generation to refine.
         </div>
       </div>
 
-      {/* Paired transcript + producer notes at the top. Claude will
-          read both when generating scripts in tab 6. */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
-        <FieldBox label="Onboarding transcript (optional)" hint="Paste the Fathom / meeting transcript from the client kickoff.">
-          <textarea value={transcript} onChange={e => setTranscript(e.target.value)} rows={8} placeholder="Paste the full transcript here..."
-            style={textareaSt} />
-        </FieldBox>
-        <FieldBox label="Producer notes (optional)" hint="Anything not in the transcript: gut reads, follow-up questions, extra context from emails.">
-          <textarea value={producerNotes} onChange={e => setProducerNotes(e.target.value)} rows={8} placeholder="Notes for the script generator or future you..."
-            style={textareaSt} />
-        </FieldBox>
+      {/* Input card: transcript + notes + Begin Processing */}
+      <div style={{ marginBottom: 20, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+          <FieldBox label="Pre-production transcript" hint="Paste the Fathom / meeting transcript from the client kickoff. Required.">
+            <textarea value={transcript} onChange={e => setTranscript(e.target.value)} rows={8} placeholder="Paste the full transcript here..."
+              style={textareaSt} />
+          </FieldBox>
+          <FieldBox label="Producer notes (optional)" hint="Anything not in the transcript: gut reads, follow-up questions, extra context from emails.">
+            <textarea value={producerNotes} onChange={e => setProducerNotes(e.target.value)} rows={8} placeholder="Notes for the script generator or future you..."
+              style={textareaSt} />
+          </FieldBox>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 11, color: "var(--muted)" }}>
+            {hasGenerated
+              ? <>Generated {new Date(bt.generatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} · click Begin Processing again to regenerate (replaces current fields).</>
+              : "Transcript is required. Producer notes are optional but useful."}
+          </div>
+          <button onClick={beginProcessing}
+            disabled={processing || !canProcess}
+            style={{ padding: "10px 22px", borderRadius: 8, border: "none", background: processing ? "#4B5563" : (!canProcess ? "#374151" : "var(--accent)"), color: "#fff", fontSize: 13, fontWeight: 700, cursor: (processing || !canProcess) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (processing || !canProcess) ? 0.6 : 1 }}>
+            {processing ? "Processing…" : hasGenerated ? "Regenerate Brand Truth" : "Begin Processing"}
+          </button>
+        </div>
+        {procError && (
+          <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+            {procError}
+          </div>
+        )}
       </div>
 
-      {/* Core brand fields — saved on blur so pasting / typing doesn't
-          round-trip Firebase per keystroke. Each field writes its own
-          leaf path so two producers editing different fields can't
-          overwrite each other. */}
+      {/* 8 brand fields — populated by Begin Processing, editable
+          afterwards. Each field's value is a bullet-ready string
+          (newline-separated lines); BrandField renders it as a list
+          once generated, falls back to empty-state copy otherwise. */}
       <div style={{ display: "grid", gap: 14 }}>
-        <BrandField label="Brand Truths" hint="What's actually true about this business? Not marketing fluff — the real version."
-          fieldKey="brandTruths" initial={bt.brandTruths} onSave={updateField} />
-        <BrandField label="Product / Offer" hint="What exactly is being sold in these ads? Be specific about the deliverable, format, and price point."
-          fieldKey="productOffer" initial={bt.productOffer} onSave={updateField} />
-        <BrandField label="Unique Value Proposition" hint="What makes this different from every other agency / provider in the space?"
-          fieldKey="uniqueValueProp" initial={bt.uniqueValueProp} onSave={updateField} />
-        <BrandField label="Target Customer" hint="Who is seeing these ads? Demographic + psychographic. Business owners 30-50 in trades, first-time founders, existing 7-figure ecomm brands — specifics."
-          fieldKey="targetCustomer" initial={bt.targetCustomer} onSave={updateField} />
-        <BrandField label="Pain Points" hint="What are they struggling with right now? What keeps them up at night about this problem?"
-          fieldKey="painPoints" initial={bt.painPoints} onSave={updateField} />
-        <BrandField label="Desired Outcome" hint="What do they want to be true after buying? The toward state — aspirational, concrete."
-          fieldKey="desiredOutcome" initial={bt.desiredOutcome} onSave={updateField} />
-        <BrandField label="Proof Points" hint="Specific case studies, numbers, named clients, testimonials the scripts can cite. Vague proof = weak ads."
-          fieldKey="proofPoints" initial={bt.proofPoints} onSave={updateField} />
-        <BrandField label="Competitors / Category" hint="Who are they up against? What does the prospect's Instagram look like filled with competitor content?"
-          fieldKey="competitors" initial={bt.competitors} onSave={updateField} />
+        {META_BRAND_TRUTH_FIELDS.map(f => (
+          <BrandField key={f.key} label={f.label} hint={f.hint}
+            fieldKey={f.key} initial={fields[f.key]} onSave={updateField}
+            emptyPlaceholder={hasGenerated ? "" : "Click Begin Processing to populate from the transcript."} />
+        ))}
       </div>
 
       {/* Approve → unlocks Tab 2 */}
@@ -230,15 +284,15 @@ function BrandTruthStep({ project, onPatch }) {
 // Uncontrolled textarea that only writes to Firebase on blur — the
 // React state is local until the producer tabs out or clicks elsewhere.
 // Keeps the per-keystroke cost to local only.
-function BrandField({ label, hint, fieldKey, initial, onSave }) {
+function BrandField({ label, hint, fieldKey, initial, onSave, emptyPlaceholder }) {
   const [value, setValue] = useState(initial || "");
   const lastSavedRef = useRef(initial || "");
 
   // Keep local state in sync if Firebase updates from another tab —
   // but ONLY when the local value matches the last-saved baseline
-  // (i.e. no unsaved edits in progress). The previous version blindly
-  // replaced value with initial, which could blow away an edit the
-  // producer was typing when a concurrent tab saved a different value.
+  // (i.e. no unsaved edits in progress). Without this, typing a local
+  // edit could get clobbered when a concurrent tab saved a different
+  // value.
   useEffect(() => {
     const remote = initial || "";
     if (remote === lastSavedRef.current) return;
@@ -258,7 +312,8 @@ function BrandField({ label, hint, fieldKey, initial, onSave }) {
 
   return (
     <FieldBox label={label} hint={hint}>
-      <textarea value={value} onChange={e => setValue(e.target.value)} onBlur={onBlur} rows={3}
+      <textarea value={value} onChange={e => setValue(e.target.value)} onBlur={onBlur} rows={4}
+        placeholder={emptyPlaceholder || ""}
         style={textareaSt} />
     </FieldBox>
   );

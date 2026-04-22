@@ -672,6 +672,136 @@ Return the rewritten ${colMeta.label} only.`;
 // Handler
 // ────────────────────────────────────────────────────────────────
 
+// ═══════════════════════════════════════════════════════════════════
+// BRAND TRUTH (Tab 1)
+//
+// generateBrandTruth: one-shot extraction from the pre-production
+// transcript + producer notes. Mirrors the Social Organic pattern
+// but fills the 8 Meta-Ads-specific fields (brandTruths, productOffer,
+// uniqueValueProp, targetCustomer, painPoints, desiredOutcome,
+// proofPoints, competitors). Output is bullet-style: 3-5 lines per
+// field, separated by newline. Frontend renders them as bullets.
+// ═══════════════════════════════════════════════════════════════════
+
+const META_ADS_BRAND_TRUTH_PROMPT = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. You have just sat in on a pre-production meeting with a client about to shoot a round of Meta video ads. Produce the "Brand Truth" block the producer will carry through the rest of the pre-production workflow — Ad Library benchmarking, video review, shortlist, selection, and Hormozi-style script generation.
+
+RULES:
+- Be specific, opinionated, evidence-based. No generic agency-speak.
+- Quote the client's own language where useful. Verbatim quotes are more valuable than paraphrased ones.
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
+
+STRUCTURE — every field is a list of 3-5 short bullet-style lines, one idea per line, separated by a newline character ("\\n"). Do NOT output prose paragraphs. Do NOT include leading bullet markers (no •, no dashes, no numbers) — the frontend renders the bullets automatically. Each line is one specific, concrete claim or observation. Keep lines under 25 words where possible.
+{
+  "brandTruths":     "3-5 lines on what's actually true about this business. Not marketing fluff, the real version — operational truths, founder quirks, what this brand does better than most.",
+  "productOffer":    "3-5 lines on what exactly is being sold in these ads. Deliverable, format, and price point. Be specific about the package / promise the ads are driving to.",
+  "uniqueValueProp": "3-5 lines on what makes this different from every other agency / provider in the space. Why a prospect would pick THIS one over the competitor Instagram suggests next.",
+  "targetCustomer":  "3-5 lines on who is seeing these ads. Demographic + psychographic, specific. Business owners 30-50 in trades, first-time founders, existing 7-figure ecomm brands — that level of specificity.",
+  "painPoints":      "3-5 lines, each a specific pain the viewer is struggling with RIGHT NOW. Use direct viewer-voice quotes where the transcript supports it. Concrete, not abstract.",
+  "desiredOutcome":  "3-5 lines on what the viewer wants to be true AFTER buying. The toward state — aspirational, concrete. What changes in their business / life / identity when this works.",
+  "proofPoints":     "3-5 lines of specific case studies, numbers, named clients, testimonials the scripts can cite. Vague proof = weak ads, so get specific. Quote numbers from the transcript where available.",
+  "competitors":     "3-5 lines on who they're up against. Named competitors if the transcript mentions them. What the prospect's Instagram feed looks like filled with competitor content."
+}`;
+
+async function getBrandTruthPromptOverride() {
+  const p = await fbGet("/preproductionTemplates/metaAdsBrandTruthPrompt");
+  return (typeof p === "string" && p.trim()) ? p : META_ADS_BRAND_TRUTH_PROMPT;
+}
+
+async function handleGenerateBrandTruth(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const transcript = project.brandTruth?.transcript || "";
+  const producerNotes = project.brandTruth?.producerNotes || "";
+  if (!transcript.trim()) {
+    return res.status(400).json({ error: "Paste the pre-production transcript before processing." });
+  }
+
+  // Pull Sherpa / account-level context so Claude has the client
+  // background to ground the truths. Mirrors Social Organic's pattern.
+  let sherpaBlock = "";
+  if (project.attioCompanyId) {
+    const accounts = await fbGet("/accounts");
+    if (accounts) {
+      const acct = Object.values(accounts).find(a => a?.attioId === project.attioCompanyId);
+      if (acct) {
+        const bits = [];
+        if (acct.industry) bits.push(`Industry: ${acct.industry}`);
+        if (acct.websiteUrl) bits.push(`Website: ${acct.websiteUrl}`);
+        if (acct.notes) bits.push(`Notes: ${acct.notes}`);
+        if (bits.length) sherpaBlock = `\nSHERPA (saved client context):\n${bits.join("\n")}\n`;
+      }
+    }
+  }
+
+  const systemPrompt = await getBrandTruthPromptOverride();
+  const userMessage = `CLIENT: ${project.companyName}
+${project.packageTier ? `PACKAGE: ${project.packageTier}` : ""}
+${sherpaBlock}
+PRE-PRODUCTION MEETING TRANSCRIPT:
+"""
+${transcript.slice(0, 12000)}
+"""
+
+PRODUCER NOTES:
+"""
+${producerNotes.slice(0, 4000) || "(none)"}
+"""
+
+Produce the brand truth JSON now.`;
+
+  const runId = `metaAds_brandtruth_${Date.now()}`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 4000,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
+  }
+
+  const fields = {
+    brandTruths:     parsed.brandTruths     || "",
+    productOffer:    parsed.productOffer    || "",
+    uniqueValueProp: parsed.uniqueValueProp || "",
+    targetCustomer:  parsed.targetCustomer  || "",
+    painPoints:      parsed.painPoints      || "",
+    desiredOutcome:  parsed.desiredOutcome  || "",
+    proofPoints:     parsed.proofPoints     || "",
+    competitors:     parsed.competitors     || "",
+  };
+
+  await fbPatch(`/preproduction/metaAds/${projectId}/brandTruth`, {
+    fields,
+    generatedAt: new Date().toISOString(),
+    modelUsed: "claude-opus-4-6",
+    runId,
+  });
+  await fbPatch(`/preproduction/metaAds/${projectId}`, {
+    updatedAt: new Date().toISOString(),
+  });
+
+  return res.status(200).json({ ok: true, fields, runId });
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -682,11 +812,12 @@ export default async function handler(req, res) {
   const { action } = req.body || {};
   try {
     switch (action) {
-      case "scrapeAdLibrary": return await handleScrapeAdLibrary(req, res);
-      case "addManualAd":     return await handleAddManualAd(req, res);
-      case "scriptGenerate":  return await handleScriptGenerate(req, res);
-      case "rewriteCell":     return await handleRewriteCell(req, res);
-      default:                return res.status(400).json({ error: `Unknown action: ${action}` });
+      case "scrapeAdLibrary":   return await handleScrapeAdLibrary(req, res);
+      case "addManualAd":       return await handleAddManualAd(req, res);
+      case "scriptGenerate":    return await handleScriptGenerate(req, res);
+      case "rewriteCell":       return await handleRewriteCell(req, res);
+      case "generateBrandTruth": return await handleGenerateBrandTruth(req, res);
+      default:                  return res.status(400).json({ error: `Unknown action: ${action}` });
     }
   } catch (e) {
     console.error(`meta-ads ${action} error:`, e);
