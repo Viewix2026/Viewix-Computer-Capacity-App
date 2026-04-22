@@ -36,6 +36,12 @@ export function Sale({
   const [form, setForm] = useState({ creating: false, ...newSale() });
   const [copyFlash, setCopyFlash] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  // Charge Balance flow state — modal open on a specific sale, result copy,
+  // loading flag, error. Only one sale can be mid-charge at a time so we
+  // hold the sale id rather than per-sale state.
+  const [chargingSale, setChargingSale] = useState(null);
+  const [chargeLoading, setChargeLoading] = useState(false);
+  const [chargeResult, setChargeResult] = useState(null);
 
   const pricing = salePricing || DEFAULT_SALE_PRICING;
 
@@ -110,6 +116,56 @@ export function Sale({
   const packagesFor = (vt) => SALE_VIDEO_TYPES.find(t => t.key === vt)?.packages || [];
   const packageLabel = (vt, pk) => packagesFor(vt).find(p => p.key === pk)?.label || pk;
   const videoLabel = (vt) => SALE_VIDEO_TYPES.find(t => t.key === vt)?.label || vt;
+
+  // Compute a compact status + optional action for a sale row. Handles
+  // legacy records (paid flag only, no schedule) and new records
+  // (schedule[] with per-slice status).
+  //
+  // Returns { label, color, action }:
+  //   label   — pill copy
+  //   color   — pill tint
+  //   action  — null, or { kind: "chargeBalance", sliceIdx, amount, label }
+  const saleStatus = (s) => {
+    const schedule = Array.isArray(s.schedule) ? s.schedule : [];
+    if (schedule.length === 0) {
+      return { label: s.paid ? "PAID" : "AWAITING PAYMENT", color: s.paid ? "#10B981" : "#F59E0B", action: null };
+    }
+    const paidCount = schedule.filter(x => x.status === "paid").length;
+    if (paidCount === 0) return { label: "AWAITING DEPOSIT", color: "#F59E0B", action: null };
+    if (paidCount === schedule.length) return { label: "PAID", color: "#10B981", action: null };
+
+    const nextIdx = schedule.findIndex(x => x.status !== "paid");
+    const nextSlice = schedule[nextIdx];
+    const label = `${paidCount}/${schedule.length} PAID`;
+    const action = nextSlice.trigger === "manual"
+      ? { kind: "chargeBalance", sliceIdx: nextIdx, amount: nextSlice.amount, label: nextSlice.label }
+      : null;
+    return { label, color: "#0082FA", action };
+  };
+
+  const chargeBalance = async (s, sliceIdx) => {
+    setChargeLoading(true);
+    setChargeResult(null);
+    try {
+      const r = await fetch("/api/charge-sale-balance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saleId: s.id, sliceIdx }),
+      });
+      const d = await r.json();
+      if (r.ok && d.status === "succeeded") {
+        setChargeResult({ kind: "success", message: `Charged successfully. Stripe receipt on its way; the row will update once the webhook lands (usually a second or two).` });
+      } else if (d.status === "requires_action" || d.status === "authentication_required") {
+        setChargeResult({ kind: "warn", message: d.message || "Customer's bank requires 3D Secure re-authentication. Email them to complete the charge." });
+      } else {
+        setChargeResult({ kind: "error", message: d.error || d.message || `Unexpected status: ${d.status}` });
+      }
+    } catch (e) {
+      setChargeResult({ kind: "error", message: e.message });
+    } finally {
+      setChargeLoading(false);
+    }
+  };
 
   return (<>
     {/* Top header: title + subtab switch */}
@@ -205,17 +261,23 @@ export function Sale({
         <div style={{display:"grid",gap:10}}>
           {[...sales].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(s=>{
             const url=saleShareUrl(s);
+            const status=saleStatus(s);
+            const showChargeBalance = status.action?.kind === "chargeBalance" && isFounders;
             return(<div key={s.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"14px 18px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                     <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{s.clientName}</span>
-                    {s.paid?(<span style={{fontSize:10,fontWeight:700,color:"white",background:"#10B981",padding:"3px 8px",borderRadius:4}}>PAID</span>):(<span style={{fontSize:10,fontWeight:700,color:"#F59E0B",background:"rgba(245,158,11,0.12)",padding:"3px 8px",borderRadius:4}}>AWAITING PAYMENT</span>)}
+                    <span style={{fontSize:10,fontWeight:700,color:status.color==="#10B981"?"white":status.color,background:status.color==="#10B981"?"#10B981":status.color==="#F59E0B"?"rgba(245,158,11,0.12)":"rgba(0,130,250,0.12)",padding:"3px 8px",borderRadius:4}}>{status.label}</span>
+                    {status.action && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"'JetBrains Mono',monospace"}}>{status.action.label} · {fmtCurExact(status.action.amount)} pending</span>}
                   </div>
                   <div style={{fontSize:12,color:"var(--muted)"}}>{videoLabel(s.videoType)} · {packageLabel(s.videoType,s.packageKey)} · <span style={{color:"#10B981",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{fmtCur(s.grandTotal||s.depositAmount||0)}</span>{s.grandTotal?<span style={{color:"var(--muted)",fontWeight:500,fontSize:11}}> inc-GST</span>:null} · {new Date(s.createdAt).toLocaleDateString("en-AU")}</div>
                   <div style={{fontSize:11,color:"var(--accent)",marginTop:6,wordBreak:"break-all"}}>{url}</div>
                 </div>
-                <div style={{display:"flex",gap:6,flexShrink:0}}>
+                <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                  {showChargeBalance && (
+                    <button onClick={()=>{setChargingSale(s);setChargeResult(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Charge Balance</button>
+                  )}
                   <button onClick={()=>copyLink(s)} style={{...BTN,background:copyFlash===s.id?"#10B981":"var(--bg)",color:copyFlash===s.id?"white":"var(--accent)",border:"1px solid var(--border)"}}>{copyFlash===s.id?"Copied!":"Copy Link"}</button>
                   <a href={url} target="_blank" rel="noopener noreferrer" style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)",textDecoration:"none",display:"inline-flex",alignItems:"center"}}>Preview ↗</a>
                   {confirmDelete===s.id?(
@@ -232,6 +294,50 @@ export function Sale({
           })}
         </div>
       )}
+
+      {/* Charge Balance confirm modal — overlay with a confirm step,
+          live loading state, and post-result messaging (success /
+          requires-auth / error). Webhook updates the sale record on
+          success so the list re-renders automatically. */}
+      {chargingSale && (()=>{
+        const action = saleStatus(chargingSale).action;
+        if (!action) return null;
+        const paidSlice = (chargingSale.schedule||[])[0];
+        return (
+          <div style={{position:"fixed",inset:0,background:"rgba(10,18,40,0.65)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+            <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"24px 28px",maxWidth:480,width:"100%"}}>
+              <div style={{fontSize:16,fontWeight:800,color:"var(--fg)",marginBottom:8}}>Charge Balance — {chargingSale.clientName}</div>
+              <div style={{fontSize:13,color:"var(--muted)",marginBottom:18,lineHeight:1.55}}>
+                Charge <strong style={{color:"var(--fg)",fontFamily:"'JetBrains Mono',monospace"}}>{fmtCurExact(action.amount)}</strong> to the card on file (saved when the deposit of {fmtCurExact(paidSlice?.amount||0)} cleared)?
+                <div style={{marginTop:8,fontSize:12,color:"var(--muted)"}}>If the bank requires re-authentication, we'll surface that and you can email the customer to complete the charge.</div>
+              </div>
+
+              {chargeResult && (
+                <div style={{marginBottom:16,padding:"12px 14px",borderRadius:8,fontSize:13,lineHeight:1.5,
+                  background: chargeResult.kind==="success"?"rgba(16,185,129,0.1)":chargeResult.kind==="warn"?"rgba(245,158,11,0.1)":"rgba(239,68,68,0.1)",
+                  border: `1px solid ${chargeResult.kind==="success"?"rgba(16,185,129,0.3)":chargeResult.kind==="warn"?"rgba(245,158,11,0.3)":"rgba(239,68,68,0.3)"}`,
+                  color: chargeResult.kind==="success"?"#065F46":chargeResult.kind==="warn"?"#92400E":"#991B1B",
+                }}>
+                  {chargeResult.message}
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                {chargeResult?.kind === "success" ? (
+                  <button onClick={()=>{setChargingSale(null);setChargeResult(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Close</button>
+                ) : (
+                  <>
+                    <button onClick={()=>{setChargingSale(null);setChargeResult(null);}} disabled={chargeLoading} style={{...BTN,background:"#374151",color:"#9CA3AF",opacity:chargeLoading?0.5:1,cursor:chargeLoading?"not-allowed":"pointer"}}>Cancel</button>
+                    <button onClick={()=>chargeBalance(chargingSale, action.sliceIdx)} disabled={chargeLoading} style={{...BTN,background:chargeLoading?"#4B5563":"#10B981",color:"white",opacity:chargeLoading?0.7:1,cursor:chargeLoading?"wait":"pointer"}}>
+                      {chargeLoading ? "Charging…" : `Charge ${fmtCurExact(action.amount)}`}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </>)}
 
     {/* ── PRICING (ex-Founders → moved here so closers/leads can reference
