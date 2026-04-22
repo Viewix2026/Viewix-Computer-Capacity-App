@@ -85,20 +85,36 @@ export function Sale({
     setForm({ creating: true, ...seed });
   };
 
-  const saveSale = () => {
-    if (!form.clientName.trim()) return;
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const saveSale = async () => {
+    if (!form.clientName.trim() || saving) return;
     const { creating, totalTouched, ...rest } = form;
     const record = { ...rest, clientName: rest.clientName.trim() };
-    setSales(p => [...p, record]);
-    // Write the new record directly so the share link works immediately —
-    // the debounced bulk-write in App.jsx would otherwise leave a ~400ms
-    // window where clicking Preview scans /sales and finds no match.
-    if (record.id) {
-      fbSetAsync(`/sales/${record.id}`, record).catch(e => {
-        console.error("Failed to persist new sale:", e);
-      });
+    if (!record.id) {
+      setSaveError("Missing record id — form state may be stale. Close and retry.");
+      return;
     }
-    resetForm();
+    setSaving(true);
+    setSaveError(null);
+    // Add optimistically so the row appears immediately.
+    setSales(p => [...p, record]);
+    try {
+      // Await the direct write so we KNOW the record is in /sales
+      // before resetForm() fires and the user can click Preview.
+      // The debounced bulk-write in App.jsx runs too — harmless
+      // duplicate write — but this one's the guarantee.
+      await fbSetAsync(`/sales/${record.id}`, record);
+      resetForm();
+    } catch (e) {
+      console.error("Failed to persist new sale:", e);
+      // Roll back the optimistic insert so the UI doesn't lie
+      // about a record that isn't actually in Firebase.
+      setSales(p => p.filter(s => s.id !== record.id));
+      setSaveError(`Couldn't save sale: ${e.message || e}. Please try again.`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const deleteSale = (id) => {
@@ -250,9 +266,12 @@ export function Sale({
             </div>
           </div>)}
         </div>
+        {saveError && (
+          <div style={{marginBottom:12,padding:"10px 14px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,color:"#991B1B",fontSize:13}}>{saveError}</div>
+        )}
         <div style={{display:"flex",gap:8}}>
-          <button onClick={saveSale} disabled={!form.clientName.trim()||!form.totalExGst} style={{...BTN,background:(form.clientName.trim()&&form.totalExGst)?"var(--accent)":"#374151",color:"white",opacity:(form.clientName.trim()&&form.totalExGst)?1:0.6}}>Create Payment Link</button>
-          <button onClick={resetForm} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
+          <button onClick={saveSale} disabled={saving||!form.clientName.trim()||!form.totalExGst} style={{...BTN,background:saving?"#4B5563":(form.clientName.trim()&&form.totalExGst)?"var(--accent)":"#374151",color:"white",opacity:(saving||!form.clientName.trim()||!form.totalExGst)?0.6:1,cursor:saving?"wait":"pointer"}}>{saving?"Creating…":"Create Payment Link"}</button>
+          <button onClick={resetForm} disabled={saving} style={{...BTN,background:"#374151",color:"#9CA3AF",opacity:saving?0.5:1,cursor:saving?"not-allowed":"pointer"}}>Cancel</button>
         </div>
       </div>)}
 
