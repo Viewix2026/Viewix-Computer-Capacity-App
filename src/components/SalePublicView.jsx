@@ -1,16 +1,24 @@
 // Public payment page served at /s/{shortId}/{slug}.
-// Resolves the sale record from Firebase, requests a PaymentIntent from
-// /api/create-payment-intent, and mounts Stripe's Elements so the customer
-// can pay. Mirrors the auth pattern in DeliveryPublicView: anonymous sign-in
-// + indexed scan by shortId.
+// Resolves the sale record from Firebase, requests a Stripe Embedded
+// Checkout Session from /api/create-checkout-session, and mounts the
+// Stripe-hosted iframe inline inside our Studio-branded page. The
+// customer never leaves — Stripe owns the card-entry UI, subscription
+// schedule, retries, SCA, dunning; we own the wrapper.
+//
+// Mirrors the auth pattern in DeliveryPublicView: anonymous sign-in
+// + indexed scan by shortId. Upgraded from Stripe Elements (one-time
+// charges) to Embedded Checkout (payment / subscription / setup modes)
+// so we can support Meta Ads 50/50 manual-balance flows AND Social
+// Media 3-payment autopay schedules with one code path.
 
 import { useState, useEffect, useMemo } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 import { SALE_VIDEO_TYPES } from "../config";
-import { fmtCur, logoBg, embedUrl, isEmbeddableBookingUrl, normaliseImageUrl } from "../utils";
+import { fmtCur, fmtCurExact, logoBg, embedUrl, isEmbeddableBookingUrl, normaliseImageUrl } from "../utils";
+import { scheduleForVideoType } from "../../api/_tiers";
 import { loadStripe } from "@stripe/stripe-js";
-import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
+import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
 
 const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
 // Module-level singleton: Stripe.js rejects re-initialization with the same key,
@@ -122,20 +130,32 @@ export function SalePublicView() {
     return () => { cancelled = true; unsub(); };
   }, [sale?.id]);
 
-  // Once we have the sale, request a PaymentIntent. Only re-request if the
-  // sale id changes (not every re-render). If the sale is already paid we
-  // skip this — the confirmation view renders instead.
+  // Once we have the sale, request an Embedded Checkout Session. Only
+  // re-request if the sale id changes. If already paid, skip — the
+  // thank-you view renders instead.
+  //
+  // Legacy sales created before the Total-ex-GST / schedule rewrite
+  // (no schedule array) can't use the new Checkout endpoint — surface
+  // an error telling the customer to get a fresh link. Their old
+  // record stays valid (paid flag, depositAmount) but cannot drive a
+  // new payment session.
   useEffect(() => {
     if (!sale || sale.paid) return;
     if (!STRIPE_PK) {
       setError("Stripe is not configured. Set VITE_STRIPE_PUBLISHABLE_KEY in your environment.");
       return;
     }
-    if (!sale.depositAmount || sale.depositAmount <= 0) {
+    const hasSchedule = Array.isArray(sale.schedule) && sale.schedule.length > 0;
+    const firstAmount = hasSchedule ? Number(sale.schedule[0]?.amount) : Number(sale.depositAmount);
+    if (!firstAmount || firstAmount <= 0) {
       setError("This payment link has no amount set. Contact the Viewix team.");
       return;
     }
-    fetch("/api/create-payment-intent", {
+    if (!hasSchedule) {
+      setError("This payment link was created before we updated our billing system. Please ask Viewix to send you a fresh link.");
+      return;
+    }
+    fetch("/api/create-checkout-session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ saleId: sale.id }),
@@ -143,7 +163,7 @@ export function SalePublicView() {
       .then(r => r.json())
       .then(d => {
         if (d.clientSecret) setClientSecret(d.clientSecret);
-        else setError(d.error || "Failed to create payment intent.");
+        else setError(d.error || "Failed to create checkout session.");
       })
       .catch(e => setError(`Network error: ${e.message}`));
   }, [sale?.id]);
@@ -165,86 +185,266 @@ export function SalePublicView() {
   }
 
   return (
-    <Shell>
-      <SaleSummary sale={sale} />
-      {error && <ErrorCard title="Could not load payment form" detail={error} />}
-      {!error && clientSecret && stripePromise && (
-        <Elements stripe={stripePromise} options={{ clientSecret, appearance: stripeAppearance }}>
-          <CheckoutForm sale={sale} thankYou={thankYou} onSucceeded={() => setOptimisticPaid(true)} />
-        </Elements>
-      )}
-      {!error && !clientSecret && (<div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13 }}>Preparing secure payment form…</div>)}
-    </Shell>
+    <StudioPayment
+      sale={sale}
+      clientSecret={clientSecret}
+      error={error}
+      onComplete={() => setOptimisticPaid(true)}
+    />
   );
 }
 
-function CheckoutForm({ sale, thankYou, onSucceeded }) {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState(null);
+// ─── Studio Payment view ────────────────────────────────────────────
+// Pre-paid layout: paper-cream background, editorial hero, client strip,
+// totals card (ex-GST + GST + grand total), payment-schedule card,
+// consent box, Stripe Embedded Checkout iframe inline. Matches the
+// design handoff at /Users/cicero/Documents/Webpages/design_handoff_sale_payment.
+//
+// Zero redirect — when the customer completes payment in Stripe's
+// iframe, `onComplete` fires, we flip optimisticPaid, and the page
+// swaps to StudioThankYou (same paper-cream canvas, visual
+// continuity).
+function StudioPayment({ sale, clientSecret, error, onComplete }) {
+  const cfg = scheduleForVideoType(sale.videoType);
+  const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
+  const firstSlice = schedule[0];
+  const firstName = (sale.clientName || "there").split(/\s+/)[0];
 
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!stripe || !elements) return;
-    setSubmitting(true);
-    setFormError(null);
-    const { error: stripeError, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      redirect: "if_required",
-      confirmParams: { return_url: window.location.href },
-    });
-    if (stripeError) {
-      setFormError(stripeError.message || "Payment failed.");
-      setSubmitting(false);
-      return;
-    }
-    if (paymentIntent && paymentIntent.status === "succeeded") {
-      // Flip the parent's optimistic-paid latch so the page swaps to
-      // the Studio thank-you layout immediately. Firebase webhook will
-      // catch up shortly after.
-      onSucceeded?.();
-    }
-    setSubmitting(false);
-  };
+  // Embedded Checkout options — the onComplete callback lets us stay
+  // on-page when Stripe finishes. `clientSecret` must be stable per
+  // render pass or the iframe remounts.
+  const options = useMemo(() => {
+    if (!clientSecret) return null;
+    return { clientSecret, onComplete };
+  }, [clientSecret, onComplete]);
 
   return (
-    <form onSubmit={submit} style={{ padding: "0 28px 40px" }}>
-      <div style={{ background: "#ffffff", border: "1px solid #E5E7EB", borderRadius: 12, padding: "20px 22px" }}>
-        <PaymentElement />
+    <div style={{ background: "var(--paper)", minHeight: "100vh" }}>
+      <style>{STUDIO_CSS}</style>
+
+      {/* Masthead */}
+      <header style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "20px 28px", borderBottom: "1px solid var(--line)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Logo h={26} />
+          <span style={{ color: "var(--muted-2)", fontSize: 12, marginLeft: 10, fontFamily: "'JetBrains Mono', monospace" }}>VIDEO · SYDNEY</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace" }}>
+          <span aria-hidden="true">🔒</span> SECURE PAYMENT
+        </div>
+      </header>
+
+      <div className="studio-page" style={{ maxWidth: 980, margin: "0 auto", padding: "0 28px 56px" }}>
+        {/* Hero */}
+        <section style={{ paddingTop: 48, paddingBottom: 20, textAlign: "center" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 999, background: "#fff", border: "1px solid var(--line)", fontSize: 12 }}>
+            <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--orange)", boxShadow: "0 0 0 4px rgba(248,119,0,.12)" }} />
+            <span style={{ color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace" }}>READY FOR YOUR DEPOSIT</span>
+          </div>
+          <h1 className="studio-hero" style={{ fontWeight: 800, lineHeight: 0.98, margin: "22px auto 12px", maxWidth: 820, letterSpacing: "-0.02em", fontSize: "clamp(40px, 6vw, 72px)" }}>
+            Let's get it made,<br/>
+            <span style={{ color: "var(--orange)" }}>{firstName}</span>.
+          </h1>
+          <p style={{ fontSize: 17, color: "var(--muted)", maxWidth: 560, margin: "0 auto", lineHeight: 1.5 }}>
+            You're one deposit away from locking in your {videoTypeLabel(sale.videoType).toLowerCase()} project. Review the scope and schedule below, then pay securely through Stripe.
+          </p>
+        </section>
+
+        {/* Client + package strip */}
+        <section style={{ marginBottom: 20 }}>
+          <StudioClientStrip sale={sale} />
+        </section>
+
+        {/* Scope */}
+        {sale.scopeNotes && (
+          <section style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, padding: 20, marginBottom: 20 }}>
+            <div className="studio-eyebrow" style={{ marginBottom: 8 }}>Scope</div>
+            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: "var(--ink)", whiteSpace: "pre-wrap" }}>{sale.scopeNotes}</p>
+          </section>
+        )}
+
+        {/* Totals */}
+        <section style={{ marginBottom: 20 }}>
+          <StudioTotals sale={sale} />
+        </section>
+
+        {/* Schedule */}
+        <section style={{ marginBottom: 20 }}>
+          <div className="studio-eyebrow" style={{ marginBottom: 10 }}>Payment schedule</div>
+          <StudioSchedule sale={sale} cfg={cfg} />
+        </section>
+
+        {/* Payment + consent */}
+        <section style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, padding: 24, marginBottom: 24 }}>
+          <div className="studio-eyebrow" style={{ marginBottom: 14 }}>Complete payment</div>
+          <div style={{ marginBottom: 16 }}>
+            <StudioConsent sale={sale} cfg={cfg} />
+          </div>
+
+          {error && <ErrorCard title="Could not load payment form" detail={error} />}
+
+          {!error && clientSecret && stripePromise && options && (
+            <div style={{ borderRadius: 12, overflow: "hidden" }}>
+              <EmbeddedCheckoutProvider stripe={stripePromise} options={options}>
+                <EmbeddedCheckout />
+              </EmbeddedCheckoutProvider>
+            </div>
+          )}
+          {!error && !clientSecret && (
+            <div style={{ textAlign: "center", padding: 32, color: "var(--muted)", fontSize: 13 }}>
+              Preparing secure payment form…
+            </div>
+          )}
+        </section>
+
+        {/* Trust row */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18, paddingTop: 12, color: "var(--muted)", fontSize: 11, flexWrap: "wrap" }}>
+          <span>🔒 SSL-encrypted</span>
+          <span>🛡 PCI-DSS compliant</span>
+          <span>Powered by <strong style={{ color: "var(--ink)", letterSpacing: "-0.02em" }}>stripe</strong></span>
+        </div>
+
+        <footer style={{ textAlign: "center", padding: "28px 0 0", color: "var(--muted-2)", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
+          © VIEWIX VIDEO PRODUCTION · SYDNEY · {new Date().getFullYear()}
+        </footer>
       </div>
-      {formError && <div style={{ marginTop: 12, padding: "10px 14px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, color: "#991B1B", fontSize: 13 }}>{formError}</div>}
-      <button type="submit" disabled={!stripe || submitting} style={{ marginTop: 16, width: "100%", padding: "14px 20px", borderRadius: 10, border: "none", background: submitting ? "#94A3B8" : "#0082FA", color: "white", fontSize: 15, fontWeight: 700, cursor: submitting ? "not-allowed" : "pointer" }}>
-        {submitting ? "Processing…" : `Pay ${fmtCur(sale.depositAmount)} Deposit`}
-      </button>
-      <div style={{ marginTop: 12, textAlign: "center", fontSize: 11, color: "#64748B" }}>Payments secured by Stripe. You'll receive a receipt by email.</div>
-    </form>
+    </div>
   );
 }
 
-function SaleSummary({ sale }) {
+function StudioClientStrip({ sale }) {
+  const initials = (sale.clientName || "?").split(/\s+/).slice(0, 2).map(s => s[0] || "").join("").toUpperCase();
   return (
-    <div style={{ padding: "28px 28px 0" }}>
-      {sale.logoUrl && (
-        <div style={{ textAlign: "center", marginBottom: 20, padding: 20, background: logoBg(sale.logoUrl), borderRadius: 12, border: "1px solid #E5E7EB" }}>
-          <img src={sale.logoUrl} alt={sale.clientName} style={{ maxHeight: 60, maxWidth: "80%" }} />
+    <div style={{
+      display: "grid", gridTemplateColumns: "1fr auto", gap: 16,
+      padding: "14px 18px", borderRadius: 10,
+      background: "var(--paper)", border: "1px solid var(--line)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+        {sale.logoUrl ? (
+          <img src={sale.logoUrl} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "contain", background: "#fff", padding: 4, border: "1px solid var(--line)" }} />
+        ) : (
+          <div style={{
+            width: 40, height: 40, borderRadius: 8,
+            background: "linear-gradient(135deg,#0082FA,#004F99)",
+            color: "#fff", fontSize: 14, fontWeight: 700,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>{initials}</div>
+        )}
+        <div style={{ minWidth: 0 }}>
+          <div className="studio-eyebrow" style={{ fontSize: 11 }}>For</div>
+          <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2, color: "var(--ink)" }}>{sale.clientName}</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+            {videoTypeLabel(sale.videoType)} · {packageLabel(sale.videoType, sale.packageKey)}
+          </div>
+        </div>
+      </div>
+      <div style={{ textAlign: "right", minWidth: 110 }}>
+        <div className="studio-eyebrow">Order</div>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, marginTop: 4, color: "var(--ink)", fontWeight: 600 }}>
+          {sale.shortId ? `VWX-${sale.shortId}` : sale.id}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudioTotals({ sale }) {
+  const row = { display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14, color: "var(--muted)" };
+  return (
+    <div style={{ background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 12, padding: 20 }}>
+      <div style={row}><span>Subtotal (ex-GST)</span><span className="studio-num" style={{ fontWeight: 600, color: "var(--ink)" }}>{fmtCurExact(sale.totalExGst || 0)}</span></div>
+      <div style={row}><span>GST (10%)</span><span className="studio-num" style={{ fontWeight: 600, color: "var(--ink)" }}>{fmtCurExact(sale.gstAmount || 0)}</span></div>
+      <div style={{ ...row, borderTop: "1px solid var(--line-strong)", marginTop: 10, paddingTop: 12, fontSize: 16, fontWeight: 700, color: "var(--ink)" }}>
+        <span>Total</span><span className="studio-num">{fmtCurExact(sale.grandTotal || 0)} AUD</span>
+      </div>
+    </div>
+  );
+}
+
+function StudioSchedule({ sale, cfg }) {
+  const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
+  const hint = cfg.kind === "subscription_monthly"
+    ? "Payments 2 and 3 are auto-charged to the card you enter today."
+    : cfg.kind === "deposit_plus_manual"
+      ? "The balance is charged manually when your project wraps — no auto-charge."
+      : "";
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: 18 }}>
+      {schedule.map((s, i) => {
+        const isDue = s.status === "pending" && i === 0;
+        return (
+          <div key={i} style={{
+            display: "grid", gridTemplateColumns: "auto 1fr auto",
+            gap: 14, padding: "12px 0",
+            borderBottom: i < schedule.length - 1 ? "1px dashed var(--line)" : "none",
+            alignItems: "center",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20 }}>
+              <span style={{
+                width: 10, height: 10, borderRadius: 99,
+                background: isDue ? "var(--orange)" : "var(--line-strong)",
+                display: "inline-block",
+                boxShadow: isDue ? "0 0 0 4px rgba(248,119,0,.14)" : "none",
+              }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink)" }}>
+                {s.label} · <span style={{ fontWeight: 500, color: "var(--muted)" }}>{s.dueLabel}</span>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                {s.trigger === "now" && "Charged on submit"}
+                {s.trigger === "auto" && "Auto-charged to card on file"}
+                {s.trigger === "manual" && "Viewix will charge this manually when the project concludes"}
+              </div>
+            </div>
+            <div className="studio-num" style={{ fontWeight: 700, fontSize: 15, color: "var(--ink)" }}>{fmtCurExact(s.amount)}</div>
+          </div>
+        );
+      })}
+      {hint && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed var(--line)", fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 8 }}>
+          <span>ⓘ</span>
+          <span>{hint}</span>
         </div>
       )}
-      <div style={{ textAlign: "center", marginBottom: 20 }}>
-        <div style={{ fontSize: 12, color: "#64748B", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>Deposit Payment</div>
-        <div style={{ fontSize: 22, fontWeight: 800, color: "#0B0F1A", marginBottom: 4 }}>{sale.clientName}</div>
-        <div style={{ fontSize: 13, color: "#64748B" }}>{videoTypeLabel(sale.videoType)} · {packageLabel(sale.videoType, sale.packageKey)}</div>
-      </div>
-      <div style={{ textAlign: "center", padding: "24px 20px", background: "linear-gradient(135deg, #0082FA 0%, #005FBF 100%)", borderRadius: 12, marginBottom: 20 }}>
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Amount Due</div>
-        <div style={{ fontSize: 36, fontWeight: 800, color: "white", fontFamily: "'JetBrains Mono',monospace" }}>{fmtCur(sale.depositAmount)}</div>
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", marginTop: 4 }}>AUD · One-time deposit</div>
-      </div>
-      {sale.scopeNotes && (
-        <div style={{ padding: "16px 18px", background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 10, marginBottom: 24 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>What this deposit covers</div>
-          <div style={{ fontSize: 13, color: "#0B0F1A", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{sale.scopeNotes}</div>
-        </div>
+    </div>
+  );
+}
+
+function StudioConsent({ sale, cfg }) {
+  const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
+  const autoSlices = schedule.filter(s => s.trigger === "auto");
+  const manualSlice = schedule.find(s => s.trigger === "manual");
+
+  return (
+    <div style={{
+      fontSize: 12, color: "var(--muted)", lineHeight: 1.6,
+      padding: 14, background: "#fdf3e8", border: "1px solid #f4d9a9", borderRadius: 8,
+    }}>
+      {cfg.kind === "subscription_monthly" && autoSlices.length > 0 && (
+        <>
+          By completing this payment, you authorise Viewix Video Production to charge the same card{" "}
+          {autoSlices.map((s, i) => (
+            <span key={i}>
+              <strong>{fmtCurExact(s.amount)} on {s.dueLabel}</strong>{i < autoSlices.length - 1 ? " and " : ""}
+            </span>
+          ))}
+          {" "}for the remaining instalments of this project. Cancel at any time by emailing{" "}
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--ink)" }}>hello@viewix.com.au</span>.
+        </>
+      )}
+      {cfg.kind === "deposit_plus_manual" && manualSlice && (
+        <>
+          You're paying a <strong>50% deposit today</strong>. The remaining{" "}
+          <strong>{fmtCurExact(manualSlice.amount)}</strong> is charged when your project wraps — Viewix will confirm with you before running the balance payment.
+        </>
+      )}
+      {cfg.kind === "paid_in_full" && (
+        <>You're paying for this project <strong>in full</strong> today. A receipt will be emailed once the payment clears.</>
       )}
     </div>
   );
@@ -373,9 +573,11 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
           </p>
         </section>
 
-        {/* 4-up facts strip */}
+        {/* 4-up facts strip — the "Paid" value is the first slice that
+            just cleared (deposit for Meta Ads, payment 1 of 3 for
+            Social). Falls back to depositAmount for legacy records. */}
         <section className="vx-facts">
-          <StudioFact k="Paid" v={fmtCur(sale.depositAmount)} sub="Deposit" />
+          <StudioFact k="Paid" v={fmtCur(sale.schedule?.[0]?.amount ?? sale.depositAmount)} sub={sale.schedule?.[0]?.label || "Deposit"} />
           <StudioFact k="Order" v={orderRef} sub="Reference" mono />
           <StudioFact k="Producer" v={PRODUCER.name} sub={PRODUCER.role} />
           <StudioFact k="First meeting" v="Pre-production" sub="Book below" />
@@ -476,7 +678,7 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
             <div className="vx-receipt-grid">
               <div>
                 <div className="vx-eyebrow">Paid today</div>
-                <div className="vx-receipt-amount vx-mono">{fmtCur(sale.depositAmount)}</div>
+                <div className="vx-receipt-amount vx-mono">{fmtCur(sale.schedule?.[0]?.amount ?? sale.depositAmount)}</div>
               </div>
               <div>
                 <div className="vx-eyebrow">Package</div>
@@ -883,13 +1085,6 @@ function MarkdownLite({ text }) {
   );
 }
 
-const stripeAppearance = {
-  theme: "stripe",
-  variables: {
-    colorPrimary: "#0082FA",
-    colorBackground: "#ffffff",
-    colorText: "#0B0F1A",
-    fontFamily: "'DM Sans', -apple-system, sans-serif",
-    borderRadius: "8px",
-  },
-};
+// Stripe Appearance API removed — Embedded Checkout styles its own
+// iframe; branding is configured in the Stripe Dashboard (logo,
+// brand colour) rather than passed per-session.
