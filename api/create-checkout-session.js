@@ -156,7 +156,7 @@ export default async function handler(req, res) {
     if (cfg.kind === "subscription_monthly") {
       const amountCents = Math.round(firstSlice.amount * 100);
       session = await stripe.checkout.sessions.create({
-        ui_mode: "embedded",
+        ui_mode: "embedded_page",
         mode: "subscription",
         customer: customer.id,
         return_url: returnUrl,
@@ -200,7 +200,7 @@ export default async function handler(req, res) {
     else if (cfg.kind === "deposit_plus_manual") {
       const amountCents = Math.round(firstSlice.amount * 100);
       session = await stripe.checkout.sessions.create({
-        ui_mode: "embedded",
+        ui_mode: "embedded_page",
         mode: "payment",
         customer: customer.id,
         return_url: returnUrl,
@@ -239,7 +239,7 @@ export default async function handler(req, res) {
     else if (cfg.kind === "paid_in_full") {
       const amountCents = Math.round(firstSlice.amount * 100);
       session = await stripe.checkout.sessions.create({
-        ui_mode: "embedded",
+        ui_mode: "embedded_page",
         mode: "payment",
         customer: customer.id,
         return_url: returnUrl,

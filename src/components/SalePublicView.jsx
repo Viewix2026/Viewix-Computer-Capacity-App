@@ -219,7 +219,7 @@ function StudioPayment({ sale, clientSecret, error, onComplete }) {
   }, [clientSecret, onComplete]);
 
   return (
-    <div style={{ background: "var(--paper)", minHeight: "100vh" }}>
+    <div className="vx-studio" style={{ background: "var(--paper)", minHeight: "100vh" }}>
       <style>{STUDIO_CSS}</style>
 
       {/* Masthead */}
@@ -801,6 +801,15 @@ const STUDIO_CSS = `
   --vx-ink: #0a1228; --vx-muted: #5a6478; --vx-muted-2: #8a8f9e;
   --vx-line: #dfe2ea; --vx-line-strong: #CBCCD1;
   --vx-green: #19976a;
+  /* Short-form aliases — StudioPayment's inline styles reference
+     these without the vx- prefix for readability. Everything here
+     resolves to the same palette. */
+  --paper: var(--vx-paper); --paper-2: var(--vx-paper-2);
+  --ink: var(--vx-ink);
+  --muted: var(--vx-muted); --muted-2: var(--vx-muted-2);
+  --line: var(--vx-line); --line-strong: var(--vx-line-strong);
+  --orange: var(--vx-orange); --orange-deep: var(--vx-orange-deep);
+  --green: var(--vx-green);
   font-family: 'Montserrat', -apple-system, system-ui, sans-serif;
   color: var(--vx-ink);
   background: var(--vx-paper);
@@ -810,6 +819,21 @@ const STUDIO_CSS = `
   -webkit-font-smoothing: antialiased;
 }
 .vx-studio * { box-sizing: border-box; }
+/* Classes used by the StudioPayment wrapper (alongside the vx-*
+   classes used by StudioThankYou). */
+.vx-studio .studio-eyebrow {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px; letter-spacing: 0.14em;
+  color: var(--vx-muted); text-transform: uppercase; font-weight: 400;
+}
+.vx-studio .studio-num {
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.vx-studio .studio-hero {
+  font-family: 'Montserrat', -apple-system, system-ui, sans-serif;
+  font-weight: 800;
+}
 .vx-studio .vx-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .vx-studio .vx-muted { color: var(--vx-muted); }
 .vx-studio .vx-muted2 { color: var(--vx-muted-2); }
