@@ -440,7 +440,7 @@ function StudioConsent({ sale, cfg }) {
       {cfg.kind === "deposit_plus_manual" && manualSlice && (
         <>
           You're paying a <strong>50% deposit today</strong>. The remaining{" "}
-          <strong>{fmtCurExact(manualSlice.amount)}</strong> is charged when your project wraps — Viewix will confirm with you before running the balance payment.
+          <strong>{fmtCurExact(manualSlice.amount)}</strong> is charged when your project wraps.
         </>
       )}
       {cfg.kind === "paid_in_full" && (
