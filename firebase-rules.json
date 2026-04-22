@@ -76,6 +76,20 @@
       ".read": "auth != null"
     },
 
+    "editors": {
+      // Team roster. Public thank-you page (/s/{shortId}) reads this to
+      // pull the producer's avatar / name / role off the roster record.
+      // Producer avatarUrl lives on the editor row in Capacity > Team
+      // Roster > Photo column, so there's one source of truth.
+      //
+      // Exposes phone/email of team members to anonymous users — narrow
+      // leak for a small team behind the already-public viewix.com.au
+      // presence. If this becomes a concern, mirror only the safe
+      // subset (name, role, avatarUrl) to a separate /editorsPublic
+      // path and narrow this rule back to authenticated.
+      ".read": "auth != null"
+    },
+
     "foundersData": {
       ".read": "auth != null && auth.token.role == 'founders'",
       ".write": "auth != null && auth.token.role == 'founders'"

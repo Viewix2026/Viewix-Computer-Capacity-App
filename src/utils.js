@@ -166,6 +166,28 @@ export function deliveryShareUrl(d) {
   return `${origin}/?d=${d.id}`;
 }
 
+// Normalise an image URL to something that actually loads inside an <img>.
+// Primary case: Google Drive share links (what producers paste when they
+// drop a file in a shared Drive folder) don't work as img sources —
+// Drive returns HTML, not image bytes. The `/thumbnail?id=…&sz=…` endpoint
+// does return bytes, and handles the "file is publicly shared" check
+// the same way the share view does. We also accept the `uc?export=view`
+// form Google used to document; it redirects to the same thumbnail path.
+//
+// Falls through unchanged for non-Drive URLs so Imgur / Cloudinary /
+// arbitrary https links keep working as-is.
+export function normaliseImageUrl(url, size = 400) {
+  if (!url || typeof url !== "string") return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  // Google Drive share link: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+  // Also: https://drive.google.com/open?id=FILE_ID
+  // Also: https://drive.google.com/uc?export=view&id=FILE_ID
+  const m = trimmed.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?[^#]*\bid=)([A-Za-z0-9_-]{20,})/);
+  if (m) return `https://drive.google.com/thumbnail?id=${m[1]}&sz=w${size}`;
+  return trimmed;
+}
+
 // Does the given URL belong to a scheduling provider known to allow iframe
 // embedding? We maintain a small allow-list rather than trying to iframe
 // any arbitrary URL, because many sites block framing via X-Frame-Options

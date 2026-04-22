@@ -11,7 +11,7 @@ import {
 } from "../config";
 import {
   todayKey, getMonday, wKey, addW, fmtRange, fmtLabel,
-  doCalc, pct, dayVal, categorizeContent,
+  doCalc, pct, dayVal, categorizeContent, normaliseImageUrl,
 } from "../utils";
 import { Badge, Metric, NumIn, UBar, FChart } from "./UIComponents";
 import { Grid } from "./Grid";
@@ -172,6 +172,7 @@ export function Capacity({
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 13 }}>
                 <thead><tr>
+                  <th style={{ ...TH, width: 50, textAlign: "center" }}>Photo</th>
                   <th style={{ ...TH, width: 150, textAlign: "left" }}>Name</th>
                   <th style={{ ...TH, width: 90, textAlign: "center" }}>Edit suite</th>
                   <th style={{ ...TH, width: 130, textAlign: "left" }}>Phone</th>
@@ -185,8 +186,20 @@ export function Capacity({
                     const dn = DK.filter(d => ed.defaultDays[d]).length;
                     const isE = rosterEditId === ed.id;
                     const edRole = ed.role || "editor";
+                    // Avatar src — normaliseImageUrl handles Google Drive share
+                    // links (converts /file/d/.../view to /thumbnail?id=... so
+                    // they actually render in <img>). Falls through for
+                    // Imgur / Cloudinary / direct https URLs.
+                    const avatarSrc = normaliseImageUrl(ed.avatarUrl, 96);
+                    const avatarInitials = (ed.name || "").split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "?";
                     return (
                       <tr key={ed.id} style={{ opacity: edRole === "crew" ? 0.75 : 1 }}>
+                        <td style={{ ...TD, textAlign: "center" }}>
+                          <AvatarCell avatarSrc={avatarSrc} initials={avatarInitials}
+                            currentUrl={ed.avatarUrl || ""}
+                            onSave={(url) => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, avatarUrl: url } : x))}
+                            name={ed.name} />
+                        </td>
                         <td style={{ ...TD, fontWeight: 700, color: "var(--fg)", cursor: "pointer" }} onClick={() => { if (!isE) { setRosterEditId(ed.id); setRosterEditName(ed.name); } }}>
                           {isE ? <input ref={rosterEditRef} type="text" value={rosterEditName} onChange={e => setRosterEditName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") rosterRename(); if (e.key === "Escape") setRosterEditId(null); }} onBlur={rosterRename} style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--accent)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, fontWeight: 700, outline: "none" }} /> : <span style={{ borderBottom: "1px dashed #3A4558" }}>{ed.name}</span>}
                         </td>
@@ -203,6 +216,7 @@ export function Capacity({
                   })}
                   {rosterAdding && (
                     <tr>
+                      <td style={TD}></td>
                       <td style={TD}><input ref={rosterAddRef} type="text" value={rosterNewName} onChange={e => setRosterNewName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") rosterAdd(); if (e.key === "Escape") { setRosterAdding(false); setRosterNewName(""); } }} placeholder="Name..." style={{ width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid var(--accent)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, fontWeight: 600, outline: "none" }} /></td>
                       <td style={TD} colSpan={7}></td>
                       <td style={{ ...TD, textAlign: "center" }}><button onClick={rosterAdd} style={{ ...BTN, background: "var(--accent)", color: "white" }}>Add</button></td>
@@ -586,3 +600,42 @@ function TimeLogsView({ allTimeLogs, mondayEditorList, timeLogDate, setTimeLogDa
     </div>
   );
 }
+
+// AvatarCell — click to reveal URL input, live preview while editing.
+// Lives on the Team Roster table. Sits in its own cell so the rest of
+// the row layout doesn't reflow when the input opens.
+function AvatarCell({ avatarSrc, initials, currentUrl, onSave, name }) {
+  const [editing, setEditing] = useState(false);
+  const [url, setUrl] = useState(currentUrl);
+  useEffect(() => { setUrl(currentUrl); }, [currentUrl]);
+  const save = () => { onSave(url.trim()); setEditing(false); };
+  const cancel = () => { setUrl(currentUrl); setEditing(false); };
+  if (editing) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center", width: 160 }}>
+        <input type="text" value={url} autoFocus onChange={e => setUrl(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") cancel(); }}
+          placeholder="Paste photo URL..."
+          style={{ width: "100%", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--accent)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 11, outline: "none", fontFamily: "inherit" }} />
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={save} style={{ padding: "2px 8px", borderRadius: 4, border: "none", background: "var(--accent)", color: "#fff", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Save</button>
+          <button onClick={cancel} style={{ padding: "2px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+  // Display state — click the thumb to edit. Falls back to initials
+  // circle if no avatarSrc. onError hides the <img> so a broken URL
+  // doesn't render a spacer.
+  return (
+    <button onClick={() => setEditing(true)} title={currentUrl ? "Click to change photo URL" : "Click to add a photo URL"}
+      style={{ width: 36, height: 36, borderRadius: "50%", border: "none", padding: 0, cursor: "pointer", overflow: "hidden", background: "linear-gradient(135deg, var(--accent) 0%, #004F99 100%)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, letterSpacing: "0.04em" }}>
+      {avatarSrc ? (
+        <img src={avatarSrc} alt={name || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />
+      ) : (
+        <span>{initials}</span>
+      )}
+    </button>
+  );
+}
+

@@ -8,7 +8,7 @@ import { useState, useEffect, useMemo } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 import { SALE_VIDEO_TYPES } from "../config";
-import { fmtCur, logoBg, embedUrl, isEmbeddableBookingUrl } from "../utils";
+import { fmtCur, logoBg, embedUrl, isEmbeddableBookingUrl, normaliseImageUrl } from "../utils";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 
@@ -102,6 +102,26 @@ export function SalePublicView() {
     return () => { cancelled = true; unsub(); };
   }, [sale?.id]);
 
+  // Roster — the thank-you page producer's avatar lives on the editor
+  // record now (Capacity → Team Roster → Photo column). We look up the
+  // producer by a name-startsWith match ("Vish" finds "Vish Peiris",
+  // "Vish P", etc.) so the producer can edit their avatar in one place
+  // and every future thank-you page picks it up. Falls back to the
+  // hardcoded initials circle when no match / no avatarUrl.
+  const [roster, setRoster] = useState([]);
+  useEffect(() => {
+    if (!sale) return;
+    let unsub = () => {};
+    let cancelled = false;
+    onFB(() => {
+      if (cancelled) return;
+      unsub = fbListen("/editors", (data) => {
+        setRoster(Array.isArray(data) ? data.filter(Boolean) : []);
+      });
+    });
+    return () => { cancelled = true; unsub(); };
+  }, [sale?.id]);
+
   // Once we have the sale, request a PaymentIntent. Only re-request if the
   // sale id changes (not every re-render). If the sale is already paid we
   // skip this — the confirmation view renders instead.
@@ -141,7 +161,7 @@ export function SalePublicView() {
   // thank-you layout directly — no Shell wrapper. The component ships
   // its own masthead + footer.
   if (sale.paid || optimisticPaid) {
-    return <StudioThankYou sale={sale} thankYou={thankYou} justPaid={optimisticPaid && !sale.paid} />;
+    return <StudioThankYou sale={sale} thankYou={thankYou} roster={roster} justPaid={optimisticPaid && !sale.paid} />;
   }
 
   return (
@@ -253,11 +273,21 @@ const PRODUCER = {
   avatarBg: "linear-gradient(135deg,#0082FA 0%,#004F99 100%)",
 };
 
-function StudioThankYou({ sale, thankYou, justPaid }) {
+function StudioThankYou({ sale, thankYou, roster, justPaid }) {
   // Per-package thank-you slot. Falls back to an empty object (no video,
   // no copy) so an un-configured tier still renders a working page — the
   // customer sees the confirmation, receipt badge, and booking button.
   const slot = thankYou?.packages?.[sale.videoType]?.[sale.packageKey] || {};
+
+  // Producer lookup — name-startsWith match against /editors so a
+  // producer's avatar/phone/email live in one place (Capacity → Team
+  // Roster). Falls back to the hardcoded PRODUCER constant when no
+  // match, which is also where we default when the roster listener
+  // hasn't loaded yet.
+  const producerEditor = (Array.isArray(roster) ? roster : []).find(e =>
+    e && (e.name || "").toLowerCase().startsWith(PRODUCER.name.split(/\s+/)[0].toLowerCase())
+  );
+  const producerAvatarUrl = normaliseImageUrl(producerEditor?.avatarUrl, 120);
   const bookingUrl = thankYou?.bookingUrl?.trim() || "";
   const videoSrc = embedUrl(slot.videoUrl);
   const nextSteps = (slot.nextStepsCopy || "").trim();
@@ -373,7 +403,7 @@ function StudioThankYou({ sale, thankYou, justPaid }) {
               </>
             )}
             <div className="vx-note-sig">
-              <StudioAvatar />
+              <StudioAvatar avatarUrl={producerAvatarUrl} />
               <div>
                 <div className="vx-note-sig-name">{PRODUCER.name}</div>
                 <div className="vx-note-sig-role vx-muted">{PRODUCER.role} · Viewix</div>
@@ -504,9 +534,15 @@ function StudioNext({ n, h, s }) {
   );
 }
 
-function StudioAvatar() {
-  if (PRODUCER.avatarUrl) {
-    return <img src={PRODUCER.avatarUrl} alt={PRODUCER.name} className="vx-avatar-img" />;
+function StudioAvatar({ avatarUrl }) {
+  // Prefer the roster-pulled URL; fall back to the hardcoded PRODUCER
+  // constant (set by paste later) and finally to the initials circle.
+  // onError hides the img if the URL 404s or Drive throttles, so a
+  // broken link doesn't leave an empty square.
+  const [broken, setBroken] = useState(false);
+  const url = !broken && (avatarUrl || PRODUCER.avatarUrl);
+  if (url) {
+    return <img src={url} alt={PRODUCER.name} className="vx-avatar-img" onError={() => setBroken(true)} />;
   }
   return (
     <div className="vx-avatar" style={{ background: PRODUCER.avatarBg }} aria-hidden="true">
