@@ -706,6 +706,32 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
                 <div className="vx-receipt-val">Stripe · AUD</div>
               </div>
             </div>
+            {/* Download receipt — opens Stripe's hosted receipt PDF
+                if the webhook captured it (new sales); falls back to
+                printing the current page for legacy records. Always
+                works, even on old paid sales from before the receipt-
+                URL capture landed. */}
+            <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px dashed var(--vx-line)", display: "flex", justifyContent: "flex-start" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const url = sale.schedule?.[0]?.receiptUrl || sale.stripeReceiptUrl;
+                  if (url) {
+                    window.open(url, "_blank", "noopener,noreferrer");
+                  } else {
+                    window.print();
+                  }
+                }}
+                className="vx-chip"
+                style={{ fontSize: 12, fontWeight: 600, padding: "8px 14px", gap: 8 }}
+                title="Download a PDF receipt for this payment"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 4v12m0 0 4-4m-4 4-4-4M5 20h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                Download receipt
+              </button>
+            </div>
           </div>
 
           {/* What happens next */}

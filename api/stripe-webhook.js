@@ -169,9 +169,24 @@ export default async function handler(req, res) {
         return res.status(200).json({ received: true, ignored: "no sliceIdx metadata" });
       }
 
+      // Receipt URL lives on the Charge, not the PaymentIntent. Stripe
+      // puts the latest charge id on intent.latest_charge — one extra
+      // round-trip to fetch the Charge gets us the receipt_url we
+      // surface on the thank-you page's Download Receipt button.
+      let receiptUrl = null;
+      if (intent.latest_charge) {
+        try {
+          const charge = await stripe.charges.retrieve(intent.latest_charge);
+          receiptUrl = charge.receipt_url || null;
+        } catch (e) {
+          console.error("Failed to load charge for receipt_url:", e.message);
+        }
+      }
+
       const result = await markSlicePaid(saleId, Number(sliceIdx), {
         stripePaymentIntentId: intent.id,
         amountPaid: intent.amount_received / 100,
+        receiptUrl,
       });
 
       // Slack notify — "deposit received" for sliceIdx=0,
@@ -223,9 +238,15 @@ export default async function handler(req, res) {
       const sliceIdx  = paidCount - 1;
       const scheduleLen = Number(sub.metadata?.scheduleLen || 3);
 
+      // invoice_pdf is the direct download URL; hosted_invoice_url is
+      // the branded Stripe-hosted page with a PDF download button.
+      // Prefer invoice_pdf so Download Receipt opens straight to the
+      // PDF; fall back to hosted_invoice_url for older invoices where
+      // the PDF isn't ready yet.
       const result = await markSlicePaid(saleId, sliceIdx, {
         stripeInvoiceId: invoice.id,
         amountPaid: invoice.amount_paid / 100,
+        receiptUrl: invoice.invoice_pdf || invoice.hosted_invoice_url || null,
       });
 
       // Cap the subscription once we've hit the final slice. Stripe
