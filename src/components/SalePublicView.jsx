@@ -759,8 +759,7 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
             <ol className="vx-next-list">
               <StudioNext n="01" h="Watch the welcome video" s="Two minutes. It saves ten in the meeting." />
               <StudioNext n="02" h="Lock your pre-production time" s="Brief, creative direction, shoot dates." />
-              <StudioNext n="03" h="Onboarding pack in your inbox" s="Within 24 hours of our call." />
-              <StudioNext n="04" h="Shoot day on-site in Sydney" s="Roughly 3 weeks from today." />
+              <StudioNext n="03" h="Shoot day on-site" s="Roughly 1 - 3 weeks from today." />
             </ol>
           </div>
         </section>
@@ -798,8 +797,15 @@ function PrintableReceipt({ sale, pkgLabel, orderRef, paidAtStr }) {
   return (
     <div className="vx-print-receipt">
       <div className="vx-print-head">
-        <div className="vx-print-brand">VIEWIX VIDEO PRODUCTION</div>
-        <div className="vx-print-sub">Sydney, Australia</div>
+        {/* Square V-mark (apple-touch-icon.png is the 180x180 master
+            that already ships in /public). Fixed 42x42 pixels in the
+            print receipt so it never stretches — the horizontal
+            wordmark looked warped at small sizes. */}
+        <img className="vx-print-logo" src="/apple-touch-icon.png" alt="Viewix" width="42" height="42" />
+        <div className="vx-print-head-text">
+          <div className="vx-print-brand">VIEWIX VIDEO PRODUCTION</div>
+          <div className="vx-print-sub">Sydney, Australia</div>
+        </div>
       </div>
       <div className="vx-print-title">Tax Invoice — Payment Receipt</div>
       <div className="vx-print-meta">
@@ -1246,7 +1252,13 @@ const STUDIO_CSS = `
     max-width: 760px;
     margin: 0 auto;
   }
-  .vx-print-head { border-bottom: 2px solid #0a1228; padding-bottom: 14px; margin-bottom: 18px; }
+  .vx-print-head {
+    display: flex; align-items: center; gap: 14px;
+    border-bottom: 2px solid #0a1228;
+    padding-bottom: 14px; margin-bottom: 18px;
+  }
+  .vx-print-logo { width: 42px; height: 42px; flex-shrink: 0; object-fit: contain; }
+  .vx-print-head-text { display: flex; flex-direction: column; }
   .vx-print-brand { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
   .vx-print-sub { font-size: 12px; color: #5a6478; margin-top: 2px; }
   .vx-print-title {
