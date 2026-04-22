@@ -765,8 +765,99 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
           © VIEWIX VIDEO PRODUCTION · SYDNEY · {new Date().getFullYear()}
         </footer>
       </div>
+
+      {/* Print-only receipt. Invisible in the normal flow (display:none
+          inside .vx-studio); @media print flips the rule so ONLY this
+          block renders when the customer hits "Download receipt" and
+          the browser produces a PDF. Means the print fallback produces
+          a clean one-page receipt instead of the whole thank-you. */}
+      <PrintableReceipt
+        sale={sale}
+        pkgLabel={pkgLabel}
+        orderRef={orderRef}
+        paidAtStr={paidAtStr}
+      />
     </div>
   </>);
+}
+
+// Clean receipt layout shown only when the browser prints the page.
+// No inline styles so the print-media CSS in STUDIO_CSS owns all
+// presentation. The legacy-paid fallback (window.print()) gets a
+// one-page PDF with just these fields — no confetti, no iframe, no
+// booking, just the receipt.
+function PrintableReceipt({ sale, pkgLabel, orderRef, paidAtStr }) {
+  const paidAmount = sale.schedule?.[0]?.amount ?? sale.depositAmount ?? 0;
+  const totalExGst = sale.totalExGst;
+  const gstAmount  = sale.gstAmount;
+  const grandTotal = sale.grandTotal;
+  return (
+    <div className="vx-print-receipt">
+      <div className="vx-print-head">
+        <div className="vx-print-brand">VIEWIX VIDEO PRODUCTION</div>
+        <div className="vx-print-sub">Sydney, Australia</div>
+      </div>
+      <div className="vx-print-title">Tax Invoice — Payment Receipt</div>
+      <div className="vx-print-meta">
+        <div><span>Issued</span><strong>{paidAtStr}</strong></div>
+        <div><span>Order</span><strong>{orderRef}</strong></div>
+        <div><span>Billed to</span><strong>{sale.clientName || "—"}</strong></div>
+        <div><span>Package</span><strong>{pkgLabel}</strong></div>
+      </div>
+
+      {sale.scopeNotes && (
+        <div className="vx-print-scope">
+          <div className="vx-print-label">Scope</div>
+          <div className="vx-print-scope-body">{sale.scopeNotes}</div>
+        </div>
+      )}
+
+      <table className="vx-print-table">
+        <thead>
+          <tr><th>Description</th><th style={{ textAlign: "right" }}>Amount (AUD)</th></tr>
+        </thead>
+        <tbody>
+          {typeof totalExGst === "number" && totalExGst > 0 ? (
+            <>
+              <tr>
+                <td>{pkgLabel} — project total (ex-GST)</td>
+                <td style={{ textAlign: "right" }}>{fmtCurExact(totalExGst)}</td>
+              </tr>
+              <tr>
+                <td>GST (10%)</td>
+                <td style={{ textAlign: "right" }}>{fmtCurExact(gstAmount || 0)}</td>
+              </tr>
+              <tr className="vx-print-total">
+                <td>Project total (inc-GST)</td>
+                <td style={{ textAlign: "right" }}>{fmtCurExact(grandTotal || 0)}</td>
+              </tr>
+              <tr className="vx-print-paid">
+                <td>Paid today ({sale.schedule?.[0]?.label || "Deposit"})</td>
+                <td style={{ textAlign: "right" }}>{fmtCurExact(paidAmount)}</td>
+              </tr>
+            </>
+          ) : (
+            // Legacy record with only depositAmount — no GST breakdown
+            // available. Show a single-line receipt for what was paid.
+            <tr className="vx-print-paid">
+              <td>{pkgLabel} — paid</td>
+              <td style={{ textAlign: "right" }}>{fmtCur(paidAmount)}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <div className="vx-print-method">
+        <span>Method</span><strong>Stripe · AUD · card on file</strong>
+      </div>
+
+      <div className="vx-print-foot">
+        <div>Viewix Video Production Pty Ltd</div>
+        <div>hello@viewix.com.au · viewix.com.au</div>
+        <div className="vx-print-ref">{orderRef}</div>
+      </div>
+    </div>
+  );
 }
 
 // Single fact cell in the 4-up strip. Pulled out so the grid renders
@@ -1061,6 +1152,118 @@ const STUDIO_CSS = `
   .vx-receipt-grid { grid-template-columns: 1fr; }
   .vx-receipt-grid > div + div { border-top: 1px dashed var(--vx-line); padding-top: 10px; }
   .vx-booking-iframe { height: 560px; }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Print-only receipt layout.
+
+   In normal rendering the .vx-print-receipt div is display:none
+   (hidden in the flow). When window.print() fires, @media print
+   flips the scope: hide EVERYTHING inside .vx-studio, then reveal
+   only .vx-print-receipt with a clean paper-ready layout.
+
+   Result: the customer clicks Download Receipt on a legacy paid
+   sale → print dialog → "Save as PDF" → they get a one-page
+   receipt, not the whole thank-you screenshot.
+   ──────────────────────────────────────────────────────────────── */
+.vx-print-receipt { display: none; }
+
+@media print {
+  /* Reset the page so nothing bleeds from the thank-you layout. */
+  html, body { background: #fff !important; }
+  .vx-studio { background: #fff !important; color: #000 !important; }
+  .vx-studio > *,
+  .vx-studio header,
+  .vx-studio .vx-page,
+  .vx-studio section,
+  .vx-studio footer,
+  .vx-studio .vx-confetti-layer { display: none !important; }
+  .vx-studio .vx-print-receipt { display: block !important; }
+
+  .vx-print-receipt {
+    font-family: 'Montserrat', -apple-system, system-ui, sans-serif;
+    color: #0a1228;
+    padding: 32px 40px;
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  .vx-print-head { border-bottom: 2px solid #0a1228; padding-bottom: 14px; margin-bottom: 18px; }
+  .vx-print-brand { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+  .vx-print-sub { font-size: 12px; color: #5a6478; margin-top: 2px; }
+  .vx-print-title {
+    font-size: 28px; font-weight: 800; letter-spacing: -0.02em;
+    margin-bottom: 20px;
+  }
+  .vx-print-meta {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px;
+    margin-bottom: 24px; font-size: 13px;
+  }
+  .vx-print-meta > div { display: flex; flex-direction: column; gap: 2px; }
+  .vx-print-meta span {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #5a6478;
+  }
+  .vx-print-meta strong { font-size: 14px; font-weight: 600; }
+
+  .vx-print-scope { margin-bottom: 20px; padding-top: 12px; border-top: 1px dashed #dfe2ea; }
+  .vx-print-label {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #5a6478; margin-bottom: 4px;
+  }
+  .vx-print-scope-body { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; }
+
+  .vx-print-table {
+    width: 100%; border-collapse: collapse;
+    margin-bottom: 20px; font-size: 13px;
+  }
+  .vx-print-table th {
+    text-align: left; padding: 10px 0;
+    border-bottom: 1.5px solid #0a1228;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #5a6478; font-weight: 500;
+  }
+  .vx-print-table td {
+    padding: 10px 0; border-bottom: 1px dashed #dfe2ea;
+    font-variant-numeric: tabular-nums;
+  }
+  .vx-print-table .vx-print-total td {
+    border-top: 1.5px solid #0a1228; border-bottom: none;
+    font-weight: 700; padding-top: 14px;
+  }
+  .vx-print-table .vx-print-paid td {
+    background: #f4f5f9; font-weight: 700;
+    padding: 12px 10px; border-bottom: none;
+  }
+
+  .vx-print-method {
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 10px 0; font-size: 13px;
+    border-top: 1px dashed #dfe2ea;
+    border-bottom: 1px dashed #dfe2ea;
+    margin-bottom: 24px;
+  }
+  .vx-print-method span {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #5a6478;
+  }
+
+  .vx-print-foot {
+    font-size: 11px; color: #5a6478; line-height: 1.6;
+    padding-top: 12px;
+  }
+  .vx-print-ref {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    margin-top: 6px; letter-spacing: 0.02em;
+  }
+
+  /* Hide browser headers/footers (URL, date) on Chrome/Safari. The
+     user still has to tick "Options → Headers and footers" off in
+     the print dialog on older browsers, but this covers most. */
+  @page { margin: 12mm; size: A4; }
 }
 
 /* Confetti */
