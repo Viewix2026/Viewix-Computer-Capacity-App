@@ -203,42 +203,17 @@ export function SocialOrganicSelect({ project, onPatch }) {
     onPatch({ selectedFormats: next });
   };
 
-  // Per-format video counts. Each selected entry can carry an explicit
-  // videoCount — producer sets how many videos of that format to shoot.
-  // When unset, we auto-fill with an equal-split default so the generator
-  // has a number to go on. Sum across entries should equal
-  // numberOfVideos; we surface red/green indicator below.
+  // Per-format video counts have moved to the Idea Selection tab
+  // (next tab). On this tab the producer just picks WHICH formats
+  // to use; the count-per-format is derived from how many ideas they
+  // tick in each format group on the Idea Selection tab. The numbers
+  // below are kept so the Approve-button advice copy can still show
+  // the round's target, but we no longer enforce an allocation split.
   const totalTarget = numberOfVideos || 0;
-  const totalAssigned = selected.reduce((sum, s) => sum + (s.videoCount || 0), 0);
-  const countsBalanced = totalTarget > 0 && totalAssigned === totalTarget;
-
-  // Setter for a single row's videoCount.
-  const setFormatCount = (formatLibraryId, value) => {
-    const n = Math.max(0, parseInt(value, 10) || 0);
-    writeSelected(selected.map(s => s.formatLibraryId === formatLibraryId ? { ...s, videoCount: n } : s));
-  };
-
-  // Reset / equal-split action — distributes totalTarget across all
-  // selected formats as evenly as possible, remainder added to the first
-  // few entries. Used both for the initial auto-fill and the manual
-  // "Reset to equal split" button.
-  const applyEqualSplit = () => {
-    if (selected.length === 0 || !totalTarget) return;
-    const base = Math.floor(totalTarget / selected.length);
-    const remainder = totalTarget % selected.length;
-    writeSelected(selected.map((s, i) => ({ ...s, videoCount: base + (i < remainder ? 1 : 0) })));
-  };
-
-  // One-shot auto-fill: when ANY selected entry has no videoCount set,
-  // initialise the whole set to equal split. Fires on first mount after
-  // formats are selected (e.g. after AI suggest) and whenever a new
-  // format is dragged in with no explicit count yet.
-  useEffect(() => {
-    if (!totalTarget || selected.length === 0) return;
-    const hasUnset = selected.some(s => s.videoCount == null);
-    if (!hasUnset) return;
-    applyEqualSplit();
-  }, [selected.length, totalTarget]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const totalAssigned = 0;            // unused now
+  const countsBalanced = true;        // unused now
+  const setFormatCount = null;        // signals read-only to SortableSelectedRow
+  const applyEqualSplit = () => {};   // no-op
 
   const addFormat = ({ source, formatLibraryId }) => {
     if (selected.some(s => s.formatLibraryId === formatLibraryId)) return;
@@ -291,7 +266,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
 
   const approve = () => {
     fbSet(`/preproduction/socialOrganic/${project.id}/approvals/select`, new Date().toISOString());
-    onPatch({ tab: "script" });
+    onPatch({ tab: "ideaSelect" });
   };
 
   return (
@@ -417,7 +392,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
             disabled={!canAdvance}
             title={canAdvance ? "Approve and move to Scripting" : `Pick at least ${targetCount || 1} format${(targetCount || 1) === 1 ? "" : "s"}`}
             style={{ ...btnPrimary, opacity: canAdvance ? 1 : 0.5 }}>
-            Approve → Scripting
+            Approve → Idea Selection
           </button>
         ) : (
           <button onClick={() => onPatch({ tab: "script" })} style={btnPrimary}>

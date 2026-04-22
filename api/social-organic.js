@@ -935,16 +935,27 @@ function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExamp
 
   const formatsBlock = selectedFormatObjects.map((fmt, i) => {
     const ex = Array.isArray(fmt.examples) ? fmt.examples : [];
-    // _videoCount comes from the project's selectedFormats[].videoCount.
-    // "Count: X" is the instruction Claude keys off for per-format
-    // distribution (see prompt line "If a format says Count: 5 produce
-    // 5 script rows").
-    const countLine = fmt._videoCount != null
-      ? `Count: ${fmt._videoCount}`
-      : `Count: (not set — fall back to equal distribution)`;
+    // Two paths:
+    //   NEW (Idea Selection flow): fmt._tickedIdeas is an array of
+    //     { title, text } the producer approved. We pass them as
+    //     "Ideas to expand" — Claude produces one scriptTable row
+    //     per ticked idea, using the idea as the creative seed.
+    //   LEGACY (pre-Idea Selection): fmt._videoCount is a count and
+    //     Claude falls back to even distribution.
+    let seedBlock;
+    if (Array.isArray(fmt._tickedIdeas) && fmt._tickedIdeas.length > 0) {
+      const ideaLines = fmt._tickedIdeas
+        .map((idea, j) => `  ${j + 1}. ${idea.title ? `[${idea.title}] ` : ""}${idea.text || ""}`)
+        .join("\n");
+      seedBlock = `Ticked ideas (produce ONE scriptTable row per idea, in order, using the idea as the creative seed — expand into the 7-column blueprint; don't invent extra rows and don't merge ideas):\n${ideaLines}`;
+    } else {
+      seedBlock = fmt._videoCount != null
+        ? `Count: ${fmt._videoCount}`
+        : `Count: (not set — fall back to equal distribution)`;
+    }
     return [
       `FORMAT ${i + 1}: ${fmt.name}`,
-      countLine,
+      seedBlock,
       fmt.category ? `Category: ${fmt.category}` : null,
       fmt.videoAnalysis ? `Analysis: ${fmt.videoAnalysis}` : null,
       fmt.filmingInstructions ? `Filming: ${fmt.filmingInstructions}` : null,
@@ -989,6 +1000,124 @@ ${fantasticExample ? `\nEXAMPLE OF A FANTASTIC PAST PREPRODUCTION DOC (same JSON
 Produce the scriptTable JSON now.`;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// TAB 7 — IDEA SELECTION
+// generateFormatIdeas: produces 10 idea concepts per selected format.
+// Each idea = { id, title, text, selected: false }. Written to
+//   /preproduction/socialOrganic/{id}/formatIdeas/{formatLibraryId}/{ideas,generatedAt}
+// Producer ticks the ones they want progressed; Scripting consumes
+// the ticked subset.
+// ═══════════════════════════════════════════════════════════════════
+async function handleGenerateFormatIdeas(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
+  if (selected.length === 0) {
+    return res.status(400).json({ error: "No selected formats. Pick formats on the Format Selection tab first." });
+  }
+
+  const bt = project.brandTruth?.fields || {};
+  const btBlock = Object.entries(bt).filter(([, v]) => v && v.trim()).map(([k, v]) => `${k}:\n${v}`).join("\n\n");
+  const existingIdeas = project.formatIdeas || {};
+
+  // One Claude call per selected format so each batch of 10 is
+  // independently tailored to that format's structure. Runs in
+  // parallel, then we write the results. Individual failures don't
+  // block the other formats — we surface them in the response.
+  const systemPrompt = `You are a Viewix senior creative strategist. You are generating 10 video idea concepts for ONE specific video format.
+
+RULES:
+- Produce exactly 10 distinct idea concepts. Each is a complete, shootable premise that fits the format's structure.
+- Each idea gets a short TITLE (3-6 words, the concept label) plus a one-sentence TEXT that explains the premise + hook angle.
+- Be specific, evidence-based. Quote the brand truth's own phrases where it strengthens the idea. No generic agency-speak.
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Titles must be distinct, not restatements of each other.
+- Return ONLY a JSON object: { "ideas": [{ "title": "...", "text": "..." }, ...] }. No markdown, no preamble, no code fences.`;
+
+  const runs = await Promise.all(selected.map(async (s) => {
+    const fmt = await fbGet(`/formatLibrary/${s.formatLibraryId}`);
+    if (!fmt) return { formatLibraryId: s.formatLibraryId, error: "Format not found in library" };
+
+    const userMessage = `CLIENT: ${project.companyName}
+${project.numberOfVideos ? `ROUND TOTAL: ${project.numberOfVideos} videos` : ""}
+
+BRAND TRUTH:
+${btBlock || "(not filled)"}
+
+TARGET FORMAT: ${fmt.name}
+${fmt.category ? `Category: ${fmt.category}` : ""}
+${fmt.videoAnalysis ? `Analysis: ${fmt.videoAnalysis}` : ""}
+${fmt.structureInstructions ? `Structure: ${fmt.structureInstructions}` : ""}
+${fmt.filmingInstructions ? `Filming: ${fmt.filmingInstructions}` : ""}
+
+Produce 10 distinct idea concepts tailored to this format's structure + the brand truth. JSON only.`;
+
+    let raw;
+    try {
+      raw = await callClaude({
+        model: "claude-opus-4-6",
+        systemPrompt,
+        userMessage,
+        maxTokens: 3000,
+        apiKey: ANTHROPIC_KEY,
+      });
+    } catch (e) {
+      return { formatLibraryId: s.formatLibraryId, error: `Claude failed: ${e.message}` };
+    }
+
+    let parsed;
+    try { parsed = parseJSON(raw); }
+    catch (e) {
+      return { formatLibraryId: s.formatLibraryId, error: `Invalid JSON: ${e.message}`, rawPreview: raw.slice(0, 300) };
+    }
+
+    const rawIdeas = Array.isArray(parsed.ideas) ? parsed.ideas : [];
+    // Preserve `selected` flags from the existing ideas if this is a
+    // regeneration and a previously-ticked idea's title matches. Prevents
+    // the producer losing their selections on a re-roll. Simple title
+    // match — good enough for regen within the same brief.
+    const existingForFormat = existingIdeas[s.formatLibraryId]?.ideas || [];
+    const priorSelectedTitles = new Set(
+      existingForFormat.filter(i => i?.selected).map(i => (i?.title || "").trim().toLowerCase())
+    );
+
+    const ideas = rawIdeas.slice(0, 10).map((it, i) => {
+      const title = String(it?.title || "").trim() || `Idea ${i + 1}`;
+      const text  = String(it?.text || "").trim();
+      const wasSelected = priorSelectedTitles.has(title.toLowerCase());
+      return { id: `idea_${Date.now()}_${i}`, title, text, selected: wasSelected };
+    });
+
+    return { formatLibraryId: s.formatLibraryId, ideas };
+  }));
+
+  // Write successful batches and collect errors.
+  const errors = [];
+  for (const run of runs) {
+    if (run.error) {
+      errors.push({ formatLibraryId: run.formatLibraryId, error: run.error });
+      continue;
+    }
+    await fbPatch(`/preproduction/socialOrganic/${projectId}/formatIdeas/${run.formatLibraryId}`, {
+      ideas: run.ideas,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  if (errors.length === runs.length) {
+    return res.status(502).json({ error: "All format idea runs failed", detail: errors });
+  }
+  return res.status(200).json({ ok: true, errors, succeeded: runs.length - errors.length });
+}
+
 async function handleGenerateScript(req, res) {
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
@@ -1018,15 +1147,33 @@ async function handleGenerateScript(req, res) {
     return res.status(400).json({ error: "No selected formats. Drag at least one into the selected queue first." });
   }
 
-  // Resolve each selected format to the full library entry so we have the
-  // analysis / filming / structure / examples available to Claude. We
-  // also carry the per-project videoCount forward (how many videos of
-  // this format to generate) so the prompt can give Claude exact counts
-  // rather than hoping for even distribution.
+  // New flow: the Idea Selection tab has produced a batch of 10 ideas
+  // per format and the producer has ticked the ones to progress. We
+  // resolve each selected format to its library entry and carry only
+  // the TICKED ideas forward — Claude then writes one scriptTable row
+  // per ticked idea, using the idea title + text as the seed. Total
+  // rows = total ticked (no more videoCount allocation guessing).
+  //
+  // Legacy fallback: if a project has no formatIdeas yet (was created
+  // under the old flow), fall back to the legacy per-format videoCount
+  // split so existing drafts still script cleanly.
+  const formatIdeas = project.formatIdeas || {};
+  const hasIdeas = Object.values(formatIdeas).some(f => Array.isArray(f?.ideas) && f.ideas.some(i => i?.selected));
   const selectedFormatObjects = [];
   for (const s of selected) {
     const fmt = await fbGet(`/formatLibrary/${s.formatLibraryId}`);
-    if (fmt) selectedFormatObjects.push({ ...fmt, _videoCount: s.videoCount ?? null });
+    if (!fmt) continue;
+    const tickedIdeas = (formatIdeas[s.formatLibraryId]?.ideas || [])
+      .filter(i => i && i.selected)
+      .map(i => ({ title: i.title || "", text: i.text || "" }));
+    selectedFormatObjects.push({
+      ...fmt,
+      _videoCount: hasIdeas ? tickedIdeas.length : (s.videoCount ?? null),
+      _tickedIdeas: hasIdeas ? tickedIdeas : null,
+    });
+  }
+  if (hasIdeas && selectedFormatObjects.every(f => !f._tickedIdeas?.length)) {
+    return res.status(400).json({ error: "No ideas ticked. Go to Idea Selection and tick the ideas you want to progress." });
   }
 
   const systemPrompt = await getPromptOverride();
@@ -2426,6 +2573,8 @@ export default async function handler(req, res) {
         return await handleRewriteScriptSection(req, res);
       case "rewriteScriptRow":
         return await handleRewriteScriptRow(req, res);
+      case "generateFormatIdeas":
+        return await handleGenerateFormatIdeas(req, res);
       case "generateBrandTruth":
         return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField":

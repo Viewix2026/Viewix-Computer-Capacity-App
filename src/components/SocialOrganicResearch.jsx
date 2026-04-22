@@ -521,6 +521,9 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
       {tab === "select" && (
         <SocialOrganicSelect project={project} onPatch={onPatch} />
       )}
+      {tab === "ideaSelect" && (
+        <IdeaSelectionStep project={project} onPatch={onPatch} />
+      )}
       {tab === "script" && (
         <ScriptStep project={project} onPatch={onPatch} />
       )}
@@ -558,13 +561,18 @@ function effectiveTab(project) {
 // scrape then happens in parallel to Tab 3's client review, which is the
 // whole point of the async model.
 export const TABS = [
-  { key: "brandTruth",     label: "Brand Truth",     num: 1, prev: null },
-  { key: "research",       label: "Format Research", num: 2, prev: "brandTruth" },
-  { key: "clientResearch", label: "Client Research", num: 3, prev: "research_b" },
-  { key: "videoReview",    label: "Video Review",    num: 4, prev: "research_b" },
-  { key: "shortlist",      label: "Shortlist",       num: 5, prev: "videoReview" },
-  { key: "select",         label: "Selection",       num: 6, prev: "shortlist" },
-  { key: "script",         label: "Scripting",       num: 7, prev: "select" },
+  { key: "brandTruth",     label: "Brand Truth",      num: 1, prev: null },
+  { key: "research",       label: "Format Research",  num: 2, prev: "brandTruth" },
+  { key: "clientResearch", label: "Client Research",  num: 3, prev: "research_b" },
+  { key: "videoReview",    label: "Video Review",     num: 4, prev: "research_b" },
+  { key: "shortlist",      label: "Shortlist",        num: 5, prev: "videoReview" },
+  { key: "select",         label: "Format Selection", num: 6, prev: "shortlist" },
+  // New tab: "Idea Selection". 10 ideas per selected format, producer
+  // ticks the ones they want to progress. Cap = project.numberOfVideos.
+  // Replaces the old per-format videoCount split on the Selection tab;
+  // counts are now a derived sum of ticked ideas per format.
+  { key: "ideaSelect",     label: "Idea Selection",   num: 7, prev: "select" },
+  { key: "script",         label: "Scripting",        num: 8, prev: "ideaSelect" },
 ];
 
 // Legacy helper — kept because it's exported from this module and may be
@@ -2253,6 +2261,191 @@ const SCRIPT_COLUMNS = [
   { key: "scriptNotes",  label: "Script / Notes",width: 260 },
   { key: "props",        label: "Props",         width: 100 },
 ];
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB 7 — IDEA SELECTION (between Format Selection and Scripting)
+//
+// Producers used to split "how many videos per format" manually on
+// the Format Selection tab. That was noisy and usually wrong. The
+// new flow:
+//   1. Click Generate → Claude produces 10 idea concepts per selected
+//      format (hook angle + premise, one-liner each). Stored at
+//      /preproduction/socialOrganic/{id}/formatIdeas[{formatLibraryId}].ideas
+//   2. Producer ticks the ideas they want to progress. Cap = round's
+//      numberOfVideos. Tick counter colours red when over the cap.
+//   3. Approve → moves to Scripting. ScriptStep reads the ticked
+//      ideas and writes one script row per idea, using the idea text
+//      as the "scriptNotes" seed that Claude expands into the full
+//      7-column blueprint.
+// ═══════════════════════════════════════════════════════════════════
+function IdeaSelectionStep({ project, onPatch }) {
+  const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
+  const formatIdeas = project.formatIdeas || {};
+  const numberOfVideos = project.numberOfVideos || 0;
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState(null);
+  const approvals = project.approvals || {};
+  const isApproved = !!approvals.ideaSelect;
+
+  // Library lookup for format names. Listen so new formats appear
+  // immediately after being added in a sibling tab.
+  const [library, setLibrary] = useState({});
+  useEffect(() => fbListenSafe("/formatLibrary", d => setLibrary(d || {})), []);
+
+  // Every selected format's idea count (tot ideas + tot ticked) +
+  // the grand totals for the cap counter.
+  const formatSummaries = selected.map(s => {
+    const ideas = formatIdeas[s.formatLibraryId]?.ideas || [];
+    const ticked = ideas.filter(i => i && i.selected).length;
+    return {
+      formatLibraryId: s.formatLibraryId,
+      name: library[s.formatLibraryId]?.name || s.formatLibraryId,
+      ideas,
+      ticked,
+    };
+  });
+  const totalTicked = formatSummaries.reduce((sum, f) => sum + f.ticked, 0);
+  const capReached = numberOfVideos > 0 && totalTicked >= numberOfVideos;
+  const capExceeded = numberOfVideos > 0 && totalTicked > numberOfVideos;
+
+  const allGenerated = selected.length > 0 && selected.every(s => (formatIdeas[s.formatLibraryId]?.ideas || []).length > 0);
+  const hasAnyGenerated = selected.some(s => (formatIdeas[s.formatLibraryId]?.ideas || []).length > 0);
+
+  const generate = async () => {
+    setGenError(null);
+    setGenerating(true);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "generateFormatIdeas", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener rehydrates formatIdeas automatically.
+    } catch (e) {
+      setGenError(e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const toggleIdea = (formatLibraryId, ideaIdx) => {
+    const ideas = formatIdeas[formatLibraryId]?.ideas || [];
+    if (!ideas[ideaIdx]) return;
+    // Block ticking if we'd exceed the cap. Un-ticking always allowed.
+    const currentlySelected = !!ideas[ideaIdx].selected;
+    if (!currentlySelected && capReached) return;
+    const next = ideas.map((idea, i) => i === ideaIdx ? { ...idea, selected: !currentlySelected } : idea);
+    fbSet(`/preproduction/socialOrganic/${project.id}/formatIdeas/${formatLibraryId}/ideas`, next);
+  };
+
+  const approve = () => {
+    fbSet(`/preproduction/socialOrganic/${project.id}/approvals/ideaSelect`, new Date().toISOString());
+    onPatch({ tab: "script" });
+  };
+
+  const canApprove = totalTicked > 0 && !capExceeded;
+
+  return (
+    <div>
+      {/* Header card — generate button + cap counter */}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 18, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Idea Selection</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, maxWidth: 560 }}>
+              Claude generates 10 ideas per selected format from the approved Brand Truth + format structure. Tick the ones worth shooting. The total must not exceed your round's video count.
+              {numberOfVideos > 0 && ` This round: ${numberOfVideos} videos.`}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {numberOfVideos > 0 && (
+              <div style={{ padding: "6px 12px", borderRadius: 6, background: capExceeded ? "rgba(239,68,68,0.12)" : capReached ? "rgba(16,185,129,0.12)" : "var(--bg)", border: `1px solid ${capExceeded ? "rgba(239,68,68,0.4)" : capReached ? "rgba(16,185,129,0.4)" : "var(--border)"}`, fontSize: 12, fontWeight: 700, color: capExceeded ? "#EF4444" : capReached ? "#10B981" : "var(--fg)", fontFamily: "'JetBrains Mono', monospace" }}>
+                {totalTicked} / {numberOfVideos} ticked {capExceeded ? "(over cap)" : capReached ? "✓" : ""}
+              </div>
+            )}
+            <button onClick={generate} disabled={generating || selected.length === 0}
+              style={{ padding: "10px 18px", borderRadius: 8, border: "none", background: generating ? "#4B5563" : selected.length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: (generating || selected.length === 0) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (generating || selected.length === 0) ? 0.6 : 1 }}>
+              {generating ? "Generating…" : hasAnyGenerated ? "Regenerate ideas" : "Generate 10 ideas per format"}
+            </button>
+          </div>
+        </div>
+        {genError && (
+          <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontSize: 12, color: "#EF4444" }}>
+            {genError}
+          </div>
+        )}
+      </div>
+
+      {/* Per-format idea grid */}
+      {selected.length === 0 ? (
+        <div style={{ padding: 30, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12, color: "var(--muted)", fontSize: 12 }}>
+          No formats selected yet. Go back to Format Selection and drag a few formats into the selected pool first.
+        </div>
+      ) : !hasAnyGenerated ? (
+        <div style={{ padding: 30, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12, color: "var(--muted)", fontSize: 12 }}>
+          Click <strong>Generate 10 ideas per format</strong> to get started. Claude uses the approved Brand Truth to write concept ideas specific to each format's structure.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 14, marginBottom: 16 }}>
+          {formatSummaries.map(f => (
+            <div key={f.formatLibraryId} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{f.name}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace" }}>
+                  {f.ticked} / {f.ideas.length} selected
+                </div>
+              </div>
+              {f.ideas.length === 0 ? (
+                <div style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic", padding: "8px 0" }}>
+                  No ideas generated for this format yet. Click Regenerate to fill.
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 6 }}>
+                  {f.ideas.map((idea, i) => {
+                    const checked = !!idea?.selected;
+                    const disabled = !checked && capReached;
+                    return (
+                      <label key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px", borderRadius: 8, border: `1px solid ${checked ? "rgba(0,130,250,0.35)" : "var(--border)"}`, background: checked ? "rgba(0,130,250,0.06)" : "var(--bg)", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, transition: "background 0.1s, border 0.1s" }}>
+                        <input type="checkbox" checked={checked} disabled={disabled}
+                          onChange={() => toggleIdea(f.formatLibraryId, i)}
+                          style={{ marginTop: 3, accentColor: "var(--accent)", cursor: disabled ? "not-allowed" : "pointer" }} />
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.5, color: "var(--fg)" }}>
+                          {idea?.title && (
+                            <div style={{ fontWeight: 700, marginBottom: 3 }}>{idea.title}</div>
+                          )}
+                          <div style={{ color: idea?.title ? "var(--muted)" : "var(--fg)" }}>{idea?.text || "(empty idea)"}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Approve bar */}
+      <div style={{ padding: "14px 18px", background: "var(--card)", border: `1px solid ${isApproved ? "rgba(34,197,94,0.4)" : "var(--border)"}`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          {isApproved
+            ? <>Ideas approved {approvals.ideaSelect ? `on ${new Date(approvals.ideaSelect).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}` : ""}. Scripting will build these out in detail.</>
+            : capExceeded ? <>You've ticked more ideas than this round's video count. Untick some before approving.</>
+            : totalTicked === 0 ? <>Tick the ideas you want to progress. Then approve to move to Scripting.</>
+            : <>{totalTicked} idea{totalTicked === 1 ? "" : "s"} ticked. Click Approve to build the scripts.</>
+          }
+        </div>
+        <button onClick={approve} disabled={!canApprove}
+          title={canApprove ? "Approve and move to Scripting" : capExceeded ? "Over cap — untick some ideas first" : "Tick at least one idea"}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: !canApprove ? "#374151" : isApproved ? "#22C55E" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: canApprove ? "pointer" : "not-allowed", fontFamily: "inherit", opacity: canApprove ? 1 : 0.6 }}>
+          {isApproved ? "→ Scripting" : "Approve → Scripting"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ScriptStep({ project, onPatch }) {
   const doc = project.preproductionDoc || null;
