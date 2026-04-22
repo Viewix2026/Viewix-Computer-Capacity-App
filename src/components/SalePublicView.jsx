@@ -601,7 +601,7 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
             <span className="vx-accent">{useFirstName ? firstName : (sale.clientName || "there")}</span>.
           </h1>
           <p className="vx-hero-sub">
-            Your {pkgLabel.toLowerCase()} deposit is in. We're genuinely excited to start creating with you — here's how the next few weeks look.
+            Your {videoTypeLabel(sale.videoType)}: {pkgLabel} Pack deposit is in. We're genuinely excited to start creating with you — here's how the next few weeks look.
           </p>
         </section>
 
@@ -676,11 +676,15 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
               <div className="vx-booking-meta vx-muted vx-mono">60 MIN · GOOGLE MEET or DULWICH HILL OFFICE · AEST</div>
             </div>
             {bookingUrl && thankYou?.bookingEmbed !== false && isEmbeddableBookingUrl(bookingUrl) ? (
-              <iframe
-                src={bookingUrl} title="Book your pre-production meeting"
-                className="vx-booking-iframe"
-                loading="lazy"
-              />
+              isTidyCalUrl(bookingUrl) ? (
+                <TidyCalEmbed url={bookingUrl} />
+              ) : (
+                <iframe
+                  src={bookingUrl} title="Book your pre-production meeting"
+                  className="vx-booking-iframe"
+                  loading="lazy"
+                />
+              )
             ) : bookingUrl ? (
               <a href={bookingUrl} target="_blank" rel="noopener noreferrer" className="vx-btn vx-btn-primary">
                 Book your kickoff call →
@@ -857,6 +861,49 @@ function PrintableReceipt({ sale, pkgLabel, orderRef, paidAtStr }) {
         <div className="vx-print-ref">{orderRef}</div>
       </div>
     </div>
+  );
+}
+
+// TidyCal JS embed — replaces the chunky iframe with TidyCal's own
+// embed widget. Their script renders a responsive booking view
+// that collapses to a stacked mobile layout at narrow widths and
+// avoids the awkward wide-left-panel / narrow-right-panel split
+// the raw iframe produces.
+//
+// Loads the script once per page via useEffect. TidyCal's script
+// uses a MutationObserver so new .tidycal-embed divs auto-init
+// without a manual call — the `key={path}` on the div ensures a
+// clean remount if the booking URL changes between sales.
+function isTidyCalUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "tidycal.com" || host.endsWith(".tidycal.com");
+  } catch { return false; }
+}
+
+function TidyCalEmbed({ url }) {
+  const path = (() => {
+    try { return new URL(url).pathname.replace(/^\//, ""); }
+    catch { return ""; }
+  })();
+
+  useEffect(() => {
+    if (!path) return;
+    if (document.querySelector('script[src*="tidycal.b-cdn.net"]')) return;
+    const s = document.createElement("script");
+    s.src = "https://asset-tidycal.b-cdn.net/js/embed.js";
+    s.async = true;
+    document.body.appendChild(s);
+  }, [path]);
+
+  if (!path) return null;
+  return (
+    <div
+      className="tidycal-embed vx-booking-embed"
+      data-path={path}
+      key={path}
+    />
   );
 }
 
@@ -1092,6 +1139,18 @@ const STUDIO_CSS = `
 .vx-booking-iframe {
   width: 100%; height: 760px; border: 0;
   border-radius: 10px; display: block; background: #fff;
+}
+/* TidyCal JS embed container — let the widget size itself. We
+   constrain max-width so the booking view doesn't stretch beyond
+   what its internal layout is designed for (about 780px) and
+   centre it. The widget handles its own min-height as content
+   loads. */
+.vx-booking-embed {
+  max-width: 820px;
+  margin: 0 auto;
+  min-height: 560px;
+  border-radius: 10px;
+  overflow: hidden;
 }
 .vx-receipt-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .vx-receipt-date { font-size: 13px; margin-top: 6px; }
