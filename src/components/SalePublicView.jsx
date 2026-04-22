@@ -482,6 +482,15 @@ const PRODUCER = {
 };
 
 function StudioThankYou({ sale, thankYou, roster, justPaid }) {
+  // Scroll reset — the customer arrived at this layout scrolled down
+  // to the Stripe iframe on the payment page. Without this, they land
+  // at the bottom of the thank-you and miss the headline + confetti.
+  // Fires once on mount; instant (not smooth) so there's no
+  // distracting scroll animation right after payment.
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, []);
+
   // Per-package thank-you slot. Falls back to an empty object (no video,
   // no copy) so an un-configured tier still renders a working page — the
   // customer sees the confirmation, receipt badge, and booking button.
