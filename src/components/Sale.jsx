@@ -10,6 +10,7 @@
 import { useState, useMemo } from "react";
 import { BTN, QUOTE_SECTIONS, DEFAULT_RATE_CARDS, TH, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING } from "../config";
 import { fmtCur, saleShareUrl, newSale } from "../utils";
+import { fbSetAsync } from "../firebase";
 import { QuoteCalc } from "./QuoteCalc";
 
 function getPackageDefault(pricing, videoType, packageKey) {
@@ -69,7 +70,16 @@ export function Sale({
   const saveSale = () => {
     if (!form.clientName.trim()) return;
     const { creating, depositTouched, ...rest } = form;
-    setSales(p => [...p, { ...rest, clientName: rest.clientName.trim() }]);
+    const record = { ...rest, clientName: rest.clientName.trim() };
+    setSales(p => [...p, record]);
+    // Write the new record directly so the share link works immediately —
+    // the debounced bulk-write in App.jsx would otherwise leave a ~400ms
+    // window where clicking Preview scans /sales and finds no match.
+    if (record.id) {
+      fbSetAsync(`/sales/${record.id}`, record).catch(e => {
+        console.error("Failed to persist new sale:", e);
+      });
+    }
     resetForm();
   };
 
