@@ -596,7 +596,7 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
         <section className="vx-facts">
           <StudioFact k="Paid" v={fmtCur(sale.schedule?.[0]?.amount ?? sale.depositAmount)} sub={sale.schedule?.[0]?.label || "Deposit"} />
           <StudioFact k="Order" v={orderRef} sub="Reference" mono />
-          <StudioFact k="Producer" v={PRODUCER.name} sub={PRODUCER.role} />
+          <StudioFact k={PRODUCER.role} v={PRODUCER.name} sub="Viewix" />
           <StudioFact k="First meeting" v="Pre-production" sub="Book below" />
         </section>
 
