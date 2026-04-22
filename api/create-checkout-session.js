@@ -132,9 +132,8 @@ export default async function handler(req, res) {
     const customer = await getOrCreateCustomer(stripe, sale);
     const cfg = scheduleForVideoType(sale.videoType);
 
-    const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers["host"]}`;
-    const returnUrl = `${origin}/s/${sale.shortId}?session_id={CHECKOUT_SESSION_ID}`;
-
+    // No return_url — Stripe rejects it with
+    // redirect_on_completion: 'never' (mutually exclusive).
     const descriptorBase = `Viewix — ${sale.clientName} — ${sale.videoType}/${sale.packageKey}`;
 
     let session;
@@ -159,13 +158,12 @@ export default async function handler(req, res) {
         ui_mode: "embedded_page",
         mode: "subscription",
         customer: customer.id,
-        return_url: returnUrl,
         // Stay in the iframe on success — fire onComplete instead of
-        // redirecting. Without this, Stripe redirects to return_url
-        // which re-renders /s/{shortId} as the deposit form again
-        // before our webhook has flipped sale.paid. return_url is
-        // still required by Stripe (used for bank redirects / 3DS
-        // fallback), but the happy path stays embedded.
+        // redirecting. Stripe is strict here: you CANNOT pass a
+        // return_url when redirect_on_completion is 'never' — it
+        // errors with "No `return_url` is required for these
+        // sessions." Bank redirects / 3DS are handled inside the
+        // iframe by Stripe in this mode.
         redirect_on_completion: "never",
         line_items: [{
           quantity: 1,
@@ -210,9 +208,7 @@ export default async function handler(req, res) {
         ui_mode: "embedded_page",
         mode: "payment",
         customer: customer.id,
-        return_url: returnUrl,
-        // Same reason as above — stay embedded, fire onComplete, let
-        // our StudioThankYou render on the same page.
+        // Stay embedded, fire onComplete, no return_url (see above).
         redirect_on_completion: "never",
         line_items: [{
           quantity: 1,
@@ -252,9 +248,7 @@ export default async function handler(req, res) {
         ui_mode: "embedded_page",
         mode: "payment",
         customer: customer.id,
-        return_url: returnUrl,
-        // Same reason as above — stay embedded, fire onComplete, let
-        // our StudioThankYou render on the same page.
+        // Stay embedded, fire onComplete, no return_url (see above).
         redirect_on_completion: "never",
         line_items: [{
           quantity: 1,
