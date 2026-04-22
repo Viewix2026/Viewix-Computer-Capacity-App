@@ -50,6 +50,14 @@ export function SalePublicView() {
   const prettyMatch = window.location.pathname.match(/^\/s\/([a-z0-9]{4,12})/i);
   const shortId = prettyMatch ? prettyMatch[1].toLowerCase() : null;
   const saleIdParam = new URLSearchParams(window.location.search).get("s");
+  // If the page reloads with ?session_id= (Stripe 3DS fallback, or
+  // a user refresh after paying before our webhook landed), flip to
+  // the paid view immediately — no re-showing the checkout form.
+  // The belt to redirect_on_completion: 'never''s suspenders.
+  useEffect(() => {
+    const sessionId = new URLSearchParams(window.location.search).get("session_id");
+    if (sessionId) setOptimisticPaid(true);
+  }, []);
 
   useEffect(() => {
     if (!shortId && !saleIdParam) return;

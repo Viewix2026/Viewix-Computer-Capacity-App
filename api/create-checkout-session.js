@@ -160,6 +160,13 @@ export default async function handler(req, res) {
         mode: "subscription",
         customer: customer.id,
         return_url: returnUrl,
+        // Stay in the iframe on success — fire onComplete instead of
+        // redirecting. Without this, Stripe redirects to return_url
+        // which re-renders /s/{shortId} as the deposit form again
+        // before our webhook has flipped sale.paid. return_url is
+        // still required by Stripe (used for bank redirects / 3DS
+        // fallback), but the happy path stays embedded.
+        redirect_on_completion: "never",
         line_items: [{
           quantity: 1,
           price_data: {
@@ -204,6 +211,9 @@ export default async function handler(req, res) {
         mode: "payment",
         customer: customer.id,
         return_url: returnUrl,
+        // Same reason as above — stay embedded, fire onComplete, let
+        // our StudioThankYou render on the same page.
+        redirect_on_completion: "never",
         line_items: [{
           quantity: 1,
           price_data: {
@@ -243,6 +253,9 @@ export default async function handler(req, res) {
         mode: "payment",
         customer: customer.id,
         return_url: returnUrl,
+        // Same reason as above — stay embedded, fire onComplete, let
+        // our StudioThankYou render on the same page.
+        redirect_on_completion: "never",
         line_items: [{
           quantity: 1,
           price_data: {
