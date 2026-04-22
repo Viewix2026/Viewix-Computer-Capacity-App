@@ -16,6 +16,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { fbSet, fbUpdate, fbListenSafe } from "../firebase";
+import { CellRewriteModal, EditableField } from "./shared/CellRewriteModal";
 
 // Tab registry — edit this list + a switch arm below to add/rename
 // tabs. Each entry has a key (matches project.tab), label (shown in
@@ -147,8 +148,17 @@ function BrandTruthStep({ project, onPatch }) {
   const fields = bt.fields || {};
   const [transcript, setTranscript] = useState(bt.transcript || "");
   const [producerNotes, setProducerNotes] = useState(bt.producerNotes || "");
-  const [processing, setProcessing] = useState(false);
-  const [procError, setProcError] = useState(null);
+  // `processing` is now derived from Firebase (bt.processingAt). When the
+  // server starts the Claude call it writes a timestamp; when it finishes
+  // it writes null. Means producers can click Begin Processing, navigate
+  // away, come back, and the state reflects what the server's actually
+  // doing — not whatever React unmounted with.
+  // `localProcError` captures network errors client-side so they show
+  // even when the Firebase flag returns to null.
+  const processingAt = bt.processingAt || null;
+  const processing = !!processingAt && (Date.now() - new Date(processingAt).getTime() < 5 * 60 * 1000);
+  const [localProcError, setLocalProcError] = useState(null);
+  const [rewriteTarget, setRewriteTarget] = useState(null);
 
   // Debounced writes for transcript + notes so the producer can type
   // without fighting the network. 500ms matches Social Organic.
@@ -168,18 +178,18 @@ function BrandTruthStep({ project, onPatch }) {
   }, [producerNotes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Begin Processing — sends transcript + notes to Claude via
-  // /api/meta-ads action=generateBrandTruth. Mirrors the Social
-  // Organic Brand Truth flow: the server writes the 8 fields to
-  // /preproduction/metaAds/{id}/brandTruth/fields/*, the listener
-  // rehydrates the project, and this component re-renders showing
-  // the populated bullet lists.
+  // /api/meta-ads action=generateBrandTruth. Server writes the 8 fields
+  // to /preproduction/metaAds/{id}/brandTruth/fields/*, and also sets
+  // bt.processingAt (clearing it on completion). Means navigating
+  // between tabs during the ~15s Claude call doesn't lose state — the
+  // processing indicator lives in Firebase.
   const beginProcessing = async () => {
-    setProcError(null);
-    setProcessing(true);
+    setLocalProcError(null);
     try {
-      // Make sure the latest transcript + notes are on disk before the
-      // server reads them. Debounce is 500ms — we wait a hair beyond
-      // that so a just-typed paste is definitely landed.
+      // Flip processingAt on client-side too so the UI snaps to the
+      // processing state immediately (don't wait for the server round-
+      // trip to mark it). Server overwrites with its own timestamp.
+      fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, new Date().toISOString());
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/transcript`, transcript);
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/producerNotes`, producerNotes);
       await new Promise(res => setTimeout(res, 150));
@@ -190,12 +200,18 @@ function BrandTruthStep({ project, onPatch }) {
         body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
-      // Firebase listener rehydrates fields automatically.
+      if (!r.ok) {
+        // Server should clear processingAt on its own error path, but
+        // mirror it here in case the server died before the finally
+        // block (e.g. Vercel timeout).
+        fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, null);
+        throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      }
+      // Firebase listener rehydrates fields automatically. Server
+      // clears processingAt before responding, so the indicator goes
+      // away as soon as the listener picks up the write.
     } catch (e) {
-      setProcError(e.message);
-    } finally {
-      setProcessing(false);
+      setLocalProcError(e.message);
     }
   };
 
@@ -246,22 +262,37 @@ function BrandTruthStep({ project, onPatch }) {
             {processing ? "Processing…" : hasGenerated ? "Regenerate Brand Truth" : "Begin Processing"}
           </button>
         </div>
-        {procError && (
+        {localProcError && (
           <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
-            {procError}
+            {localProcError}
           </div>
         )}
       </div>
 
-      {/* 8 brand fields — populated by Begin Processing, editable
-          afterwards. Each field's value is a bullet-ready string
-          (newline-separated lines); BrandField renders it as a list
-          once generated, falls back to empty-state copy otherwise. */}
-      <div style={{ display: "grid", gap: 14 }}>
+      {/* 8 brand fields — populated by Begin Processing, each
+          rendered as bullet points via the shared Clickable. Click
+          any field to open the CellRewriteModal (AI rewrite OR
+          manual edit tabs). */}
+      {processing && (
+        <div style={{ marginBottom: 14, padding: "14px 18px", background: "rgba(0,130,250,0.08)", border: "1px solid rgba(0,130,250,0.3)", borderRadius: 10, display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: "var(--fg)" }}>
+          <div style={{ width: 16, height: 16, border: "2px solid rgba(0,130,250,0.3)", borderTopColor: "#0082FA", borderRadius: "50%", animation: "metaSpin 0.8s linear infinite" }} />
+          <div>
+            <div style={{ fontWeight: 700 }}>Processing…</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>Claude is reading the transcript + notes. Usually takes 15–30 seconds. Safe to switch tabs — the fields will populate when ready.</div>
+          </div>
+          <style>{`@keyframes metaSpin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 20, display: "grid", gap: 16 }}>
         {META_BRAND_TRUTH_FIELDS.map(f => (
-          <BrandField key={f.key} label={f.label} hint={f.hint}
-            fieldKey={f.key} initial={fields[f.key]} onSave={updateField}
-            emptyPlaceholder={hasGenerated ? "" : "Click Begin Processing to populate from the transcript."} />
+          <EditableField
+            key={f.key}
+            label={f.label}
+            path={f.key}
+            value={fields[f.key]}
+            multi={true}
+            onEdit={(path, label, currentValue) => setRewriteTarget({ path, label, currentValue: currentValue || "" })}
+          />
         ))}
       </div>
 
@@ -277,6 +308,22 @@ function BrandTruthStep({ project, onPatch }) {
           {isApproved ? "→ Ad Library" : "Approve Brand Truth"}
         </button>
       </div>
+
+      {/* Cell-level rewrite modal — opens with two tabs:
+              AI — tell Claude what to change
+              Manual — edit the raw value
+          Both write back to /preproduction/metaAds/{id}/brandTruth/fields/{path}. */}
+      {rewriteTarget && (
+        <CellRewriteModal
+          target={rewriteTarget}
+          fbPathPrefix={`/preproduction/metaAds/${project.id}/brandTruth/fields`}
+          apiEndpoint="/api/meta-ads"
+          apiAction="rewriteBrandTruthField"
+          extraPayload={{ projectId: project.id }}
+          updatedAtPath={`/preproduction/metaAds/${project.id}/updatedAt`}
+          onClose={() => setRewriteTarget(null)}
+        />
+      )}
     </div>
   );
 }

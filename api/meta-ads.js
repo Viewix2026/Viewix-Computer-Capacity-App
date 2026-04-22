@@ -724,6 +724,13 @@ async function handleGenerateBrandTruth(req, res) {
     return res.status(400).json({ error: "Paste the pre-production transcript before processing." });
   }
 
+  // Flag the record as in-flight so the UI shows a processing spinner
+  // even if the producer navigates between tabs during the ~15-30s
+  // Claude call. Cleared on success OR failure below.
+  await fbPatch(`/preproduction/metaAds/${projectId}/brandTruth`, {
+    processingAt: new Date().toISOString(),
+  });
+
   // Pull Sherpa / account-level context so Claude has the client
   // background to ground the truths. Mirrors Social Organic's pattern.
   let sherpaBlock = "";
@@ -769,12 +776,14 @@ Produce the brand truth JSON now.`;
       apiKey: ANTHROPIC_KEY,
     });
   } catch (e) {
+    await fbPatch(`/preproduction/metaAds/${projectId}/brandTruth`, { processingAt: null });
     return res.status(502).json({ error: "Claude call failed", detail: e.message });
   }
 
   let parsed;
   try { parsed = parseJSON(raw); }
   catch (e) {
+    await fbPatch(`/preproduction/metaAds/${projectId}/brandTruth`, { processingAt: null });
     return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
   }
 
@@ -794,12 +803,102 @@ Produce the brand truth JSON now.`;
     generatedAt: new Date().toISOString(),
     modelUsed: "claude-opus-4-6",
     runId,
+    processingAt: null,
   });
   await fbPatch(`/preproduction/metaAds/${projectId}`, {
     updatedAt: new Date().toISOString(),
   });
 
   return res.status(200).json({ ok: true, fields, runId });
+}
+
+// Cell-level AI rewrite for a single brand-truth field. Called by
+// CellRewriteModal's "AI" tab. Receives a path (e.g. "brandTruths"),
+// the current value, and a natural-language instruction, and writes
+// the rewritten value back to /preproduction/metaAds/{id}/brandTruth
+// /fields/{path}. Keeps the rest of the fields untouched.
+async function handleRewriteBrandTruthField(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, path, instruction, currentValue } = req.body || {};
+  if (!projectId || !path) return res.status(400).json({ error: "Missing projectId or path" });
+  if (!instruction || !instruction.trim()) return res.status(400).json({ error: "Missing instruction" });
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  // Build a scoped rewrite prompt that carries the OTHER fields as
+  // context so Claude doesn't contradict them. Keep output bullet-
+  // style (newline-separated lines) to match the rest of the step.
+  const fields = project.brandTruth?.fields || {};
+  const fieldLabelMap = {
+    brandTruths:     "Brand Truths",
+    productOffer:    "Product / Offer",
+    uniqueValueProp: "Unique Value Proposition",
+    targetCustomer:  "Target Customer",
+    painPoints:      "Pain Points",
+    desiredOutcome:  "Desired Outcome",
+    proofPoints:     "Proof Points",
+    competitors:     "Competitors / Category",
+  };
+  const targetLabel = fieldLabelMap[path] || path;
+
+  const contextBits = Object.entries(fields)
+    .filter(([k, v]) => k !== path && v && v.trim())
+    .map(([k, v]) => `${fieldLabelMap[k] || k}:\n${v}`)
+    .join("\n\n");
+
+  const systemPrompt = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. You're editing ONE field of a client's Brand Truth block used to drive Meta ad scripts.
+
+RULES:
+- Rewrite ONLY the target field. Do not touch any other field.
+- Follow the producer's instruction literally.
+- Keep the output as 3-5 bullet-style lines, one idea per line, separated by "\\n". No leading bullet markers (•, -, *, 1.) — the frontend renders bullets.
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Be specific, opinionated, evidence-based. No generic agency-speak.
+- Return ONLY the new value for the field. No preamble, no code fences, no JSON.`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+${project.packageTier ? `PACKAGE: ${project.packageTier}` : ""}
+
+OTHER BRAND FIELDS (for context — do NOT modify):
+${contextBits || "(no other fields filled yet)"}
+
+FIELD BEING REWRITTEN: ${targetLabel}
+
+CURRENT VALUE:
+"""
+${currentValue || "(empty)"}
+"""
+
+PRODUCER INSTRUCTION:
+"""
+${instruction.trim()}
+"""
+
+Return the new value for the "${targetLabel}" field now.`;
+
+  let rewritten;
+  try {
+    rewritten = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 800,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  const cleaned = (rewritten || "").trim().replace(/^```[a-z]*\s*/, "").replace(/\s*```$/, "");
+  if (!cleaned) return res.status(422).json({ error: "Claude returned an empty rewrite" });
+
+  await fbSet(`/preproduction/metaAds/${projectId}/brandTruth/fields/${path}`, cleaned);
+  await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ ok: true, value: cleaned });
 }
 
 export default async function handler(req, res) {
@@ -816,8 +915,9 @@ export default async function handler(req, res) {
       case "addManualAd":       return await handleAddManualAd(req, res);
       case "scriptGenerate":    return await handleScriptGenerate(req, res);
       case "rewriteCell":       return await handleRewriteCell(req, res);
-      case "generateBrandTruth": return await handleGenerateBrandTruth(req, res);
-      default:                  return res.status(400).json({ error: `Unknown action: ${action}` });
+      case "generateBrandTruth":    return await handleGenerateBrandTruth(req, res);
+      case "rewriteBrandTruthField": return await handleRewriteBrandTruthField(req, res);
+      default:                       return res.status(400).json({ error: `Unknown action: ${action}` });
     }
   } catch (e) {
     console.error(`meta-ads ${action} error:`, e);
