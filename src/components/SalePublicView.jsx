@@ -658,7 +658,7 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
                 <div className="vx-eyebrow">Step 2 · Book a time</div>
                 <div className="vx-booking-title">Book your pre-production meeting</div>
               </div>
-              <div className="vx-booking-meta vx-muted vx-mono">60 MIN · ZOOM · AEST</div>
+              <div className="vx-booking-meta vx-muted vx-mono">60 MIN · GOOGLE MEET or DULWICH HILL OFFICE · AEST</div>
             </div>
             {bookingUrl && thankYou?.bookingEmbed !== false && isEmbeddableBookingUrl(bookingUrl) ? (
               <iframe
