@@ -2282,10 +2282,16 @@ function IdeaSelectionStep({ project, onPatch }) {
   const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
   const formatIdeas = project.formatIdeas || {};
   const numberOfVideos = project.numberOfVideos || 0;
-  const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const approvals = project.approvals || {};
   const isApproved = !!approvals.ideaSelect;
+
+  // `generating` is derived from Firebase so it survives tab-switching
+  // during the ~15-30s Claude run. Server sets formatIdeasProcessingAt
+  // on start, clears on completion. Stale flag (>5min old) is ignored
+  // client-side so a crashed run doesn't pin the spinner forever.
+  const processingAt = project.formatIdeasProcessingAt || null;
+  const generating = !!processingAt && (Date.now() - new Date(processingAt).getTime() < 5 * 60 * 1000);
 
   // Library lookup for format names. Listen so new formats appear
   // immediately after being added in a sibling tab.
@@ -2313,20 +2319,23 @@ function IdeaSelectionStep({ project, onPatch }) {
 
   const generate = async () => {
     setGenError(null);
-    setGenerating(true);
     try {
+      // Set the processing flag client-side too so the spinner snaps
+      // on immediately (don't wait for the server to write it).
+      fbSet(`/preproduction/socialOrganic/${project.id}/formatIdeasProcessingAt`, new Date().toISOString());
       const r = await fetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "generateFormatIdeas", projectId: project.id }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
-      // Firebase listener rehydrates formatIdeas automatically.
+      if (!r.ok) {
+        fbSet(`/preproduction/socialOrganic/${project.id}/formatIdeasProcessingAt`, null);
+        throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      }
+      // Firebase listener rehydrates formatIdeas + clears flag.
     } catch (e) {
       setGenError(e.message);
-    } finally {
-      setGenerating(false);
     }
   };
 

@@ -267,6 +267,16 @@ export function SocialOrganicSelect({ project, onPatch }) {
   const approve = () => {
     fbSet(`/preproduction/socialOrganic/${project.id}/approvals/select`, new Date().toISOString());
     onPatch({ tab: "ideaSelect" });
+    // Fire-and-forget kick off the 10-ideas-per-format Claude run so
+    // the next tab already has results when the producer lands there,
+    // rather than them having to click Generate. Silent failures log
+    // to console — the Idea Selection tab's own Generate button is
+    // the retry path if anything dropped.
+    fetch("/api/social-organic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "generateFormatIdeas", projectId: project.id }),
+    }).catch(e => console.warn("generateFormatIdeas auto-kickoff failed:", e));
   };
 
   return (
@@ -395,8 +405,8 @@ export function SocialOrganicSelect({ project, onPatch }) {
             Approve → Idea Selection
           </button>
         ) : (
-          <button onClick={() => onPatch({ tab: "script" })} style={btnPrimary}>
-            → Scripting
+          <button onClick={() => onPatch({ tab: "ideaSelect" })} style={btnPrimary}>
+            → Idea Selection
           </button>
         )}
       </div>
@@ -664,7 +674,12 @@ function SelectedDropzone({ selected, library, shortlisted, onRemove, targetCoun
                   thumbnail={thumb}
                   exampleUrl={exampleUrl}
                   videoCount={s.videoCount}
-                  onChangeCount={v => setFormatCount(s.formatLibraryId, v)}
+                  // Per-format count input is hidden on Format Selection
+                  // now — producers assign counts by ticking ideas on the
+                  // next tab (Idea Selection). Passing null so
+                  // SortableSelectedRow's conditional-render drops the
+                  // × N stepper entirely.
+                  onChangeCount={setFormatCount ? (v => setFormatCount(s.formatLibraryId, v)) : null}
                   onRemove={() => onRemove(s.formatLibraryId)}
                 />
               );

@@ -1023,6 +1023,15 @@ async function handleGenerateFormatIdeas(req, res) {
     return res.status(400).json({ error: "No selected formats. Pick formats on the Format Selection tab first." });
   }
 
+  // Flag the project as processing so the Idea Selection tab can show
+  // a spinner when the producer navigates there (either by clicking
+  // Generate directly or by having it auto-kicked from the Format
+  // Selection Approve button). Cleared after writes below succeed OR
+  // fail. 5-min staleness TTL handled on the client.
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    formatIdeasProcessingAt: new Date().toISOString(),
+  });
+
   const bt = project.brandTruth?.fields || {};
   const btBlock = Object.entries(bt).filter(([, v]) => v && v.trim()).map(([k, v]) => `${k}:\n${v}`).join("\n\n");
   const existingIdeas = project.formatIdeas || {};
@@ -1110,7 +1119,10 @@ Produce 10 distinct idea concepts tailored to this format's structure + the bran
       generatedAt: new Date().toISOString(),
     });
   }
-  await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
+    updatedAt: new Date().toISOString(),
+    formatIdeasProcessingAt: null,
+  });
 
   if (errors.length === runs.length) {
     return res.status(502).json({ error: "All format idea runs failed", detail: errors });
