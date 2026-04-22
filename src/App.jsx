@@ -354,7 +354,9 @@ export default function App(){
     {/* ═══ SALE (Payment Intake + Quotes) ═══ */}
     {(tool==="sale"||tool==="quoting")&&(isFounder||role==="closer"||isLead)&&(
       <Sale
-        sales={sales} setSales={setSales} salePricing={salePricing}
+        sales={sales} setSales={setSales}
+        salePricing={salePricing} setSalePricing={setSalePricing}
+        isFounders={isFounder}
         saleTab={saleTab} setSaleTab={setSaleTab}
         quotes={quotes} setQuotes={setQuotes}
         activeQuoteId={activeQuoteId} setActiveQuoteId={setActiveQuoteId}

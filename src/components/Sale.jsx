@@ -9,9 +9,11 @@
 
 import { useState, useMemo } from "react";
 import { BTN, QUOTE_SECTIONS, DEFAULT_RATE_CARDS, TH, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING } from "../config";
-import { fmtCur, saleShareUrl, newSale } from "../utils";
+import { fmtCur, fmtCurExact, saleShareUrl, newSale, computeGst, buildSchedule } from "../utils";
+import { scheduleForVideoType } from "../../api/_tiers";
 import { fbSetAsync } from "../firebase";
 import { QuoteCalc } from "./QuoteCalc";
+import { SalePricingEditor } from "./SalePricingEditor";
 
 function getPackageDefault(pricing, videoType, packageKey) {
   return Number(pricing?.[videoType]?.[packageKey] ?? 0);
@@ -19,7 +21,7 @@ function getPackageDefault(pricing, videoType, packageKey) {
 
 export function Sale({
   // Sale (Payment Intake) state
-  sales, setSales, salePricing,
+  sales, setSales, salePricing, setSalePricing, isFounders,
   saleTab, setSaleTab,
   // Quotes state (lifted from App.jsx)
   quotes, setQuotes, activeQuoteId, setActiveQuoteId,
@@ -47,14 +49,20 @@ export function Sale({
 
   const activeQuote = quotes.find(q => q.id === activeQuoteId);
 
-  // Keep deposit pre-filled from pricing whenever video type / package changes,
-  // unless the user has typed a manual override (tracked by form.depositTouched).
+  // Pre-fill total from pricing whenever video type / package changes,
+  // unless the founder/closer has typed a manual override (totalTouched).
+  // Also rebuilds GST + grand total + schedule on every edit so the
+  // preview always matches what the customer will see.
   const updateForm = (patch) => {
     setForm(f => {
       const next = { ...f, ...patch };
-      if ((patch.videoType !== undefined || patch.packageKey !== undefined) && !next.depositTouched) {
-        next.depositAmount = getPackageDefault(pricing, next.videoType, next.packageKey);
+      if ((patch.videoType !== undefined || patch.packageKey !== undefined) && !next.totalTouched) {
+        next.totalExGst = getPackageDefault(pricing, next.videoType, next.packageKey);
       }
+      const { gstAmount, grandTotal } = computeGst(next.totalExGst || 0);
+      next.gstAmount  = gstAmount;
+      next.grandTotal = grandTotal;
+      next.schedule   = buildSchedule(next.videoType, next.totalExGst || 0, null);
       return next;
     });
   };
@@ -63,13 +71,17 @@ export function Sale({
 
   const startNew = () => {
     const seed = newSale();
-    seed.depositAmount = getPackageDefault(pricing, seed.videoType, seed.packageKey);
+    seed.totalExGst = getPackageDefault(pricing, seed.videoType, seed.packageKey);
+    const { gstAmount, grandTotal } = computeGst(seed.totalExGst);
+    seed.gstAmount  = gstAmount;
+    seed.grandTotal = grandTotal;
+    seed.schedule   = buildSchedule(seed.videoType, seed.totalExGst, null);
     setForm({ creating: true, ...seed });
   };
 
   const saveSale = () => {
     if (!form.clientName.trim()) return;
-    const { creating, depositTouched, ...rest } = form;
+    const { creating, totalTouched, ...rest } = form;
     const record = { ...rest, clientName: rest.clientName.trim() };
     setSales(p => [...p, record]);
     // Write the new record directly so the share link works immediately —
@@ -107,6 +119,7 @@ export function Sale({
         <div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3,marginLeft:12}}>
           <button onClick={()=>setSaleTab("payment")} style={{padding:"6px 12px",borderRadius:6,border:"none",background:saleTab==="payment"?"var(--card)":"transparent",color:saleTab==="payment"?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Payment Intake</button>
           <button onClick={()=>setSaleTab("quotes")} style={{padding:"6px 12px",borderRadius:6,border:"none",background:saleTab==="quotes"?"var(--card)":"transparent",color:saleTab==="quotes"?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Quotes</button>
+          <button onClick={()=>setSaleTab("pricing")} style={{padding:"6px 12px",borderRadius:6,border:"none",background:saleTab==="pricing"?"var(--card)":"transparent",color:saleTab==="pricing"?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Pricing</button>
         </div>
         {saleTab==="quotes"&&!activeQuoteId&&(<div style={{display:"flex",gap:3,background:"var(--bg)",borderRadius:8,padding:3,marginLeft:8}}>
           <button onClick={()=>setQTab("quotes")} style={{padding:"6px 12px",borderRadius:6,border:"none",background:qTab==="quotes"?"var(--card)":"transparent",color:qTab==="quotes"?"var(--fg)":"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Quotes</button>
@@ -149,17 +162,40 @@ export function Sale({
           <label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:6}}>Scope Notes (shown to customer)</label>
           <textarea value={form.scopeNotes} onChange={e=>updateForm({scopeNotes:e.target.value})} rows={4} placeholder="What the customer is paying a deposit for — this will appear on their payment page." style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,fontFamily:"inherit",outline:"none",resize:"vertical"}}/>
         </div>
-        <div style={{marginBottom:16}}>
-          <label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:6}}>Deposit Amount (AUD)</label>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div style={{marginBottom:16,padding:"16px",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:10}}>
+          <label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:6}}>Total Project Amount (ex-GST)</label>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
             <span style={{fontSize:16,color:"var(--muted)"}}>$</span>
-            <input type="number" value={form.depositAmount||""} onChange={e=>updateForm({depositAmount:parseFloat(e.target.value)||0,depositTouched:true})} step={50} style={{flex:1,maxWidth:200,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",outline:"none"}}/>
-            <span style={{fontSize:11,color:"var(--muted)"}}>Default for {packageLabel(form.videoType,form.packageKey)}: {fmtCur(getPackageDefault(pricing,form.videoType,form.packageKey))}</span>
+            <input type="number" value={form.totalExGst||""} onChange={e=>updateForm({totalExGst:parseFloat(e.target.value)||0,totalTouched:true})} step={50} style={{flex:1,maxWidth:200,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",outline:"none"}}/>
+            <span style={{fontSize:11,color:"var(--muted)"}}>Default for {packageLabel(form.videoType,form.packageKey)}: {fmtCur(getPackageDefault(pricing,form.videoType,form.packageKey))} ex-GST</span>
           </div>
-          {getPackageDefault(pricing,form.videoType,form.packageKey)===0&&(<div style={{marginTop:8,fontSize:11,color:"#F59E0B"}}>⚠ No default set for this package. Founders can set it under Founders → Pricing.</div>)}
+          {getPackageDefault(pricing,form.videoType,form.packageKey)===0&&(<div style={{marginBottom:12,fontSize:11,color:"#F59E0B"}}>⚠ No default set for this package. {isFounders ? "Set one in the Pricing tab." : "Ask a founder to set one in the Pricing tab."}</div>)}
+
+          {/* Live breakdown: GST + grand total + instalment schedule */}
+          {form.totalExGst>0&&(<div style={{display:"grid",gridTemplateColumns:"1fr 1.4fr",gap:16,paddingTop:12,borderTop:"1px dashed var(--border)"}}>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Customer sees</div>
+              <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
+                <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}><span style={{fontFamily:"inherit"}}>Subtotal (ex-GST)</span><span>{fmtCurExact(form.totalExGst)}</span></div>
+                <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}><span style={{fontFamily:"inherit"}}>GST (10%)</span><span>{fmtCurExact(form.gstAmount)}</span></div>
+                <div style={{display:"flex",justifyContent:"space-between",color:"var(--fg)",fontWeight:700,borderTop:"1px solid var(--border)",paddingTop:4,marginTop:2}}><span style={{fontFamily:"inherit"}}>Grand total</span><span>{fmtCurExact(form.grandTotal)}</span></div>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Paid as ({scheduleForVideoType(form.videoType).kind === "deposit_plus_manual" ? "deposit + manual balance" : scheduleForVideoType(form.videoType).kind === "subscription_monthly" ? "3 auto-payments" : "paid in full"})</div>
+              <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
+                {(form.schedule||[]).map((s,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",color:s.trigger==="now"?"var(--fg)":"var(--muted)"}}>
+                    <span style={{fontFamily:"inherit"}}>{s.label} · {s.trigger==="now"?"Today":s.trigger==="auto"?`${s.dueDaysOffset}d`:"Manual"}</span>
+                    <span style={{fontWeight:s.trigger==="now"?700:500}}>{fmtCurExact(s.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>)}
         </div>
         <div style={{display:"flex",gap:8}}>
-          <button onClick={saveSale} disabled={!form.clientName.trim()||!form.depositAmount} style={{...BTN,background:(form.clientName.trim()&&form.depositAmount)?"var(--accent)":"#374151",color:"white",opacity:(form.clientName.trim()&&form.depositAmount)?1:0.6}}>Create Payment Link</button>
+          <button onClick={saveSale} disabled={!form.clientName.trim()||!form.totalExGst} style={{...BTN,background:(form.clientName.trim()&&form.totalExGst)?"var(--accent)":"#374151",color:"white",opacity:(form.clientName.trim()&&form.totalExGst)?1:0.6}}>Create Payment Link</button>
           <button onClick={resetForm} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
         </div>
       </div>)}
@@ -176,7 +212,7 @@ export function Sale({
                     <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{s.clientName}</span>
                     {s.paid?(<span style={{fontSize:10,fontWeight:700,color:"white",background:"#10B981",padding:"3px 8px",borderRadius:4}}>PAID</span>):(<span style={{fontSize:10,fontWeight:700,color:"#F59E0B",background:"rgba(245,158,11,0.12)",padding:"3px 8px",borderRadius:4}}>AWAITING PAYMENT</span>)}
                   </div>
-                  <div style={{fontSize:12,color:"var(--muted)"}}>{videoLabel(s.videoType)} · {packageLabel(s.videoType,s.packageKey)} · <span style={{color:"#10B981",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{fmtCur(s.depositAmount)}</span> · {new Date(s.createdAt).toLocaleDateString("en-AU")}</div>
+                  <div style={{fontSize:12,color:"var(--muted)"}}>{videoLabel(s.videoType)} · {packageLabel(s.videoType,s.packageKey)} · <span style={{color:"#10B981",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{fmtCur(s.grandTotal||s.depositAmount||0)}</span>{s.grandTotal?<span style={{color:"var(--muted)",fontWeight:500,fontSize:11}}> inc-GST</span>:null} · {new Date(s.createdAt).toLocaleDateString("en-AU")}</div>
                   <div style={{fontSize:11,color:"var(--accent)",marginTop:6,wordBreak:"break-all"}}>{url}</div>
                 </div>
                 <div style={{display:"flex",gap:6,flexShrink:0}}>
@@ -197,6 +233,13 @@ export function Sale({
         </div>
       )}
     </>)}
+
+    {/* ── PRICING (ex-Founders → moved here so closers/leads can reference
+           the totals while creating a sale; edit access is still gated to
+           founders). ── */}
+    {saleTab==="pricing"&&(
+      <SalePricingEditor salePricing={salePricing} setSalePricing={setSalePricing} canEdit={!!isFounders} />
+    )}
 
     {/* ── QUOTES (lifted from App.jsx) ── */}
     {saleTab==="quotes"&&(<>

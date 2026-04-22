@@ -4,8 +4,7 @@
 
 import { useState } from "react";
 import { BTN, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING, DEFAULT_SALE_THANKYOU } from "../config";
-import { pct, fmtCur, fmtCurExact, computeGst, buildSchedule } from "../utils";
-import { scheduleForVideoType } from "../../api/_tiers";
+import { pct, fmtCur } from "../utils";
 import { fbSet } from "../firebase";
 import { FoundersData } from "./FoundersData";
 import { FoundersLearnings } from "./FoundersLearnings";
@@ -82,7 +81,7 @@ export function Founders({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Founders Dashboard</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "pricing", label: "Pricing" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }].map(t => (
             <button key={t.key} onClick={() => setFoundersTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: foundersTab === t.key ? "var(--card)" : "transparent", color: foundersTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
@@ -299,7 +298,6 @@ export function Founders({
 
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
-        {foundersTab === "pricing" && <PricingEditor salePricing={salePricing} setSalePricing={setSalePricing} />}
         {foundersTab === "thankyou" && <ThankYouEditor saleThankYou={saleThankYou} setSaleThankYou={setSaleThankYou} />}
         {/* Buyer Journey is rendered above the maxWidth wrapper to allow
             full-width horizontal scroll — see top of this component. */}
@@ -308,126 +306,10 @@ export function Founders({
   );
 }
 
-// Total-project-amount defaults (ex-GST) for the Sale → Payment Intake form.
-// Founders enter the total ex-GST per package; the customer sees + pays
-//   total ex-GST  +  10% GST  =  grand total
-// split into instalments per the package's billing schedule (Meta Ads
-// 50/50, Social Media 3× autopay, one-offs 50/50). Everything derived
-// from the single ex-GST number so there's one source of truth.
-//
-// Written to /salePricing in the debounced bulk-write from App.jsx.
-// Closers can still override the total per-sale in the Sale form; this
-// just seeds the default value.
-function PricingEditor({ salePricing, setSalePricing }) {
-  const pricing = salePricing || DEFAULT_SALE_PRICING;
-  const update = (videoType, packageKey, value) => {
-    const next = {
-      ...pricing,
-      [videoType]: { ...(pricing[videoType] || {}), [packageKey]: Number(value) || 0 },
-    };
-    setSalePricing(next);
-  };
-
-  const scheduleSummary = (videoType) => {
-    const cfg = scheduleForVideoType(videoType);
-    if (cfg.kind === "deposit_plus_manual")  return "50% deposit + 50% on project completion";
-    if (cfg.kind === "subscription_monthly") return "3 equal payments (today, +30d, +60d auto)";
-    if (cfg.kind === "paid_in_full")          return "Paid in full at checkout";
-    return "";
-  };
-
-  return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", marginBottom: 4 }}>Sale Pricing — Total Project Amounts (ex-GST)</div>
-        <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
-          Enter the <strong>total project amount ex-GST</strong> for each package. The customer sees GST (10%) added on top, then pays it in instalments per the package's billing schedule (shown next to each row). Closers can override per-sale.
-        </div>
-      </div>
-      <div style={{ display: "grid", gap: 16 }}>
-        {SALE_VIDEO_TYPES.map(vt => (
-          <div key={vt.key} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px" }}>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 14 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{vt.label}</div>
-              <div style={{ fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>{scheduleSummary(vt.key)}</div>
-            </div>
-            <div style={{ display: "grid", gap: 10 }}>
-              {vt.packages.map(p => {
-                const totalExGst = Number(pricing?.[vt.key]?.[p.key] ?? 0);
-                const { gstAmount, grandTotal } = computeGst(totalExGst);
-                const schedule = totalExGst > 0 ? buildSchedule(vt.key, totalExGst, null) : [];
-                return (
-                  <div key={p.key} style={{
-                    display: "grid",
-                    gridTemplateColumns: "1.1fr 1fr 1.3fr",
-                    gap: 16,
-                    alignItems: "center",
-                    padding: "12px 14px",
-                    background: "var(--bg)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 10,
-                  }}>
-                    {/* Input: total ex-GST */}
-                    <div>
-                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                        {p.label} — Total (ex-GST)
-                      </label>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", background: "var(--input-bg)", border: `1px solid ${totalExGst > 0 ? "var(--border)" : "#F59E0B55"}`, borderRadius: 8 }}>
-                        <span style={{ fontSize: 13, color: "var(--muted)" }}>$</span>
-                        <input
-                          type="number" value={totalExGst || ""}
-                          onChange={e => update(vt.key, p.key, e.target.value)}
-                          placeholder="0" step={50}
-                          style={{ flex: 1, width: "100%", border: "none", background: "transparent", color: "var(--fg)", fontSize: 14, fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", outline: "none" }}
-                        />
-                      </div>
-                      <div style={{ fontSize: 10, color: totalExGst > 0 ? "var(--muted)" : "#F59E0B", marginTop: 4 }}>
-                        {totalExGst > 0 ? "Ex-GST" : "Not set"}
-                      </div>
-                    </div>
-
-                    {/* GST + Grand total live */}
-                    <div style={{ display: "grid", gap: 4, fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
-                        <span style={{ fontFamily: "inherit" }}>GST (10%)</span>
-                        <span>{fmtCurExact(gstAmount)}</span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--fg)", fontWeight: 700, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
-                        <span style={{ fontFamily: "inherit" }}>Grand total</span>
-                        <span>{fmtCurExact(grandTotal)}</span>
-                      </div>
-                    </div>
-
-                    {/* Instalments preview */}
-                    <div>
-                      {schedule.length === 0 ? (
-                        <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>Set a price to see instalments</div>
-                      ) : (
-                        <div style={{ display: "grid", gap: 2, fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
-                          {schedule.map((s, i) => (
-                            <div key={i} style={{ display: "flex", justifyContent: "space-between", color: s.trigger === "now" ? "var(--fg)" : "var(--muted)" }}>
-                              <span style={{ fontFamily: "inherit" }}>
-                                {s.label} · {s.trigger === "now" ? "Today" : s.trigger === "auto" ? `${s.dueDaysOffset}d` : "Manual"}
-                              </span>
-                              <span style={{ fontWeight: s.trigger === "now" ? 700 : 500 }}>{fmtCurExact(s.amount)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop: 16, padding: "12px 16px", background: "rgba(0,130,250,0.08)", border: "1px solid rgba(0,130,250,0.25)", borderRadius: 8, fontSize: 12, color: "var(--muted)", lineHeight: 1.55 }}>
-        <strong style={{ color: "var(--fg)" }}>Changes auto-save.</strong> New payment links use the latest defaults; already-sent links keep the total captured at creation time — their schedule can't change once any instalment is paid.
-      </div>
-    </div>
-  );
-}
+// Sale pricing editor now lives under the Sale tab — see
+// src/components/SalePricingEditor.jsx. Moved out of Founders because
+// closers / leads benefit from seeing the defaults while creating a
+// sale; edit access is still gated to founders only.
 
 // Per-package thank-you content shown on the branded payment page after the
 // customer's deposit clears. One shared bookingUrl at the top (same kickoff
