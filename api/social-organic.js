@@ -993,11 +993,25 @@ async function handleGenerateScript(req, res) {
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
 
-  const { projectId } = req.body || {};
+  const { projectId, selectedFormats: inlineSelected, numberOfVideos: inlineTotal } = req.body || {};
   if (!projectId) return res.status(400).json({ error: "Missing projectId" });
 
-  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
-  if (!project) return res.status(404).json({ error: "Project not found" });
+  const projectFromFb = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!projectFromFb) return res.status(404).json({ error: "Project not found" });
+
+  // Client sends its current state inline (see generate() on the
+  // Scripts tab) because its fbUpdate() writes are fire-and-forget
+  // and can be mid-flight when Generate is clicked. Prefer the
+  // inline override; fall back to Firebase for anything missing.
+  const project = {
+    ...projectFromFb,
+    selectedFormats: Array.isArray(inlineSelected) && inlineSelected.length > 0
+      ? inlineSelected
+      : projectFromFb.selectedFormats,
+    numberOfVideos: typeof inlineTotal === "number" && inlineTotal > 0
+      ? inlineTotal
+      : projectFromFb.numberOfVideos,
+  };
 
   const selected = Array.isArray(project.selectedFormats) ? project.selectedFormats : [];
   if (selected.length === 0) {

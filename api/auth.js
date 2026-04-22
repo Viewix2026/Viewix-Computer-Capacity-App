@@ -43,9 +43,32 @@ export default async function handler(req, res) {
 
   const uid = ROLE_TO_UID[role];
   try {
-    // Mint a custom token with the role as a developer claim.
-    // Firebase auto-creates the user when the client signs in with this token,
-    // and the developer claims are propagated to auth.token.role in security rules.
+    // Ensure the Firebase Auth user exists — setCustomUserClaims below
+    // fails if the user doesn't exist yet. Creating ahead of time also
+    // stops the auto-created-on-signInWithCustomToken path that was
+    // skipping claim persistence entirely.
+    try {
+      await admin.auth().getUser(uid);
+    } catch (lookupErr) {
+      if (lookupErr.code === "auth/user-not-found") {
+        await admin.auth().createUser({ uid });
+      } else {
+        throw lookupErr;
+      }
+    }
+
+    // Persist the role claim on the USER record so it survives token
+    // refresh. Custom-token developer claims only land on the initial
+    // ID token — when Firebase's SDK auto-refreshes that token ~55
+    // minutes later, the claim is gone and writes start failing with
+    // PERMISSION_DENIED because our rules check auth.token.role != null.
+    // setCustomUserClaims stores the claim server-side; every future
+    // refreshed token inherits it.
+    await admin.auth().setCustomUserClaims(uid, { role });
+
+    // Still mint a custom token with the claim inline — that's what
+    // the client signs in with. Once signed in, the SDK refreshes
+    // against the persisted claim and the role sticks.
     const token = await admin.auth().createCustomToken(uid, { role });
     return res.status(200).json({ token, role });
   } catch (e) {

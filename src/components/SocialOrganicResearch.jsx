@@ -2273,10 +2273,22 @@ function ScriptStep({ project, onPatch }) {
     setGenError(null);
     setGenerating(true);
     try {
+      // Pass the CURRENT project state inline so the server doesn't
+      // depend on a fresh Firebase read. fbUpdate from the Select tab
+      // is fire-and-forget and can be in-flight when Generate is
+      // clicked — the server would then see stale selectedFormats and
+      // fall back to equal distribution (the "only 12 videos instead
+      // of 28" bug). Inline override wins; server falls back to
+      // /preproduction if override is missing.
       const r = await fetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "generateScript", projectId: project.id }),
+        body: JSON.stringify({
+          action: "generateScript",
+          projectId: project.id,
+          selectedFormats: project.selectedFormats || [],
+          numberOfVideos: project.numberOfVideos ?? null,
+        }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));

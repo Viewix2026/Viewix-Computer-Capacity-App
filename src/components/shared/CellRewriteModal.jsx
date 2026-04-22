@@ -18,7 +18,7 @@
 // Consumers: BrandTruthStep (Tab 1), ScriptStep (Tab 7).
 
 import { useState } from "react";
-import { fbSet } from "../../firebase";
+import { fbSet, fbSetAsync } from "../../firebase";
 
 const inputSt = {
   padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)",
@@ -143,13 +143,29 @@ export function CellRewriteModal({
     }
   };
 
-  const manualSubmit = () => {
+  const manualSubmit = async () => {
     // JS dot-path → Firebase slash-path. Keeps the audit trail shape
     // consistent with AI rewrites (which write the same path server-side).
     const fbPath = `${fbPathPrefix}/${target.path.replace(/\./g, "/")}`;
-    fbSet(fbPath, manualValue);
-    if (updatedAtPath) fbSet(updatedAtPath, new Date().toISOString());
-    onClose();
+    // Await the write (and the updatedAt bump) before closing. The old
+    // fire-and-forget pattern closed the modal optimistically, the
+    // parent's Firebase listener then fired with a STALE snapshot
+    // (the write hadn't committed yet), and the stale snapshot
+    // clobbered the edit — user reported the rewrite "reverting".
+    // fbSetAsync resolves only after Firebase acks the write, so the
+    // listener's next fire sees the new value and re-rendering is a
+    // no-op.
+    setWorking(true);
+    setError(null);
+    try {
+      await fbSetAsync(fbPath, manualValue);
+      if (updatedAtPath) await fbSetAsync(updatedAtPath, new Date().toISOString());
+      onClose();
+    } catch (e) {
+      setError(`Couldn't save edit: ${e.message || e}. Try again.`);
+    } finally {
+      setWorking(false);
+    }
   };
 
   return (
