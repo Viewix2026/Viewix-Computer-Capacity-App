@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { fbSet, fbSetAsync, fbListenSafe } from "../firebase";
+import { fbSet, fbSetAsync, fbUpdate, fbListenSafe } from "../firebase";
 import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { FormatLibrary } from "./FormatLibrary";
@@ -68,9 +68,12 @@ const NB = {
 
 // ─── Helper: Firebase patch for preproduction ───
 function fbPatchProject(projectId, data) {
-  fbSet(`/preproduction/metaAds/${projectId}/updatedAt`, new Date().toISOString());
-  Object.entries(data).forEach(([k, v]) => {
-    fbSet(`/preproduction/metaAds/${projectId}/${k}`, v);
+  // Single atomic merge — previously this fanned out N+1 separate
+  // fbSet calls, meaning a tab close or network drop mid-loop could
+  // leave the record half-patched.
+  fbUpdate(`/preproduction/metaAds/${projectId}`, {
+    ...data,
+    updatedAt: new Date().toISOString(),
   });
 }
 

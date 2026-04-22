@@ -129,7 +129,15 @@ export function fbListen(p, cb, onError) {
 export function fbListenSafe(path, cb) {
   let off = () => {};
   let hasLoaded = false;
+  // `cancelled` guards the auth-deferred path: if the caller unmounts
+  // before onAuthStateChanged fires, `attach` was queued in authCbs.
+  // Without this flag, attach runs post-unmount, creates a real
+  // listener, and no-one is left to call its unsub — one leaked
+  // listener per mount/unmount pair during the auth window. Adds up
+  // fast when producers bounce through tabs just after login.
+  let cancelled = false;
   const attach = () => {
+    if (cancelled) return;
     off = fbListen(path, d => {
       if (d != null) {
         hasLoaded = true;
@@ -146,7 +154,7 @@ export function fbListenSafe(path, cb) {
   // Gate on auth — avoids the pre-auth "security rules return null" bug.
   if (authReady) attach();
   else authCbs.push(attach);
-  return () => off();
+  return () => { cancelled = true; off(); };
 }
 
 // ─── Auth helpers ───

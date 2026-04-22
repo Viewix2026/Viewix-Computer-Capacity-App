@@ -201,18 +201,28 @@ async function handleScrapeAdLibrary(req, res) {
     const existing = (await fbGet(`/preproduction/metaAds/${projectId}/adLibraryResearch/ads`)) || {};
     const merged = { ...existing };
     let added = 0;
+    let skippedNoId = 0;   // normaliseScrapedAd couldn't find an ad id — most likely an actor schema drift
+    let skippedDupe = 0;
     for (const raw of items) {
       const ad = normaliseScrapedAd(raw, null);
-      if (!ad) continue;
-      if (merged[ad.id]) continue;  // don't overwrite an existing manual or prior-scrape entry
+      if (!ad) { skippedNoId++; continue; }
+      if (merged[ad.id]) { skippedDupe++; continue; }
       merged[ad.id] = ad;
       added++;
     }
     await fbSet(`/preproduction/metaAds/${projectId}/adLibraryResearch/ads`, merged);
+    // Surface a warning on the record when the actor returned items we
+    // couldn't normalise — producers were previously seeing "scraped 100,
+    // added 0" with no hint why. scrapeWarning shows in the UI next to
+    // scrapeStatus: "done".
+    const warning = skippedNoId > 0
+      ? `${skippedNoId} item${skippedNoId === 1 ? "" : "s"} from Apify had no recognisable ad id — the actor may have changed its output schema. Check api/meta-ads.js:normaliseScrapedAd if you've recently updated the actor.`
+      : null;
     await fbPatch(`/preproduction/metaAds/${projectId}/adLibraryResearch`, {
       scrapeStatus: "done",
       scrapeFinishedAt: new Date().toISOString(),
       scrapeError: null,
+      scrapeWarning: warning,
     });
 
     return res.status(200).json({
@@ -638,8 +648,21 @@ Return the rewritten ${colMeta.label} only.`;
   // Headline hard 35-char limit (trim rather than fail)
   if (column === "headline" && cleaned.length > 35) cleaned = cleaned.slice(0, 35);
 
-  // Write the single field back.
-  await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${rowIndex}/${column}`, cleaned);
+  // Re-look up the row index right before writing. If the script table
+  // was regenerated in a parallel call between the read above (used for
+  // context) and this write, the rowIndex we computed is stale — it'd
+  // point at whichever row ended up in that position after regen,
+  // and we'd silently corrupt the wrong row's cell. Re-reading catches
+  // the structural change (row id no longer exists) and returns a 409;
+  // a narrow race window remains if regen completes AFTER this read,
+  // but that's ms-wide rather than the seconds-wide Claude-call window.
+  const freshTable = await fbGet(`/preproduction/metaAds/${projectId}/scriptTable`);
+  const freshList = Array.isArray(freshTable) ? freshTable : Object.values(freshTable || {});
+  const freshIndex = freshList.findIndex(r => r && r.id === rowId);
+  if (freshIndex < 0) {
+    return res.status(409).json({ error: "Row no longer in script table — it may have been regenerated. Reopen the row and try again." });
+  }
+  await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${freshIndex}/${column}`, cleaned);
   await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
 
   return res.status(200).json({ success: true, value: cleaned });

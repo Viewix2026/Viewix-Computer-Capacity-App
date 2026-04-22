@@ -11,7 +11,7 @@
 // into Viewix's institutional knowledge of what filming styles work.
 
 import { useEffect, useState, memo } from "react";
-import { fbSet, fbListenSafe } from "../firebase";
+import { fbSet, fbUpdate, fbListenSafe } from "../firebase";
 import { ReelPreview } from "./shared/ReelPreview";
 
 // Shared with other preproduction surfaces so the look-and-feel matches.
@@ -105,10 +105,14 @@ export function FormatLibrary({ role, isFounder }) {
         format={active}
         onBack={() => setActiveId(null)}
         onSave={(patch) => {
-          fbSet(`/formatLibrary/${active.id}`, { ...active, ...patch, updatedAt: new Date().toISOString() });
+          // fbUpdate (merge) not fbSet (replace) — shortlist flows in
+          // SocialOrganicResearch + MetaAdsResearch write sibling leaves
+          // like /examples and /usageCount; an fbSet+spread here would
+          // wipe those if they landed after this component rendered.
+          fbUpdate(`/formatLibrary/${active.id}`, { ...patch, updatedAt: new Date().toISOString() });
         }}
         onArchiveToggle={() => {
-          fbSet(`/formatLibrary/${active.id}`, { ...active, archived: !active.archived, updatedAt: new Date().toISOString() });
+          fbUpdate(`/formatLibrary/${active.id}`, { archived: !active.archived, updatedAt: new Date().toISOString() });
         }}
         onDelete={isFounder ? () => {
           if (!window.confirm(`Delete "${active.name}" from the library permanently?`)) return;

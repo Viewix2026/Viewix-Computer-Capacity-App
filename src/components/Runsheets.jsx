@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { fbSet, fbSetAsync, fbListenSafe } from "../firebase";
+import { fbSet, fbSetAsync, fbUpdate, fbListenSafe } from "../firebase";
 import { generateRunsheetDocx } from "../runsheetDocx";
 import { logoBg } from "../utils";
 
@@ -160,8 +160,13 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
   const getEditorById = (id) => editors.find(e => e.id === id) || null;
 
   // ─── Save helper ───
+  // fbUpdate merges at the RTDB level — concurrent writes from other
+  // tabs (or background webhooks) to sibling keys on this runsheet
+  // survive. The old fbSet+spread pattern captured `runsheets[rsId]`
+  // at render time and replaced the whole node, silently clobbering
+  // any fields that changed after render.
   const patchRS = (rsId, data) => {
-    fbSet(`/runsheets/${rsId}`, { ...runsheets[rsId], ...data, updatedAt: new Date().toISOString() });
+    fbUpdate(`/runsheets/${rsId}`, { ...data, updatedAt: new Date().toISOString() });
   };
 
   const [createError, setCreateError] = useState(null);

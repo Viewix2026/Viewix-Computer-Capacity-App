@@ -16,7 +16,7 @@
 import { useState, useMemo, memo } from "react";
 import { BTN } from "../config";
 import { fmtCur, fmtD } from "../utils";
-import { fbSet } from "../firebase";
+import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
 
 // Monday.com-style status values — matches the screenshot Jeremy shared.
@@ -288,8 +288,12 @@ function ProjectDetail({ project, onBack, onDelete }) {
   const saveField = async (patch) => {
     setSaveState("saving");
     try {
-      await fbSet(`/projects/${project.id}`, {
-        ...project,
+      // fbUpdate (merge) instead of fbSet (replace) so webhook-written
+      // fields (packageTier, numberOfVideos, attioCompanyId, etc.) that
+      // land between this component's render and the save don't get
+      // silently wiped. The old fbSet pattern spread `project` captured
+      // at render time, clobbering anything newer.
+      await fbUpdate(`/projects/${project.id}`, {
         ...patch,
         updatedAt: new Date().toISOString(),
       });

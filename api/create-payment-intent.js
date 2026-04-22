@@ -24,6 +24,13 @@ import { adminGet, adminPatch } from "./_fb-admin.js";
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT = 10;
 const rateLimits = new Map();
+// Counter-based cleanup cadence. The previous size-gated version
+// iterated the full Map on every request past size 500, which under
+// an adversarial burst (thousands of unique IPs/minute) would be
+// O(n) per request and block the event loop. Now we run cleanup at
+// most once every 100 requests regardless of Map size, so the
+// amortised cost per request is bounded.
+let cleanupCounter = 0;
 function checkRate(ip) {
   const now = Date.now();
   const entry = rateLimits.get(ip) || { count: 0, windowStart: now };
@@ -33,9 +40,8 @@ function checkRate(ip) {
   }
   entry.count++;
   rateLimits.set(ip, entry);
-  // Opportunistic cleanup — drop stale entries so the Map can't grow
-  // unbounded across a long-lived warm instance.
-  if (rateLimits.size > 500) {
+  if (++cleanupCounter >= 100) {
+    cleanupCounter = 0;
     for (const [k, v] of rateLimits) {
       if (now - v.windowStart > RATE_WINDOW_MS * 2) rateLimits.delete(k);
     }

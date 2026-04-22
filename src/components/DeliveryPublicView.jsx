@@ -112,10 +112,15 @@ export function DeliveryPublicView(){
 
   const updateField=(videoId,field,value)=>{
     if(!delivery)return;
-    const videoIndex=delivery.videos.findIndex(v=>v.id===videoId);
+    // Guard against missing/non-array videos — legacy delivery records
+    // or partial webhook writes can land here without the field. Without
+    // this guard, findIndex throws and white-screens the public page for
+    // the client — worst possible place for a crash.
+    const videos=Array.isArray(delivery.videos)?delivery.videos:[];
+    const videoIndex=videos.findIndex(v=>v?.id===videoId);
     if(videoIndex<0)return;
-    const video=delivery.videos[videoIndex];
-    const updated={...delivery,videos:delivery.videos.map(v=>v.id===videoId?{...v,[field]:value}:v)};
+    const video=videos[videoIndex];
+    const updated={...delivery,videos:videos.map(v=>v?.id===videoId?{...v,[field]:value}:v)};
     setDelivery(updated);
     setSaving(true);
     // Write the single field path instead of the whole delivery record.
@@ -128,6 +133,12 @@ export function DeliveryPublicView(){
     setTimeout(()=>setSaving(false),800);
     if(field==="revision1"||field==="revision2"){
       pendingChanges.current.push({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});
+      // Bounded queue — clients reviewing for hours without pausing 2min
+      // (which resets the batch timer, see below) would otherwise grow
+      // this unbounded. 200 changes is far more than any real review
+      // session; dropping the oldest loses a notification line, not
+      // client state.
+      if(pendingChanges.current.length>200)pendingChanges.current.shift();
       if(batchTimer.current)clearTimeout(batchTimer.current);
       batchTimer.current=setTimeout(flushNotifications,120000);
     }
@@ -147,8 +158,11 @@ export function DeliveryPublicView(){
     </div>
   );
 
-  const readyCount=delivery.videos.filter(v=>v.viewixStatus==="Ready for Review"||v.viewixStatus==="Completed").length;
-  const totalCount=delivery.videos.length;
+  // Coerce videos to an array once — multiple render paths downstream
+  // assume it's iterable (readyCount, totalCount, the video list map).
+  const videosArr=Array.isArray(delivery.videos)?delivery.videos:[];
+  const readyCount=videosArr.filter(v=>v&&(v.viewixStatus==="Ready for Review"||v.viewixStatus==="Completed")).length;
+  const totalCount=videosArr.length;
   const editableBorder="1px solid #0082FA";
   const editableBg="rgba(0,130,250,0.06)";
 
@@ -197,7 +211,7 @@ export function DeliveryPublicView(){
       </div>
 
       {/* Video table */}
-      {delivery.videos.length===0?(<div style={{textAlign:"center",padding:60,color:"#5A6B85"}}><div style={{fontSize:16,fontWeight:600}}>No videos yet</div></div>)
+      {videosArr.length===0?(<div style={{textAlign:"center",padding:60,color:"#5A6B85"}}><div style={{fontSize:16,fontWeight:600}}>No videos yet</div></div>)
       :(<div style={{overflowX:"auto",background:"#131825",borderRadius:12,border:"1px solid #1E2A3A"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Video Name</th>
@@ -206,7 +220,7 @@ export function DeliveryPublicView(){
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 1 ✎</th>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 2 ✎</th>
         </tr></thead>
-        <tbody>{delivery.videos.map(v=>{
+        <tbody>{videosArr.map(v=>{
           const sc=VIEWIX_STATUS_COLORS[v.viewixStatus]||"#5A6B85";
           return(<tr key={v.id}>
             <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A",fontWeight:600,color:"#E8ECF4"}}>{v.name}</td>

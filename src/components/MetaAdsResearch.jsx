@@ -234,12 +234,19 @@ function BrandField({ label, hint, fieldKey, initial, onSave }) {
   const [value, setValue] = useState(initial || "");
   const lastSavedRef = useRef(initial || "");
 
-  // Keep local state in sync if Firebase updates from another tab.
+  // Keep local state in sync if Firebase updates from another tab —
+  // but ONLY when the local value matches the last-saved baseline
+  // (i.e. no unsaved edits in progress). The previous version blindly
+  // replaced value with initial, which could blow away an edit the
+  // producer was typing when a concurrent tab saved a different value.
   useEffect(() => {
-    if ((initial || "") !== lastSavedRef.current) {
-      setValue(initial || "");
-      lastSavedRef.current = initial || "";
-    }
+    const remote = initial || "";
+    if (remote === lastSavedRef.current) return;
+    setValue(prev => {
+      if (prev !== lastSavedRef.current) return prev;  // has unsaved local edit; preserve it
+      lastSavedRef.current = remote;
+      return remote;
+    });
   }, [initial]);
 
   const onBlur = () => {
@@ -306,11 +313,22 @@ function ResearchStep({ project, onPatch }) {
   const [scrapeError, setScrapeError] = useState(null);
   const [manualError, setManualError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // Unmount guard — avoids setState-on-unmount when the producer
+  // leaves the Research tab while a scrape or manual-add fetch is
+  // still in flight. `inFlightRef` separately gates double-click
+  // on the scrape button (see runScrape below).
+  const isMountedRef = useRef(true);
+  const inFlightRef = useRef(false);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
 
   const pages = Array.isArray(inputs.pages) ? inputs.pages : [];
 
+  // fbUpdate merges at the RTDB level — fast consecutive edits
+  // (add page → change country) each read `inputs` from the closure,
+  // so with fbSet+spread the second call's payload clobbered the
+  // first's changes. fbUpdate writes only the provided keys.
   const patchInputs = (patch) => {
-    fbSet(`/preproduction/metaAds/${project.id}/adLibraryResearch/inputs`, { ...inputs, ...patch });
+    fbUpdate(`/preproduction/metaAds/${project.id}/adLibraryResearch/inputs`, patch);
   };
 
   const addPage = () => {
@@ -333,8 +351,10 @@ function ResearchStep({ project, onPatch }) {
   };
 
   const runScrape = async () => {
+    if (inFlightRef.current || isRunning) return;  // ref-gate covers the narrow window between click and Firebase propagating scrapeStatus: "running"
     setScrapeError(null);
     if (pages.length === 0) { setScrapeError("Add at least one competitor page before scraping."); return; }
+    inFlightRef.current = true;
     patchInputs({ country, dateRange: { from: dateFrom, to: dateTo } });
     setSubmitting(true);
     try {
@@ -353,9 +373,10 @@ function ResearchStep({ project, onPatch }) {
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       // Firebase listener will rehydrate with the scrape status + ads as they arrive.
     } catch (e) {
-      setScrapeError(e.message);
+      if (isMountedRef.current) setScrapeError(e.message);
     } finally {
-      setSubmitting(false);
+      inFlightRef.current = false;
+      if (isMountedRef.current) setSubmitting(false);
     }
   };
 
@@ -384,11 +405,11 @@ function ResearchStep({ project, onPatch }) {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
-      setManualUrl("");
+      if (isMountedRef.current) setManualUrl("");
     } catch (e) {
-      setManualError(e.message);
+      if (isMountedRef.current) setManualError(e.message);
     } finally {
-      setSubmitting(false);
+      if (isMountedRef.current) setSubmitting(false);
     }
   };
 
@@ -481,6 +502,11 @@ function ResearchStep({ project, onPatch }) {
             <span style={{ fontSize: 11, color: "#EF4444" }}>Error: {research.scrapeError}</span>
           )}
         </div>
+        {research.scrapeWarning && (
+          <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(245,158,11,0.08)", borderRadius: 6, border: "1px solid rgba(245,158,11,0.3)", fontSize: 11, color: "#F59E0B" }}>
+            ⚠ {research.scrapeWarning}
+          </div>
+        )}
         {scrapeError && (
           <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
             {scrapeError}
@@ -1054,16 +1080,36 @@ function SelectStep({ project, onPatch }) {
     const n = Math.max(0, parseInt(count, 10) || 0);
     writeSelected(selected.map((s, i) => `${s.formatLibraryId || s.shortlistId || i}` === key ? { ...s, videoCount: n } : s));
   };
+  // User-triggered full rebalance — explicit "Reset to equal split"
+  // button uses this. Always rewrites every row.
   const applyEqualSplit = () => {
     if (selected.length === 0 || !totalTarget) return;
     const base = Math.floor(totalTarget / selected.length);
     const remainder = totalTarget % selected.length;
     writeSelected(selected.map((s, i) => ({ ...s, videoCount: base + (i < remainder ? 1 : 0) })));
   };
+  // Auto-fill — runs when a new format is added and still has no count.
+  // Distributes the REMAINING budget over ONLY the rows that don't have
+  // a count set yet, so the producer's manually-chosen numbers on other
+  // rows are preserved. The old implementation called applyEqualSplit
+  // here, which rewrote all rows.
   useEffect(() => {
     if (!totalTarget || selected.length === 0) return;
-    if (selected.every(s => s.videoCount != null)) return;
-    applyEqualSplit();
+    const unsetIndexes = selected
+      .map((s, i) => (s.videoCount == null ? i : -1))
+      .filter(i => i >= 0);
+    if (unsetIndexes.length === 0) return;
+    const setTotal = selected.reduce((sum, s) => sum + (s.videoCount || 0), 0);
+    const remaining = Math.max(0, totalTarget - setTotal);
+    const base = Math.floor(remaining / unsetIndexes.length);
+    const rem = remaining % unsetIndexes.length;
+    let rIdx = 0;
+    writeSelected(selected.map((s, i) => {
+      if (s.videoCount != null) return s;
+      const v = base + (rIdx < rem ? 1 : 0);
+      rIdx++;
+      return { ...s, videoCount: v };
+    }));
   }, [selected.length, totalTarget]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const approve = () => {
@@ -1197,6 +1243,10 @@ function ScriptStep({ project, onPatch }) {
   // { rowId, column, label, currentValue } | null
   const [rewriteTarget, setRewriteTarget] = useState(null);
   const scripts = project.scriptTable || [];
+  // Tracks mount so the 30-60s Claude call doesn't call setState on
+  // an unmounted component when the producer switches tabs mid-flight.
+  const isMountedRef = useRef(true);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
 
   const generate = async () => {
     setError(null);
@@ -1211,9 +1261,9 @@ function ScriptStep({ project, onPatch }) {
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       // Firebase listener rehydrates scriptTable.
     } catch (e) {
-      setError(e.message);
+      if (isMountedRef.current) setError(e.message);
     } finally {
-      setGenerating(false);
+      if (isMountedRef.current) setGenerating(false);
     }
   };
 
@@ -1320,9 +1370,17 @@ function RewriteModal({ project, target, onClose, onDone }) {
   const [instruction, setInstruction] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  // Guards against setState after unmount (user closes the modal mid-
+  // fetch) — plus a ref to dedupe rapid double-clicks on Rewrite which
+  // would otherwise fire two Claude calls and race each other.
+  const isMountedRef = useRef(true);
+  const inFlightRef = useRef(false);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
 
   const submit = async () => {
     if (!instruction.trim()) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setError(null);
     setSubmitting(true);
     try {
@@ -1340,11 +1398,12 @@ function RewriteModal({ project, target, onClose, onDone }) {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
-      onDone?.();
+      if (isMountedRef.current) onDone?.();
     } catch (e) {
-      setError(e.message);
+      if (isMountedRef.current) setError(e.message);
     } finally {
-      setSubmitting(false);
+      inFlightRef.current = false;
+      if (isMountedRef.current) setSubmitting(false);
     }
   };
 
