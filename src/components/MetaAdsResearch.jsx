@@ -409,12 +409,22 @@ function ResearchStep({ project, onPatch }) {
   const inputs = research.inputs || {};
   const [pageInput, setPageInput] = useState("");
   const [country, setCountry] = useState(inputs.country || "AU");
-  const [dateFrom, setDateFrom] = useState(inputs.dateRange?.from || "");
-  const [dateTo, setDateTo] = useState(inputs.dateRange?.to || "");
+  // Default date range: last 90 days. Producers almost always want
+  // "recent" ads — a ~3 month window gives enough creative variety
+  // without drowning the library in stale stuff.
+  const defaultFrom = (() => {
+    const d = new Date(); d.setDate(d.getDate() - 90);
+    return d.toISOString().slice(0, 10);
+  })();
+  const defaultTo = new Date().toISOString().slice(0, 10);
+  const [dateFrom, setDateFrom] = useState(inputs.dateRange?.from || defaultFrom);
+  const [dateTo, setDateTo] = useState(inputs.dateRange?.to || defaultTo);
   const [manualUrl, setManualUrl] = useState("");
   const [scrapeError, setScrapeError] = useState(null);
   const [manualError, setManualError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState(null);
   // Unmount guard — avoids setState-on-unmount when the producer
   // leaves the Research tab while a scrape or manual-add fetch is
   // still in flight. `inFlightRef` separately gates double-click
@@ -450,6 +460,44 @@ function ResearchStep({ project, onPatch }) {
   };
   const removePage = (pageName) => {
     patchInputs({ pages: pages.filter(p => p.pageName !== pageName) });
+  };
+
+  // AI-suggest competitor pages from the brand-truth transcript +
+  // competitors field. Pops the returned names straight into the
+  // pages list (deduped against anything already there). Producers
+  // can edit the chip list afterwards — this is a head-start, not a
+  // lock-in.
+  const suggestPages = async () => {
+    setSuggestError(null);
+    setSuggesting(true);
+    try {
+      const r = await fetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "suggestAdLibraryInputs", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      const suggestions = Array.isArray(d.pages) ? d.pages : [];
+      if (suggestions.length === 0) {
+        setSuggestError("Claude didn't pick up any competitor page names from the brand truth. Fill in the Competitors field on the Brand Truth tab and try again.");
+        return;
+      }
+      // Merge into existing pages — dedupe on name (case-insensitive).
+      const existingNames = new Set(pages.map(p => p.pageName.toLowerCase()));
+      const merged = [...pages];
+      for (const s of suggestions) {
+        if (!s.pageName) continue;
+        if (existingNames.has(s.pageName.toLowerCase())) continue;
+        merged.push(s);
+        existingNames.add(s.pageName.toLowerCase());
+      }
+      patchInputs({ pages: merged });
+    } catch (e) {
+      if (isMountedRef.current) setSuggestError(e.message);
+    } finally {
+      if (isMountedRef.current) setSuggesting(false);
+    }
   };
 
   const runScrape = async () => {
@@ -540,7 +588,19 @@ function ResearchStep({ project, onPatch }) {
 
         {/* Page list */}
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 6 }}>Competitor Pages</label>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, gap: 8 }}>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Competitor Pages</label>
+            <button onClick={suggestPages} disabled={suggesting}
+              title="Extract competitor page names from the brand truth transcript + competitors field"
+              style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)", background: suggesting ? "#374151" : "var(--bg)", color: "var(--accent)", fontSize: 11, fontWeight: 700, cursor: suggesting ? "wait" : "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}>
+              {suggesting ? "Suggesting…" : "✨ Suggest with AI"}
+            </button>
+          </div>
+          {suggestError && (
+            <div style={{ marginBottom: 8, padding: "8px 10px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+              {suggestError}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <input type="text" value={pageInput} onChange={e => setPageInput(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addPage(); } }}

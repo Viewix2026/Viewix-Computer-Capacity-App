@@ -901,6 +901,89 @@ Return the new value for the "${targetLabel}" field now.`;
   return res.status(200).json({ ok: true, value: cleaned });
 }
 
+// Suggest Facebook Ad Library scrape inputs from the brand truth.
+// Reads project.brandTruth.{fields.competitors, transcript} and asks
+// Claude to extract 3-6 likely Facebook page names (or URLs) that
+// the producer should scrape. Returns them as an array the frontend
+// dumps straight into inputs.pages.
+async function handleSuggestAdLibraryInputs(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const bt = project.brandTruth || {};
+  const fields = bt.fields || {};
+  const competitorsText = fields.competitors || "";
+  const brandTruthsText = fields.brandTruths || "";
+  const targetText = fields.targetCustomer || "";
+  const transcript = bt.transcript || "";
+
+  if (!competitorsText.trim() && !transcript.trim()) {
+    return res.status(400).json({ error: "Run Begin Processing on the Brand Truth tab first so we have something to extract competitors from." });
+  }
+
+  const systemPrompt = `You are a Viewix creative strategist extracting Facebook page names to feed the Meta Ad Library scraper.
+
+RULES:
+- Return a single JSON object: { "pages": ["pageName1", "pageName2", ...] }
+- 3 to 6 entries.
+- Each entry should be the Facebook page handle or simple page name a human would search for, e.g. "NikeAustralia", "Tesla", "AussieFitnessCo". No URLs, no @ signs, no facebook.com/... prefix.
+- Prefer named specific competitors from the context. Do NOT invent businesses that weren't referenced.
+- If the context names ≤3 competitors and the category is well defined, you MAY add 1-2 well-known Australian category leaders.
+- Return ONLY the JSON object. No markdown, no preamble, no code fences.`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+
+COMPETITORS (from Brand Truth):
+${competitorsText || "(not filled yet)"}
+
+BRAND TRUTHS:
+${brandTruthsText || "(not filled yet)"}
+
+TARGET CUSTOMER:
+${targetText || "(not filled yet)"}
+
+TRANSCRIPT EXCERPT (first 4000 chars):
+"""
+${transcript.slice(0, 4000) || "(no transcript)"}
+"""
+
+Extract the pages JSON now.`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 500,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 300) });
+  }
+
+  const rawPages = Array.isArray(parsed.pages) ? parsed.pages : [];
+  const pages = rawPages
+    .map(p => String(p || "").trim().replace(/^https?:\/\/(?:www\.)?facebook\.com\//i, "").replace(/\/$/, "").replace(/^@/, ""))
+    .filter(Boolean)
+    .slice(0, 6)
+    .map(name => ({ pageName: name, pageUrl: "" }));
+
+  return res.status(200).json({ ok: true, pages });
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -915,8 +998,9 @@ export default async function handler(req, res) {
       case "addManualAd":       return await handleAddManualAd(req, res);
       case "scriptGenerate":    return await handleScriptGenerate(req, res);
       case "rewriteCell":       return await handleRewriteCell(req, res);
-      case "generateBrandTruth":    return await handleGenerateBrandTruth(req, res);
+      case "generateBrandTruth":     return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField": return await handleRewriteBrandTruthField(req, res);
+      case "suggestAdLibraryInputs": return await handleSuggestAdLibraryInputs(req, res);
       default:                       return res.status(400).json({ error: `Unknown action: ${action}` });
     }
   } catch (e) {

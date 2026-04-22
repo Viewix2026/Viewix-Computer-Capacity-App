@@ -9,7 +9,7 @@
 // `synthesis` field on old projects is preserved but unused.
 
 import { useState, useEffect, useRef, memo } from "react";
-import { fbSet, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
+import { fbSet, fbSetAsync, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
@@ -2410,9 +2410,24 @@ function ScriptStep({ project, onPatch }) {
                   // lift above the dark card background so producers can
                   // scan across a wide table without losing their row.
                   const rowBg = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.025)";
+                  // Row-level producer note lives at
+                  // preproductionDoc.scriptTable[i].producerNote. Clicking
+                  // the # cell opens a row-scoped modal with a note editor
+                  // + "Rewrite whole row with AI" action. Note indicator
+                  // (amber dot) shows when a note exists.
+                  const hasRowNote = (row.producerNote || "").trim().length > 0;
                   return (
                     <tr key={i} style={{ borderTop: "1px solid var(--border)", background: rowBg }}>
-                      <td style={{ ...tdStyle, color: "var(--muted)", fontWeight: 700, fontFamily: "'JetBrains Mono',monospace" }}>{row.videoNumber || i + 1}</td>
+                      <td
+                        style={{ ...tdStyle, color: "var(--muted)", fontWeight: 700, fontFamily: "'JetBrains Mono',monospace", cursor: "pointer", position: "relative" }}
+                        title={hasRowNote ? `Note: ${row.producerNote.slice(0, 80)}…` : "Click to add a note or rewrite the whole video idea with AI"}
+                        onClick={() => openRewrite(`scriptTable.${i}._row`, `Video ${row.videoNumber || i + 1} — Whole Idea`, row)}
+                      >
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          {row.videoNumber || i + 1}
+                          {hasRowNote && <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: "50%", background: "#F59E0B" }} />}
+                        </div>
+                      </td>
                       {SCRIPT_COLUMNS.map(c => {
                         // Client-feedback cell key: matches what the public
                         // view writes — `scriptTable.{i}.{c.key}`.
@@ -2493,7 +2508,7 @@ function ScriptStep({ project, onPatch }) {
         </SectionCard>
       )}
 
-      {rewriteTarget && (
+      {rewriteTarget && !rewriteTarget.path.endsWith("._row") && (
         <CellRewriteModal
           target={rewriteTarget}
           fbPathPrefix={`/preproduction/socialOrganic/${project.id}/preproductionDoc`}
@@ -2503,6 +2518,140 @@ function ScriptStep({ project, onPatch }) {
           onClose={() => setRewriteTarget(null)}
         />
       )}
+      {rewriteTarget && rewriteTarget.path.endsWith("._row") && (
+        <RowFeedbackModal
+          target={rewriteTarget}
+          project={project}
+          onClose={() => setRewriteTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Row-level feedback modal for the scripting table. Opened from the
+// first (#) cell of any scriptTable row. Gives the producer two
+// actions for the WHOLE video idea:
+//   - Save note: writes a free-text producer note to
+//     preproductionDoc.scriptTable[i].producerNote. Doesn't modify
+//     the script cells; just attaches a sticky note.
+//   - Rewrite whole video with AI: takes the note as instruction +
+//     the existing row data + project brand truth, asks Claude to
+//     produce a fresh row (all cells) replacing the existing row.
+//
+// We use the _row path convention: `scriptTable.{i}._row` -> the
+// parent (ScriptStep) opens this modal instead of the normal
+// CellRewriteModal. rowIndex parsed from the path.
+function RowFeedbackModal({ target, project, onClose }) {
+  const rowIdx = Number((target.path.match(/^scriptTable\.(\d+)\._row$/) || [])[1]);
+  const row = Number.isInteger(rowIdx) ? (project.preproductionDoc?.scriptTable || [])[rowIdx] || {} : {};
+  const [note, setNote] = useState(row.producerNote || "");
+  const [mode, setMode] = useState("note");  // "note" | "rewrite"
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState(null);
+
+  const saveNote = async () => {
+    setWorking(true);
+    setError(null);
+    try {
+      await fbSetAsync(`/preproduction/socialOrganic/${project.id}/preproductionDoc/scriptTable/${rowIdx}/producerNote`, note);
+      await fbSetAsync(`/preproduction/socialOrganic/${project.id}/updatedAt`, new Date().toISOString());
+      onClose();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const rewriteRow = async () => {
+    if (!note.trim()) {
+      setError("Add a note first — Claude needs an instruction.");
+      return;
+    }
+    setWorking(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "rewriteScriptRow",
+          projectId: project.id,
+          rowIndex: rowIdx,
+          instruction: note.trim(),
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      onClose();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const tabBtn = (k, label) => ({
+    padding: "7px 14px", borderRadius: 6, border: "1px solid var(--border)",
+    background: mode === k ? "var(--accent)" : "var(--card)",
+    color: mode === k ? "#fff" : "var(--muted)",
+    fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+  });
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "var(--card)", borderRadius: 12, padding: 22, maxWidth: 720, width: "92%", maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>{target.label}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Row snapshot — what Claude / the producer is commenting on. */}
+        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", marginBottom: 14, fontSize: 12, display: "grid", gap: 4 }}>
+          <div><span style={{ color: "var(--muted)" }}>Format:</span> <strong style={{ color: "var(--fg)" }}>{row.formatName || "—"}</strong></div>
+          {row.hook && <div><span style={{ color: "var(--muted)" }}>Hook:</span> {row.hook}</div>}
+          {row.textHook && <div><span style={{ color: "var(--muted)" }}>Text Hook:</span> {row.textHook}</div>}
+          {row.scriptNotes && <div><span style={{ color: "var(--muted)" }}>Script / Notes:</span> {row.scriptNotes.slice(0, 200)}{row.scriptNotes.length > 200 ? "…" : ""}</div>}
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <button onClick={() => setMode("note")} style={tabBtn("note", "📝 Save note")}>Save note</button>
+          <button onClick={() => setMode("rewrite")} style={tabBtn("rewrite", "✨ Rewrite with AI")}>Rewrite with AI</button>
+        </div>
+
+        <textarea
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          placeholder={mode === "note"
+            ? "Producer note — visible to the team working on this video. E.g. 'Client wants to emphasise speed over price here.'"
+            : "Tell Claude what to change about this whole video idea. E.g. 'Make this more confrontational. The hook is too soft and the script should push harder on the pain point.'"}
+          rows={6}
+          style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", marginBottom: 12 }}
+        />
+
+        {error && (
+          <div style={{ padding: "10px 14px", marginBottom: 12, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontSize: 12, color: "#EF4444" }}>{error}</div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} disabled={working}
+            style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 600, cursor: working ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: working ? 0.5 : 1 }}>
+            Cancel
+          </button>
+          {mode === "note" ? (
+            <button onClick={saveNote} disabled={working}
+              style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: working ? "wait" : "pointer", fontFamily: "inherit", opacity: working ? 0.7 : 1 }}>
+              {working ? "Saving…" : "Save Note"}
+            </button>
+          ) : (
+            <button onClick={rewriteRow} disabled={working || !note.trim()}
+              style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: working || !note.trim() ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: (working || !note.trim()) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (working || !note.trim()) ? 0.6 : 1 }}>
+              {working ? "Rewriting…" : "Rewrite Whole Video"}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -1174,6 +1174,127 @@ Return only the rewritten value.`;
   return res.status(200).json({ success: true, newValue });
 }
 
+// Whole-row rewrite for the scripting table. Called from the
+// RowFeedbackModal ("Rewrite Whole Video" button). Takes a rowIndex
+// + producer instruction and asks Claude to regenerate every field
+// of that script row while preserving videoNumber + formatName +
+// producerNote (the note is kept as a receipt of what the producer
+// asked for). Other rows are untouched.
+async function handleRewriteScriptRow(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, rowIndex, instruction } = req.body || {};
+  if (!projectId || typeof rowIndex !== "number" || !instruction) {
+    return res.status(400).json({ error: "Missing projectId, rowIndex, or instruction" });
+  }
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const table = Array.isArray(project.preproductionDoc?.scriptTable) ? project.preproductionDoc.scriptTable : [];
+  const row = table[rowIndex];
+  if (!row) return res.status(400).json({ error: `No row at index ${rowIndex}` });
+
+  const bt = project.brandTruth?.fields || {};
+  const btBlock = Object.entries(bt).filter(([, v]) => v && v.trim()).map(([k, v]) => `${k}:\n${v}`).join("\n\n");
+
+  const systemPrompt = `You rewrite a single row of a social video script table for Viewix. The producer has asked for specific changes to this whole video idea. Rewrite every editable field (contentStyle, hook, textHook, visualHook, scriptNotes, props) as one coherent idea. Keep the formatName unchanged — format is locked. Follow the producer's instruction literally.
+
+RULES:
+- Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Keep "hook" to one spoken line under 18 words.
+- "textHook" is the on-screen caption overlay, under 8 words.
+- "visualHook" describes what the viewer SEES in the first 2 seconds.
+- "scriptNotes" is the structural beat-by-beat plan — 3-8 short lines.
+- "props" is a comma-separated short list.
+- "contentStyle" is a one-sentence tone/approach description.
+
+{
+  "contentStyle": "...",
+  "hook": "...",
+  "textHook": "...",
+  "visualHook": "...",
+  "scriptNotes": "...",
+  "props": "..."
+}`;
+
+  const userMessage = `CLIENT: ${project.companyName}
+
+BRAND TRUTH CONTEXT:
+${btBlock || "(not filled)"}
+
+FORMAT (locked): ${row.formatName || "(unknown)"}
+
+CURRENT ROW VALUES:
+Content Style: ${row.contentStyle || ""}
+Hook (spoken): ${row.hook || ""}
+Text Hook: ${row.textHook || ""}
+Visual Hook: ${row.visualHook || ""}
+Script / Notes: ${row.scriptNotes || ""}
+Props: ${row.props || ""}
+
+PRODUCER INSTRUCTION:
+"""
+${instruction}
+"""
+
+Rewrite every field of this video idea per the instruction. Return the JSON now.`;
+
+  let raw;
+  try {
+    raw = await callClaude({
+      model: "claude-opus-4-6",
+      systemPrompt,
+      userMessage,
+      maxTokens: 2500,
+      apiKey: ANTHROPIC_KEY,
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+  }
+
+  let parsed;
+  try {
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 400) });
+  }
+
+  // Merge the rewritten fields into the row. Keep videoNumber and
+  // formatName. Keep producerNote as the receipt of what was asked
+  // for. Every other editable field gets overwritten.
+  const newRow = {
+    ...row,
+    contentStyle: parsed.contentStyle ?? row.contentStyle,
+    hook:         parsed.hook         ?? row.hook,
+    textHook:     parsed.textHook     ?? row.textHook,
+    visualHook:   parsed.visualHook   ?? row.visualHook,
+    scriptNotes:  parsed.scriptNotes  ?? row.scriptNotes,
+    props:        parsed.props        ?? row.props,
+    producerNote: instruction.trim(),
+    rewrittenAt:  new Date().toISOString(),
+  };
+
+  await fbSet(`/preproduction/socialOrganic/${projectId}/preproductionDoc/scriptTable/${rowIndex}`, newRow);
+
+  // Audit entry in rewriteHistory, mirroring rewriteScriptSection.
+  const history = Array.isArray(project.preproductionDoc?.rewriteHistory) ? project.preproductionDoc.rewriteHistory : [];
+  history.push({
+    timestamp: new Date().toISOString(),
+    path: `scriptTable.${rowIndex}._row`,
+    instruction,
+    previousValue: { ...row },
+    newValue: newRow,
+  });
+  await fbSet(`/preproduction/socialOrganic/${projectId}/preproductionDoc/rewriteHistory`, history);
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, row: newRow });
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // TAB 1 — BRAND TRUTH (Phase B of 7-tab restructure)
 // generateBrandTruth:     one-shot extraction from transcript + notes + Sherpa
@@ -2303,6 +2424,8 @@ export default async function handler(req, res) {
         return await handleGenerateScript(req, res);
       case "rewriteScriptSection":
         return await handleRewriteScriptSection(req, res);
+      case "rewriteScriptRow":
+        return await handleRewriteScriptRow(req, res);
       case "generateBrandTruth":
         return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField":
