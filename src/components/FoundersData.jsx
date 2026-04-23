@@ -469,7 +469,10 @@ export function FoundersData({ metrics, setMetrics }) {
         }
         return e.date.startsWith(yearFilter);
       });
-      const latest = entryLabels[entryLabels.length - 1] || null;
+      // Latest = last entry IN THE FILTERED WINDOW, not all-time.
+      // Fixes the "top-right number stays on April 2026 even when I
+      // filter to 2023" bug — the number now tracks the filter.
+      const latest = filtered[filtered.length - 1] || null;
 
       // Collect every year in the data so the filter chips are
       // auto-populated (no hard-coded years that need updating).
