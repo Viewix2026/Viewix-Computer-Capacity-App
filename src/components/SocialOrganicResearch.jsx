@@ -321,7 +321,7 @@ function CreateProjectModal({ accounts, onCancel, onCreate }) {
       <div style={{ background: "var(--card)", borderRadius: 12, padding: 24, maxWidth: 560, width: "90%", border: "1px solid var(--border)", maxHeight: "80vh", overflowY: "auto" }}
         onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>New Research Project</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--fg)" }}>New Social Media Organic Pre Production</div>
           <button onClick={onCancel} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 18, cursor: "pointer" }}>×</button>
         </div>
         <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>
