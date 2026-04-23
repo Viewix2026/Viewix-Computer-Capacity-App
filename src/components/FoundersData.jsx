@@ -276,7 +276,22 @@ function SparkChart({ entries, field, latest }) {
     return `${months[parseInt(m) - 1] || m} '${y?.slice(2)}`;
   };
 
-  const latestVal = latest?.[field.key];
+  // Latest value for the top-right — read from the last NON-EMPTY
+  // entry inside the filtered window (not necessarily the chronological
+  // last, because the last entry might be missing this field). Walks
+  // backwards through entries to find the most recent one that has a
+  // value for this field. Guarantees the top-right number tracks the
+  // year filter regardless of sparse data, and removes the dependency
+  // on the separate `latest` prop which was flaky.
+  let latestPair = null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const v = entries[i]?.[field.key];
+    if (v !== "" && v != null && !Number.isNaN(parseFloat(v))) {
+      latestPair = { v, date: entries[i].date };
+      break;
+    }
+  }
+  const latestVal = latestPair?.v;
   const formatted = formatValue(latestVal, field.unit);
 
   return (
