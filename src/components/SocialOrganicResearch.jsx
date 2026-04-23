@@ -3837,14 +3837,21 @@ function ClientResearchStep({ project, onPatch }) {
       <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 10 }}>Top 5 client reels by views</div>
         {topPosts.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
-            {scrapeRunning
-              ? "Waiting on scrape…"
-              : clientScrape.status === "done" && posts.length === 0
-                ? "Client scrape finished but found 0 video posts. The handle may be private or have no reels. Go back to Tab 2 and retry Stage A with a corrected handle."
-                : !clientScrape.status
-                  ? "No scrape has been run yet — approve Stage A on Tab 2 to kick it off."
-                  : "No reels yet — waiting on the client scrape."}
+          <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 12, lineHeight: 1.6 }}>
+            {scrapeRunning ? (
+              "Waiting on scrape…"
+            ) : clientScrape.status === "done" && posts.length === 0 ? (
+              <>
+                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>No reels found for this handle</div>
+                Could be a typo, a private account, or the client just doesn't post video content on Instagram (common for B2B).
+                <br/><br/>
+                <strong>Reels aren't mandatory.</strong> Write the Key Takeaways below based on TikTok / YouTube / what you know from the pre-production meeting, and approve.
+              </>
+            ) : !clientScrape.status ? (
+              "No scrape has been run yet — approve Stage A on Tab 2 to kick it off."
+            ) : (
+              "No reels yet — waiting on the client scrape."
+            )}
           </div>
         ) : (
           // Wider tiles + taller aspect ratio so the Instagram embed has
