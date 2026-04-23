@@ -39,6 +39,7 @@ import { BTN } from "../config";
 // ─── Categories ───────────────────────────────────────────────────────
 const CATEGORIES = [
   { key: "acquisition", label: "Acquisition",        blurb: "Top of funnel — ad spend, leads, cost per lead." },
+  { key: "sources",     label: "Sources (new clients)", blurb: "New clients acquired this month, broken down by channel." },
   { key: "conversion",  label: "Conversion",         blurb: "Mid funnel — calls, close rate, sales cycle." },
   { key: "revenue",     label: "Revenue",            blurb: "The money — monthly, recurring, pipeline." },
   { key: "ltvcac",      label: "LTV + CAC",          blurb: "Efficiency — lifetime value and cost to acquire." },
@@ -65,6 +66,20 @@ const FIELDS = [
   { key: "cpm",                       label: "CPM",                          unit: "$",     category: "acquisition", tier: 2, cadence: "monthly",   def: "Cost per 1,000 impressions" },
   { key: "ctr",                       label: "CTR",                          unit: "%",     category: "acquisition", tier: 2, cadence: "monthly",   def: "Link clicks ÷ impressions" },
   // Deferred (need breakdown-field model): CPL by Campaign, New Leads by Source.
+
+  // ── SOURCES (new clients per channel, this month) ──────────────────
+  // Sourced from the xlsx "New Clients by Source" sheet. Every new
+  // client is tagged against exactly one acquisition source, so the
+  // sum of these should equal newClientsAcquired (same column in the
+  // Conversion section, kept as the blended total for consistency).
+  { key: "newClientsReferral",        label: "New Clients — Referral",       unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via referral" },
+  { key: "newClientsAdvertising",     label: "New Clients — Advertising",    unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via paid ads" },
+  { key: "newClientsLinkedIn",        label: "New Clients — LinkedIn",       unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via LinkedIn outreach" },
+  { key: "newClientsSEO",             label: "New Clients — SEO",            unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via organic search" },
+  { key: "newClientsConference",      label: "New Clients — Conference",     unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via conferences / events" },
+  { key: "newClientsColdEmail",       label: "New Clients — Cold Email",     unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via cold outbound" },
+  { key: "newClientsRepeat",          label: "New Clients — Repeat (untagged)", unit: "count", category: "sources",  tier: 3, cadence: "monthly",   def: "Pre-existing clients reactivated but not tagged to a specific source" },
+  { key: "newClientsOther",           label: "New Clients — Other",          unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients whose source isn't tracked in Attio" },
 
   // ── CONVERSION ─────────────────────────────────────────────────────
   { key: "callsBooked",               label: "Calls Booked",                 unit: "count", category: "conversion",  tier: 2, cadence: "monthly",   def: "Discovery calls scheduled" },
@@ -150,6 +165,7 @@ function formatValue(v, unit) {
 
 const CATEGORY_COLORS = {
   acquisition: "#0082FA",
+  sources:     "#14B8A6",   // teal — distinct from Acquisition's blue
   conversion:  "#10B981",
   revenue:     "#F87700",
   ltvcac:      "#8B5CF6",
@@ -158,64 +174,117 @@ const CATEGORY_COLORS = {
   operations:  "#06B6D4",
 };
 
-// ─── Line chart (kept from the previous version, slightly hardened) ──
-function LineChart({ entries, fields, height = 220 }) {
-  if (!entries || entries.length < 2) {
-    return <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>Need at least 2 months of data to show a chart.</div>;
-  }
-  if (!fields.length) {
-    return <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>No fields to display.</div>;
-  }
-  const W = 700, H = height, PAD = { t: 20, r: 20, b: 40, l: 60 };
+// ─── SparkChart — one field per chart, small-multiples layout ────────
+// Each chart is self-contained: own Y-axis scaled to the field's range,
+// minimal X-axis labels (first / middle / last so it doesn't crowd).
+// Hover shows the value at each point. Much easier to scan than the
+// previous all-fields-overlaid chart that muddled 9 lines in the same
+// viewport.
+function SparkChart({ entries, field, latest }) {
+  if (!entries || entries.length < 2) return null;
+  const W = 280, H = 110, PAD = { t: 14, r: 10, b: 22, l: 36 };
   const cw = W - PAD.l - PAD.r, ch = H - PAD.t - PAD.b;
 
-  const allVals = [];
-  fields.forEach(f => { entries.forEach(e => { const v = parseFloat(e[f.key]); if (!Number.isNaN(v)) allVals.push(v); }); });
-  if (!allVals.length) {
-    return <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>No values logged for these fields yet.</div>;
-  }
-  const minV = Math.min(...allVals, 0);
-  const maxV = Math.max(...allVals, 1);
-  const range = maxV - minV || 1;
+  const color = CATEGORY_COLORS[field.category] || "#8B5CF6";
 
-  const xStep = cw / (entries.length - 1 || 1);
-  const yScale = v => PAD.t + ch - ((v - minV) / range) * ch;
+  const vals = entries.map(e => parseFloat(e[field.key])).filter(v => !Number.isNaN(v));
+  if (vals.length < 2) {
+    return (
+      <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, minHeight: H + 38 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>{field.label}</div>
+        <div style={{ fontSize: 10, color: "var(--muted)", height: H, display: "flex", alignItems: "center", justifyContent: "center", fontStyle: "italic" }}>
+          Not enough data
+        </div>
+      </div>
+    );
+  }
+
+  const minV = Math.min(...vals);
+  const maxV = Math.max(...vals);
+  // Pad the range a touch so the line doesn't kiss the top/bottom edge.
+  const pad = (maxV - minV) * 0.12 || Math.abs(maxV) * 0.12 || 1;
+  const yMin = minV - pad;
+  const yMax = maxV + pad;
+  const range = yMax - yMin || 1;
+
+  const xStep = cw / (entries.length - 1);
+  const yScale = v => PAD.t + ch - ((v - yMin) / range) * ch;
   const xPos = i => PAD.l + i * xStep;
-  const gridLines = 5;
-  const gridStep = range / gridLines;
+
+  const points = entries.map((e, i) => {
+    const v = parseFloat(e[field.key]);
+    if (Number.isNaN(v)) return null;
+    return { x: xPos(i), y: yScale(v), v, date: e.date };
+  }).filter(Boolean);
+
+  const d = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  // Soft area fill under the line for scannability.
+  const areaD = `${d} L${points[points.length - 1].x},${PAD.t + ch} L${points[0].x},${PAD.t + ch} Z`;
+
+  // Y-axis: just min / max ticks (no clutter).
+  const yTick = (v) => {
+    const abs = Math.abs(v);
+    if (field.unit === "$") {
+      if (abs >= 1000) return `$${(v / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
+      return `$${Math.round(v)}`;
+    }
+    if (field.unit === "%") return `${v.toFixed(0)}%`;
+    if (field.unit === "x") return `${v.toFixed(1)}×`;
+    if (abs >= 1000) return `${(v / 1000).toFixed(1)}k`;
+    return `${Math.round(v)}`;
+  };
+
+  // X labels: first and last date only.
+  const fmtDate = (iso) => {
+    if (!iso) return "";
+    const [y, m] = iso.split("-");
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return `${months[parseInt(m) - 1] || m} '${y?.slice(2)}`;
+  };
+
+  const latestVal = latest?.[field.key];
+  const formatted = formatValue(latestVal, field.unit);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", maxWidth: W, display: "block" }}>
-      {Array.from({ length: gridLines + 1 }).map((_, i) => {
-        const val = minV + i * gridStep;
-        const y = yScale(val);
-        return <g key={i}>
-          <line x1={PAD.l} y1={y} x2={W - PAD.r} y2={y} stroke="#1E2A3A" strokeWidth={1} />
-          <text x={PAD.l - 8} y={y + 4} fill="#5A6B85" fontSize={9} textAnchor="end" fontFamily="'JetBrains Mono',monospace">
-            {val >= 1000 ? `${(val / 1000).toFixed(1)}k` : val.toFixed(val < 10 ? 1 : 0)}
-          </text>
-        </g>;
-      })}
-      {entries.map((e, i) => (
-        <text key={i} x={xPos(i)} y={H - 8} fill="#5A6B85" fontSize={9} textAnchor="middle" fontFamily="'JetBrains Mono',monospace">
-          {e.label || e.date}
+    <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6, marginBottom: 6 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={field.label}>
+          {field.label}
+        </div>
+        {formatted && (
+          <div style={{ fontSize: 12, fontWeight: 700, color, fontFamily: "'JetBrains Mono',monospace", flexShrink: 0 }}>
+            {formatted}
+          </div>
+        )}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+        <defs>
+          <linearGradient id={`grad-${field.key}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {/* Min / max Y-axis ticks */}
+        <text x={PAD.l - 4} y={PAD.t + 4} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMax)}</text>
+        <text x={PAD.l - 4} y={PAD.t + ch} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMin)}</text>
+        <line x1={PAD.l} y1={PAD.t + ch} x2={W - PAD.r} y2={PAD.t + ch} stroke="#1E2A3A" strokeWidth={1} />
+        {/* Soft area fill */}
+        <path d={areaD} fill={`url(#grad-${field.key})`} />
+        {/* Main line */}
+        <path d={d} fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+        {/* Latest point dot */}
+        {points.length > 0 && (
+          <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r={3} fill={color} stroke="#0B0F1A" strokeWidth={1.5} />
+        )}
+        {/* X-axis: first + last month */}
+        <text x={PAD.l} y={H - 6} fill="#5A6B85" fontSize={8} textAnchor="start" fontFamily="'JetBrains Mono',monospace">
+          {fmtDate(entries[0].date)}
         </text>
-      ))}
-      {fields.map(f => {
-        const color = CATEGORY_COLORS[f.category] || "#8B5CF6";
-        const points = entries.map((e, i) => {
-          const v = parseFloat(e[f.key]);
-          if (Number.isNaN(v)) return null;
-          return { x: xPos(i), y: yScale(v), v };
-        }).filter(Boolean);
-        if (points.length < 2) return null;
-        const d = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
-        return <g key={f.key}>
-          <path d={d} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-          {points.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={3.5} fill={color} stroke="#0B0F1A" strokeWidth={2} />)}
-        </g>;
-      })}
-    </svg>
+        <text x={W - PAD.r} y={H - 6} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">
+          {fmtDate(entries[entries.length - 1].date)}
+        </text>
+      </svg>
+    </div>
   );
 }
 
@@ -227,10 +296,15 @@ export function FoundersData({ metrics, setMetrics }) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
   const [editVals, setEditVals] = useState({});
-  const [openCategories, setOpenCategories] = useState({ acquisition: true, conversion: true, revenue: true, ltvcac: true, retention: true, risk: true, operations: false });
+  const [openCategories, setOpenCategories] = useState({ acquisition: true, sources: true, conversion: true, revenue: true, ltvcac: true, retention: true, risk: true, operations: false });
   const [visibleChartCategories, setVisibleChartCategories] = useState(
     Object.fromEntries(CATEGORIES.map(c => [c.key, true]))
   );
+  // Year filter: "all" | "last12" | "2022" | "2023" | "2024" | "2025" | "2026"
+  // Default to "last12" — most useful window for a founder reviewing
+  // trends; full range still available for the "look back at the arc"
+  // review.
+  const [yearFilter, setYearFilter] = useState("last12");
 
   const activeFields = fieldsForTier(tierCap);
 
@@ -375,12 +449,67 @@ export function FoundersData({ metrics, setMetrics }) {
       </div>
     </div>
 
-    {/* Trends */}
-    {entryLabels.length >= 2 && (
-      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "18px 20px", marginBottom: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>Trends</div>
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+    {/* Trends — small multiples. One chart per field, grouped by
+        category. Each chart is self-scaled so the shape is always
+        readable regardless of the field's magnitude. Year filter
+        narrows the X axis. */}
+    {entryLabels.length >= 2 && (() => {
+      // Apply year filter to build the chart's entry set without
+      // mutating entryLabels (the data table still shows all months).
+      const filtered = entryLabels.filter(e => {
+        if (!yearFilter || yearFilter === "all") return true;
+        if (yearFilter === "last12") {
+          // Last 12 months from the most recent entry's date.
+          const latest = entryLabels[entryLabels.length - 1]?.date;
+          if (!latest) return true;
+          const [ly, lm] = latest.split("-").map(Number);
+          const cutoff = new Date(ly, lm - 12, 1);
+          const [ey, em] = e.date.split("-").map(Number);
+          return new Date(ey, em - 1, 1) >= cutoff;
+        }
+        return e.date.startsWith(yearFilter);
+      });
+      const latest = entryLabels[entryLabels.length - 1] || null;
+
+      // Collect every year in the data so the filter chips are
+      // auto-populated (no hard-coded years that need updating).
+      const years = Array.from(new Set(entryLabels.map(e => e.date.split("-")[0]))).sort();
+
+      const filterChips = [
+        { key: "last12", label: "Last 12 months" },
+        { key: "all",    label: "All time" },
+        ...years.map(y => ({ key: y, label: y })),
+      ];
+
+      return (
+        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "18px 20px", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>Trends</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>One line per field. Each chart is scaled to its own range so the shape is always readable. Latest value in the top right.</div>
+            </div>
+          </div>
+
+          {/* Year / window filter */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
+            {filterChips.map(f => {
+              const active = yearFilter === f.key;
+              return (
+                <button key={f.key} onClick={() => setYearFilter(f.key)}
+                  style={{
+                    padding: "5px 12px", borderRadius: 4, border: "none",
+                    background: active ? "var(--accent)" : "var(--bg)",
+                    color: active ? "#fff" : "var(--muted)",
+                    fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                  }}>
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Category toggle chips */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
             {CATEGORIES.map(cat => {
               const catFields = activeFields.filter(f => f.category === cat.key);
               if (!catFields.length) return null;
@@ -401,24 +530,35 @@ export function FoundersData({ metrics, setMetrics }) {
               );
             })}
           </div>
+
+          {filtered.length < 2 ? (
+            <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+              Not enough data points in the selected window. Widen the filter or wait for another month of data.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 18 }}>
+              {CATEGORIES.map(cat => {
+                if (!visibleChartCategories[cat.key]) return null;
+                const catFields = activeFields.filter(f => f.category === cat.key);
+                if (!catFields.length) return null;
+                return (
+                  <div key={cat.key}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: CATEGORY_COLORS[cat.key], textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+                      {cat.label}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
+                      {catFields.map(f => (
+                        <SparkChart key={f.key} entries={filtered} field={f} latest={latest} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-        <div style={{ display: "grid", gap: 16 }}>
-          {CATEGORIES.map(cat => {
-            if (!visibleChartCategories[cat.key]) return null;
-            const catFields = activeFields.filter(f => f.category === cat.key);
-            if (!catFields.length) return null;
-            return (
-              <div key={cat.key}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: CATEGORY_COLORS[cat.key], textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
-                  {cat.label}
-                </div>
-                <LineChart entries={entryLabels} fields={catFields} height={180} />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    )}
+      );
+    })()}
 
     {/* Data Table */}
     <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "18px 20px" }}>
