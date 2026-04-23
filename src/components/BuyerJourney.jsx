@@ -19,7 +19,46 @@
 import { useState } from "react";
 import { BTN, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS } from "../config";
 
-const SECTION_COLORS = { "Lead Generation": "#0082FA", "Sales": "#F87700", "Pre Production": "#8B5CF6", "Production": "#10B981", "Delivery": "#F59E0B", "Retention": "#EC4899" };
+const SECTION_COLORS = {
+  "Lead Generation": "#0082FA",
+  "Lead Generation — Funnels": "#0082FA",
+  "Sales": "#F87700",
+  "Sales — Discovery & Blueprint": "#F87700",
+  "Sale Conversion": "#F59E0B",
+  "Pre Production": "#8B5CF6",
+  "Pre-Production": "#8B5CF6",
+  "Production": "#10B981",
+  "Editing & Review": "#14B8A6",
+  "Delivery": "#F59E0B",
+  "Delivery & Feedback": "#F59E0B",
+  "Upload & Scheduling (Social Retainer)": "#0EA5E9",
+  "Performance & Review": "#EC4899",
+  "Renewal": "#EC4899",
+  "Retention": "#EC4899",
+  "Loop — Renewed back to Pre-Production": "#8B5CF6",
+};
+
+// ─── Event types ────────────────────────────────────────────────────
+// Each stage / branch side can carry an `eventType` that colour-codes
+// the card's left accent bar + tag chip so founders can scan the
+// journey and see, at a glance, "who does what" at every step.
+//
+//   touchpoint — the client sees / experiences it (ads, emails, pages, videos)
+//   action     — the client does it (clicks, pays, books, gives feedback)
+//   internal   — internal team work (production, editing, QA)
+//   automation — system-triggered event (nurture sequences, reminders, Slack notifs, dashboard population)
+//   invoice    — money events (deposit, invoice generation)
+//   meeting    — scheduled live meetings (discovery call, pre-prod, SRM, SPM)
+//   notBuilt   — documented but not yet implemented — amber dashed border
+const EVENT_TYPES = {
+  touchpoint: { label: "Client touchpoint",  color: "#0082FA", icon: "👁" },
+  action:     { label: "Client action",      color: "#10B981", icon: "✓" },
+  internal:   { label: "Internal task",      color: "#8B5CF6", icon: "⚙" },
+  automation: { label: "Automation",         color: "#06B6D4", icon: "⚡" },
+  invoice:    { label: "Invoice / payment",  color: "#F59E0B", icon: "$" },
+  meeting:    { label: "Meeting",            color: "#EC4899", icon: "📅" },
+  notBuilt:   { label: "Not yet built",      color: "#EF4444", icon: "⏳" },
+};
 
 // Milestone-to-default-stage hints used when the user first opens the
 // editor — otherwise the dropdown is just "(none)" everywhere. Stored
@@ -54,58 +93,242 @@ const DEFAULT_META = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════
-// DEFAULT_COMBINED — the unified Meta Ads + Social Retainer journey.
+// DEFAULT_COMBINED — the FULL Viewix buyer journey, Jeremy's dictation
+// turned into a colour-coded flow chart.
 //
-// The two offers share ~90% of the flow (Lead Gen → Sales → Pre-Prod
-// → Production → Delivery review). They diverge at exactly 4 points:
-//   1. Invoice paid    (50/50 vs 3 payments)
-//   2. Final delivery  (hand to ad agency vs upload to Metricool)
-//   3. Monthly review  (ad performance vs content performance)
-//   4. Ongoing catchup (new ad / VSL vs new content batch)
+// Structure:
+//   11 sections (Lead Gen → Loop)
+//   ~65 stages + decision points
+//   7 event types colour-coded on each stage
+//   4 branches (Yes/Maybe/No/No-show + Revise/Approve + Renew/Not + etc.)
+//   2 offerBranches (payment schedule + final delivery)
+//   1 multiBranch for the 4 lead funnels converging
 //
-// At those points we use a new `offerBranch` type that renders as two
-// stacked cards — Meta Ads (orange) on top, Social Retainer (purple)
-// below — and the main flow continues from both simultaneously.
-//
-// The shared milestoneKey on an offerBranch links both sides to the
-// same turnaround milestone so days-to-next and /turnaround editing
-// stay consistent regardless of which offer you sold.
+// Every stage can carry:
+//   eventType  — touchpoint / action / internal / automation / invoice / meeting / notBuilt
+//   notBuilt   — flagged stages render amber-dashed with a "⏳ Not built" tag
+//   tag        — short label chip (e.g. "50 / 50", "1 day before", "Meta Ads only")
+//   milestoneKey — ties to /turnaround so days-to-next syncs with AccountsDashboard
 // ═══════════════════════════════════════════════════════════════════
 const DEFAULT_COMBINED = [
-  { id: "c1",  type: "section", label: "Lead Generation" },
-  { id: "c2",  type: "stage", title: "Meta ad", desc: "Prospect watches a video ad on Facebook or Instagram" },
-  { id: "c3",  type: "stage", title: "Click \"Learn more\"", desc: "CTA button takes them to the landing page" },
-  { id: "c4",  type: "stage", title: "Landing page", desc: "Complete a 5 step survey. They become a lead at this point." },
-  { id: "c5",  type: "stage", title: "Booked meeting", desc: "65% of leads book a meeting with the sales team. Lead is pushed to the LEADS Slack channel.", pct: "65% convert" },
-  { id: "c6",  type: "stage", title: "Closer calls immediately", desc: "As soon as the lead comes in, a closer calls them from the LEADS channel" },
-  { id: "c7",  type: "section", label: "Sales" },
-  { id: "c8",  type: "stage", title: "Discovery call", desc: "Further qualification. Understand their goals, budget, timeline. Present the content blueprint." },
-  { id: "c9",  type: "branch", left: { title: "Won", desc: "Send video sales letter explaining the process. Closer sends first invoice." }, right: { title: "Lost", desc: "Deal closed. Add to nurture sequence for future re-engagement." } },
-  { id: "c10", type: "offerBranch", milestoneKey: "signing",
-    metaAds:        { title: "Invoice paid", desc: "50% of the ad package paid upfront before production begins. 50% balance charged when the project wraps.", tag: "50 / 50" },
-    socialRetainer: { title: "Invoice paid", desc: "Retainer split into 3 payments. Deposit upfront, second at +30 days, third at +60 days. Auto-charged via Stripe.", tag: "3 payments" } },
-  { id: "c11", type: "section", label: "Pre Production" },
-  { id: "c12", type: "stage", title: "Pre production meeting", desc: "Client meets a founder and their project lead. Project lead asks questions to deeply understand the business.", milestoneKey: "preProductionMeeting" },
-  { id: "c13", type: "stage", title: "Pre production prep", desc: "Team puts together the pre production plan with all creative ideas" },
-  { id: "c14", type: "stage", title: "Pre production call", desc: "Run the client through all ideas and creative direction", milestoneKey: "preProductionPresentation" },
-  { id: "c15", type: "branch", left: { title: "Revisions", desc: "Client has feedback. A couple of days to action, then another meeting to confirm." }, right: { title: "Approved", desc: "No changes needed. Go straight to booking the shoot." } },
-  { id: "c16", type: "section", label: "Production" },
-  { id: "c17", type: "stage", title: "Book shoot", desc: "Schedule the shoot date with the client and team" },
-  { id: "c18", type: "stage", title: "Shoot day", desc: "Single shoot day with the full team on location", milestoneKey: "shoot" },
-  { id: "c19", type: "stage", title: "Editing", desc: "Editor completes all videos and all aspect ratios" },
-  { id: "c20", type: "section", label: "Delivery" },
-  { id: "c21", type: "branch", left: { title: "Office review", desc: "Client comes in to review. Get a video testimonial and take feedback in person." }, right: { title: "Frame.io", desc: "Client reviews videos online via Frame.io and leaves feedback there." } },
-  { id: "c22", type: "stage", title: "Action feedback", desc: "Make any requested changes from the review" },
-  { id: "c23", type: "offerBranch", milestoneKey: "posting",
-    metaAds:        { title: "Final delivery", desc: "Deliver all videos in all ratios to the client. Client shares with their ad agency for Meta Ads deployment." },
-    socialRetainer: { title: "Upload to Metricool", desc: "Viewix takes the client's login credentials and uploads content directly to Metricool, scheduling and posting on their behalf." } },
-  { id: "c24", type: "section", label: "Retention" },
-  { id: "c25", type: "offerBranch", milestoneKey: "resultsReview",
-    metaAds:        { title: "Monthly performance review", desc: "Recurring monthly meeting to review ad performance in Meta Ads Manager with their agency" },
-    socialRetainer: { title: "Monthly performance review", desc: "Recurring monthly meeting to review content performance and engagement metrics across Instagram / TikTok / etc." } },
-  { id: "c26", type: "offerBranch", milestoneKey: "partnershipReview",
-    metaAds:        { title: "Ongoing catch ups", desc: "Understand which ads are performing. Identify when new ads or a video sales letter is needed to increase landing page opt-in rate." },
-    socialRetainer: { title: "Ongoing catch ups", desc: "Understand what content is performing. Identify when a new batch of content is needed for the next month." } },
+  // ─── LEAD GENERATION ──────────────────────────────────────────────
+  { id: "c1",  type: "section", label: "Lead Generation — Funnels" },
+
+  // Four parallel funnels, each a full path that converges on #leads Slack.
+  // Rendered as a multiBranch so they sit side-by-side visually.
+  { id: "c2",  type: "multiBranch", sides: [
+      { eventType: "touchpoint", title: "Meta Ads Funnel",
+        desc: "Prospect sees Meta ad → clicks → lands on landing page (pixel fires for retargeting) → completes 5-step survey → becomes lead." },
+      { eventType: "touchpoint", title: "Instagram Funnel",
+        desc: "Sees content on Instagram → DMs \"video\" → auto-reply asks for phone number → number lands in #leads Slack." },
+      { eventType: "touchpoint", title: "Website Funnel",
+        desc: "Visits viewix.com.au → completes Get Started form → info lands in #leads Slack." },
+      { eventType: "notBuilt", notBuilt: true, title: "Lead Magnet Funnel",
+        desc: "Meta ads / website tab / Instagram CTA → single lead magnet landing page → #leads Slack. 3 variants, not built yet." },
+  ] },
+
+  { id: "c3",  type: "stage", eventType: "automation", title: "Lead lands in #leads Slack",
+    desc: "Phone + source visible to closers. Simultaneously triggers the lead-nurture sequence (email + SMS) to keep the lead warm." },
+  { id: "c4",  type: "stage", eventType: "internal", title: "Closer calls lead immediately",
+    desc: "Closer in #leads picks up as soon as the lead drops. First-response speed is the #1 predictor of booking." },
+  { id: "c5",  type: "stage", eventType: "internal", title: "Walks through competitor analysis report",
+    desc: "Closer presents an AI-generated competitor analysis of the prospect's industry / handles on the phone call." },
+  { id: "c6",  type: "stage", eventType: "action", title: "Books discovery meeting",
+    desc: "Either during the survey flow or on the closer's first call. Prospect is now scheduled for a discovery call." },
+
+  // ─── SALES ─────────────────────────────────────────────────────────
+  { id: "c7",  type: "section", label: "Sales — Discovery & Blueprint" },
+
+  { id: "c8",  type: "stage", eventType: "automation", title: "Pre-meeting nurture sequence",
+    desc: "Email + SMS sequence keeps the lead engaged and encourages show-up to the discovery call." },
+  { id: "c9",  type: "stage", eventType: "automation", title: "Meeting reminder (2 hours before)",
+    desc: "Auto-fires by email 2 hours before the scheduled discovery call.", tag: "2 hrs before" },
+  { id: "c10", type: "stage", eventType: "meeting", title: "Discovery call — Content Blueprint",
+    desc: "Closer presents the content blueprint. Deep qualification on goals, budget, timeline, fit." },
+
+  // 4-way outcome branch
+  { id: "c11", type: "multiBranch", sides: [
+      { eventType: "action", title: "YES — proceed",
+        desc: "Prospect commits. Closer sends the deposit page link (/s/{shortId})." },
+      { eventType: "internal", title: "MAYBE — needs time",
+        desc: "Closer organises catch-up meetings to nurture. Stays active in the pipeline." },
+      { eventType: "notBuilt", notBuilt: true, title: "NO — declined",
+        desc: "Prospect passes. Drops into a longer-term nurture sequence. Not built yet." },
+      { eventType: "notBuilt", notBuilt: true, title: "NO-SHOW",
+        desc: "Didn't attend the discovery call. Kicks off a re-engagement nurture sequence. Not built yet." },
+  ] },
+
+  // ─── SALE CONVERSION ──────────────────────────────────────────────
+  { id: "c12", type: "section", label: "Sale Conversion" },
+
+  { id: "c13", type: "stage", eventType: "touchpoint", title: "Deposit page link sent",
+    desc: "Closer emails + SMSes the Stripe deposit link. Branded Viewix page with scope, schedule, consent, and the Stripe Embedded Checkout iframe." },
+  { id: "c14", type: "stage", eventType: "invoice", title: "Deposit paid",
+    desc: "Prospect pays on the public payment page. Stripe webhook fires → marks slice 0 paid + saves payment method for future charges.",
+    milestoneKey: "signing" },
+
+  // Payment schedule divergence (Meta Ads vs Social)
+  { id: "c15", type: "offerBranch", milestoneKey: "signing",
+    metaAds:        { title: "50 / 50 schedule", desc: "50% upfront (paid now) + 50% balance charged on project completion via the Charge Balance button in the Sale tab.", tag: "50 / 50" },
+    socialRetainer: { title: "3-payment schedule", desc: "Deposit now + auto-charge at +30 days + auto-charge at +60 days (Stripe subscription).", tag: "3 payments" } },
+
+  { id: "c16", type: "stage", eventType: "touchpoint", title: "Well Done page",
+    desc: "Branded confirmation page (paper-cream Studio design). Loom video specific to the package purchased. Producer card with photo. TidyCal embed for pre-production booking. Receipt + Download receipt button.",
+    tag: "was Thank-You page" },
+  { id: "c17", type: "stage", eventType: "automation", title: "Slack #sales: deposit received",
+    desc: "Auto-posted to #sales channel with deposit amount, client name, package tier, LTV forecast." },
+  { id: "c18", type: "stage", eventType: "internal", title: "Log sale in Attio",
+    desc: "Closer manually records the won deal in Attio. Triggers every downstream automation via the deal-won webhook." },
+
+  // Parallel post-sale automations (multiBranch because they all fire together)
+  { id: "c19", type: "multiBranch", sides: [
+      { eventType: "automation", title: "Monday project task",
+        desc: "Auto-created in the production board (1884080816). Assigned to producer." },
+      { eventType: "automation", title: "Xero invoice generated",
+        desc: "Invoice raised for accounting. Matches Stripe payment on reconciliation." },
+      { eventType: "automation", title: "Dashboard populated",
+        desc: "Creates: Projects tab record, Accounts tab entry, Deliveries page (empty), Client Sherpa." },
+      { eventType: "notBuilt", notBuilt: true, title: "Assign account manager + producer",
+        desc: "Currently manual — founder picks. Needs a routing rule (capacity-aware). Not built yet." },
+  ] },
+
+  // ─── PRE-PRODUCTION ───────────────────────────────────────────────
+  { id: "c20", type: "section", label: "Pre-Production" },
+
+  { id: "c21", type: "stage", eventType: "action", title: "Client books pre-production call",
+    desc: "TidyCal embed on Well Done page → scheduled into Vish's (production manager) calendar." },
+  { id: "c22", type: "stage", eventType: "automation", title: "Reminder emails",
+    desc: "Two auto-reminders: one the day before the meeting, one an hour before.",
+    tag: "24h + 1h" },
+  { id: "c23", type: "stage", eventType: "meeting", title: "Pre-production meeting",
+    desc: "Vish + account manager + client. AI notetaker records. Questions on goals, aspirations, fears, desires, USP, industry — what's changed since last time for repeat clients.",
+    milestoneKey: "preProductionMeeting" },
+  { id: "c24", type: "stage", eventType: "automation", title: "Transcription → Google Doc → #preproduction Slack",
+    desc: "AI notetaker output lands in both places automatically. Producer reads before building the brief." },
+  { id: "c25", type: "stage", eventType: "internal", title: "Schedule pre-production presentation",
+    desc: "Scheduled within ~7 days of the first meeting.",
+    tag: "+7 days" },
+  { id: "c26", type: "stage", eventType: "internal", title: "Production manager assigns producer",
+    desc: "Production manager picks the right producer for this project." },
+
+  // Pre-production workflow divergence (Meta Ads 6-tab vs Social Organic 8-tab)
+  { id: "c27", type: "offerBranch",
+    metaAds:        { title: "Meta Ads pre-production", desc: "Producer runs the 6-tab flow in the dashboard: Brand Truth → Ad Library → Video Review → Shortlist → Selection → Scripting." },
+    socialRetainer: { title: "Social Organic pre-production", desc: "Producer runs the 8-tab flow: Brand Truth → Format Research → Client Research → Video Review → Shortlist → Format Selection → Idea Selection → Scripting." } },
+
+  { id: "c28", type: "stage", eventType: "internal", title: "Internal pre-prod review",
+    desc: "Producer + account manager review together before showing the client. Catches anything off-brief." },
+  { id: "c29", type: "stage", eventType: "meeting", title: "Pre-production presentation",
+    desc: "Producer + account manager + client. Google Meet or in-person (Dulwich Hill office). Walk client through all creative ideas.",
+    milestoneKey: "preProductionPresentation" },
+  { id: "c30", type: "branch",
+    left:  { title: "Revisions requested", desc: "Producer updates the brief. Schedule another pre-production presentation." },
+    right: { title: "Approved", desc: "Shoot date booked. Edit date(s) scheduled for one or more editors to meet the client's timeline." } },
+  { id: "c31", type: "stage", eventType: "automation", title: "Video names + run sheet scaffolding populated",
+    desc: "Once pre-prod is approved: deliveries page pre-fills with video names, run sheet is pre-scaffolded so the producer just fills the blanks." },
+  { id: "c32", type: "stage", eventType: "internal", title: "Producer finalises run sheet",
+    desc: "Fills in full shoot details — call times, locations, talent, wardrobe, shot list, props." },
+  { id: "c33", type: "stage", eventType: "touchpoint", title: "Run sheet emailed to client",
+    desc: "Production manager sends the finalised run sheet to the client. Chance for any last-minute flags." },
+
+  // ─── PRODUCTION ───────────────────────────────────────────────────
+  { id: "c34", type: "section", label: "Production" },
+
+  { id: "c35", type: "stage", eventType: "automation", title: "Pre-shoot email (day before)",
+    desc: "Auto-fires the day before. Excitement + pre-shoot talent checklist so the client knows exactly what to prepare.",
+    tag: "1 day before" },
+  { id: "c36", type: "stage", eventType: "meeting", title: "Shoot day",
+    desc: "Full team on-site. Everything from the run sheet is captured.",
+    milestoneKey: "shoot" },
+  { id: "c37", type: "stage", eventType: "internal", title: "Shooter creates project folder + drops footage",
+    desc: "All raw footage uploaded to the project's Drive folder." },
+  { id: "c38", type: "stage", eventType: "automation", title: "Edit Suite email to client",
+    desc: "Auto-fires letting the client know we're in post. Expect an update soon.",
+    tag: "+1 day after shoot" },
+
+  // ─── EDITING & REVIEW ─────────────────────────────────────────────
+  { id: "c39", type: "section", label: "Editing & Review" },
+
+  { id: "c40", type: "stage", eventType: "internal", title: "Producer makes selects timeline",
+    desc: "Initial cut selects — narrows hundreds of raw clips down to the usable takes for each video." },
+  { id: "c41", type: "stage", eventType: "internal", title: "Edit kick-off walkthrough (Loom or OBS)",
+    desc: "Project lead records a screen walkthrough — brief, shoot context, format specifics. Uploaded to Drive + linked on the project so every editor (sync or async) sees exactly what the project looks like." },
+  { id: "c42", type: "stage", eventType: "internal", title: "Editors edit all videos",
+    desc: "Full editorial work per video. Every format + every aspect ratio variant." },
+  { id: "c43", type: "stage", eventType: "internal", title: "Producer quality review",
+    desc: "QA pass against the brief. Nothing advances until the producer signs off." },
+  { id: "c44", type: "stage", eventType: "internal", title: "Account manager review",
+    desc: "Second QA layer. Approved on #slack before the deliveries page exposes anything to the client." },
+  { id: "c45", type: "stage", eventType: "internal", title: "Push links to deliveries page",
+    desc: "Production manager manually uploads Frame.io links into the dashboard. Should be automated — wire Frame.io webhook directly into the deliveries page.",
+    tag: "manual now, automate later" },
+
+  // ─── DELIVERY & FEEDBACK ──────────────────────────────────────────
+  { id: "c46", type: "section", label: "Delivery & Feedback" },
+
+  { id: "c47", type: "stage", eventType: "touchpoint", title: "Deliveries page shared with client",
+    desc: "Client-branded public share link (/d/{shortId}). Two rounds of revisions included.",
+    milestoneKey: "posting" },
+  { id: "c48", type: "stage", eventType: "action", title: "Client reviews + leaves feedback",
+    desc: "Detailed per-video notes in Frame.io + per-video Approved / Needs Revision status on the deliveries page." },
+  { id: "c49", type: "branch",
+    left:  { title: "Revisions", desc: "Producer actions changes. Back to review. Up to 2 rounds included." },
+    right: { title: "All approved", desc: "Move to upload / hand-off phase." } },
+
+  // ─── UPLOAD & SCHEDULING ─────────────────────────────────────────
+  // This phase diverges: Meta Ads → client's agency takes over.
+  // Social Retainer → Viewix uploads + schedules + boosts.
+  { id: "c50", type: "section", label: "Upload & Scheduling (Social Retainer)" },
+
+  { id: "c51", type: "offerBranch",
+    metaAds:        { title: "Final delivery", desc: "Deliver all videos in all ratios. Client hands off to their ad agency for Meta Ads deployment. Viewix's production phase ends here." },
+    socialRetainer: { title: "Upload + schedule (Metricool)", desc: "Production manager uploads videos + schedules them via Metricool using client's credentials. First month: one video per format, best first." } },
+
+  { id: "c52", type: "stage", eventType: "automation", title: "Auto-schedule 6 meetings",
+    desc: "Social Retainer only. 3× SRM (Social Review Meeting, with client + AM + producer) and 3× SPM (Social Performance Meeting, internal-only). SPM always 2 hours before its paired SRM. SPM learnings feed the Sherpa." },
+  { id: "c53", type: "stage", eventType: "internal", title: "$5 boost per post on Instagram",
+    desc: "Every uploaded video gets a standard $5 Instagram boost for broad reach + to surface the low-cost-per-profile-visit winners." },
+
+  // ─── PERFORMANCE & REVIEW ─────────────────────────────────────────
+  { id: "c54", type: "section", label: "Performance & Review (Social Retainer)" },
+
+  { id: "c55", type: "stage", eventType: "meeting", title: "SPM 1 (week ~4, internal)",
+    desc: "Producer + AM review initial analytics before the client meeting. Identifies what to pitch." },
+  { id: "c56", type: "stage", eventType: "meeting", title: "SRM 1 (week 4, with client)",
+    desc: "Review initial 4-week analytics. Identify the 2 highest-performing videos + add $50 boost each. Discuss what formats are working.",
+    milestoneKey: "resultsReview",
+    tag: "+4 weeks" },
+  { id: "c57", type: "stage", eventType: "internal", title: "Round 2 pre-production kickoff",
+    desc: "Producer scheduled to kick off R2 content pre-production, 1 week before SRM 2.",
+    tag: "+7 weeks" },
+  { id: "c58", type: "stage", eventType: "meeting", title: "SPM 2 (week ~8, internal)",
+    desc: "Pre-SRM 2 analytics review + pitch prep." },
+  { id: "c59", type: "stage", eventType: "meeting", title: "SRM 2 (week 8, with client)",
+    desc: "Analytics + pitch R2 content ideas. Identify top 2 from month 2 + add $50 boost each.",
+    tag: "+8 weeks" },
+
+  // ─── RENEWAL ─────────────────────────────────────────────────────
+  { id: "c60", type: "section", label: "Renewal" },
+
+  { id: "c61", type: "branch",
+    left:  { title: "Renew YES", desc: "Client signs for another round. New shoot date booked. Run sheet begins. Loop back to Pre-Production (c20)." },
+    right: { title: "Renew NO", desc: "Move into SRM 3 last-ditch pitch." } },
+  { id: "c62", type: "stage", eventType: "meeting", title: "SPM 3 (week ~12, internal)",
+    desc: "Pre-SRM 3 analytics + last-pitch strategy. What can we offer to win them back?" },
+  { id: "c63", type: "stage", eventType: "meeting", title: "SRM 3 — last-pitch (week 12, with client)",
+    desc: "Final analytics wrap. New lead magnet pitched (e.g. competitor analysis). $200 / month discount offered.",
+    tag: "+12 weeks" },
+  { id: "c64", type: "branch",
+    left:  { title: "Recovered at SRM 3", desc: "Client renews after the last-pitch. Loop back to Pre-Production." },
+    right: { title: "Still no — churn", desc: "Client churns. Drop into the 6-month retention nurture." } },
+
+  { id: "c65", type: "stage", eventType: "notBuilt", notBuilt: true, title: "6-month retention nurture",
+    desc: "Mix of email + SMS over 6 months post-churn. Goal: win back when their needs shift. NOT YET BUILT." },
+
+  // ─── LOOP (renewed path) ─────────────────────────────────────────
+  { id: "c66", type: "section", label: "Loop — Renewed back to Pre-Production" },
+  { id: "c67", type: "stage", eventType: "internal", title: "Restart production cycle",
+    desc: "New shoot date. Run sheet. Production begins again. Repeat as many cycles as the client keeps renewing — this is where LTV compounds." },
 ];
 
 const DEFAULT_SOCIAL = [
@@ -400,6 +623,73 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
             );
           }
 
+          // MultiBranch — 3+ side decision or parallel-path point.
+          // Used for the 4 lead funnels (Meta Ads / IG / Website /
+          // Lead Magnet) converging on #leads, the 4-way discovery-
+          // call outcome (Yes/Maybe/No/No-show), and the 4-way
+          // parallel post-sale automations (Monday task / Xero /
+          // dashboard / assign). Each side can carry its own
+          // eventType so the card mirrors the stage colour-coding.
+          if (item.type === "multiBranch") {
+            const sides = Array.isArray(item.sides) ? item.sides : [];
+            return (
+              <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 0, flexShrink: 0 }}>
+                <div style={{ display: "flex", flexDirection: "column", width: 280 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {sides.map((s, sideIdx) => {
+                      const et = s.eventType ? EVENT_TYPES[s.eventType] : null;
+                      const isSideNotBuilt = s.eventType === "notBuilt" || s.notBuilt;
+                      const sideColor = et?.color || EVENT_TYPES.touchpoint.color;
+                      const sideBorder = isSideNotBuilt
+                        ? `1px dashed ${EVENT_TYPES.notBuilt.color}66`
+                        : `1px solid ${sideColor}55`;
+                      return (
+                        <div key={sideIdx} style={{ background: "var(--card)", border: sideBorder, borderRadius: 10, padding: "10px 12px", borderLeft: `3px solid ${sideColor}` }}>
+                          {isEditing ? (<>
+                            <input defaultValue={s.title} onBlur={e => {
+                              const next = sides.map((ss, i) => i === sideIdx ? { ...ss, title: e.target.value.trim() || ss.title } : ss);
+                              updateItem(item.id, { sides: next });
+                            }} style={{ ...inputSt, fontSize: 12, fontWeight: 700, marginBottom: 4 }} />
+                            <textarea defaultValue={s.desc} onBlur={e => {
+                              const next = sides.map((ss, i) => i === sideIdx ? { ...ss, desc: e.target.value } : ss);
+                              updateItem(item.id, { sides: next });
+                            }} style={descSt} />
+                            <select value={s.eventType || ""} onChange={e => {
+                              const val = e.target.value || null;
+                              const next = sides.map((ss, i) => i === sideIdx ? { ...ss, eventType: val, notBuilt: val === "notBuilt" } : ss);
+                              updateItem(item.id, { sides: next });
+                            }} style={{ ...inputSt, fontSize: 10, marginTop: 4 }}>
+                              <option value="">(no event type)</option>
+                              {Object.entries(EVENT_TYPES).map(([k, v]) => (
+                                <option key={k} value={k}>{v.icon} {v.label}</option>
+                              ))}
+                            </select>
+                          </>) : (<>
+                            {(et || isSideNotBuilt) && (
+                              <div style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 3, background: `${sideColor}1A`, color: sideColor, letterSpacing: "0.04em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 3, marginBottom: 4 }}>
+                                <span>{(et?.icon) || EVENT_TYPES.notBuilt.icon}</span>
+                                {(et?.label) || EVENT_TYPES.notBuilt.label}
+                              </div>
+                            )}
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 2 }}>{s.title}</div>
+                            <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>{s.desc}</div>
+                          </>)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 4 }}>
+                    <button onClick={() => setEditingId(isEditing ? null : item.id)} style={{ ...smallBtn, color: "var(--accent)", fontWeight: 600 }}>{isEditing ? "Done" : "Edit"}</button>
+                    <button onClick={() => moveItem(item.id, -1)} style={smallBtn}>◀</button>
+                    <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▶</button>
+                    <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
+                  </div>
+                </div>
+                {showConnector && <StageConnector stage={item} days={connectorDays} pctValue={pctValue} pctSource={pctSource} />}
+              </div>
+            );
+          }
+
           // OfferBranch — divergence point where Meta Ads and Social
           // Retainer flows differ. Renders as two stacked offer-coded
           // cards (orange Meta, purple Social) that share the same
@@ -498,11 +788,20 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
             );
           }
 
-          // Plain stage card
+          // Plain stage card — colour-coded by eventType (client
+          // touchpoint / action / internal / automation / invoice /
+          // meeting / notBuilt). notBuilt stages render amber-dashed
+          // so they're scannable as "TODO" at a glance.
+          const et = item.eventType ? EVENT_TYPES[item.eventType] : null;
+          const isNotBuilt = item.eventType === "notBuilt" || item.notBuilt;
+          const borderColor = et?.color || (item.diff ? "var(--accent)" : "var(--border)");
+          const cardBorder = isNotBuilt
+            ? `1px dashed ${EVENT_TYPES.notBuilt.color}66`
+            : `1px solid ${item.diff ? "var(--accent)" : "var(--border)"}`;
           return (
             <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 0, flexShrink: 0 }}>
               <div style={{ display: "flex", flexDirection: "column", width: 240 }}>
-                <div style={{ background: "var(--card)", border: `1px solid ${item.diff ? "var(--accent)" : "var(--border)"}`, borderRadius: item.diff ? 0 : 10, padding: "14px 18px", borderLeft: item.diff ? "3px solid var(--accent)" : undefined }}>
+                <div style={{ background: "var(--card)", border: cardBorder, borderRadius: 10, padding: "14px 18px", borderLeft: `3px solid ${borderColor}` }}>
                   {isEditing ? (<>
                     <input defaultValue={item.title} onBlur={e => updateItem(item.id, { title: e.target.value.trim() || item.title })} style={{ ...inputSt, fontSize: 14, fontWeight: 700, marginBottom: 6 }} autoFocus />
                     <textarea defaultValue={item.desc} onBlur={e => updateItem(item.id, { desc: e.target.value })} style={descSt} />
@@ -547,6 +846,15 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                       <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", alignItems: "center", gap: 4 }}><input type="checkbox" checked={!!item.diff} onChange={e => updateItem(item.id, { diff: e.target.checked })} /> Differs between offers</label>
                     </div>
                   </>) : (<>
+                    {/* Event-type pill (top) + milestone link icon */}
+                    {(et || isNotBuilt) && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: `${(et?.color) || EVENT_TYPES.notBuilt.color}1A`, color: (et?.color) || EVENT_TYPES.notBuilt.color, letterSpacing: "0.04em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <span>{(et?.icon) || EVENT_TYPES.notBuilt.icon}</span>
+                          {(et?.label) || EVENT_TYPES.notBuilt.label}
+                        </span>
+                      </div>
+                    )}
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>{item.title}</span>
                       {(() => {
@@ -556,7 +864,7 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                       })()}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>{item.desc}</div>
-                    {item.tag && !deriveMilestoneKey(item) && getDaysToNext(item, turnaround) == null && (
+                    {item.tag && (
                       <div style={{ marginTop: 6, fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)", display: "inline-block" }}>{item.tag}</div>
                     )}
                   </>)}
@@ -673,16 +981,13 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
         </div>
       </div>
       {subTab === "journey" && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "var(--muted)" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: "#F87700" }} />
-            Meta Ads
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: "#8B5CF6" }} />
-            Social Retainer
-          </span>
-          <span>· shared stages in white</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 10, color: "var(--muted)", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {Object.entries(EVENT_TYPES).map(([k, v]) => (
+            <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: v.color }} />
+              {v.label}
+            </span>
+          ))}
         </div>
       )}
     </div>
