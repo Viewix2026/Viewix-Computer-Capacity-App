@@ -187,13 +187,47 @@ function SparkChart({ entries, field, latest }) {
 
   const color = CATEGORY_COLORS[field.category] || "#8B5CF6";
 
-  const vals = entries.map(e => parseFloat(e[field.key])).filter(v => !Number.isNaN(v));
-  if (vals.length < 2) {
+  // Pull (value, date) pairs in the filtered window so we can show a
+  // single-value card when the field only has one data point in scope.
+  const pairs = entries
+    .map(e => ({ v: parseFloat(e[field.key]), date: e.date }))
+    .filter(p => !Number.isNaN(p.v));
+  const vals = pairs.map(p => p.v);
+
+  // Zero-data state — the filter window has nothing to show. Surface
+  // the total-across-all-time so the producer knows the field HAS
+  // data, just not in the current window.
+  if (vals.length === 0) {
     return (
       <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, minHeight: H + 38 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>{field.label}</div>
-        <div style={{ fontSize: 10, color: "var(--muted)", height: H, display: "flex", alignItems: "center", justifyContent: "center", fontStyle: "italic" }}>
-          Not enough data
+        <div style={{ fontSize: 10, color: "var(--muted)", height: H, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "0 8px", fontStyle: "italic" }}>
+          No data in this window — try <strong style={{ fontWeight: 700 }}>All time</strong>
+        </div>
+      </div>
+    );
+  }
+
+  // Single-data-point state — can't draw a line, but we CAN show the
+  // value + the month. Big number centred, coloured by category.
+  if (vals.length < 2) {
+    const single = pairs[0];
+    const fmtDateSingle = (iso) => {
+      if (!iso) return "";
+      const [y, m] = iso.split("-");
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      return `${months[parseInt(m) - 1] || m} '${y?.slice(2)}`;
+    };
+    return (
+      <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, minHeight: H + 38, display: "flex", flexDirection: "column" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>{field.label}</div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: color, fontFamily: "'JetBrains Mono',monospace" }}>
+            {formatValue(single.v, field.unit)}
+          </div>
+          <div style={{ fontSize: 9, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+            {fmtDateSingle(single.date)} · 1 month logged
+          </div>
         </div>
       </div>
     );
