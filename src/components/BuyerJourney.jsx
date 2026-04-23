@@ -53,6 +53,61 @@ const DEFAULT_META = [
   { id: "m26", type: "stage", title: "Ongoing catch ups", desc: "Understand which ads are performing. Identify when new ads or a video sales letter is needed to increase landing page opt in rate.", milestoneKey: "partnershipReview" },
 ];
 
+// ═══════════════════════════════════════════════════════════════════
+// DEFAULT_COMBINED — the unified Meta Ads + Social Retainer journey.
+//
+// The two offers share ~90% of the flow (Lead Gen → Sales → Pre-Prod
+// → Production → Delivery review). They diverge at exactly 4 points:
+//   1. Invoice paid    (50/50 vs 3 payments)
+//   2. Final delivery  (hand to ad agency vs upload to Metricool)
+//   3. Monthly review  (ad performance vs content performance)
+//   4. Ongoing catchup (new ad / VSL vs new content batch)
+//
+// At those points we use a new `offerBranch` type that renders as two
+// stacked cards — Meta Ads (orange) on top, Social Retainer (purple)
+// below — and the main flow continues from both simultaneously.
+//
+// The shared milestoneKey on an offerBranch links both sides to the
+// same turnaround milestone so days-to-next and /turnaround editing
+// stay consistent regardless of which offer you sold.
+// ═══════════════════════════════════════════════════════════════════
+const DEFAULT_COMBINED = [
+  { id: "c1",  type: "section", label: "Lead Generation" },
+  { id: "c2",  type: "stage", title: "Meta ad", desc: "Prospect watches a video ad on Facebook or Instagram" },
+  { id: "c3",  type: "stage", title: "Click \"Learn more\"", desc: "CTA button takes them to the landing page" },
+  { id: "c4",  type: "stage", title: "Landing page", desc: "Complete a 5 step survey. They become a lead at this point." },
+  { id: "c5",  type: "stage", title: "Booked meeting", desc: "65% of leads book a meeting with the sales team. Lead is pushed to the LEADS Slack channel.", pct: "65% convert" },
+  { id: "c6",  type: "stage", title: "Closer calls immediately", desc: "As soon as the lead comes in, a closer calls them from the LEADS channel" },
+  { id: "c7",  type: "section", label: "Sales" },
+  { id: "c8",  type: "stage", title: "Discovery call", desc: "Further qualification. Understand their goals, budget, timeline. Present the content blueprint." },
+  { id: "c9",  type: "branch", left: { title: "Won", desc: "Send video sales letter explaining the process. Closer sends first invoice." }, right: { title: "Lost", desc: "Deal closed. Add to nurture sequence for future re-engagement." } },
+  { id: "c10", type: "offerBranch", milestoneKey: "signing",
+    metaAds:        { title: "Invoice paid", desc: "50% of the ad package paid upfront before production begins. 50% balance charged when the project wraps.", tag: "50 / 50" },
+    socialRetainer: { title: "Invoice paid", desc: "Retainer split into 3 payments. Deposit upfront, second at +30 days, third at +60 days. Auto-charged via Stripe.", tag: "3 payments" } },
+  { id: "c11", type: "section", label: "Pre Production" },
+  { id: "c12", type: "stage", title: "Pre production meeting", desc: "Client meets a founder and their project lead. Project lead asks questions to deeply understand the business.", milestoneKey: "preProductionMeeting" },
+  { id: "c13", type: "stage", title: "Pre production prep", desc: "Team puts together the pre production plan with all creative ideas" },
+  { id: "c14", type: "stage", title: "Pre production call", desc: "Run the client through all ideas and creative direction", milestoneKey: "preProductionPresentation" },
+  { id: "c15", type: "branch", left: { title: "Revisions", desc: "Client has feedback. A couple of days to action, then another meeting to confirm." }, right: { title: "Approved", desc: "No changes needed. Go straight to booking the shoot." } },
+  { id: "c16", type: "section", label: "Production" },
+  { id: "c17", type: "stage", title: "Book shoot", desc: "Schedule the shoot date with the client and team" },
+  { id: "c18", type: "stage", title: "Shoot day", desc: "Single shoot day with the full team on location", milestoneKey: "shoot" },
+  { id: "c19", type: "stage", title: "Editing", desc: "Editor completes all videos and all aspect ratios" },
+  { id: "c20", type: "section", label: "Delivery" },
+  { id: "c21", type: "branch", left: { title: "Office review", desc: "Client comes in to review. Get a video testimonial and take feedback in person." }, right: { title: "Frame.io", desc: "Client reviews videos online via Frame.io and leaves feedback there." } },
+  { id: "c22", type: "stage", title: "Action feedback", desc: "Make any requested changes from the review" },
+  { id: "c23", type: "offerBranch", milestoneKey: "posting",
+    metaAds:        { title: "Final delivery", desc: "Deliver all videos in all ratios to the client. Client shares with their ad agency for Meta Ads deployment." },
+    socialRetainer: { title: "Upload to Metricool", desc: "Viewix takes the client's login credentials and uploads content directly to Metricool, scheduling and posting on their behalf." } },
+  { id: "c24", type: "section", label: "Retention" },
+  { id: "c25", type: "offerBranch", milestoneKey: "resultsReview",
+    metaAds:        { title: "Monthly performance review", desc: "Recurring monthly meeting to review ad performance in Meta Ads Manager with their agency" },
+    socialRetainer: { title: "Monthly performance review", desc: "Recurring monthly meeting to review content performance and engagement metrics across Instagram / TikTok / etc." } },
+  { id: "c26", type: "offerBranch", milestoneKey: "partnershipReview",
+    metaAds:        { title: "Ongoing catch ups", desc: "Understand which ads are performing. Identify when new ads or a video sales letter is needed to increase landing page opt-in rate." },
+    socialRetainer: { title: "Ongoing catch ups", desc: "Understand what content is performing. Identify when a new batch of content is needed for the next month." } },
+];
+
 const DEFAULT_SOCIAL = [
   { id: "s1", type: "section", label: "Lead Generation" },
   { id: "s2", type: "stage", title: "Meta ad", desc: "Prospect watches a video ad on Facebook or Instagram" },
@@ -110,7 +165,14 @@ const TITLE_TO_MILESTONE = [
 function deriveMilestoneKey(stage) {
   // Explicit null wins (producer unlinked). Explicit string wins too.
   if (stage?.milestoneKey !== undefined) return stage.milestoneKey || null;
-  const title = (stage?.title || "").toLowerCase().trim();
+  // OfferBranch items may carry their key on the parent OR on the meta/
+  // socialRetainer sub-object — check both. Parent-level wins (both
+  // offers share the same milestone so linking applies to both).
+  if (stage?.type === "offerBranch") {
+    const k = stage.metaAds?.milestoneKey || stage.socialRetainer?.milestoneKey;
+    if (k !== undefined) return k || null;
+  }
+  const title = (stage?.title || stage?.metaAds?.title || stage?.socialRetainer?.title || "").toLowerCase().trim();
   if (!title) return null;
   // Substring match — covers renames like "Pre-Prod Meeting" or
   // "Kickoff call" without needing the exact default wording.
@@ -149,17 +211,17 @@ function computeLivePct(accounts, fromKey, toKey) {
 // Find the next linkable milestone after the stage at `stages[idx]`.
 // Used by computeLivePct so we pair each linked stage with the
 // soonest downstream linked stage — inline sections/branches don't
-// break the chain.
+// break the chain. offerBranches count too (they carry milestoneKey).
 function findNextMilestoneStage(stages, idx) {
   for (let j = idx + 1; j < stages.length; j++) {
-    if (stages[j].type === "stage" && deriveMilestoneKey(stages[j])) return stages[j];
+    const t = stages[j].type;
+    if ((t === "stage" || t === "offerBranch") && deriveMilestoneKey(stages[j])) return stages[j];
   }
   return null;
 }
 
 export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accounts }) {
   const [subTab, setSubTab] = useState("journey");      // journey | turnaround
-  const [offer, setOffer] = useState("meta");
   const [editingId, setEditingId] = useState(null);
   // Inline connector editing — { stageId, field: "days" | "pct" } | null.
   // When set, the corresponding connector label renders an input instead
@@ -168,18 +230,20 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
   // linked stages stays read-only live data.
   const [inlineEdit, setInlineEdit] = useState(null);
 
-  const metaStages = data?.meta?.length > 0 ? data.meta : DEFAULT_META;
-  const socialStages = data?.social?.length > 0 ? data.social : DEFAULT_SOCIAL;
-  const stages = offer === "meta" ? metaStages : socialStages;
+  // Unified Meta Ads + Social Retainer journey. The old per-offer toggle
+  // is gone — at the 4 divergence points the renderer shows an
+  // offerBranch with both offers stacked. Legacy data.meta and data.social
+  // are preserved in Firebase for auditability but no longer drive the UI.
+  const stages = data?.combined?.length > 0 ? data.combined : DEFAULT_COMBINED;
 
-  const save = (updated) => { onChange({ ...data, [offer]: updated }); };
+  const save = (updated) => { onChange({ ...data, combined: updated }); };
   const updateItem = (id, patch) => { save(stages.map(s => s.id === id ? { ...s, ...patch } : s)); };
   const removeItem = (id) => { if (!confirm("Remove this item?")) return; save(stages.filter(s => s.id !== id)); };
   const moveItem = (id, dir) => { const idx = stages.findIndex(s => s.id === id); if (idx < 0) return; const si = idx + dir; if (si < 0 || si >= stages.length) return; const n = [...stages]; [n[idx], n[si]] = [n[si], n[idx]]; save(n); };
 
-  const addStage = (afterId) => { const idx = stages.findIndex(s => s.id === afterId); const nid = `${offer[0]}${Date.now()}`; const n = [...stages]; n.splice(idx + 1, 0, { id: nid, type: "stage", title: "New stage", desc: "" }); save(n); setEditingId(nid); };
-  const addBranch = (afterId) => { const idx = stages.findIndex(s => s.id === afterId); const nid = `${offer[0]}b${Date.now()}`; const n = [...stages]; n.splice(idx + 1, 0, { id: nid, type: "branch", left: { title: "Option A", desc: "" }, right: { title: "Option B", desc: "" } }); save(n); setEditingId(nid); };
-  const addSection = (afterId) => { const idx = stages.findIndex(s => s.id === afterId); const n = [...stages]; n.splice(idx + 1, 0, { id: `${offer[0]}sec${Date.now()}`, type: "section", label: "New Section" }); save(n); };
+  const addStage = (afterId) => { const idx = stages.findIndex(s => s.id === afterId); const nid = `c${Date.now()}`; const n = [...stages]; n.splice(idx + 1, 0, { id: nid, type: "stage", title: "New stage", desc: "" }); save(n); setEditingId(nid); };
+  const addBranch = (afterId) => { const idx = stages.findIndex(s => s.id === afterId); const nid = `cb${Date.now()}`; const n = [...stages]; n.splice(idx + 1, 0, { id: nid, type: "branch", left: { title: "Option A", desc: "" }, right: { title: "Option B", desc: "" } }); save(n); setEditingId(nid); };
+  const addSection = (afterId) => { const idx = stages.findIndex(s => s.id === afterId); const n = [...stages]; n.splice(idx + 1, 0, { id: `csec${Date.now()}`, type: "section", label: "New Section" }); save(n); };
 
   // Edit handler for per-stage days: linked stages push to /turnaround,
   // unlinked stages persist on the stage itself. Empty string clears.
@@ -293,12 +357,16 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
           // advances to another stage-like thing. Sections don't get
           // connectors either side (they're the dividers).
           const showConnector = item.type !== "section" && nextItem && nextItem.type !== "section";
-          const connectorDays = item.type === "stage" ? getDaysToNext(item, turnaround) : null;
-          // Live % lookup: pair this linked stage with the next linked one
-          // downstream. If either end isn't linked, we fall back to the
+          // Stages AND offerBranches can carry a milestone + days-to-next.
+          // Branches (won/lost, office/frame.io) don't pin a milestone —
+          // they're in-flow decision points.
+          const isMilestoneBearing = item.type === "stage" || item.type === "offerBranch";
+          const connectorDays = isMilestoneBearing ? getDaysToNext(item, turnaround) : null;
+          // Live % lookup: pair this linked item with the next linked one
+          // downstream. If either end isn't linked, fall back to the
           // stage's manual pct text below.
           let pctValue = null, pctSource = null;
-          if (item.type === "stage") {
+          if (isMilestoneBearing) {
             const itemMk = deriveMilestoneKey(item);
             const nextLinked = itemMk ? findNextMilestoneStage(stages, i) : null;
             const nextMk = nextLinked ? deriveMilestoneKey(nextLinked) : null;
@@ -328,6 +396,62 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
                   <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▶</button>
                   <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
                 </div>
+              </div>
+            );
+          }
+
+          // OfferBranch — divergence point where Meta Ads and Social
+          // Retainer flows differ. Renders as two stacked offer-coded
+          // cards (orange Meta, purple Social) that share the same
+          // milestoneKey + connector so the rest of the flow links
+          // cleanly from both. Edit mode exposes both titles + descs
+          // + the shared tag (e.g. "50 / 50" vs "3 payments").
+          if (item.type === "offerBranch") {
+            const renderOfferCard = (offerKey, offerLabel, offerColor) => {
+              const o = item[offerKey] || { title: "", desc: "" };
+              return (
+                <div key={offerKey} style={{ background: "var(--card)", border: `1px solid ${offerColor}66`, borderRadius: 10, padding: "12px 14px", borderLeft: `3px solid ${offerColor}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: offerColor, textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: "'JetBrains Mono',monospace" }}>
+                      {offerLabel}
+                    </div>
+                    {o.tag && !isEditing && (
+                      <div style={{ fontSize: 9, fontWeight: 700, color: offerColor, background: `${offerColor}1A`, padding: "2px 6px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace" }}>{o.tag}</div>
+                    )}
+                  </div>
+                  {isEditing ? (<>
+                    <input defaultValue={o.title} onBlur={e => updateItem(item.id, { [offerKey]: { ...o, title: e.target.value.trim() || o.title } })} style={{ ...inputSt, fontSize: 12, fontWeight: 700, marginBottom: 4 }} placeholder="Title" />
+                    <textarea defaultValue={o.desc} onBlur={e => updateItem(item.id, { [offerKey]: { ...o, desc: e.target.value } })} style={descSt} placeholder="Description" />
+                    <input defaultValue={o.tag || ""} onBlur={e => updateItem(item.id, { [offerKey]: { ...o, tag: e.target.value.trim() } })} style={{ ...inputSt, fontSize: 10, marginTop: 4 }} placeholder="Short tag (optional)" />
+                  </>) : (<>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 2 }}>{o.title}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>{o.desc}</div>
+                  </>)}
+                </div>
+              );
+            };
+            return (
+              <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 0, flexShrink: 0 }}>
+                <div style={{ display: "flex", flexDirection: "column", width: 270 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {renderOfferCard("metaAds", "Meta Ads", "#F87700")}
+                    {renderOfferCard("socialRetainer", "Social Retainer", "#8B5CF6")}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 4, marginTop: 4 }}>
+                    <button onClick={() => setEditingId(isEditing ? null : item.id)} style={{ ...smallBtn, color: "var(--accent)", fontWeight: 600 }}>{isEditing ? "Done" : "Edit"}</button>
+                    <button onClick={() => moveItem(item.id, -1)} style={smallBtn}>◀</button>
+                    <button onClick={() => moveItem(item.id, 1)} style={smallBtn}>▶</button>
+                    <button onClick={() => removeItem(item.id)} style={smallBtn}>x</button>
+                  </div>
+                  {isEditing && (
+                    <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                      <button onClick={() => addStage(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Stage</button>
+                      <button onClick={() => addBranch(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Branch</button>
+                      <button onClick={() => addSection(item.id)} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 10, padding: "4px 10px" }}>+ Section</button>
+                    </div>
+                  )}
+                </div>
+                {showConnector && <StageConnector stage={item} days={getDaysToNext(item, turnaround)} pctValue={pctValue} pctSource={pctSource} />}
               </div>
             );
           }
@@ -549,10 +673,16 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
         </div>
       </div>
       {subTab === "journey" && (
-        <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "meta", label: "Meta Ads Offer" }, { key: "social", label: "Social Media Retainer" }].map(t => (
-            <button key={t.key} onClick={() => { setOffer(t.key); setEditingId(null); }} style={{ padding: "7px 16px", borderRadius: 6, border: "none", background: offer === t.key ? "var(--card)" : "transparent", color: offer === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "var(--muted)" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: "#F87700" }} />
+            Meta Ads
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: "#8B5CF6" }} />
+            Social Retainer
+          </span>
+          <span>· shared stages in white</span>
         </div>
       )}
     </div>
