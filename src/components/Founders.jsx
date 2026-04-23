@@ -375,8 +375,10 @@ function ThankYouEditor({ saleThankYou, setSaleThankYou }) {
               {vt.packages.map(p => {
                 const key = `${vt.key}:${p.key}`;
                 const isOpen = expanded === key;
-                const slot = ty.packages?.[vt.key]?.[p.key] || { videoUrl: "", nextStepsCopy: "" };
-                const hasContent = !!(slot.videoUrl?.trim() || slot.nextStepsCopy?.trim());
+                const slot = ty.packages?.[vt.key]?.[p.key] || { videoUrl: "" };
+                // hasContent now only tracks videoUrl — the per-tier
+                // next-steps copy field was retired.
+                const hasContent = !!slot.videoUrl?.trim();
                 return (
                   <div key={p.key} style={{ borderTop: "1px solid var(--border-light)" }}>
                     <button
@@ -398,15 +400,15 @@ function ThankYouEditor({ saleThankYou, setSaleThankYou }) {
                           placeholder="https://www.loom.com/share/... or https://youtu.be/..."
                           style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none", marginBottom: 12 }} />
 
-                        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 6 }}>
-                          Next Steps Copy (what happens next, shown to customer)
-                        </label>
-                        <textarea value={slot.nextStepsCopy || ""} onChange={e => updateSlot(vt.key, p.key, "nextStepsCopy", e.target.value)} rows={8}
-                          placeholder={`Supports **bold** and bullet lists.\n\nExample:\n\n**Welcome to Viewix.**\n\nHere's what happens next:\n\n- Watch the welcome video\n- Book your Pre-Production meeting\n- We'll send your onboarding pack within 24 hours`}
-                          style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }} />
-                        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
-                          Supports <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 3 }}>**bold**</code> and bullet lines starting with <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 3 }}>-</code> or <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 3 }}>•</code>. Blank lines become paragraphs.
-                        </div>
+                        {/* Per-package "Next Steps Copy" removed — the
+                            Studio thank-you page now has a universal
+                            "What happens next" block driven by its
+                            own hardcoded 3-step sequence, so the
+                            founder-editable text per tier isn't used
+                            on the live page any more. Existing
+                            nextStepsCopy values remain in Firebase
+                            for auditability; they just aren't
+                            editable or rendered. */}
                       </div>
                     )}
                   </div>
