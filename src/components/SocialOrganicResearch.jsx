@@ -3784,7 +3784,7 @@ function ClientResearchStep({ project, onPatch }) {
           Key takeaways <span style={{ color: "#EF4444", marginLeft: 4 }}>*</span>
         </label>
         <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
-          What are the strengths of the client's current content? Where are the gaps? Use your eyes on the reels above — Claude will weight this heavily in Tab 7.
+          What are the strengths of the client's current content? Where are the gaps? Use your eyes on the reels above. With the client will see this.
         </div>
         <textarea value={takeaways} onChange={e => setTakeaways(e.target.value)}
           placeholder="e.g. Strong on-camera presence but formats are inconsistent. Best-performing reels are the 'day in the life' ones. No hook formula — we should standardise."
