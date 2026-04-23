@@ -57,11 +57,13 @@ const CATEGORIES = [
 // historical data stays intact. New keys added for new fields.
 const FIELDS = [
   // ── ACQUISITION ────────────────────────────────────────────────────
-  { key: "monthlyAdSpend",            label: "Monthly Ad Spend",             unit: "$",     category: "acquisition", tier: 2, cadence: "monthly",   def: "Total Meta ad spend in the month" },
+  // `agg`: "sum" for flow metrics (cumulative across the window);
+  // "latest" (default) for stock/ratio metrics (point-in-time).
+  { key: "monthlyAdSpend",            label: "Monthly Ad Spend",             unit: "$",     category: "acquisition", tier: 2, cadence: "monthly",   def: "Total Meta ad spend in the month",                 agg: "sum" },
   { key: "dailyAdSpendGoal",          label: "Daily Ad Spend Goal",          unit: "$",     category: "acquisition", tier: 2, cadence: "quarterly", def: "Target daily spend" },
   { key: "predictedAdSpend",          label: "Predicted Monthly Ad Spend",   unit: "$",     category: "acquisition", tier: 2, cadence: "monthly",   def: "Forecast based on daily goal × 30" },
   { key: "tenMonthAdSpend",           label: "10 Month Ad Spend Forecast",   unit: "$",     category: "acquisition", tier: 3, cadence: "quarterly", def: "Forward projection at current pace" },
-  { key: "totalLeads",                label: "Total Leads",                  unit: "count", category: "acquisition", tier: 2, cadence: "monthly",   def: "Tracked leads across all sources" },
+  { key: "totalLeads",                label: "Total Leads",                  unit: "count", category: "acquisition", tier: 2, cadence: "monthly",   def: "Tracked leads across all sources",                 agg: "sum" },
   { key: "cpl",                       label: "CPL (blended)",                unit: "$",     category: "acquisition", tier: 1, cadence: "monthly",   def: "Ad spend ÷ leads attributed to ads" },
   { key: "cpm",                       label: "CPM",                          unit: "$",     category: "acquisition", tier: 2, cadence: "monthly",   def: "Cost per 1,000 impressions" },
   { key: "ctr",                       label: "CTR",                          unit: "%",     category: "acquisition", tier: 2, cadence: "monthly",   def: "Link clicks ÷ impressions" },
@@ -72,28 +74,28 @@ const FIELDS = [
   // client is tagged against exactly one acquisition source, so the
   // sum of these should equal newClientsAcquired (same column in the
   // Conversion section, kept as the blended total for consistency).
-  { key: "newClientsReferral",        label: "New Clients — Referral",       unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via referral" },
-  { key: "newClientsAdvertising",     label: "New Clients — Advertising",    unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via paid ads" },
-  { key: "newClientsLinkedIn",        label: "New Clients — LinkedIn",       unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via LinkedIn outreach" },
-  { key: "newClientsSEO",             label: "New Clients — SEO",            unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via organic search" },
-  { key: "newClientsConference",      label: "New Clients — Conference",     unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via conferences / events" },
-  { key: "newClientsColdEmail",       label: "New Clients — Cold Email",     unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via cold outbound" },
-  { key: "newClientsRepeat",          label: "New Clients — Repeat (untagged)", unit: "count", category: "sources",  tier: 3, cadence: "monthly",   def: "Pre-existing clients reactivated but not tagged to a specific source" },
-  { key: "newClientsOther",           label: "New Clients — Other",          unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients whose source isn't tracked in Attio" },
+  { key: "newClientsReferral",        label: "New Clients — Referral",       unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via referral",                                 agg: "sum" },
+  { key: "newClientsAdvertising",     label: "New Clients — Advertising",    unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via paid ads",                                 agg: "sum" },
+  { key: "newClientsLinkedIn",        label: "New Clients — LinkedIn",       unit: "count", category: "sources",     tier: 2, cadence: "monthly",   def: "New clients acquired via LinkedIn outreach",                        agg: "sum" },
+  { key: "newClientsSEO",             label: "New Clients — SEO",            unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via organic search",                           agg: "sum" },
+  { key: "newClientsConference",      label: "New Clients — Conference",     unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via conferences / events",                     agg: "sum" },
+  { key: "newClientsColdEmail",       label: "New Clients — Cold Email",     unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients acquired via cold outbound",                            agg: "sum" },
+  { key: "newClientsRepeat",          label: "New Clients — Repeat (untagged)", unit: "count", category: "sources",  tier: 3, cadence: "monthly",   def: "Pre-existing clients reactivated but not tagged to a specific source", agg: "sum" },
+  { key: "newClientsOther",           label: "New Clients — Other",          unit: "count", category: "sources",     tier: 3, cadence: "monthly",   def: "New clients whose source isn't tracked in Attio",                   agg: "sum" },
 
   // ── CONVERSION ─────────────────────────────────────────────────────
-  { key: "callsBooked",               label: "Calls Booked",                 unit: "count", category: "conversion",  tier: 2, cadence: "monthly",   def: "Discovery calls scheduled" },
+  { key: "callsBooked",               label: "Calls Booked",                 unit: "count", category: "conversion",  tier: 2, cadence: "monthly",   def: "Discovery calls scheduled",                                         agg: "sum" },
   { key: "showRate",                  label: "Show Rate",                    unit: "%",     category: "conversion",  tier: 2, cadence: "monthly",   def: "Calls attended ÷ calls booked" },
   { key: "closeRateCallToDeal",       label: "Close Rate (call → deal)",     unit: "%",     category: "conversion",  tier: 2, cadence: "monthly",   def: "Deals won ÷ calls attended" },
   { key: "leadToDealRate",            label: "Lead to Deal Rate",            unit: "%",     category: "conversion",  tier: 2, cadence: "monthly",   def: "Deals won ÷ leads generated (lagged)" },
   { key: "avgSalesCycle",             label: "Avg Sales Cycle",              unit: "days",  category: "conversion",  tier: 2, cadence: "monthly",   def: "Created at → Close Date. Blocked until deal creation hygiene is clean." },
-  { key: "newClientsAcquired",        label: "New Clients Acquired",         unit: "count", category: "conversion",  tier: 1, cadence: "monthly",   def: "First time clients in the month" },
+  { key: "newClientsAcquired",        label: "New Clients Acquired",         unit: "count", category: "conversion",  tier: 1, cadence: "monthly",   def: "First time clients in the month",                                   agg: "sum" },
   // Deferred: Lead→Deal Rate by Source, Sales Cycle by Source, New Clients by Source.
 
   // ── REVENUE ─────────────────────────────────────────────────────────
-  { key: "monthlyRevenue",            label: "Monthly Revenue",              unit: "$",     category: "revenue",     tier: 1, cadence: "monthly",   def: "Total deal value closed in the month" },
-  { key: "newClientRevenue",          label: "New Client Revenue",           unit: "$",     category: "revenue",     tier: 2, cadence: "monthly",   def: "Revenue from clients whose first deal was this month" },
-  { key: "repeatClientRevenue",       label: "Repeat Client Revenue",        unit: "$",     category: "revenue",     tier: 2, cadence: "monthly",   def: "Revenue from existing clients" },
+  { key: "monthlyRevenue",            label: "Monthly Revenue",              unit: "$",     category: "revenue",     tier: 1, cadence: "monthly",   def: "Total deal value closed in the month",                agg: "sum" },
+  { key: "newClientRevenue",          label: "New Client Revenue",           unit: "$",     category: "revenue",     tier: 2, cadence: "monthly",   def: "Revenue from clients whose first deal was this month", agg: "sum" },
+  { key: "repeatClientRevenue",       label: "Repeat Client Revenue",        unit: "$",     category: "revenue",     tier: 2, cadence: "monthly",   def: "Revenue from existing clients",                       agg: "sum" },
   { key: "pctRevenueFromNew",         label: "% Revenue from New Clients",   unit: "%",     category: "revenue",     tier: 1, cadence: "monthly",   def: "New ÷ total monthly revenue" },
   { key: "mrr",                       label: "MRR",                          unit: "$",     category: "revenue",     tier: 1, cadence: "monthly",   def: "Monthly recurring revenue from active retainers" },
   { key: "arrRunRate",                label: "ARR Run Rate",                 unit: "$",     category: "revenue",     tier: 2, cadence: "monthly",   def: "MRR × 12" },
@@ -276,23 +278,39 @@ function SparkChart({ entries, field, latest }) {
     return `${months[parseInt(m) - 1] || m} '${y?.slice(2)}`;
   };
 
-  // Latest value for the top-right — read from the last NON-EMPTY
-  // entry inside the filtered window (not necessarily the chronological
-  // last, because the last entry might be missing this field). Walks
-  // backwards through entries to find the most recent one that has a
-  // value for this field. Guarantees the top-right number tracks the
-  // year filter regardless of sparse data, and removes the dependency
-  // on the separate `latest` prop which was flaky.
-  let latestPair = null;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const v = entries[i]?.[field.key];
-    if (v !== "" && v != null && !Number.isNaN(parseFloat(v))) {
-      latestPair = { v, date: entries[i].date };
-      break;
+  // Top-right number — aggregation depends on the field type:
+  //   `agg: "sum"`    (flow metrics)  → sum of all values in window
+  //                                      e.g. New Clients Acquired in
+  //                                      2026 = Jan(3)+Feb(7)+Mar(1)
+  //                                      +Apr(6) = 17
+  //   `agg: "latest"` (stock/ratio)    → last non-empty value, walks
+  //                                      backward to skip missing data.
+  //                                      Default.
+  //
+  // Flow fields get a "· {window} total" suffix so the number reads as
+  // "17 · 2026 total" instead of ambiguously "17".
+  let displayVal = null;
+  let displaySuffix = null;
+  if (field.agg === "sum") {
+    const sum = entries.reduce((acc, e) => {
+      const v = parseFloat(e?.[field.key]);
+      return Number.isNaN(v) ? acc : acc + v;
+    }, 0);
+    if (vals.length > 0) {
+      displayVal = sum;
+      displaySuffix = "total";
+    }
+  } else {
+    // "latest" — walk backward to find the most recent non-empty value.
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const v = entries[i]?.[field.key];
+      if (v !== "" && v != null && !Number.isNaN(parseFloat(v))) {
+        displayVal = v;
+        break;
+      }
     }
   }
-  const latestVal = latestPair?.v;
-  const formatted = formatValue(latestVal, field.unit);
+  const formatted = formatValue(displayVal, field.unit);
 
   return (
     <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
@@ -301,8 +319,11 @@ function SparkChart({ entries, field, latest }) {
           {field.label}
         </div>
         {formatted && (
-          <div style={{ fontSize: 12, fontWeight: 700, color, fontFamily: "'JetBrains Mono',monospace", flexShrink: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color, fontFamily: "'JetBrains Mono',monospace", flexShrink: 0, textAlign: "right" }}>
             {formatted}
+            {displaySuffix && (
+              <div style={{ fontSize: 9, fontWeight: 500, color: "var(--muted)", marginTop: -1 }}>{displaySuffix}</div>
+            )}
           </div>
         )}
       </div>
