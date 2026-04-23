@@ -3837,22 +3837,33 @@ function ClientResearchStep({ project, onPatch }) {
       <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 10 }}>Top 5 client reels by views</div>
         {topPosts.length === 0 ? (
-          <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 12, lineHeight: 1.6 }}>
-            {scrapeRunning ? (
-              "Waiting on scrape…"
-            ) : clientScrape.status === "done" && posts.length === 0 ? (
-              <>
-                <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>No reels found for this handle</div>
-                Could be a typo, a private account, or the client just doesn't post video content on Instagram (common for B2B).
-                <br/><br/>
-                <strong>Reels aren't mandatory.</strong> Write the Key Takeaways below based on TikTok / YouTube / what you know from the pre-production meeting, and approve.
-              </>
-            ) : !clientScrape.status ? (
-              "No scrape has been run yet — approve Stage A on Tab 2 to kick it off."
-            ) : (
-              "No reels yet — waiting on the client scrape."
-            )}
-          </div>
+          clientScrape.status === "done" && posts.length === 0 ? (
+            // Amber notification card — visually distinct so producers
+            // don't miss it. Makes the "this is fine, just move on"
+            // action obvious at a glance.
+            <div style={{ padding: "14px 16px", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.4)", borderRadius: 10, display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0 }} aria-hidden="true">⚠️</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#F59E0B", marginBottom: 4 }}>
+                  0 reels found for this Instagram handle
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.55, marginBottom: 6 }}>
+                  Could be a typo, a private account, or the client just doesn't post video content on Instagram (common for B2B).
+                </div>
+                <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.55 }}>
+                  <strong>Reels aren't required to continue.</strong> Write the Key Takeaways below using TikTok / YouTube / what you know from the pre-production meeting, then approve.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 12, lineHeight: 1.6 }}>
+              {scrapeRunning
+                ? "Waiting on scrape…"
+                : !clientScrape.status
+                  ? "No scrape has been run yet — approve Stage A on Tab 2 to kick it off."
+                  : "No reels yet — waiting on the client scrape."}
+            </div>
+          )
         ) : (
           // Wider tiles + taller aspect ratio so the Instagram embed has
           // room to render the full reel frame without cropping the chrome.
