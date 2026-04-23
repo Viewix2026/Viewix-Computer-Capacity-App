@@ -3625,6 +3625,46 @@ function ClientResearchStep({ project, onPatch }) {
   const [busy, setBusy] = useState({ tt: false, yt: false });
   const [err, setErr] = useState({ tt: null, yt: null });
 
+  // Inline Stage-A retry — producers can fix a typo / try a different
+  // handle without bouncing back to Tab 2. Defaults to whatever handle
+  // was used for the original run; common case is the producer
+  // realising after the scrape returned 0 that they typed the wrong
+  // handle (businesses often run their socials from a personal @ or
+  // a secondary account).
+  const [retryHandle, setRetryHandle] = useState(
+    clientScrape.handles?.instagram || project.research?.clientHandle || ""
+  );
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState(null);
+  const retryClientScrape = async () => {
+    const clean = retryHandle.trim().replace(/^@+/, "");
+    if (!clean) { setRetryError("Type an Instagram handle first."); return; }
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      // Persist the new handle to /research so Tab 2 shows the corrected
+      // value + so the prompt blocks that read clientHandle pick it up.
+      fbSet(`/preproduction/socialOrganic/${project.id}/research/clientHandle`, `@${clean}`);
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "startClientScrape", projectId: project.id, handle: clean }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener rehydrates clientScrape.status → "running"
+      // and the rest of the tab's UI responds accordingly.
+    } catch (e) {
+      setRetryError(e.message);
+    } finally {
+      setRetrying(false);
+    }
+  };
+  // Is the scrape in a "retry-me" state? Either finished empty, or errored.
+  const scrapeEmpty = clientScrape.status === "done" && posts.length === 0;
+  const scrapeErroredState = clientScrape.status === "error";
+  const showRetry = scrapeEmpty || scrapeErroredState;
+
   // Sync local input state when Claude's suggestClientHandle call lands
   // new handles in Firebase. Without this, the inputs stay on their initial
   // empty value even after the backend writes a pre-filled handle.
@@ -3733,7 +3773,42 @@ function ClientResearchStep({ project, onPatch }) {
       )}
       {scrapeErrored && (
         <div style={{ padding: 14, marginBottom: 14, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, fontSize: 12, color: "#EF4444" }}>
-          Client scrape errored: {clientScrape.error || "(no detail)"}. Go back to Tab 2 and retry Stage A.
+          Client scrape errored: {clientScrape.error || "(no detail)"}. Retry below with a corrected handle.
+        </div>
+      )}
+
+      {/* Inline Stage-A retry card — appears when the scrape finished
+          empty OR errored. Producer can fix a typo + retry without
+          bouncing back to Tab 2. */}
+      {showRetry && !isDone && (
+        <div style={{ padding: 14, marginBottom: 14, background: "var(--card)", border: "1px solid rgba(245,158,11,0.4)", borderRadius: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>
+            {scrapeEmpty ? "Retry with a corrected Instagram handle" : "Retry the client scrape"}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>
+            {scrapeEmpty
+              ? "The previous scrape finished but found no videos. Often this is a typo in the handle, a private account, or the business running their socials from a different @."
+              : "Something went wrong last time — try again, or adjust the handle if it was off."}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>@</span>
+            <input
+              type="text"
+              value={retryHandle.replace(/^@+/, "")}
+              onChange={e => setRetryHandle(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !retrying) retryClientScrape(); }}
+              placeholder="handle-goes-here"
+              disabled={retrying}
+              style={{ ...inputSt, flex: 1, maxWidth: 260, opacity: retrying ? 0.5 : 1 }}
+            />
+            <button onClick={retryClientScrape} disabled={retrying || !retryHandle.trim()}
+              style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: retrying ? "#4B5563" : !retryHandle.trim() ? "#374151" : "var(--accent)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: (retrying || !retryHandle.trim()) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (retrying || !retryHandle.trim()) ? 0.6 : 1 }}>
+              {retrying ? "Starting…" : "Retry scrape"}
+            </button>
+          </div>
+          {retryError && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "#EF4444" }}>{retryError}</div>
+          )}
         </div>
       )}
 
