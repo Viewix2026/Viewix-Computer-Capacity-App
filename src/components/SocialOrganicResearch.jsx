@@ -3606,7 +3606,15 @@ function ClientResearchStep({ project, onPatch }) {
   useEffect(() => { followersRef.current = followers; }, [followers]);
   const posts = Array.isArray(clientScrape.posts) ? clientScrape.posts : [];
   const topIds = Array.isArray(clientScrape.topByViews) ? clientScrape.topByViews : [];
-  const topPosts = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 5);
+  // Primary path: posts resolved by the ids the webhook pre-sorted. Fallback:
+  // if topByViews didn't write for some reason (race, or an older project
+  // where the Apify processor didn't emit it), sort posts by views inline so
+  // the UI still shows something instead of "no reels yet". Protects against
+  // the "scrape says complete but tab 3 is empty" bug.
+  const topPostsPrimary = topIds.map(id => posts.find(p => p.id === id)).filter(Boolean).slice(0, 5);
+  const topPosts = topPostsPrimary.length > 0
+    ? topPostsPrimary
+    : [...posts].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 5);
   const handles = clientScrape.handles || {};
   const approvals = project.approvals || {};
   const isDone = !!approvals.clientResearch;
@@ -3755,7 +3763,13 @@ function ClientResearchStep({ project, onPatch }) {
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 10 }}>Top 5 client reels by views</div>
         {topPosts.length === 0 ? (
           <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
-            {scrapeRunning ? "Waiting on scrape…" : "No reels yet — waiting on the client scrape."}
+            {scrapeRunning
+              ? "Waiting on scrape…"
+              : clientScrape.status === "done" && posts.length === 0
+                ? "Client scrape finished but found 0 video posts. The handle may be private or have no reels. Go back to Tab 2 and retry Stage A with a corrected handle."
+                : !clientScrape.status
+                  ? "No scrape has been run yet — approve Stage A on Tab 2 to kick it off."
+                  : "No reels yet — waiting on the client scrape."}
           </div>
         ) : (
           // Wider tiles + taller aspect ratio so the Instagram embed has
