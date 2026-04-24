@@ -120,6 +120,12 @@ export function Sale({
   const deleteSale = (id) => {
     setSales(p => p.filter(s => s.id !== id));
     setConfirmDelete(null);
+    // Explicit Firebase delete — the App.jsx bulk write no longer
+    // touches /sales (it would clobber server-owned fields), so we
+    // need to remove the record directly here.
+    fbSetAsync(`/sales/${id}`, null).catch(e => {
+      console.error("Failed to delete sale from Firebase:", e);
+    });
   };
 
   const copyLink = (s) => {
