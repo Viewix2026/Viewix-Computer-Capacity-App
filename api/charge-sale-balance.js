@@ -46,13 +46,69 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Slice ${idx} is not a manual-trigger slice (trigger=${slice.trigger})` });
     }
 
-    if (!sale.stripeCustomerId || !sale.stripePaymentMethodId) {
-      return res.status(400).json({ error: "No saved card on file. The customer's deposit must clear (and save the card) before the balance can be charged." });
-    }
-
     const stripe = new Stripe(secret);
     const amountCents = Math.round(Number(slice.amount) * 100);
     if (!amountCents || amountCents <= 0) return res.status(400).json({ error: "Invalid slice amount" });
+
+    // ── Resolve the PaymentMethod to charge ─────────────────────────
+    // Ideally the checkout.session.completed webhook captured both
+    // stripeCustomerId and stripePaymentMethodId at deposit time.
+    // If the webhook didn't fire (endpoint missing that event in
+    // Stripe Dashboard, or transient network fail), we can still
+    // recover — Stripe has attached the PM to the Customer itself
+    // via setup_future_usage='off_session' on the deposit PI. So
+    // fall back to: list the customer's payment methods, use the
+    // newest card. This makes the endpoint self-healing and also
+    // lets us patch the sale record so next time we don't need the
+    // fallback.
+    let customerId = sale.stripeCustomerId;
+    let paymentMethodId = sale.stripePaymentMethodId;
+
+    // Fallback 1: if customerId isn't on the sale, try to recover
+    // from the Checkout Session id we cached during create-session.
+    if (!customerId && sale.stripeCheckoutSessionId) {
+      try {
+        const session = await stripe.checkout.sessions.retrieve(sale.stripeCheckoutSessionId);
+        if (session?.customer) customerId = session.customer;
+      } catch (e) {
+        console.error("charge-balance fallback: failed to load checkout session:", e.message);
+      }
+    }
+
+    if (!customerId) {
+      return res.status(400).json({
+        error: "No Stripe customer linked to this sale. The deposit must clear before the balance can be charged.",
+      });
+    }
+
+    // Fallback 2: if PaymentMethod id isn't on the sale, list the
+    // customer's saved cards and use the most recent.
+    if (!paymentMethodId) {
+      try {
+        const list = await stripe.paymentMethods.list({ customer: customerId, type: "card", limit: 5 });
+        if (list.data?.length) {
+          // Newest first — Stripe returns in reverse creation order.
+          paymentMethodId = list.data[0].id;
+          // Backfill the sale record so future charges skip the fallback.
+          try {
+            await adminPatch(`/sales/${saleId}`, {
+              stripePaymentMethodId: paymentMethodId,
+              ...(sale.stripeCustomerId === customerId ? {} : { stripeCustomerId: customerId }),
+            });
+          } catch (e) {
+            console.error("charge-balance: failed to backfill PM id on sale:", e.message);
+          }
+        }
+      } catch (e) {
+        console.error("charge-balance fallback: failed to list customer PMs:", e.message);
+      }
+    }
+
+    if (!paymentMethodId) {
+      return res.status(400).json({
+        error: "No card saved on the Stripe customer. This can happen if the deposit was paid without 'save for future use' — ask the customer to pay the balance via a new payment link instead.",
+      });
+    }
 
     const descriptorBase = `Viewix — ${sale.clientName} — ${sale.videoType}/${sale.packageKey}`;
 
@@ -63,8 +119,8 @@ export default async function handler(req, res) {
     const pi = await stripe.paymentIntents.create({
       amount: amountCents,
       currency: "aud",
-      customer: sale.stripeCustomerId,
-      payment_method: sale.stripePaymentMethodId,
+      customer: customerId,
+      payment_method: paymentMethodId,
       off_session: true,
       confirm: true,
       description: `${descriptorBase} — ${slice.label || `Slice ${idx}`}`,
