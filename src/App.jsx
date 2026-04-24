@@ -220,9 +220,15 @@ export default function App(){
             if(data.foundersData){
               setFoundersData(data.foundersData);
             }
+            // Sales: handle the empty/missing case explicitly so deleting
+            // the last sale (or all of them) clears React state instead of
+            // leaving the previous list around. Same defensive pattern
+            // already used for projects above.
             if(data.sales){
               const sArr=Object.values(data.sales).filter(s=>s&&s.id);
               setSales(sArr);
+            } else {
+              setSales([]);
             }
             if(data.salePricing){setSalePricing(data.salePricing);}
             if(data.saleThankYou){setSaleThankYou(data.saleThankYou);}

@@ -149,6 +149,17 @@ export default async function handler(req, res) {
         return res.status(200).json({ received: true, ignored: true });
       }
 
+      // Existence check — adminPatch (Firebase update()) creates the
+      // path if it doesn't exist, which would resurrect a sale the
+      // founder deleted from the dashboard. Stripe retries failed
+      // events for days, so a delayed retry of an old event for a
+      // since-deleted sale would silently re-create it. Skip if gone.
+      const existing = await adminGet(`/sales/${saleId}`);
+      if (!existing) {
+        console.warn("checkout.session.completed for deleted sale, skipping:", saleId);
+        return res.status(200).json({ received: true, ignored: "sale deleted" });
+      }
+
       const patch = { stripeCheckoutSessionId: null };
 
       // Capture the PaymentMethod id for future off-session use.
@@ -301,7 +312,12 @@ export default async function handler(req, res) {
       const sub = event.data.object;
       const saleId = sub.metadata?.saleId;
       if (saleId) {
-        await adminPatch(`/sales/${saleId}`, { stripeSubscriptionActive: false });
+        // Existence check — same resurrection-prevention logic as
+        // checkout.session.completed above.
+        const existing = await adminGet(`/sales/${saleId}`);
+        if (existing) {
+          await adminPatch(`/sales/${saleId}`, { stripeSubscriptionActive: false });
+        }
       }
     }
 
