@@ -103,10 +103,26 @@ export function SalePricingEditor({ salePricing, setSalePricing, canEdit = true 
                         <span style={{ fontFamily: "inherit" }}>GST (10%)</span>
                         <span>{fmtCurExact(gstAmount)}</span>
                       </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--fg)", fontWeight: 700, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
-                        <span style={{ fontFamily: "inherit" }}>Grand total</span>
+                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)", borderTop: "1px dashed var(--border)", paddingTop: 4, marginTop: 2 }}>
+                        <span style={{ fontFamily: "inherit" }}>Project total</span>
                         <span>{fmtCurExact(grandTotal)}</span>
                       </div>
+                      {schedule.length > 0 && (() => {
+                        const totalSurcharge = schedule.reduce((sum, s) => sum + (Number(s.surcharge) || 0), 0);
+                        const customerPays = grandTotal + totalSurcharge;
+                        return (
+                          <>
+                            <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
+                              <span style={{ fontFamily: "inherit" }}>Card fee (\u00d7{schedule.length})</span>
+                              <span>{fmtCurExact(totalSurcharge)}</span>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between", color: "var(--fg)", fontWeight: 700, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
+                              <span style={{ fontFamily: "inherit" }}>Customer pays</span>
+                              <span>{fmtCurExact(customerPays)}</span>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
 
                     <div>

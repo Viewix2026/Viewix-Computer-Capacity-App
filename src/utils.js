@@ -1,4 +1,4 @@
-import { GST_RATE, scheduleForVideoType } from "../api/_tiers.js";
+import { GST_RATE, scheduleForVideoType, computeStripeSurcharge } from "../api/_tiers.js";
 
 // ─── Date Helpers ───
 export function todayKey() {
@@ -318,12 +318,22 @@ export function buildSchedule(videoType, totalExGst, depositDate) {
       dueAt = null;
       dueLabel = "On project completion";
     }
+    // Each slice is its own Stripe charge, so each gets its own
+    // 1.73% + 30c surcharge to cover Stripe's 1.7% + 30c fee.
+    // slice.amount is the FULL amount Stripe charges the customer
+    // (project share + surcharge). projectAmount + surcharge break
+    // it down for display.
+    const projectAmount = amounts[idx];
+    const surcharge = computeStripeSurcharge(projectAmount);
+    const amount = round2(projectAmount + surcharge);
     return {
       idx,
       label: s.label,
       trigger: s.trigger,
       pct: s.pct,
-      amount: amounts[idx],
+      projectAmount,   // share of grandTotal allocated to the project
+      surcharge,       // Stripe processing fee passed through to customer
+      amount,          // what Stripe actually charges (projectAmount + surcharge)
       dueDaysOffset: s.dueDaysOffset ?? null,
       dueAt,
       dueLabel,

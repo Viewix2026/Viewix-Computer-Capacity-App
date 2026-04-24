@@ -249,28 +249,38 @@ export function Sale({
           </div>
           {getPackageDefault(pricing,form.videoType,form.packageKey)===0&&(<div style={{marginBottom:12,fontSize:11,color:"#F59E0B"}}>⚠ No default set for this package. {isFounders ? "Set one in the Pricing tab." : "Ask a founder to set one in the Pricing tab."}</div>)}
 
-          {/* Live breakdown: GST + grand total + instalment schedule */}
-          {form.totalExGst>0&&(<div style={{display:"grid",gridTemplateColumns:"1fr 1.4fr",gap:16,paddingTop:12,borderTop:"1px dashed var(--border)"}}>
-            <div>
-              <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Customer sees</div>
-              <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
-                <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}><span style={{fontFamily:"inherit"}}>Subtotal (ex-GST)</span><span>{fmtCurExact(form.totalExGst)}</span></div>
-                <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}><span style={{fontFamily:"inherit"}}>GST (10%)</span><span>{fmtCurExact(form.gstAmount)}</span></div>
-                <div style={{display:"flex",justifyContent:"space-between",color:"var(--fg)",fontWeight:700,borderTop:"1px solid var(--border)",paddingTop:4,marginTop:2}}><span style={{fontFamily:"inherit"}}>Grand total</span><span>{fmtCurExact(form.grandTotal)}</span></div>
+          {/* Live breakdown: GST + surcharges + grand total + instalment schedule */}
+          {form.totalExGst>0&&(()=>{
+            const totalSurcharge = (form.schedule||[]).reduce((sum,s)=>sum+(Number(s.surcharge)||0),0);
+            const customerPays = (Number(form.grandTotal)||0) + totalSurcharge;
+            const sliceCount = (form.schedule||[]).length;
+            return (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1.4fr",gap:16,paddingTop:12,borderTop:"1px dashed var(--border)"}}>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Customer sees</div>
+                <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}><span style={{fontFamily:"inherit"}}>Subtotal (ex-GST)</span><span>{fmtCurExact(form.totalExGst)}</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}><span style={{fontFamily:"inherit"}}>GST (10%)</span><span>{fmtCurExact(form.gstAmount)}</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)",borderTop:"1px dashed var(--border)",paddingTop:4,marginTop:2}}><span style={{fontFamily:"inherit"}}>Project total</span><span>{fmtCurExact(form.grandTotal)}</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",color:"var(--muted)"}}><span style={{fontFamily:"inherit"}}>Card fee (1.73%+30c{sliceCount>1?` \u00d7${sliceCount}`:""})</span><span>{fmtCurExact(totalSurcharge)}</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",color:"var(--fg)",fontWeight:700,borderTop:"1px solid var(--border)",paddingTop:4,marginTop:2}}><span style={{fontFamily:"inherit"}}>Customer pays</span><span>{fmtCurExact(customerPays)}</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",color:"#10B981",fontWeight:600,fontSize:11,marginTop:4}}><span style={{fontFamily:"inherit"}}>Viewix receives</span><span>{fmtCurExact(form.grandTotal)}</span></div>
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Paid as ({scheduleForVideoType(form.videoType).kind === "deposit_plus_manual" ? "deposit + manual balance" : scheduleForVideoType(form.videoType).kind === "subscription_monthly" ? "3 auto-payments" : "paid in full"})</div>
+                <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
+                  {(form.schedule||[]).map((s,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",color:s.trigger==="now"?"var(--fg)":"var(--muted)"}}>
+                      <span style={{fontFamily:"inherit"}}>{s.label} · {s.trigger==="now"?"Today":s.trigger==="auto"?`${s.dueDaysOffset}d`:"Manual"}</span>
+                      <span style={{fontWeight:s.trigger==="now"?700:500}}>{fmtCurExact(s.amount)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-            <div>
-              <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Paid as ({scheduleForVideoType(form.videoType).kind === "deposit_plus_manual" ? "deposit + manual balance" : scheduleForVideoType(form.videoType).kind === "subscription_monthly" ? "3 auto-payments" : "paid in full"})</div>
-              <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
-                {(form.schedule||[]).map((s,i)=>(
-                  <div key={i} style={{display:"flex",justifyContent:"space-between",color:s.trigger==="now"?"var(--fg)":"var(--muted)"}}>
-                    <span style={{fontFamily:"inherit"}}>{s.label} · {s.trigger==="now"?"Today":s.trigger==="auto"?`${s.dueDaysOffset}d`:"Manual"}</span>
-                    <span style={{fontWeight:s.trigger==="now"?700:500}}>{fmtCurExact(s.amount)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>)}
+            );
+          })()}
         </div>
         {saveError && (
           <div style={{marginBottom:12,padding:"10px 14px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,color:"#991B1B",fontSize:13}}>{saveError}</div>

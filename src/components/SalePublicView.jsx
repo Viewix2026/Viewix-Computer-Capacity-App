@@ -376,12 +376,25 @@ function StudioClientStrip({ sale }) {
 
 function StudioTotals({ sale }) {
   const row = { display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 14, color: "var(--muted)" };
+  const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
+  const totalSurcharge = schedule.reduce((sum, s) => sum + (Number(s.surcharge) || 0), 0);
+  const totalCharged = (Number(sale.grandTotal) || 0) + totalSurcharge;
+  const sliceCount = schedule.length;
   return (
     <div style={{ background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 12, padding: 20 }}>
       <div style={row}><span>Subtotal (ex-GST)</span><span className="studio-num" style={{ fontWeight: 600, color: "var(--ink)" }}>{fmtCurExact(sale.totalExGst || 0)}</span></div>
       <div style={row}><span>GST (10%)</span><span className="studio-num" style={{ fontWeight: 600, color: "var(--ink)" }}>{fmtCurExact(sale.gstAmount || 0)}</span></div>
+      <div style={{ ...row, borderTop: "1px dashed var(--line)", marginTop: 6, paddingTop: 10, fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+        <span>Project total</span><span className="studio-num">{fmtCurExact(sale.grandTotal || 0)}</span>
+      </div>
+      {totalSurcharge > 0 && (
+        <div style={row}>
+          <span>Card processing (1.73% + 30c{sliceCount > 1 ? ` \u00d7 ${sliceCount}` : ""})</span>
+          <span className="studio-num" style={{ fontWeight: 600, color: "var(--ink)" }}>{fmtCurExact(totalSurcharge)}</span>
+        </div>
+      )}
       <div style={{ ...row, borderTop: "1px solid var(--line-strong)", marginTop: 10, paddingTop: 12, fontSize: 16, fontWeight: 700, color: "var(--ink)" }}>
-        <span>Total</span><span className="studio-num">{fmtCurExact(sale.grandTotal || 0)} AUD</span>
+        <span>Total to be charged</span><span className="studio-num">{fmtCurExact(totalCharged)} AUD</span>
       </div>
     </div>
   );
@@ -424,7 +437,14 @@ function StudioSchedule({ sale, cfg }) {
                 {s.trigger === "manual" && "Viewix will charge this manually when the project concludes"}
               </div>
             </div>
-            <div className="studio-num" style={{ fontWeight: 700, fontSize: 15, color: "var(--ink)" }}>{fmtCurExact(s.amount)}</div>
+            <div style={{ textAlign: "right" }}>
+              <div className="studio-num" style={{ fontWeight: 700, fontSize: 15, color: "var(--ink)" }}>{fmtCurExact(s.amount)}</div>
+              {Number(s.surcharge) > 0 && (
+                <div className="studio-num" style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                  {fmtCurExact(s.projectAmount)} + {fmtCurExact(s.surcharge)} fee
+                </div>
+              )}
+            </div>
           </div>
         );
       })}

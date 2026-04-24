@@ -279,6 +279,33 @@ export const SALE_VIDEO_TYPES = [
 // find if the rate ever changes (unlikely but not impossible).
 export const GST_RATE = 0.10;
 
+// ─── Stripe processing fee surcharge ───────────────────────────────
+// Pass-through of Stripe's AU domestic fee (1.7% + 30c per charge),
+// adjusted to break-even after Stripe takes its cut of the surcharge
+// itself. Formula:
+//
+//   Surcharge = (1.7% × original + 30c) ÷ 0.983
+//
+// Which simplifies to ~1.73% + 30c on each individual Stripe charge.
+// Applied per slice (each instalment is a separate Stripe charge,
+// each gets its own 30c fixed fee).
+//
+// ACCC-compliant: this is the true cost of card acceptance, not a
+// profit margin. International cards / Amex cost more (~3.5% + 30c)
+// but we absorb that variance — the typical Viewix client uses an
+// AU domestic card so the average still sits at break-even.
+export const STRIPE_SURCHARGE_PCT   = 0.0173;
+export const STRIPE_SURCHARGE_FIXED = 0.30;
+
+// Compute the Stripe processing fee surcharge for a given inc-GST
+// amount. Returns the surcharge to ADD on top of `amount` so the
+// customer covers Stripe's fee. Always rounded to cents.
+export function computeStripeSurcharge(amount) {
+  const a = Number(amount) || 0;
+  if (a <= 0) return 0;
+  return Math.round((a * STRIPE_SURCHARGE_PCT + STRIPE_SURCHARGE_FIXED) * 100) / 100;
+}
+
 // ─── SALE_SCHEDULES ────────────────────────────────────────────────
 // Per-product-line billing schedule. Used by buildSchedule() in utils
 // to produce the array of instalments on each Sale record.
