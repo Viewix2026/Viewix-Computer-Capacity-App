@@ -96,17 +96,39 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   const secret = process.env.STRIPE_SECRET_KEY;
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret || !webhookSecret) {
+  // Multi-secret support — try every webhook signing secret in env
+  // until one verifies. Lets us run BOTH a test-mode AND live-mode
+  // Stripe webhook destination off the same Vercel deployment without
+  // having to rotate env vars when toggling modes. Order doesn't
+  // matter; we accept the first one that verifies.
+  //
+  //   STRIPE_WEBHOOK_SECRET       — primary / single-mode setup
+  //   STRIPE_WEBHOOK_SECRET_TEST  — test/sandbox destination
+  //   STRIPE_WEBHOOK_SECRET_LIVE  — live destination
+  const webhookSecrets = [
+    process.env.STRIPE_WEBHOOK_SECRET,
+    process.env.STRIPE_WEBHOOK_SECRET_TEST,
+    process.env.STRIPE_WEBHOOK_SECRET_LIVE,
+  ].filter(Boolean);
+  if (!secret || webhookSecrets.length === 0) {
     return res.status(500).json({ error: "Stripe env vars not configured" });
   }
 
   const stripe = new Stripe(secret);
   const sig = req.headers["stripe-signature"];
   let event;
+  let lastErr;
   try {
     const raw = await readRawBody(req);
-    event = stripe.webhooks.constructEvent(raw, sig, webhookSecret);
+    for (const ws of webhookSecrets) {
+      try {
+        event = stripe.webhooks.constructEvent(raw, sig, ws);
+        break; // verified — stop trying
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!event) throw lastErr || new Error("No matching webhook secret");
   } catch (e) {
     console.error("Webhook signature verification failed:", e.message);
     return res.status(400).json({ error: `Webhook Error: ${e.message}` });
