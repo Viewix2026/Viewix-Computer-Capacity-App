@@ -305,20 +305,106 @@ export default async function handler(req, res) {
     }
 
     // ─── customer.subscription.deleted ─────────────────────────────
-    // Fires when the subscription fully ends (after our
-    // cancel_at_period_end flip). Clears stripeSubscriptionId so the
-    // UI doesn't keep trying to reference it.
+    // Fires when the subscription fully ends. Two cases:
+    //   (a) Happy path — fired AFTER our cancel_at_period_end was set
+    //       on the final invoice. All slices already paid. Just flip
+    //       stripeSubscriptionActive=false for cleanliness.
+    //   (b) Mid-plan cancellation — sub died before all invoices ran
+    //       (manual cancel in Stripe Dashboard, dunning failure
+    //       exhausting retries, customer's bank declining). Some
+    //       slices remain "pending" forever; sale.paid never flips
+    //       true; dashboard shows "2/3 PAID" indefinitely.
+    //
+    // For (b) we mark unpaid slices as "cancelled" so the allPaid
+    // calculation can resolve and the UI shows the truth.
     if (event.type === "customer.subscription.deleted") {
       const sub = event.data.object;
       const saleId = sub.metadata?.saleId;
       if (saleId) {
-        // Existence check — same resurrection-prevention logic as
-        // checkout.session.completed above.
         const existing = await adminGet(`/sales/${saleId}`);
         if (existing) {
-          await adminPatch(`/sales/${saleId}`, { stripeSubscriptionActive: false });
+          const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
+          let cancelledCount = 0;
+          const updatedSchedule = schedule.map(s => {
+            if (s.status === "pending") {
+              cancelledCount++;
+              return { ...s, status: "cancelled", cancelledAt: new Date().toISOString() };
+            }
+            return s;
+          });
+          // allDone now means every slice is either paid OR cancelled
+          // (i.e. the schedule has reached a terminal state).
+          const allDone = updatedSchedule.every(s => s.status === "paid" || s.status === "cancelled");
+          await adminPatch(`/sales/${saleId}`, {
+            schedule: updatedSchedule,
+            stripeSubscriptionActive: false,
+            // Only set top-level paid=true if every slice paid (no
+            // cancellations). A partial-paid + cancelled sale stays
+            // paid: false so it shows up in "AWAITING" filters.
+            ...(updatedSchedule.every(s => s.status === "paid") ? { paid: true, paidAt: new Date().toISOString() } : {}),
+          });
+          if (cancelledCount > 0) {
+            await slackNotify(`:warning: *Subscription ended early* — ${sub.metadata?.clientName || saleId} · ${cancelledCount} unpaid instalment(s) marked cancelled. Subscription died mid-plan (manual cancel, dunning failure, or expired card). Reconcile in Stripe Dashboard.`);
+          }
         }
       }
+    }
+
+    // ─── charge.refunded ───────────────────────────────────────────
+    // A refund was issued (full or partial) on a previously-paid
+    // charge. Flip the matching slice from "paid" to "refunded" so
+    // the dashboard reflects the truth and the customer doesn't see
+    // a stale PAID badge. Also drops the top-level paid flag if any
+    // slice goes back to non-paid.
+    if (event.type === "charge.refunded") {
+      const charge = event.data.object;
+      const saleId = charge.metadata?.saleId;
+      const sliceIdx = charge.metadata?.sliceIdx;
+      // Refund metadata may live on the charge OR on the underlying
+      // PaymentIntent. Subscription invoice charges put metadata on
+      // the invoice, not the charge — try the PI as a fallback.
+      let resolvedSaleId = saleId;
+      let resolvedSliceIdx = sliceIdx;
+      if ((!resolvedSaleId || resolvedSliceIdx === undefined) && charge.payment_intent) {
+        try {
+          const pi = await stripe.paymentIntents.retrieve(charge.payment_intent);
+          resolvedSaleId = resolvedSaleId || pi.metadata?.saleId;
+          resolvedSliceIdx = resolvedSliceIdx !== undefined ? resolvedSliceIdx : pi.metadata?.sliceIdx;
+        } catch (e) {
+          console.error("charge.refunded: failed to load PI:", e.message);
+        }
+      }
+      if (!resolvedSaleId || resolvedSliceIdx === undefined) {
+        return res.status(200).json({ received: true, ignored: "no saleId/sliceIdx on refund" });
+      }
+      const existing = await adminGet(`/sales/${resolvedSaleId}`);
+      if (!existing) {
+        return res.status(200).json({ received: true, ignored: "sale deleted" });
+      }
+      const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
+      const idx = Number(resolvedSliceIdx);
+      if (!schedule[idx]) {
+        return res.status(200).json({ received: true, ignored: "sliceIdx out of range" });
+      }
+      // Idempotent — if already marked refunded, skip.
+      if (schedule[idx].status === "refunded") {
+        return res.status(200).json({ received: true, ignored: "already refunded" });
+      }
+      schedule[idx] = {
+        ...schedule[idx],
+        status: "refunded",
+        refundedAt: new Date().toISOString(),
+        refundedAmount: (charge.amount_refunded || 0) / 100,
+      };
+      await adminPatch(`/sales/${resolvedSaleId}`, {
+        schedule,
+        // Top-level paid is no longer true if any slice is non-paid.
+        paid: false,
+        paidAt: null,
+      });
+      const amount = ((charge.amount_refunded || 0) / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+      const clientName = existing.clientName || "a customer";
+      await slackNotify(`:rewind: *Refund issued* — ${clientName} · ${amount} for ${schedule[idx].label || `slice ${idx}`}. Sale row updated.`);
     }
 
     // ─── invoice.payment_failed ────────────────────────────────────

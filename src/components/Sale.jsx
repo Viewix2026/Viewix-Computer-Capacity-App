@@ -152,14 +152,31 @@ export function Sale({
     if (schedule.length === 0) {
       return { label: s.paid ? "PAID" : "AWAITING PAYMENT", color: s.paid ? "#10B981" : "#F59E0B", action: null };
     }
-    const paidCount = schedule.filter(x => x.status === "paid").length;
-    if (paidCount === 0) return { label: "AWAITING DEPOSIT", color: "#F59E0B", action: null };
-    if (paidCount === schedule.length) return { label: "PAID", color: "#10B981", action: null };
+    const paidCount      = schedule.filter(x => x.status === "paid").length;
+    const cancelledCount = schedule.filter(x => x.status === "cancelled").length;
+    const refundedCount  = schedule.filter(x => x.status === "refunded").length;
+    const total          = schedule.length;
 
+    // All paid → PAID
+    if (paidCount === total) return { label: "PAID", color: "#10B981", action: null };
+    // Nothing paid, nothing started → awaiting first charge
+    if (paidCount === 0 && cancelledCount === 0 && refundedCount === 0) {
+      return { label: "AWAITING DEPOSIT", color: "#F59E0B", action: null };
+    }
+    // Any refund flips to a refunded state
+    if (refundedCount > 0) {
+      const allRefunded = refundedCount === total;
+      return { label: allRefunded ? "REFUNDED" : `REFUND ${refundedCount}/${total}`, color: "#9333EA", action: null };
+    }
+    // Subscription died mid-plan — some paid, some cancelled
+    if (cancelledCount > 0) {
+      return { label: paidCount > 0 ? `${paidCount}/${total} PAID \u00b7 CANCELLED` : "CANCELLED", color: "#EF4444", action: null };
+    }
+    // Partial paid, nothing cancelled / refunded — normal in-flight state
     const nextIdx = schedule.findIndex(x => x.status !== "paid");
     const nextSlice = schedule[nextIdx];
-    const label = `${paidCount}/${schedule.length} PAID`;
-    const action = nextSlice.trigger === "manual"
+    const label = `${paidCount}/${total} PAID`;
+    const action = nextSlice && nextSlice.trigger === "manual"
       ? { kind: "chargeBalance", sliceIdx: nextIdx, amount: nextSlice.amount, label: nextSlice.label }
       : null;
     return { label, color: "#0082FA", action };
@@ -303,7 +320,25 @@ export function Sale({
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                     <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>{s.clientName}</span>
-                    <span style={{fontSize:10,fontWeight:700,color:status.color==="#10B981"?"white":status.color,background:status.color==="#10B981"?"#10B981":status.color==="#F59E0B"?"rgba(245,158,11,0.12)":"rgba(0,130,250,0.12)",padding:"3px 8px",borderRadius:4}}>{status.label}</span>
+                    {(() => {
+                      // Convert hex → rgb tuple for transparent background.
+                      // Solid background only on success (green); every other
+                      // status uses tinted-text-on-transparent-bg.
+                      const isSolid = status.color === "#10B981";
+                      const hex = status.color.replace("#", "");
+                      const r = parseInt(hex.slice(0, 2), 16);
+                      const g = parseInt(hex.slice(2, 4), 16);
+                      const b = parseInt(hex.slice(4, 6), 16);
+                      const tintBg = `rgba(${r},${g},${b},0.12)`;
+                      return (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700,
+                          color: isSolid ? "white" : status.color,
+                          background: isSolid ? status.color : tintBg,
+                          padding: "3px 8px", borderRadius: 4,
+                        }}>{status.label}</span>
+                      );
+                    })()}
                     {status.action && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"'JetBrains Mono',monospace"}}>{status.action.label} · {fmtCurExact(status.action.amount)} pending</span>}
                   </div>
                   <div style={{fontSize:12,color:"var(--muted)"}}>{videoLabel(s.videoType)} · {packageLabel(s.videoType,s.packageKey)} · <span style={{color:"#10B981",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{fmtCur(s.grandTotal||s.depositAmount||0)}</span>{s.grandTotal?<span style={{color:"var(--muted)",fontWeight:500,fontSize:11}}> inc-GST</span>:null} · {new Date(s.createdAt).toLocaleDateString("en-AU")}</div>
