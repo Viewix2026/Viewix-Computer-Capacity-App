@@ -3199,17 +3199,22 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
     }).finally(() => setSuggestingHandle(false));
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Same fallback for Stage B: if no AI competitor suggestion has run yet
-  // and the producer hasn't already added entries manually, fire one.
+  // Auto-suggest fallback for Stage B: if no AI competitor suggestion has
+  // run yet and the producer hasn't already added entries manually, fire
+  // one through runSuggest() (declared below) — that path commits the
+  // results to research.competitors, drives the spinner state, and
+  // auto-populates the chips. Without going through runSuggest the
+  // suggestions used to land in research.aiSuggestions only and never
+  // visibly appear, which is why producers had to click Re-suggest
+  // manually every time.
+  const ranSuggestOnMount = useRef(false);
   useEffect(() => {
+    if (ranSuggestOnMount.current) return;
     if (research.aiSuggestedAt) return;
     if ((research.competitors || []).length > 0) return;
     if ((research.keywords || []).length > 0) return;
-    fetch("/api/social-organic", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
-    }).catch(err => console.warn("suggestCompetitors mount-fallback failed:", err));
+    ranSuggestOnMount.current = true;
+    runSuggest();   // eslint-disable-line @typescript-eslint/no-use-before-define
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const resuggest = () => {
@@ -3261,11 +3266,22 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
 
   const suggestedCompetitorMap = new Map((research.aiSuggestions?.competitors || []).map(c => [c.handle.toLowerCase(), c.reason]));
 
-  const addCompetitor = (handle, source = "manual") => {
+  // Manual-add tag — producer toggles "direct" / "inspiration" before
+  // typing the handle. Defaults to direct because that's the more common
+  // case (producer adds someone they know is a competitor).
+  const [newTag, setNewTag] = useState("direct");
+
+  const addCompetitor = (handle, opts = {}) => {
     const norm = handle.trim().startsWith("@") ? handle.trim() : `@${handle.trim().replace(/^@+/, "")}`;
     if (!norm || norm === "@") return;
     if (competitors.some(c => c.handle.toLowerCase() === norm.toLowerCase())) return;
-    const next = [...competitors, { handle: norm, source }];
+    const entry = {
+      handle: norm,
+      source: opts.source || "manual",
+      tag: opts.tag === "inspiration" ? "inspiration" : "direct",
+      verified: opts.verified ?? null,
+    };
+    const next = [...competitors, entry];
     setCompetitors(next);
     fbSet(`/preproduction/socialOrganic/${project.id}/research/competitors`, next);
   };
@@ -3299,8 +3315,15 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       // Auto-add suggested competitors + keywords if empty; otherwise just
       // leave the suggestions in research.aiSuggestions for manual accept.
+      // Preserves the tag (direct / inspiration) Claude assigned to each
+      // entry so the chip in the UI reads the right colour.
       if (competitors.length === 0 && Array.isArray(d.competitors)) {
-        const next = d.competitors.map(c => ({ handle: c.handle, source: "ai" }));
+        const next = d.competitors.map(c => ({
+          handle: c.handle,
+          source: "ai",
+          tag: c.tag === "inspiration" ? "inspiration" : "direct",
+          verified: c.verified ?? null,
+        }));
         setCompetitors(next);
         fbSet(`/preproduction/socialOrganic/${project.id}/research/competitors`, next);
       }
@@ -3413,28 +3436,64 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
           )}
 
           <Label>Competitor handles</Label>
+          <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 6 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, marginRight: 12 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22C55E" }} /> direct
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#A855F7" }} /> inspiration
+            </span>
+          </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
             {competitors.map(c => {
               const reason = suggestedCompetitorMap.get(c.handle.toLowerCase());
-              const sourceChip = c.source === "ai" ? { bg: "rgba(139,92,246,0.15)", fg: "#8B5CF6", label: "AI" } : { bg: "rgba(59,130,246,0.12)", fg: "#3B82F6", label: c.source };
+              const tag = c.tag === "inspiration" ? "inspiration" : "direct";
+              const tagChip = tag === "inspiration"
+                ? { bg: "rgba(168,85,247,0.15)", fg: "#A855F7", label: "INSPIRATION" }
+                : { bg: "rgba(34,197,94,0.15)", fg: "#22C55E", label: "DIRECT" };
               return (
                 <span key={c.handle} title={reason || ""}
-                  style={{ padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  style={{ padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg)", border: `1px solid ${tagChip.fg}33`, color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  {/* Tag chip — direct (green) or inspiration (purple) — set
+                      either by Claude on auto-suggest or by the producer
+                      when manually adding. Tags don't flip after creation;
+                      to change one, remove the chip and re-add. */}
+                  <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 5px", borderRadius: 3, background: tagChip.bg, color: tagChip.fg, letterSpacing: 0.4 }}>{tagChip.label}</span>
                   {c.handle}
-                  <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 3, background: sourceChip.bg, color: sourceChip.fg, textTransform: "uppercase" }}>{sourceChip.label}</span>
+                  {/* Open IG profile in a new tab — manual verify path. */}
+                  <a href={`https://www.instagram.com/${c.handle.replace(/^@/, "")}/`} target="_blank" rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    title="Open on Instagram to verify"
+                    style={{ color: "var(--muted)", fontSize: 10, textDecoration: "none", marginLeft: 2 }}>↗</a>
                   {!stageBDone && <button onClick={() => removeCompetitor(c.handle)} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 14, cursor: "pointer", padding: 0, lineHeight: 1 }}>×</button>}
                 </span>
               );
             })}
-            {competitors.length === 0 && <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None yet — hit "Suggest with AI" or add manually.</span>}
+            {competitors.length === 0 && (
+              suggesting
+                ? <span style={{ fontSize: 11, color: "var(--accent)", fontStyle: "italic" }}>Generating competitor suggestions… (~10–15 seconds)</span>
+                : <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None yet — hit "↻ Re-suggest" or add manually.</span>
+            )}
           </div>
           {!stageBDone && (
-            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center" }}>
+              {/* Tag toggle for the manual-add input — producer picks
+                  direct / inspiration before pressing Enter. */}
+              <div style={{ display: "flex", gap: 0, background: "var(--bg)", borderRadius: 6, padding: 2, border: "1px solid var(--border)" }}>
+                <button onClick={() => setNewTag("direct")}
+                  style={{ padding: "4px 8px", borderRadius: 4, border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: newTag === "direct" ? "rgba(34,197,94,0.2)" : "transparent", color: newTag === "direct" ? "#22C55E" : "var(--muted)" }}>
+                  Direct
+                </button>
+                <button onClick={() => setNewTag("inspiration")}
+                  style={{ padding: "4px 8px", borderRadius: 4, border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: newTag === "inspiration" ? "rgba(168,85,247,0.2)" : "transparent", color: newTag === "inspiration" ? "#A855F7" : "var(--muted)" }}>
+                  Inspiration
+                </button>
+              </div>
               <input type="text" value={newHandle} onChange={e => setNewHandle(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCompetitor(newHandle); setNewHandle(""); } }}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCompetitor(newHandle, { tag: newTag }); setNewHandle(""); } }}
                 placeholder="@handle — press Enter"
                 style={{ ...inputSt, fontSize: 12, flex: 1 }} />
-              <button onClick={() => { addCompetitor(newHandle); setNewHandle(""); }} disabled={!newHandle.trim()}
+              <button onClick={() => { addCompetitor(newHandle, { tag: newTag }); setNewHandle(""); }} disabled={!newHandle.trim()}
                 style={{ ...btnSecondary, padding: "6px 14px", opacity: newHandle.trim() ? 1 : 0.5 }}>Add</button>
             </div>
           )}

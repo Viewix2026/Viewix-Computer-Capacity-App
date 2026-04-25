@@ -2059,11 +2059,31 @@ async function handleSuggestCompetitors(req, res) {
     }
   }
 
-  const systemPrompt = `You suggest Instagram competitor handles + hashtag keywords for Viewix's Social Organic research. Return JSON only, no markdown, no code fences. Prioritise accounts and topics the client would actually benchmark against. Avoid generic industry-giant handles unless they genuinely overlap. Limit: 5 handles, 8 keywords.
+  // Claude returns a mix of two kinds of competitor:
+  //   - "direct"      — same category / same audience, genuine competitor
+  //   - "inspiration" — different category but markets in a similar way
+  //                     (style, tone, format, audience overlap). Producers
+  //                     use these for stylistic reference, not proof points.
+  // Claude tags each entry. The producer can edit / remove / add manually
+  // on the client side; tags are surfaced as chips on the UI.
+  const systemPrompt = `You suggest Instagram competitor handles + hashtag keywords for Viewix's Social Organic research. Return JSON only, no markdown, no code fences.
+
+Return TWO kinds of competitor in a single mixed list:
+
+  - tag: "direct" — accounts in the same category / same audience as the client. Real competitors the client would benchmark against. Aim for ~4 of these.
+  - tag: "inspiration" — accounts OUTSIDE the client's industry that market in a similar way: similar audience, similar tone, similar format / content style. Producers borrow stylistic ideas from these. Think "if our client is a B2B SaaS, an inspiration brand could be a DTC food brand with sharp creative". Aim for ~4 of these.
+
+Avoid generic industry-giant handles unless they genuinely overlap.
+Avoid handles you're not confident about — better to return fewer than to hallucinate.
+
+LIMIT: up to 8 competitors total (~4 direct + ~4 inspiration), up to 8 keywords.
 
 STRUCTURE:
 {
-  "competitors": [{"handle": "@example", "reason": "one short sentence"}],
+  "competitors": [
+    {"handle": "@example", "tag": "direct", "reason": "one short sentence"},
+    {"handle": "@otherbrand", "tag": "inspiration", "reason": "why this brand's marketing is worth studying"}
+  ],
   "keywords": ["keyword one", "hashtag-friendly phrase"]
 }`;
 
@@ -2098,15 +2118,27 @@ Suggest competitor handles and keywords now.`;
     return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 400) });
   }
 
+  // Normalise into the canonical shape the rest of the pipeline reads:
+  //   { handle: "@xxx", tag: "direct"|"inspiration", reason, source: "ai",
+  //     verified: null }   — verified is filled by a future async Apify
+  //                          handle-search step; null = "not verified yet,
+  //                          producer should eyeball the IG profile".
   const normalisedCompetitors = (parsed.competitors || [])
     .map(c => {
-      if (typeof c === "string") return { handle: c.startsWith("@") ? c : `@${c.replace(/^@+/, "")}`, reason: "" };
+      if (typeof c === "string") return { handle: c.startsWith("@") ? c : `@${c.replace(/^@+/, "")}`, tag: "direct", reason: "", source: "ai", verified: null };
       const h = (c.handle || c.username || "").trim();
       if (!h) return null;
-      return { handle: h.startsWith("@") ? h : `@${h.replace(/^@+/, "")}`, reason: c.reason || "" };
+      const tag = c.tag === "inspiration" ? "inspiration" : "direct";
+      return {
+        handle: h.startsWith("@") ? h : `@${h.replace(/^@+/, "")}`,
+        tag,
+        reason: c.reason || "",
+        source: "ai",
+        verified: null,
+      };
     })
     .filter(Boolean)
-    .slice(0, 5);
+    .slice(0, 8);
   const keywords = (parsed.keywords || []).map(k => (k || "").toString().trim().replace(/^#/, "")).filter(Boolean).slice(0, 8);
 
   await fbPatch(`/preproduction/socialOrganic/${projectId}/research`, {
