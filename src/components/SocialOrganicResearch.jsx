@@ -174,7 +174,18 @@ export function SocialOrganicResearch({ accounts, creating: creatingProp, onCrea
         onPatch={(patch) => patchProject(activeProject.id, patch)}
         onDelete={() => {
           if (!window.confirm(`Delete "${activeProject.companyName}" research project?`)) return;
-          fbSet(`/preproduction/socialOrganic/${activeProject.id}`, null);
+          // Optimistic local removal so the producer doesn't see the
+          // project flicker back if any in-flight Apify webhook lands
+          // milliseconds before the listener confirms the delete. The
+          // server-side processApifyRun also has a tombstone guard so
+          // late-arriving webhooks can't resurrect the record either.
+          const idToDelete = activeProject.id;
+          setProjects(prev => {
+            const next = { ...prev };
+            delete next[idToDelete];
+            return next;
+          });
+          fbSet(`/preproduction/socialOrganic/${idToDelete}`, null);
           setActiveProjectId(null);
         }}
       />

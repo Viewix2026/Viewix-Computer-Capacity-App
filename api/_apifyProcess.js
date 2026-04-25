@@ -144,6 +144,23 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
   }
   const { projectId, purpose } = sidecar;
 
+  // ─── Tombstone guard ─────────────────────────────────────────────
+  // If the producer deleted this project while the Apify run was still
+  // in flight, the project record at /preproduction/socialOrganic/{id}
+  // is gone. Any fbPatch we'd do here would resurrect it (Firebase
+  // patches non-existent paths back into existence). Bail early and
+  // clean up the sidecar.
+  //
+  // We don't check this for the failure path below — error patches on
+  // a deleted project don't recreate enough to make it visible in the
+  // list (no `id` field gets restored), but they still leave debris,
+  // so the same guard runs there too.
+  const projectExists = await fbGet(`/preproduction/socialOrganic/${projectId}/id`);
+  if (!projectExists) {
+    await fbSet(`/preproduction/socialOrganic/_apifyRuns/${runId}`, null);
+    return { ignored: true, reason: "project_deleted", projectId };
+  }
+
   // Failure paths: flip the scrape bundle to "error" so the UI surfaces it.
   if (status !== "SUCCEEDED") {
     const errField = purpose.startsWith("client") && purpose !== "competitorPosts" ? "clientScrape" : "competitorScrape";
