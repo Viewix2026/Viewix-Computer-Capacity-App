@@ -2260,6 +2260,30 @@ Suggest competitor handles and keywords now.`;
     aiSuggestions: { competitors: normalisedCompetitors, keywords },
   });
 
+  // Async handle verification — fire one Apify Instagram profile-scrape
+  // run that takes ALL the AI-suggested usernames at once, no await.
+  // The webhook callback (api/_apifyProcess.js, purpose: "verifyCompetitors")
+  // matches results back to research.competitors[] and patches each
+  // entry's `verified` flag (true if Apify found the profile, false
+  // otherwise). Manual-add entries (source !== "ai") are skipped — the
+  // producer typed them in, so they're authoritative.
+  //
+  // Failures are non-fatal — the chip stays in `verified: null` (which
+  // the UI surfaces as a yellow ?), and the producer's manual ↗ link
+  // path still works as a fallback.
+  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+  if (APIFY_TOKEN && normalisedCompetitors.length > 0) {
+    const handles = normalisedCompetitors.map(c => c.handle.replace(/^@/, ""));
+    startApifyRun({
+      actorId: APIFY_IG_PROFILE_ACTOR,
+      input: { usernames: handles, resultsLimit: handles.length },
+      token: APIFY_TOKEN,
+      projectId,
+      purpose: "verifyCompetitors",
+      extraSidecar: { suggestedHandles: handles },
+    }).catch(err => console.warn("[verifyCompetitors] start failed:", err.message));
+  }
+
   return res.status(200).json({ success: true, competitors: normalisedCompetitors, keywords });
 }
 

@@ -3620,8 +3620,17 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
               const tagChip = tag === "inspiration"
                 ? { bg: "rgba(168,85,247,0.15)", fg: "#A855F7", label: "INSPIRATION" }
                 : { bg: "rgba(34,197,94,0.15)", fg: "#22C55E", label: "DIRECT" };
+              // Verify status: true = Apify confirmed the IG profile exists,
+              // false = Apify couldn't find it (typo / dead handle / etc.),
+              // null = still verifying (AI suggestions get a verify run
+              //                          fired immediately after they land).
+              // Manual-add chips skip verification (producer is authoritative).
+              const verifyTitle = c.verified === true ? "Verified — IG profile exists"
+                                : c.verified === false ? "Could not find this handle on Instagram. Click ↗ to check / edit."
+                                : c.source === "ai" ? "Verifying handle…"
+                                : null;
               return (
-                <span key={c.handle} title={reason || ""}
+                <span key={c.handle} title={reason ? `${reason}${verifyTitle ? ` · ${verifyTitle}` : ""}` : (verifyTitle || "")}
                   style={{ padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg)", border: `1px solid ${tagChip.fg}33`, color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 6 }}>
                   {/* Tag chip — direct (green) or inspiration (purple) — set
                       either by Claude on auto-suggest or by the producer
@@ -3629,6 +3638,16 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
                       to change one, remove the chip and re-add. */}
                   <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 5px", borderRadius: 3, background: tagChip.bg, color: tagChip.fg, letterSpacing: 0.4 }}>{tagChip.label}</span>
                   {c.handle}
+                  {/* Verify indicator: ✓ verified, ⚠ unverified, ⋯ pending. */}
+                  {c.verified === true && (
+                    <span style={{ color: "#22C55E", fontSize: 11, fontWeight: 800 }} aria-label="Verified">✓</span>
+                  )}
+                  {c.verified === false && (
+                    <span style={{ color: "#F59E0B", fontSize: 11, fontWeight: 800 }} aria-label="Unverified">⚠</span>
+                  )}
+                  {c.verified == null && c.source === "ai" && (
+                    <span style={{ color: "var(--muted)", fontSize: 10, fontStyle: "italic" }} aria-label="Verifying">…</span>
+                  )}
                   {/* Open IG profile in a new tab — manual verify path. */}
                   <a href={`https://www.instagram.com/${c.handle.replace(/^@/, "")}/`} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}

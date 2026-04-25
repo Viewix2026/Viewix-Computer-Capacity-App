@@ -240,6 +240,31 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
       posts: mergedPosts, handleStats, topOverperformers,
       lastRefreshAt: stampTime,
     }));
+  } else if (purpose === "verifyCompetitors") {
+    // Bulk handle verification for AI-suggested competitors. The Apify
+    // run was kicked off by handleSuggestCompetitors with a list of
+    // usernames; whatever profiles it returned, those handles exist.
+    // Anything missing from the response is presumed not to exist.
+    //
+    // Only AI-suggested entries get their `verified` flag flipped —
+    // manual-add competitors are authoritative (the producer typed
+    // them in, they don't need our second-guessing).
+    const found = new Set(
+      items
+        .map(i => (i.username || i.ownerUsername || "").toLowerCase())
+        .filter(Boolean)
+    );
+    const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+    const competitors = Array.isArray(project?.research?.competitors)
+      ? project.research.competitors : [];
+    if (competitors.length > 0) {
+      const updated = competitors.map(c => {
+        if (c.source !== "ai") return c;
+        const h = (c.handle || "").replace(/^@/, "").toLowerCase();
+        return { ...c, verified: found.has(h) };
+      });
+      await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, updated);
+    }
   } else {
     console.warn(`[apify-process] Unknown purpose ${purpose} for run ${runId}`);
   }
