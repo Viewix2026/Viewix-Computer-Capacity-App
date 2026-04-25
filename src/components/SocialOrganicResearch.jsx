@@ -109,12 +109,22 @@ function defaultRange(days = DEFAULTS.dateRangeDays) {
 // button can live in the top header (matching the Meta Ads layout).
 // When they're omitted the component falls back to local state so this
 // file stays standalone-usable.
-export function SocialOrganicResearch({ accounts, creating: creatingProp, onCreatingChange }) {
+export function SocialOrganicResearch({ accounts, creating: creatingProp, onCreatingChange, deepLinkProjectId }) {
   const [projects, setProjects] = useState({});
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [creatingLocal, setCreatingLocal] = useState(false);
   const creating = creatingProp !== undefined ? creatingProp : creatingLocal;
   const setCreating = onCreatingChange || setCreatingLocal;
+
+  // Deep-link from the Projects tab "Pre-Prod" linked-record pill.
+  // Auto-opens the specified project once it appears in the listener
+  // payload. Re-fires whenever the deepLinkProjectId prop changes, so
+  // the producer can click another pill and land on a different project
+  // without an intermediate Back-to-list step.
+  useEffect(() => {
+    if (!deepLinkProjectId) return;
+    if (projects[deepLinkProjectId]) setActiveProjectId(deepLinkProjectId);
+  }, [deepLinkProjectId, projects]);
 
   // fbListenSafe: waits for auth + suppresses transient nulls after the
   // first real load. Fixes the "competitor research blank even though it's

@@ -103,8 +103,26 @@ function EditModal({ title, onClose, children }) {
 }
 
 // ─── Main Component ───
-export function Preproduction({ role, isFounder } = {}) {
+export function Preproduction({ role, isFounder, route } = {}) {
   const [subTab, setSubTab] = useState("metaAds");
+
+  // Deep-link from a hash route like #preproduction/socialOrganic/social_1234.
+  // App.jsx parses the hash and passes us {subTab, recordId}. We honour it
+  // on first mount AND when the route's recordId changes — covers the case
+  // where the producer clicks one linked-record pill, navigates around,
+  // then clicks another. SocialOrganicResearch + Runsheets handle their
+  // own deep-link via the `deepLinkProjectId` / `deepLinkRunsheetId` props
+  // we pass below.
+  useEffect(() => {
+    if (!route || !route.subTab) return;
+    if (subTab !== route.subTab) setSubTab(route.subTab);
+    // For metaAds, project IDs land directly into local state. For
+    // socialOrganic + runsheets the child components own the active-id
+    // state, so we just route to the right sub-tab and pass the id down.
+    if (route.subTab === "metaAds" && route.recordId) {
+      setActiveProjectId(route.recordId);
+    }
+  }, [route?.subTab, route?.recordId]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [projects, setProjects] = useState({});
   // Separate listener for Social Organic so the Runsheets sub-tab can
   // source from both project types when creating a runsheet. Meta Ads
@@ -1125,12 +1143,16 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
           </div>
         )}
 
-        {/* Social Media Organic — competitor research, Stage 1 of social pre-prod flow */}
+        {/* Social Media Organic — competitor research, Stage 1 of social pre-prod flow.
+            deepLinkProjectId only fires once per hash change (handled inside
+            the child via a one-shot effect) so producers can still browse
+            normally after the deep link lands them on a project. */}
         {subTab === "socialOrganic" && (
           <SocialOrganicResearch
             accounts={accounts}
             creating={socialOrganicCreating}
             onCreatingChange={setSocialOrganicCreating}
+            deepLinkProjectId={route?.subTab === "socialOrganic" ? route?.recordId : null}
           />
         )}
 
@@ -1140,6 +1162,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
             projects={runsheetSourceProjects}
             creating={runsheetCreating}
             onCreatingChange={setRunsheetCreating}
+            deepLinkRunsheetId={route?.subTab === "runsheets" ? route?.recordId : null}
           />
         )}
 

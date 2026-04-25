@@ -62,7 +62,7 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAttio, editors, clients, setClients, onDeletePath }) {
+export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAttio, editors, clients, setClients, onDeletePath, highlightId }) {
   // Buyer Journey + Turnaround sub-tabs have moved to the Founders tab
   // (founders > buyerJourney). This component is now Clients-only; the
   // tab state is retained as a no-op to minimise downstream churn in
@@ -263,11 +263,12 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                   const cc = contactColor(acct.lastContact);
                   const mc = MANAGER_COLORS[acct.accountManager] || { bg: "var(--bg)", color: "var(--muted)" };
                   const isExpanded = expandedClientId === acct.id;
+                  const isHighlighted = highlightId === acct.id;
                   // Columns = 3 sticky (client/manager/lead) + partnership + lastContact + milestones + action
                   const totalCols = 5 + MILESTONE_DEFS.length + 1;
                   return (
                     <React.Fragment key={acct.id}>
-                    <tr>
+                    <tr id={`account-row-${acct.id}`} style={isHighlighted ? { outline: "2px solid #F59E0B", outlineOffset: -2 } : undefined}>
                       <td style={{ ...TD, position: "sticky", left: 0, zIndex: 5, background: "var(--card)", fontWeight: 700, color: "var(--fg)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <button

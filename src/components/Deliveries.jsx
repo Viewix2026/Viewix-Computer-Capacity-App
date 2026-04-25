@@ -2,15 +2,27 @@
 // Imports projects from Monday.com, tracks per-video Viewix status + client
 // revision rounds, and generates shareable client review links.
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
 import { fetchInProgressParents } from "../monday";
 import { StatusSelect } from "./UIComponents";
 import { fbSet } from "../firebase";
 
-export function Deliveries({ deliveries, setDeliveries, accounts }) {
+export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDeliveryId }) {
   const [activeDeliveryId, setActiveDeliveryId] = useState(null);
+
+  // Deep-link receiver — Projects → Delivery linked-record pill drops
+  // a hash route like #projects/deliveries/del-1234 which lands here.
+  // Auto-opens that delivery once the listener has loaded it. Re-fires
+  // when deepLinkDeliveryId changes so producers can pinball between
+  // pills without an intermediate Back-to-list.
+  useEffect(() => {
+    if (!deepLinkDeliveryId) return;
+    if (deliveries.find(d => d.id === deepLinkDeliveryId)) {
+      setActiveDeliveryId(deepLinkDeliveryId);
+    }
+  }, [deepLinkDeliveryId, deliveries]);
   const [importMode, setImportMode] = useState(false);
   const [importProjects, setImportProjects] = useState([]);
   const [importLoading, setImportLoading] = useState(false);

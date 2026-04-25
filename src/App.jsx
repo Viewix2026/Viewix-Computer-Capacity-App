@@ -48,6 +48,47 @@ export default function App(){
   const[resourceTab,setResourceTab]=useState("roas");
   const[saleTab,setSaleTab]=useState("payment");
 
+  // ─── Hash-based deep-linking ───────────────────────────────────────
+  // Format: #<tool>[/<subTab>][/<recordId>]
+  //   #preproduction/socialOrganic/social_1234   → opens that project
+  //   #preproduction/runsheets/rs-1234           → opens that runsheet
+  //   #projects/deliveries/del-1234              → opens that delivery
+  //   #accounts/acct-1234                        → highlights that account
+  //   #sherpas/cl-1234                           → highlights that sherpa
+  // Each tab component reads `route` as a prop and reacts on mount or
+  // when the recordId changes. Click handlers anywhere in the app set
+  // window.location.hash and the listener below propagates state.
+  const[route,setRoute]=useState({tool:null,subTab:null,recordId:null});
+  useEffect(()=>{
+    const apply=()=>{
+      const h=(window.location.hash||"").replace(/^#/,"");
+      if(!h){setRoute({tool:null,subTab:null,recordId:null});return;}
+      const parts=h.split("/");
+      const next={tool:parts[0]||null,subTab:parts[1]||null,recordId:parts[2]||null};
+      setRoute(next);
+      if(next.tool)setTool(next.tool);
+    };
+    apply();
+    window.addEventListener("hashchange",apply);
+    return()=>window.removeEventListener("hashchange",apply);
+  },[]);
+
+  // Side-effect: when the hash points to a Sherpa or Account row, scroll
+  // the matching DOM node into view shortly after the tab paints. The
+  // 250ms delay covers the lazy-load Suspense boundary on Accounts /
+  // first paint of the Sherpas list. Idempotent; fires once per route
+  // change.
+  useEffect(()=>{
+    if(!route.tool||!route.subTab)return;
+    if(route.tool!=="sherpas"&&route.tool!=="accounts")return;
+    const id=route.tool==="sherpas"?`sherpa-row-${route.subTab}`:`account-row-${route.subTab}`;
+    const t=setTimeout(()=>{
+      const el=document.getElementById(id);
+      if(el)el.scrollIntoView({behavior:"smooth",block:"center"});
+    },250);
+    return()=>clearTimeout(t);
+  },[route.tool,route.subTab]);
+
   // Sale (Payment Intake) state — records at /sales, defaults at /salePricing,
   // per-package thank-you content at /saleThankYou (booking link + welcome
   // video + next-steps copy shown to customer after payment clears).
@@ -531,7 +572,7 @@ export default function App(){
     </>)}
 
     {/* ═══ PREPRODUCTION ═══ */}
-    {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder}/>)}
+    {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder} route={route.tool==="preproduction"?route:null}/>)}
 
     {/* ═══ RESOURCES ═══ */}
     {tool==="resources"&&(isFounder||role==="closer")&&(<>
@@ -550,13 +591,13 @@ export default function App(){
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
-    {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>)}
+    {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} route={route.tool==="projects"?route:null}/>)}
 
     {/* Legacy direct-to-Deliveries route (kept so old bookmarks still resolve). */}
-    {tool==="deliveries"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>)}
+    {tool==="deliveries"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} route={route.tool==="projects"?route:null}/>)}
 
 
     {/* ═══ SHERPAS ═══ */}
@@ -590,7 +631,8 @@ export default function App(){
         :(<div style={{display:"grid",gap:8}}>
           {clients.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(cl=>{
             const isEditing=clientEditId===cl.id;
-            return(<div key={cl.id} style={{background:"var(--card)",border:`1px solid ${isEditing?"var(--accent)":"var(--border)"}`,borderRadius:10,padding:"14px 20px"}}>
+            const isHighlighted=route.tool==="sherpas"&&route.subTab===cl.id;
+            return(<div key={cl.id} id={`sherpa-row-${cl.id}`} style={{background:isHighlighted?"rgba(245,158,11,0.06)":"var(--card)",border:`1px solid ${isEditing?"var(--accent)":isHighlighted?"#F59E0B":"var(--border)"}`,borderRadius:10,padding:"14px 20px",transition:"background 0.4s, border 0.4s"}}>
               {isEditing?(<div>
                 <input type="text" defaultValue={cl.name} id={`cl-name-${cl.id}`}
                   style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none",marginBottom:8}}/>

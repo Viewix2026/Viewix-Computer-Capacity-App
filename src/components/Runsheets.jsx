@@ -94,7 +94,7 @@ function Badge({ text, colors }) {
 // Runsheet" trigger can live in the top header alongside the Meta Ads /
 // Social Organic buttons. Falls back to local state so the component
 // keeps working standalone.
-export function Runsheets({ accounts, projects, creating: creatingProp, onCreatingChange }) {
+export function Runsheets({ accounts, projects, creating: creatingProp, onCreatingChange, deepLinkRunsheetId }) {
   const [runsheets, setRunsheets] = useState({});
   const [editors, setEditors] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -112,6 +112,17 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
   const [editingVideo, setEditingVideo] = useState(null);
 
   // Firebase listeners — fbListenSafe waits for auth + suppresses transient
+  // Deep-link from a Projects-tab Runsheet pill (#preproduction/runsheets/{id}).
+  // Once the runsheet listener has loaded the matching record, jump
+  // straight into its detail view.
+  useEffect(() => {
+    if (!deepLinkRunsheetId) return;
+    if (runsheets[deepLinkRunsheetId]) {
+      setActiveId(deepLinkRunsheetId);
+      setActiveDayIdx(0);
+    }
+  }, [deepLinkRunsheetId, runsheets]);
+
   // nulls, so the runsheet list doesn't blank itself on token refresh.
   useEffect(() => {
     const u1 = fbListenSafe("/runsheets", d => setRunsheets(d || {}));

@@ -13,7 +13,7 @@
 // to Firebase via fbSet to avoid the App.jsx debounced bulk-write clobbering
 // webhook-created records that haven't hit local state yet.
 
-import { useState, useMemo, memo } from "react";
+import { useState, useMemo, useEffect, useRef, memo } from "react";
 import { BTN } from "../config";
 import { fmtCur, fmtD } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
@@ -37,6 +37,155 @@ const LEGACY_STATUS = { active: "inProgress", onHold: "waitingClient" };
 function normaliseStatus(raw) {
   const key = LEGACY_STATUS[raw] || raw || "notStarted";
   return STATUS_MAP[key] ? key : "notStarted";
+}
+
+// ─── Inline edit primitives ────────────────────────────────────────
+// Single-line text input that commits on blur or Enter. Optional
+// `displayValue` lets number / date inputs keep the underlying string
+// in state but render formatted output when not focused — e.g. a date
+// stored as "2026-04-21" displays as "21 Apr".
+function InlineText({ value, onSave, placeholder, type = "text", displayValue, style }) {
+  const [draft, setDraft] = useState(value || "");
+  const [focused, setFocused] = useState(false);
+  // Keep draft in sync with the upstream value when it changes from
+  // outside (e.g. another producer edits, listener updates).
+  useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
+
+  const commit = () => {
+    if ((draft || "") === (value || "")) return;
+    onSave(draft || "");
+  };
+  const showFormatted = !focused && displayValue && !draft.startsWith("");
+  return (
+    <input
+      type={type}
+      value={focused ? draft : (displayValue || draft || "")}
+      onChange={e => setDraft(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => { setFocused(false); commit(); }}
+      onKeyDown={e => { if (e.key === "Enter") { e.target.blur(); } if (e.key === "Escape") { setDraft(value || ""); e.target.blur(); } }}
+      placeholder={placeholder}
+      style={{
+        width: "100%", padding: "8px 10px", borderRadius: 6,
+        border: "1px solid var(--border)", background: "var(--input-bg)",
+        color: "var(--fg)", fontSize: 13, fontWeight: 600,
+        fontFamily: "inherit", outline: "none",
+        ...style,
+      }}
+    />
+  );
+}
+
+function InlineTextArea({ value, onSave, placeholder, rows = 4 }) {
+  const [draft, setDraft] = useState(value || "");
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
+  const commit = () => {
+    if ((draft || "") === (value || "")) return;
+    onSave(draft);
+  };
+  return (
+    <textarea
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => { setFocused(false); commit(); }}
+      placeholder={placeholder}
+      rows={rows}
+      style={{
+        width: "100%", padding: "10px 12px", borderRadius: 6,
+        border: "1px solid var(--border)", background: "var(--input-bg)",
+        color: "var(--fg)", fontSize: 13, lineHeight: 1.5,
+        fontFamily: "inherit", outline: "none", resize: "vertical",
+      }}
+    />
+  );
+}
+
+// Card wrapper around a labelled editable field, matching the static
+// FieldCard style the previous read-only view used.
+function FieldCard({ label, hint, children }) {
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
+      <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span>{label}</span>
+        {hint && <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, fontStyle: "italic" }}>{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// Destinations chip editor — shows existing destinations as removable
+// chips, single text input below. Enter or comma adds a chip.
+function DestinationsEditor({ value, onChange }) {
+  const [draft, setDraft] = useState("");
+  const list = Array.isArray(value) ? value : [];
+  const add = (raw) => {
+    const t = (raw || "").trim();
+    if (!t) return;
+    if (list.includes(t)) return;
+    onChange([...list, t]);
+    setDraft("");
+  };
+  const remove = (d) => onChange(list.filter(x => x !== d));
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+        {list.map((d, i) => (
+          <button key={i} onClick={() => remove(d)} title="Click to remove"
+            style={{ padding: "3px 8px 3px 10px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)",
+              color: "var(--accent)", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+              display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {d}
+            <span style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1 }}>×</span>
+          </button>
+        ))}
+        {list.length === 0 && <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None yet</span>}
+      </div>
+      <input type="text" value={draft} onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(draft); } }}
+        onBlur={() => add(draft)}
+        placeholder="Add a destination, press Enter (e.g. Instagram, YouTube, LinkedIn)"
+        style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, fontFamily: "inherit", outline: "none" }}
+      />
+    </div>
+  );
+}
+
+// Variant of StatusPill that takes onClick + disabled. Disabled looks
+// dimmed and shows a "not yet" tooltip; click takes you to the matching
+// record via hash routing.
+function ClickableStatusPill({ label, done, color = "#10B981", onClick, disabled }) {
+  return (
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={disabled ? `${label} not linked yet` : `Open ${label.toLowerCase()} →`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "4px 10px", borderRadius: 999,
+        background: done ? `${color}22` : "var(--bg)",
+        border: `1px solid ${done ? color : "var(--border)"}`,
+        color: done ? color : "var(--muted)",
+        fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
+        whiteSpace: "nowrap", fontFamily: "inherit",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.4 : 1,
+        transition: "transform 0.1s, opacity 0.15s",
+      }}
+      onMouseEnter={e => { if (!disabled) e.currentTarget.style.transform = "translateY(-1px)"; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = "none"; }}
+    >
+      <span style={{
+        width: 6, height: 6, borderRadius: "50%",
+        background: done ? color : "transparent",
+        border: done ? "none" : "1px solid var(--muted)",
+      }}/>
+      {label}
+      {done && <span style={{ marginLeft: 2, fontSize: 9 }}>↗</span>}
+    </button>
+  );
 }
 
 function StatusPill({ label, done, color = "#10B981" }) {
@@ -279,22 +428,19 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
 });
 
 function ProjectDetail({ project, onBack, onDelete }) {
-  const [notes, setNotes] = useState(project.producerNotes || "");
-  // Normalise so legacy "active" / "onHold" records open with a sensible
-  // current-status value instead of falling through to "Not Started".
+  // Status normalised once on mount — legacy "active" / "onHold" records
+  // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
 
-  const saveField = async (patch) => {
+  // Per-leaf fbUpdate. fbUpdate is merge-semantics so concurrent writes
+  // from the webhook (e.g. attioCompanyId arriving late) don't get
+  // clobbered by a render-time spread of the old project object.
+  const persistField = async (path, value) => {
     setSaveState("saving");
     try {
-      // fbUpdate (merge) instead of fbSet (replace) so webhook-written
-      // fields (packageTier, numberOfVideos, attioCompanyId, etc.) that
-      // land between this component's render and the save don't get
-      // silently wiped. The old fbSet pattern spread `project` captured
-      // at render time, clobbering anything newer.
       await fbUpdate(`/projects/${project.id}`, {
-        ...patch,
+        [path]: value,
         updatedAt: new Date().toISOString(),
       });
       setSaveState("saved");
@@ -305,113 +451,128 @@ function ProjectDetail({ project, onBack, onDelete }) {
     }
   };
 
+  // Click handlers for the linked-record pills. Each emits a hash-based
+  // route the App-level listener picks up (#tool/subTab/recordId);
+  // matching tab opens, the receiving component auto-opens the specific
+  // record on mount. Falls back to no-op if the link is missing.
   const links = project.links || {};
   const dests = Array.isArray(project.destinations) ? project.destinations : [];
+  const accountId = links.accountId || null;
+  const navigate = (hash) => { window.location.hash = hash; };
+  const openSherpa   = () => links.sherpaId   && navigate(`sherpas/${links.sherpaId}`);
+  const openPreprod  = () => links.preprodId  && navigate(`preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`);
+  const openRunsheet = () => links.runsheetId && navigate(`preproduction/runsheets/${links.runsheetId}`);
+  const openDelivery = () => links.deliveryId && navigate(`projects/deliveries/${links.deliveryId}`);
+  const openAccount  = () => accountId        && navigate(`accounts/${accountId}`);
 
   return (
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: "24px 28px 60px" }}>
-      <button onClick={onBack} style={{ ...BTN, background: "var(--bg)", color: "var(--muted)", border: "1px solid var(--border)", marginBottom: 20 }}>← Back to projects</button>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <button onClick={onBack} style={{ ...BTN, background: "var(--bg)", color: "var(--muted)", border: "1px solid var(--border)" }}>← Back to projects</button>
+        {saveState === "saving" && <span style={{ fontSize: 11, color: "var(--muted)" }}>Saving…</span>}
+        {saveState === "saved"  && <span style={{ fontSize: 11, color: "#10B981", fontWeight: 600 }}>Saved ✓</span>}
+      </div>
 
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
-        <div>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          {/* clientName is intentionally read-only — it's the Attio link.
+              Edits here would silently de-sync from Accounts / Deliveries /
+              Sherpas which all match by name. Edit upstream in Attio and
+              the next sync will refresh. */}
           <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginBottom: 4 }}>
             {project.clientName}
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "var(--fg)" }}>
-            {project.projectName}
-          </div>
+          <InlineText
+            value={project.projectName || ""}
+            onSave={(v) => persistField("projectName", v.trim() || "Untitled project")}
+            placeholder="Project name"
+            style={{ fontSize: 24, fontWeight: 700, color: "var(--fg)" }}
+          />
         </div>
-        {/* Seven-status taxonomy — swapped to a coloured dropdown so all
-            options fit without horizontal overflow. Background colour
-            reflects current selection (matches the row pill). */}
+        {/* Seven-status taxonomy — coloured dropdown to fit without overflow */}
         <div style={{ minWidth: 200 }}>
-          <StatusCell value={status} onChange={(s) => { setStatus(s); saveField({ status: s }); }} />
+          <StatusCell value={status} onChange={(s) => { setStatus(s); persistField("status", s); }} />
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
-        {[
-          { label: "Video Type", value: project.videoType || "—" },
-          { label: "Number of Videos", value: project.numberOfVideos != null ? String(project.numberOfVideos) : "—" },
-          { label: "Deal Value", value: project.dealValue != null ? fmtCur(Number(project.dealValue) || 0) : "—" },
-          { label: "Due Date", value: project.dueDate ? fmtD(project.dueDate) : "—" },
-          { label: "Signing Date", value: project.closeDate ? fmtD(project.closeDate) : "—" },
-          { label: "Target Audience", value: project.targetAudience || "—" },
-        ].map(f => (
-          <div key={f.label} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 16px" }}>
-            <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-              {f.label}
-            </div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg)" }}>{f.value}</div>
-          </div>
-        ))}
+        <FieldCard label="Video Type">
+          <InlineText value={project.videoType || ""} placeholder="e.g. Social Media Premium"
+            onSave={(v) => persistField("videoType", v.trim())} />
+        </FieldCard>
+        <FieldCard label="Number of Videos">
+          <InlineText value={project.numberOfVideos != null ? String(project.numberOfVideos) : ""}
+            placeholder="e.g. 12" type="number"
+            onSave={(v) => persistField("numberOfVideos", v.trim() === "" ? null : parseInt(v, 10) || 0)} />
+        </FieldCard>
+        <FieldCard label="Deal Value">
+          <InlineText value={project.dealValue != null ? String(project.dealValue) : ""}
+            placeholder="$ AUD" type="number"
+            displayValue={project.dealValue != null ? fmtCur(Number(project.dealValue) || 0) : ""}
+            onSave={(v) => persistField("dealValue", v.trim() === "" ? null : parseFloat(v) || 0)} />
+        </FieldCard>
+        <FieldCard label="Due Date">
+          <InlineText value={project.dueDate || ""} placeholder="YYYY-MM-DD" type="date"
+            displayValue={project.dueDate ? fmtD(project.dueDate) : ""}
+            onSave={(v) => persistField("dueDate", v || null)} />
+        </FieldCard>
+        <FieldCard label="Signing Date">
+          <InlineText value={project.closeDate || ""} placeholder="YYYY-MM-DD" type="date"
+            displayValue={project.closeDate ? fmtD(project.closeDate) : ""}
+            onSave={(v) => persistField("closeDate", v || null)} />
+        </FieldCard>
+        <FieldCard label="Target Audience">
+          <InlineText value={project.targetAudience || ""} placeholder="e.g. Sydney women, 25-44"
+            onSave={(v) => persistField("targetAudience", v.trim())} />
+        </FieldCard>
       </div>
 
-      {dests.length > 0 && (
-        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-            Destinations
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {dests.map((d, i) => <Chip key={i}>{d}</Chip>)}
-          </div>
-        </div>
-      )}
+      <FieldCard label="Destinations" hint="Press Enter to add. Click a chip to remove.">
+        <DestinationsEditor value={dests} onChange={(next) => persistField("destinations", next)} />
+      </FieldCard>
 
-      {project.description && (
-        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 18px", marginBottom: 16 }}>
-          <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
-            Scope of Work
-          </div>
-          <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-            {project.description}
-          </div>
-        </div>
-      )}
+      <FieldCard label="Scope of Work">
+        <InlineTextArea value={project.description || ""}
+          placeholder="What's being produced, key talking points, anything specific the client called out…"
+          onSave={(v) => persistField("description", v)} />
+      </FieldCard>
 
-      {(project.clientContact?.firstName || project.clientContact?.email) && (
-        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-            Client Contact
-          </div>
-          <div style={{ fontSize: 13, color: "var(--fg)" }}>
-            {project.clientContact?.firstName}
-            {project.clientContact?.firstName && project.clientContact?.email && " · "}
-            {project.clientContact?.email && (
-              <a href={`mailto:${project.clientContact.email}`} style={{ color: "var(--accent)", textDecoration: "none" }}>{project.clientContact.email}</a>
-            )}
-          </div>
+      <FieldCard label="Client Contact">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8 }}>
+          <InlineText value={project.clientContact?.firstName || ""} placeholder="First name"
+            onSave={(v) => persistField("clientContact", { ...(project.clientContact || {}), firstName: v.trim() })} />
+          <InlineText value={project.clientContact?.email || ""} placeholder="email@company.com" type="email"
+            onSave={(v) => persistField("clientContact", { ...(project.clientContact || {}), email: v.trim() })} />
         </div>
-      )}
+        {project.clientContact?.email && (
+          <a href={`mailto:${project.clientContact.email}`} style={{ display: "inline-block", marginTop: 6, fontSize: 11, color: "var(--accent)", textDecoration: "none" }}>
+            ✉ {project.clientContact.email} ↗
+          </a>
+        )}
+      </FieldCard>
 
+      {/* Linked Records — pills now click through to the matching record
+          via hash routing. Disabled (faded) pills are records that don't
+          exist for this project (e.g. Meta Ads projects have no delivery
+          until the producer pushes one from preprod approval). */}
       <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 18px", marginBottom: 16 }}>
         <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-          Linked Records
+          Linked Records · click to open
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <StatusPill label={`Sherpa${links.sherpaId ? " ✓" : ""}`}     done={!!links.sherpaId}    color="#8B5CF6"/>
-          <StatusPill label={`Pre-Prod${links.preprodId ? " ✓" : ""}`}  done={!!links.preprodId}   color="#EC4899"/>
-          <StatusPill label={`Runsheet${links.runsheetId ? " ✓" : ""}`} done={!!links.runsheetId}  color="#06B6D4"/>
-          <StatusPill label={`Delivery${links.deliveryId ? " ✓" : ""}`} done={!!links.deliveryId}  color="#10B981"/>
-          <StatusPill label={`Account${links.accountId ? " ✓" : ""}`}   done={!!links.accountId}   color="#F59E0B"/>
+          <ClickableStatusPill label="Sherpa"   done={!!links.sherpaId}   color="#8B5CF6" onClick={openSherpa}   disabled={!links.sherpaId}   />
+          <ClickableStatusPill label="Pre-Prod" done={!!links.preprodId}  color="#EC4899" onClick={openPreprod}  disabled={!links.preprodId}  />
+          <ClickableStatusPill label="Runsheet" done={!!links.runsheetId} color="#06B6D4" onClick={openRunsheet} disabled={!links.runsheetId} />
+          <ClickableStatusPill label="Delivery" done={!!links.deliveryId} color="#10B981" onClick={openDelivery} disabled={!links.deliveryId} />
+          <ClickableStatusPill label="Account"  done={!!accountId}        color="#F59E0B" onClick={openAccount}  disabled={!accountId}        />
         </div>
       </div>
 
-      <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 18px", marginBottom: 24 }}>
-        <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
-          <span>Producer Notes</span>
-          {saveState === "saving" && <span style={{ color: "var(--muted)", textTransform: "none", fontWeight: 400 }}>Saving…</span>}
-          {saveState === "saved"  && <span style={{ color: "#10B981", textTransform: "none", fontWeight: 400 }}>Saved ✓</span>}
-        </div>
-        <textarea value={notes} onChange={e => setNotes(e.target.value)} onBlur={() => { if (notes !== (project.producerNotes || "")) saveField({ producerNotes: notes }); }}
-          placeholder="Internal notes about this project…"
-          style={{
-            width: "100%", minHeight: 100, padding: "10px 12px", borderRadius: 6,
-            border: "1px solid var(--border)", background: "var(--input-bg)",
-            color: "var(--fg)", fontSize: 13, lineHeight: 1.5, outline: "none",
-            resize: "vertical", fontFamily: "inherit",
-          }}/>
-      </div>
+      <FieldCard label="Producer Notes" hint="Internal — won't be shown to the client.">
+        <InlineTextArea value={project.producerNotes || ""}
+          placeholder="Anything your future self / the editor needs to know about this project…"
+          onSave={(v) => persistField("producerNotes", v)} />
+      </FieldCard>
 
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <button onClick={() => { if (confirm(`Delete project "${project.projectName}"? This only removes it from the Projects tab — linked records (delivery / preprod / sherpa / account) are kept.`)) onDelete(); }}
@@ -423,11 +584,23 @@ function ProjectDetail({ project, onBack, onDelete }) {
   );
 }
 
-export function Projects({ projects, deliveries, setDeliveries, accounts }) {
+export function Projects({ projects, deliveries, setDeliveries, accounts, route }) {
   const [subTab, setSubTab] = useState("projects"); // "projects" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [filter, setFilter] = useState("all"); // "all" | "active" | "onHold" | "archived"
   const [search, setSearch] = useState("");
+
+  // Deep-link receiver — App.jsx parses #projects/<subTab>/<recordId> and
+  // passes route here. We honour subTab + the record id once the matching
+  // record exists in the local listener data. The Deliveries sub-tab opens
+  // its own detail view via the deepLinkDeliveryId prop below.
+  useEffect(() => {
+    if (!route || !route.subTab) return;
+    if (route.subTab !== subTab) setSubTab(route.subTab);
+    if (route.subTab === "projects" && route.recordId && projects.find(p => p.id === route.recordId)) {
+      setActiveProjectId(route.recordId);
+    }
+  }, [route?.subTab, route?.recordId, projects]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = projects.find(p => p.id === activeProjectId);
 
@@ -520,7 +693,12 @@ export function Projects({ projects, deliveries, setDeliveries, accounts }) {
       )}
 
       {subTab === "deliveries" && (
-        <Deliveries deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts}/>
+        <Deliveries
+          deliveries={deliveries}
+          setDeliveries={setDeliveries}
+          accounts={accounts}
+          deepLinkDeliveryId={route?.subTab === "deliveries" ? route?.recordId : null}
+        />
       )}
     </>
   );
