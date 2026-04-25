@@ -309,24 +309,36 @@ function TimelineCell({ start, end }) {
   );
 }
 
-function ProjectRow({ project, onOpen, onStatusChange, striped }) {
+function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect }) {
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "—";
   const namePart = project.projectName || "Untitled project";
   const startDate = project.closeDate || project.createdAt;
   const dueDate = project.dueDate;
+  // Selected rows get a soft indigo wash so the selection is obvious in
+  // a long list. Hover still overrides briefly while the cursor is on
+  // the row, then snaps back to selected/striped/normal on leave.
+  const baseBg = selected ? "rgba(99,102,241,0.12)"
+               : striped  ? "rgba(255,255,255,0.015)"
+               : "transparent";
   return (
     <tr
       onClick={() => onOpen(project.id)}
       style={{
         cursor: "pointer",
-        background: striped ? "rgba(255,255,255,0.015)" : "transparent",
+        background: baseBg,
         borderBottom: "1px solid var(--border)",
       }}
       onMouseEnter={e => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
-      onMouseLeave={e => e.currentTarget.style.background = striped ? "rgba(255,255,255,0.015)" : "transparent"}>
+      onMouseLeave={e => e.currentTarget.style.background = baseBg}>
       <td style={tdStyle} onClick={e => e.stopPropagation()}>
-        <input type="checkbox" disabled style={{ cursor: "not-allowed", opacity: 0.4 }} title="Bulk actions coming soon" />
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onChange={() => onToggleSelect(project.id)}
+          title="Select for bulk actions"
+          style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
+        />
       </td>
       <td style={{ ...tdStyle, minWidth: 320 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -366,7 +378,17 @@ const dateCellStyle = {
   fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
 };
 
-function ProjectTable({ projects, onOpen, onStatusChange }) {
+function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll }) {
+  // Header checkbox is tri-state: empty / checked (all) / indeterminate
+  // (some). Browsers don't have a CSS-only indeterminate state — set
+  // it on the DOM via ref.
+  const headerCheckRef = useRef(null);
+  const allChecked = projects.length > 0 && projects.every(p => selectedIds.has(p.id));
+  const someChecked = !allChecked && projects.some(p => selectedIds.has(p.id));
+  useEffect(() => {
+    if (headerCheckRef.current) headerCheckRef.current.indeterminate = someChecked;
+  }, [someChecked]);
+
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", position: "relative" }}>
       {/* Thin pink accent stripe on the left — matches the Monday-style
@@ -376,7 +398,16 @@ function ProjectTable({ projects, onOpen, onStatusChange }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: "var(--bg)" }}>
-              <th style={thStyle}></th>
+              <th style={thStyle}>
+                <input
+                  ref={headerCheckRef}
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={() => onToggleSelectAll(allChecked)}
+                  title={allChecked ? "Deselect all" : "Select all"}
+                  style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
+                />
+              </th>
               <th style={{ ...thStyle, textAlign: "left" }}>Project</th>
               <th style={thStyle}>Start Date</th>
               <th style={thStyle}>Due date</th>
@@ -386,7 +417,15 @@ function ProjectTable({ projects, onOpen, onStatusChange }) {
           </thead>
           <tbody>
             {projects.map((p, i) => (
-              <ProjectRow key={p.id} project={p} onOpen={onOpen} onStatusChange={onStatusChange} striped={i % 2 === 1} />
+              <ProjectRow
+                key={p.id}
+                project={p}
+                onOpen={onOpen}
+                onStatusChange={onStatusChange}
+                striped={i % 2 === 1}
+                selected={selectedIds.has(p.id)}
+                onToggleSelect={onToggleSelect}
+              />
             ))}
           </tbody>
         </table>
@@ -625,6 +664,29 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, route 
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [filter, setFilter] = useState("all"); // "all" | "active" | "onHold" | "archived"
   const [search, setSearch] = useState("");
+  // Bulk-action selection — Set of project ids checked via the row
+  // checkbox or the header select-all. Clears when the filter or
+  // sub-tab changes (those rows aren't visible any more, leaving them
+  // selected would surprise the producer).
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  useEffect(() => { setSelectedIds(new Set()); }, [filter, subTab]);
+
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAllVisible = (allCurrentlyChecked) => {
+    setSelectedIds(prev => {
+      if (allCurrentlyChecked) return new Set();
+      const next = new Set(prev);
+      for (const p of filtered) next.add(p.id);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
 
   // Deep-link receiver — App.jsx parses #projects/<subTab>/<recordId> and
   // passes route here. We honour subTab + the record id once the matching
@@ -659,6 +721,29 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, route 
   const deleteProject = async (id) => {
     await fbSet(`/projects/${id}`, null);
     setActiveProjectId(null);
+  };
+
+  // ─── Bulk actions ──────────────────────────────────────────────
+  // Applied to every project in selectedIds. All writes are leaf-path
+  // fbSet so concurrent webhook patches don't get clobbered. Done
+  // sequentially in a Promise.all so the listener flushes once at the
+  // end rather than rerendering on every individual write.
+  const bulkSetStatus = async (status) => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    const ts = new Date().toISOString();
+    await Promise.all(ids.flatMap(id => [
+      fbSet(`/projects/${id}/status`, status),
+      fbSet(`/projects/${id}/updatedAt`, ts),
+    ]));
+    clearSelection();
+  };
+  const bulkDelete = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} project${ids.length === 1 ? "" : "s"}? Linked records (delivery / preprod / sherpa / account) are kept.`)) return;
+    await Promise.all(ids.map(id => fbSet(`/projects/${id}`, null)));
+    clearSelection();
   };
 
   return (
@@ -709,17 +794,78 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, route 
               )}
             </div>
           ) : (
-            <ProjectTable
-              projects={filtered}
-              onOpen={(id) => setActiveProjectId(id)}
-              onStatusChange={(id, status) => {
-                // Write the status leaf directly so the change lands before
-                // any listener race — same pattern as the Deliveries
-                // per-field write fix. Also bump updatedAt for sort keys.
-                fbSet(`/projects/${id}/status`, status);
-                fbSet(`/projects/${id}/updatedAt`, new Date().toISOString());
-              }}
-            />
+            <>
+              {/* Bulk-action bar — appears whenever any rows are
+                  selected. Sticky at the top of the table area so it
+                  follows the producer down a long list. */}
+              {selectedIds.size > 0 && (
+                <div style={{
+                  position: "sticky", top: 12, zIndex: 5,
+                  display: "flex", alignItems: "center", gap: 12, marginBottom: 12,
+                  padding: "10px 16px", background: "var(--card)",
+                  border: "1px solid var(--accent)", borderRadius: 10,
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+                }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)" }}>
+                    {selectedIds.size} selected
+                  </span>
+                  <div style={{ width: 1, height: 20, background: "var(--border)" }} />
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Set status:</span>
+                  <select
+                    value=""
+                    onChange={e => { if (e.target.value) bulkSetStatus(e.target.value); }}
+                    style={{
+                      padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border)",
+                      background: "var(--input-bg)", color: "var(--fg)",
+                      fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                    }}>
+                    <option value="">Choose…</option>
+                    {STATUS_OPTIONS.map(s => (
+                      <option key={s.key} value={s.key}>{s.label}</option>
+                    ))}
+                  </select>
+                  <button onClick={() => bulkSetStatus("archived")}
+                    style={{
+                      padding: "5px 12px", borderRadius: 6, border: "1px solid var(--border)",
+                      background: "var(--bg)", color: "var(--muted)",
+                      fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                    }}>
+                    Archive
+                  </button>
+                  <button onClick={bulkDelete}
+                    style={{
+                      padding: "5px 12px", borderRadius: 6, border: "1px solid #EF4444",
+                      background: "transparent", color: "#EF4444",
+                      fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                    }}>
+                    Delete
+                  </button>
+                  <button onClick={clearSelection}
+                    style={{
+                      marginLeft: "auto",
+                      padding: "5px 10px", borderRadius: 6, border: "none",
+                      background: "transparent", color: "var(--muted)",
+                      fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                    }}>
+                    Clear
+                  </button>
+                </div>
+              )}
+              <ProjectTable
+                projects={filtered}
+                onOpen={(id) => setActiveProjectId(id)}
+                onStatusChange={(id, status) => {
+                  // Write the status leaf directly so the change lands before
+                  // any listener race — same pattern as the Deliveries
+                  // per-field write fix. Also bump updatedAt for sort keys.
+                  fbSet(`/projects/${id}/status`, status);
+                  fbSet(`/projects/${id}/updatedAt`, new Date().toISOString());
+                }}
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+                onToggleSelectAll={toggleSelectAllVisible}
+              />
+            </>
           )}
         </div>
       )}
