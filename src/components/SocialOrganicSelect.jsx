@@ -307,10 +307,18 @@ export function SocialOrganicSelect({ project, onPatch }) {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Select formats</div>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-            Drag from the project shortlist or the global library into the selected queue at the bottom. Reorder by dragging within the queue.
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* Back-to-Tab-4 signpost — same affordance as on Shortlist so
+              producers can round-trip back to add more competitor reels
+              mid-selection without restarting the project. */}
+          <button onClick={() => onPatch({ tab: "videoReview" })} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 11 }}>
+            ← Back to Video Review
+          </button>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Select formats</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              Drag from the project shortlist or the global library into the selected queue at the bottom. Reorder by dragging within the queue.
+            </div>
           </div>
         </div>
         <div style={{ fontSize: 11, color: "var(--muted)" }}>

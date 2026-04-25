@@ -1516,13 +1516,17 @@ function VideoReviewStep({ project, onPatch }) {
   const isDone = !!approvals.videoReview;
 
   const [filter, setFilter] = useState("all");
+  // Per-handle filter — null shows everything, otherwise only posts from
+  // the matching handle. Lets producers scan one competitor at a time
+  // when the pool is large.
+  const [handleFilter, setHandleFilter] = useState(null);
   const [newLink, setNewLink] = useState("");
   // Sort metric + "View More" page size. Default: overperformance (the
   // score the server computed against each handle's baseline). The rest
   // sort by raw engagement counts from the scrape, so producers can find
   // the best video on the signal they care about in that moment.
   const [sortBy, setSortBy] = useState("overperformance");
-  const [visibleCount, setVisibleCount] = useState(25);
+  const [visibleCount, setVisibleCount] = useState(50);
   // Per-handle cap prevents one viral account (Huberman, Shaan Puri, etc.)
   // from dominating the review pool. Default 8 — keeps the top few videos
   // from every handle while reserving space for diversity. 0 = unlimited.
@@ -1606,10 +1610,24 @@ function VideoReviewStep({ project, onPatch }) {
     onPatch({ tab: "shortlist" });
   };
 
+  // Counts per handle for the chip row. Computed against the capped
+  // pool (not topPosts) so the count reflects what's available beyond
+  // the current visibleCount slice — clicking a handle chip widens the
+  // pool to show all of that handle's posts.
+  const handleCounts = (() => {
+    const counts = new Map();
+    for (const p of cappedPosts) {
+      const h = p.handle || "@unknown";
+      counts.set(h, (counts.get(h) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  })();
+
   let filtered = topPosts;
-  if (filter === "ticked")     filtered = topPosts.filter(p => ticked.has(p.id));
-  else if (filter === "crossed")   filtered = topPosts.filter(p => crossed.has(p.id));
-  else if (filter === "unreviewed") filtered = topPosts.filter(p => !ticked.has(p.id) && !crossed.has(p.id));
+  if (handleFilter) filtered = cappedPosts.filter(p => p.handle === handleFilter);
+  if (filter === "ticked")     filtered = filtered.filter(p => ticked.has(p.id));
+  else if (filter === "crossed")   filtered = filtered.filter(p => crossed.has(p.id));
+  else if (filter === "unreviewed") filtered = filtered.filter(p => !ticked.has(p.id) && !crossed.has(p.id));
 
   const scrapeStatus = competitorScrape.status;
   const scrapeRunning = scrapeStatus === "running" && posts.length === 0;
@@ -1631,7 +1649,7 @@ function VideoReviewStep({ project, onPatch }) {
 
       {scrapeRunning && (
         <div style={{ padding: 14, marginBottom: 14, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 8, fontSize: 12, color: "#3B82F6" }}>
-          Competitor scrape still running… the top 25 will appear here once Apify finishes.
+          Competitor scrape still running… the top 50 will appear here once Apify finishes.
         </div>
       )}
       {scrapeErrored && (
@@ -1640,11 +1658,27 @@ function VideoReviewStep({ project, onPatch }) {
         </div>
       )}
 
-      {/* Filter chips + sort selector */}
+      {/* Per-handle filter chips — one chip per competitor handle in the
+          pool, sorted by post count. Click to isolate that handle. */}
+      {topPosts.length > 0 && handleCounts.length > 1 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+          <FilterChip label={`All handles (${cappedPosts.length})`} active={!handleFilter} onClick={() => setHandleFilter(null)} />
+          {handleCounts.map(([h, n]) => (
+            <FilterChip
+              key={h}
+              label={`${h} (${n})`}
+              active={handleFilter === h}
+              onClick={() => setHandleFilter(handleFilter === h ? null : h)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Status filter chips + sort selector */}
       {topPosts.length > 0 && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <FilterChip label={`All (${topPosts.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
+            <FilterChip label={`All (${filtered.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
             <FilterChip label={`✓ Ticked (${ticked.size})`} active={filter === "ticked"} colour="#22C55E" onClick={() => setFilter("ticked")} />
             <FilterChip label={`✗ Crossed (${crossed.size})`} active={filter === "crossed"} colour="#EF4444" onClick={() => setFilter("crossed")} />
             <FilterChip label={`Unreviewed`} active={filter === "unreviewed"} onClick={() => setFilter("unreviewed")} />
@@ -1653,7 +1687,7 @@ function VideoReviewStep({ project, onPatch }) {
             {/* Per-handle cap — prevents one viral account from dominating. */}
             <div style={{ display: "flex", alignItems: "center", gap: 6 }} title="Max videos to show from any single handle. Prevents a viral account from dominating the pool.">
               <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Max / handle</label>
-              <select value={maxPerHandle} onChange={e => { const v = parseInt(e.target.value, 10); setMaxPerHandle(v); onPatch({ maxPerHandle: v }); setVisibleCount(25); }}
+              <select value={maxPerHandle} onChange={e => { const v = parseInt(e.target.value, 10); setMaxPerHandle(v); onPatch({ maxPerHandle: v }); setVisibleCount(50); }}
                 style={{ ...inputSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
                 <option value={0}>Unlimited</option>
                 <option value={3}>3</option>
@@ -1666,7 +1700,7 @@ function VideoReviewStep({ project, onPatch }) {
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Sort</label>
-              <select value={sortBy} onChange={e => { setSortBy(e.target.value); setVisibleCount(25); }}
+              <select value={sortBy} onChange={e => { setSortBy(e.target.value); setVisibleCount(50); }}
                 style={{ ...inputSt, width: "auto", fontSize: 12, padding: "5px 8px" }}>
                 {SORT_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
               </select>
@@ -1886,10 +1920,19 @@ function ShortlistStep({ project, onPatch }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Shortlist</div>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-            Each ticked video becomes an entry in the global Format Library — or gets added as a new example to an existing format.
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* Back-to-Tab-4 signpost — producers asked for an obvious path
+              back when they realise mid-shortlist they want to add more
+              competitor reels to the candidate pool. Tabs aren't gated;
+              this is just a clearer way back. */}
+          <button onClick={() => onPatch({ tab: "videoReview" })} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 11 }}>
+            ← Back to Video Review
+          </button>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Shortlist</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              Each ticked video becomes an entry in the global Format Library — or gets added as a new example to an existing format.
+            </div>
           </div>
         </div>
         <div style={{ fontSize: 11, color: "var(--muted)" }}>
@@ -1977,9 +2020,21 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
   const [formatName, setFormatName] = useState(existing?.formatName || "");
   const [tags, setTags] = useState(existing?.tags || []);
   const [tagInput, setTagInput] = useState("");
-  const [description, setDescription] = useState(existing?.description || "");
-  const [filming, setFilming] = useState(existing?.filmingInstructions || "");
-  const [structure, setStructure] = useState(existing?.structureInstructions || "");
+  // Old records had three textareas: description (videoAnalysis), filming
+  // instructions, and structure. We collapsed those into a single
+  // Video Analysis box. On open of any record that has the legacy fields
+  // populated, merge them in once so producers see all the captured
+  // context — they can edit it down on save.
+  const [description, setDescription] = useState(() => {
+    const d = (existing?.description || "").trim();
+    const f = (existing?.filmingInstructions || "").trim();
+    const s = (existing?.structureInstructions || "").trim();
+    if (!f && !s) return d;
+    const parts = [d];
+    if (f) parts.push(`\nFilming: ${f}`);
+    if (s) parts.push(`\nStructure: ${s}`);
+    return parts.filter(Boolean).join("\n");
+  });
   const [addTargetId, setAddTargetId] = useState(existing?.addedAsExampleTo || "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -2050,8 +2105,13 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
           formatType: "organic",
           name: formatName.trim(),
           videoAnalysis: description,
-          filmingInstructions: filming,
-          structureInstructions: structure,
+          // Legacy: filmingInstructions + structureInstructions used to be
+          // two extra textareas on this form. Producers asked for one
+          // unified Video Analysis box, so the merge happens at form-open
+          // time (see useState initializer above) and we just blank the
+          // old fields here so they fade out of the schema over time.
+          filmingInstructions: "",
+          structureInstructions: "",
           tags,
           examples: [
             {
@@ -2089,8 +2149,10 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
         thumbnail: video.thumbnail || null,
         formatName: saveMode === "new" ? formatName.trim() : (library[libraryId]?.name || ""),
         description,
-        filmingInstructions: filming,
-        structureInstructions: structure,
+        // Legacy fields kept blank in fresh writes — merged into description
+        // at form-open time (see useState initializer above).
+        filmingInstructions: "",
+        structureInstructions: "",
         tags,
         formatLibraryId: libraryId,
         addedAsExampleTo: saveMode === "example" ? libraryId : null,
@@ -2110,25 +2172,36 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
   };
 
   return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
-      {/* Header: video preview */}
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
-        <a href={video.url} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0 }}>
-          <div style={{ width: 80, height: 80, borderRadius: 6, overflow: "hidden" }}>
-            <ReelPreview shortCode={video.shortCode} url={video.url} thumbnail={video.thumbnail} aspectRatio="1 / 1" compact />
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, display: "grid", gridTemplateColumns: "minmax(220px, 280px) 1fr", gap: 16, alignItems: "start" }}>
+      {/* Left column — full reel embed pinned to the top of the visible area
+          so the producer can scrub through it while writing analysis on
+          the right. Sticky lets it stay in view as the form scrolls.
+          Click-through to IG kept as a small footer link. */}
+      <div style={{ position: "sticky", top: 12, alignSelf: "start" }}>
+        <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+          <ReelPreview shortCode={video.shortCode} url={video.url} thumbnail={video.thumbnail} aspectRatio="9 / 16" />
+        </div>
+        <div style={{ padding: "8px 4px 0", fontSize: 11, color: "var(--muted)" }}>
+          <div style={{ color: "var(--accent)", fontWeight: 700, marginBottom: 3 }}>{video.handle}</div>
+          <div style={{ fontFamily: "'JetBrains Mono',monospace" }}>
+            {video.views != null && `👁 ${formatBig(video.views)}`}
+            {video.overperformanceScore != null && ` · ${video.overperformanceScore.toFixed(1)}× baseline`}
           </div>
-        </a>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--accent)" }}>{video.handle}</div>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
-            {video.views != null && `${formatBig(video.views)} views · `}
-            {video.overperformanceScore != null && `${video.overperformanceScore.toFixed(1)}× baseline`}
-          </div>
-          <div style={{ fontSize: 11, color: "var(--fg)", lineHeight: 1.4, marginTop: 4, maxHeight: 36, overflow: "hidden" }}>
-            {(video.caption || "").slice(0, 200)}
-          </div>
+          {video.caption && (
+            <div style={{ fontSize: 10, marginTop: 6, lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+              {video.caption}
+            </div>
+          )}
+          <a href={video.url} target="_blank" rel="noopener noreferrer"
+            style={{ display: "inline-block", marginTop: 6, fontSize: 10, color: "var(--accent)", textDecoration: "none", fontWeight: 700 }}>
+            Open on Instagram ↗
+          </a>
         </div>
       </div>
+
+      {/* Right column — form fields. Wrap so the existing fields below
+          this header just flow into the right grid cell. */}
+      <div>
 
       {/* Mode toggle */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14, padding: 4, background: "var(--bg)", borderRadius: 6 }}>
@@ -2187,23 +2260,10 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
 
           <DescriptionField
             label="Video analysis"
-            hint="What's happening in the video? Why does it work? (Dictation supported — click the mic.)"
+            hint="What's happening in the video? Why does it work? Note the structure (hook → beats → close), how it's filmed, and any production cues you'd want to replicate. Dictation supported — click the mic."
             value={description}
             onChange={setDescription}
-          />
-
-          <DescriptionField
-            label="Filming instructions"
-            hint="How would you shoot this? Lighting, camera set-up, wardrobe, location cues."
-            value={filming}
-            onChange={setFilming}
-          />
-
-          <DescriptionField
-            label="Structure"
-            hint="Hook → beats → close. What happens in what order?"
-            value={structure}
-            onChange={setStructure}
+            rows={8}
           />
         </div>
       )}
@@ -2219,6 +2279,7 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
           {saving ? "Saving…" : existing ? "Update" : saveMode === "example" ? "Add example" : "Save to library"}
         </button>
       </div>
+      </div>{/* /right column */}
     </div>
   );
 }
@@ -2572,9 +2633,15 @@ function ScriptStep({ project, onPatch }) {
                 <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
                   {i + 1}. {f.name}
                 </div>
-                {f.videoAnalysis && <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, marginBottom: 6 }}>{f.videoAnalysis}</div>}
-                {f.filmingInstructions && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}><strong>Filming:</strong> {f.filmingInstructions}</div>}
-                {f.structureInstructions && <div style={{ fontSize: 11, color: "var(--muted)" }}><strong>Structure:</strong> {f.structureInstructions}</div>}
+                {/* Combined view — old records may still have legacy
+                    Filming / Structure fields populated; show them inline
+                    appended to the analysis so producers see all context
+                    until they re-save (which collapses them into one). */}
+                {(f.videoAnalysis || f.filmingInstructions || f.structureInstructions) && (
+                  <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, marginBottom: 6, whiteSpace: "pre-wrap" }}>
+                    {[f.videoAnalysis, f.filmingInstructions && `\nFilming: ${f.filmingInstructions}`, f.structureInstructions && `\nStructure: ${f.structureInstructions}`].filter(Boolean).join("\n")}
+                  </div>
+                )}
                 {Array.isArray(f.examples) && f.examples.length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
                     {f.examples.map((ex, j) => (

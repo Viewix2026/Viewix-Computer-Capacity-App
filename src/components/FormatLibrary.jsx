@@ -323,33 +323,46 @@ const FormatCard = memo(function FormatCard({ format, onClick }) {
 });
 
 function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
+  // The form used to expose three textareas: videoAnalysis, filming
+  // instructions, and structure. Producers asked for a single, larger
+  // Video Analysis box covering all three. Old records that already
+  // have content in the legacy fields get their text merged in once
+  // when the detail view opens — saving collapses them into the
+  // unified field and blanks the old ones.
+  const mergeLegacy = (f) => {
+    const a = (f.videoAnalysis || "").trim();
+    const fl = (f.filmingInstructions || "").trim();
+    const s = (f.structureInstructions || "").trim();
+    if (!fl && !s) return a;
+    return [a, fl && `\nFilming: ${fl}`, s && `\nStructure: ${s}`].filter(Boolean).join("\n");
+  };
+
   const [name, setName] = useState(format.name || "");
-  const [videoAnalysis, setVideoAnalysis] = useState(format.videoAnalysis || "");
-  const [filming, setFilming] = useState(format.filmingInstructions || "");
-  const [structure, setStructure] = useState(format.structureInstructions || "");
+  const [videoAnalysis, setVideoAnalysis] = useState(() => mergeLegacy(format));
   const [tags, setTags] = useState(Array.isArray(format.tags) ? format.tags : []);
   const [tagInput, setTagInput] = useState("");
   const [newExampleUrl, setNewExampleUrl] = useState("");
 
   useEffect(() => {
     setName(format.name || "");
-    setVideoAnalysis(format.videoAnalysis || "");
-    setFilming(format.filmingInstructions || "");
-    setStructure(format.structureInstructions || "");
+    setVideoAnalysis(mergeLegacy(format));
     setTags(Array.isArray(format.tags) ? format.tags : []);
   }, [format.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const dirty =
     name !== (format.name || "") ||
-    videoAnalysis !== (format.videoAnalysis || "") ||
-    filming !== (format.filmingInstructions || "") ||
-    structure !== (format.structureInstructions || "") ||
+    videoAnalysis !== mergeLegacy(format) ||
     JSON.stringify(tags) !== JSON.stringify(Array.isArray(format.tags) ? format.tags : []);
 
   const save = () => {
     onSave({
       name: name.trim() || format.name,
-      videoAnalysis, filmingInstructions: filming, structureInstructions: structure,
+      videoAnalysis,
+      // Wipe the legacy fields on save — the merged content lives in
+      // videoAnalysis now, so re-saving an old record graduates it to
+      // the new schema permanently.
+      filmingInstructions: "",
+      structureInstructions: "",
       tags,
     });
   };
@@ -401,18 +414,8 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
             </div>
           </FieldRow>
 
-          <FieldRow label="Video analysis" hint="The 'why it works' breakdown.">
-            <textarea value={videoAnalysis} onChange={e => setVideoAnalysis(e.target.value)} rows={5}
-              style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
-          </FieldRow>
-
-          <FieldRow label="Filming instructions" hint="How the crew should shoot it.">
-            <textarea value={filming} onChange={e => setFilming(e.target.value)} rows={3}
-              style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
-          </FieldRow>
-
-          <FieldRow label="Structure" hint="Hook → beats → close.">
-            <textarea value={structure} onChange={e => setStructure(e.target.value)} rows={3}
+          <FieldRow label="Video analysis" hint="What's happening, why it works, how it's filmed (lighting, camera, wardrobe), and the structure (hook → beats → close).">
+            <textarea value={videoAnalysis} onChange={e => setVideoAnalysis(e.target.value)} rows={10}
               style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
           </FieldRow>
         </div>
@@ -502,10 +505,12 @@ function formatBigLocal(n) {
 // a format spec directly. Each example URL becomes a new entry in the
 // examples array; a shortCode is auto-derived for Instagram URLs.
 function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }) {
+  // Single Video Analysis box — the old form had separate Filming +
+  // Structure boxes which producers found redundant, so they got merged
+  // into one larger note covering everything ("what's happening, why
+  // it works, how it's filmed, structure of the piece").
   const [name, setName] = useState("");
   const [analysis, setAnalysis] = useState("");
-  const [filming, setFilming] = useState("");
-  const [structure, setStructure] = useState("");
   const [tagsInput, setTagsInput] = useState("");
   const [exampleUrls, setExampleUrls] = useState("");
   const [saving, setSaving] = useState(false);
@@ -539,8 +544,10 @@ function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }
         formatType,  // "organic" | "metaAds" — drives sub-tab filter + which preproduction flow pulls this entry.
         name: name.trim(),
         videoAnalysis: analysis.trim(),
-        filmingInstructions: filming.trim(),
-        structureInstructions: structure.trim(),
+        // Legacy fields — kept blank in fresh writes; left here so old
+        // records that still hold them don't crash anything.
+        filmingInstructions: "",
+        structureInstructions: "",
         tags,
         examples,
         sourceProjectId: null,
@@ -593,18 +600,8 @@ function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }
             style={{ ...inputSt, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }} />
         </FieldRow>
 
-        <FieldRow label="Video analysis" hint="The 'why it works' breakdown.">
-          <textarea value={analysis} onChange={e => setAnalysis(e.target.value)} rows={4}
-            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
-        </FieldRow>
-
-        <FieldRow label="Filming instructions" hint="How the crew should shoot it.">
-          <textarea value={filming} onChange={e => setFilming(e.target.value)} rows={3}
-            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
-        </FieldRow>
-
-        <FieldRow label="Structure" hint="Hook → beats → close.">
-          <textarea value={structure} onChange={e => setStructure(e.target.value)} rows={3}
+        <FieldRow label="Video analysis" hint="What's happening, why it works, how it's filmed (lighting, camera, wardrobe), and the structure (hook → beats → close).">
+          <textarea value={analysis} onChange={e => setAnalysis(e.target.value)} rows={8}
             style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
         </FieldRow>
 
