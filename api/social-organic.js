@@ -1846,6 +1846,120 @@ async function handleStartCompetitorScrape(req, res) {
   return res.status(200).json({ success: true, runId, handles: handles.length, perHandle });
 }
 
+// Append-mode competitor scrape — kicks off an Apify run that adds
+// posts to the existing competitor pool instead of replacing it. Used by
+// "+ Add competitor" (one new handle) and "↻ Refresh widens" (re-deepen
+// existing handles + optional hashtag search).
+//
+// Body: {
+//   projectId,
+//   handles?: ["@new"]            — explicit handles to scrape (else uses
+//                                   ALL existing project competitors)
+//   tag?: "direct" | "inspiration" — only relevant when adding new handles;
+//                                   stamped on the research.competitors entry
+//   resultsLimit?: number          — per-handle Apify limit (default 60 to
+//                                   widen beyond the initial 30)
+//   includeHashtags?: boolean      — also kick off a separate hashtag-search
+//                                   run using project.research.keywords
+// }
+async function handleAppendCompetitorScrape(req, res) {
+  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+  if (!APIFY_TOKEN) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
+
+  const { projectId, handles: bodyHandles, tag, resultsLimit, includeHashtags } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const research = project.research || {};
+  const existingCompetitors = Array.isArray(research.competitors) ? research.competitors : [];
+  const keywords = Array.isArray(research.keywords) ? research.keywords : [];
+
+  // Resolve which handles this run scrapes. If body supplied them, append
+  // any new ones to project.research.competitors first (so the producer's
+  // chip list stays in sync with what's been scraped). Otherwise fall back
+  // to all existing handles — that's the "↻ Refresh widens" path.
+  let scrapeHandles;
+  if (Array.isArray(bodyHandles) && bodyHandles.length > 0) {
+    const cleaned = bodyHandles.map(h => (h || "").toString().trim().replace(/^@/, "")).filter(Boolean);
+    const safeTag = tag === "inspiration" ? "inspiration" : "direct";
+    const nextCompetitors = [...existingCompetitors];
+    for (const h of cleaned) {
+      const handleKey = `@${h.toLowerCase()}`;
+      if (!nextCompetitors.some(c => (c.handle || "").toLowerCase() === handleKey)) {
+        nextCompetitors.push({
+          handle: `@${h}`,
+          tag: safeTag,
+          source: "manual",
+          verified: null,
+        });
+      }
+    }
+    if (nextCompetitors.length !== existingCompetitors.length) {
+      await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, nextCompetitors);
+    }
+    scrapeHandles = cleaned.map(h => `@${h}`);
+  } else {
+    scrapeHandles = existingCompetitors.map(c => c.handle).filter(Boolean);
+  }
+
+  if (scrapeHandles.length === 0) {
+    return res.status(400).json({ error: "No handles to scrape" });
+  }
+
+  const directUrls = scrapeHandles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  const perHandle = Math.min(80, Math.max(20, resultsLimit || 60));
+
+  // Mark the bundle running again. lastRefreshAt persists from the previous
+  // refresh so the UI's "X new since last refresh" pill keeps a stable
+  // reference point until this new run lands.
+  await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, {
+    status: "running",
+    refreshStartedAt: new Date().toISOString(),
+    error: null,
+  });
+
+  const runIds = { handles: null, hashtags: null };
+  try {
+    runIds.handles = await startApifyRun({
+      actorId: APIFY_ACTOR,
+      input: { directUrls, resultsType: "posts", resultsLimit: perHandle, searchType: "user", addParentData: false },
+      token: APIFY_TOKEN, projectId, purpose: "competitorPosts",
+      extraSidecar: { mode: "append", source: "handle" },
+    });
+  } catch (e) {
+    console.error("[appendCompetitorScrape] handles run failed:", e);
+    return res.status(502).json({ error: "Apify wouldn't accept the handles run", detail: e.message });
+  }
+
+  // Hashtag search — separate run, only fires if there are keywords AND
+  // the caller asked for it. Hashtag results are appended to the same
+  // pool, tagged source="hashtag" so the UI can distinguish.
+  if (includeHashtags && keywords.length > 0) {
+    try {
+      runIds.hashtags = await startApifyRun({
+        actorId: APIFY_ACTOR,
+        input: {
+          search: keywords.slice(0, 5).join(" "),
+          searchType: "hashtag",
+          resultsType: "posts",
+          resultsLimit: 30,
+          addParentData: false,
+        },
+        token: APIFY_TOKEN, projectId, purpose: "competitorPosts",
+        extraSidecar: { mode: "append", source: "hashtag" },
+      });
+    } catch (e) {
+      // Don't block the handles run on a hashtag run failure — log it
+      // and let the producer see the partial result.
+      console.warn("[appendCompetitorScrape] hashtags run failed:", e.message);
+    }
+  }
+
+  return res.status(200).json({ success: true, runIds, handles: scrapeHandles.length });
+}
+
 // Ask Claude to guess the client's Instagram handle from the transcript +
 // brand truth + Sherpa. Fires on Brand Truth approval (Tab 1 → Tab 2) so
 // Stage A opens pre-filled. Producer can still edit before approving.
@@ -2627,6 +2741,10 @@ export default async function handler(req, res) {
         return await handleStartClientScrape(req, res);
       case "startCompetitorScrape":
         return await handleStartCompetitorScrape(req, res);
+      case "appendCompetitorScrape":
+      case "addCompetitorAndScrape":   // alias — adds new handles + appends
+      case "widenCompetitorScrape":     // alias — re-deepens all handles + optional hashtag run
+        return await handleAppendCompetitorScrape(req, res);
       case "suggestCompetitors":
         return await handleSuggestCompetitors(req, res);
       case "startProfileScrape":

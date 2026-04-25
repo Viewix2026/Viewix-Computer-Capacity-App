@@ -1601,6 +1601,84 @@ function VideoReviewStep({ project, onPatch }) {
     fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/extraLinks`, next);
     setNewLink("");
   };
+
+  // ─── + Add competitor + ↻ Refresh widens ────────────────────────
+  // Both kick off Apify runs in append mode via the appendCompetitorScrape
+  // action so producers can extend the candidate pool without restarting
+  // the project. Refresh widens by re-scraping ALL existing handles with
+  // a bigger limit + adding a hashtag-search run on the project's
+  // keywords list. Add Competitor only scrapes the new handles.
+  const [addCompetitorOpen, setAddCompetitorOpen] = useState(false);
+  const [addCompetitorHandles, setAddCompetitorHandles] = useState("");
+  const [addCompetitorTag, setAddCompetitorTag] = useState("direct");
+  const [appendBusy, setAppendBusy] = useState(false);
+  const [appendError, setAppendError] = useState(null);
+
+  const lastRefreshAt = competitorScrape.lastRefreshAt || null;
+  // Posts scraped after the last refresh — drives the "X new" pill
+  // each card shows when source !== initial. Pre-existing posts (from
+  // the original scrape, before append-mode existed) don't have a
+  // firstSeenAt and so are never counted as "new".
+  const newPostIdsSet = lastRefreshAt
+    ? new Set(posts.filter(p => p.firstSeenAt && p.firstSeenAt >= lastRefreshAt).map(p => p.id))
+    : new Set();
+
+  const submitAddCompetitor = async () => {
+    setAppendError(null);
+    const handles = addCompetitorHandles
+      .split(/[,\n]/)
+      .map(h => h.trim().replace(/^@/, ""))
+      .filter(Boolean);
+    if (handles.length === 0) { setAppendError("Add at least one handle."); return; }
+    setAppendBusy(true);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "addCompetitorAndScrape",
+          projectId: project.id,
+          handles, tag: addCompetitorTag,
+          resultsLimit: 50,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      setAddCompetitorOpen(false);
+      setAddCompetitorHandles("");
+    } catch (e) {
+      setAppendError(e.message);
+    } finally {
+      setAppendBusy(false);
+    }
+  };
+
+  const submitWiden = async () => {
+    setAppendError(null);
+    setAppendBusy(true);
+    try {
+      const r = await fetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "widenCompetitorScrape",
+          projectId: project.id,
+          // 60 per existing handle ≈ +20 over the initial 30-40 cut so
+          // we surface the "next page" of older content without going
+          // truly exhaustive. Hashtag search piggybacks on the project's
+          // keywords list set during Tab 2.
+          resultsLimit: 60,
+          includeHashtags: true,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+    } catch (e) {
+      setAppendError(e.message);
+    } finally {
+      setAppendBusy(false);
+    }
+  };
   const removeLink = (u) => {
     fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/extraLinks`, extraLinks.filter(x => x !== u));
   };
@@ -1642,10 +1720,77 @@ function VideoReviewStep({ project, onPatch }) {
             Top {topPosts.length} over-performing competitor videos from the Stage B scrape ({posts.length} total scraped). Tick the ones worth shortlisting, cross the rest, optionally add your own picks at the bottom.
           </div>
         </div>
-        <div style={{ fontSize: 11, color: "var(--muted)" }}>
-          ✓ {ticked.size} · ✗ {crossed.size} · {topPosts.length + extraLinks.length - ticked.size - crossed.size} unreviewed
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "var(--muted)" }}>
+            ✓ {ticked.size} · ✗ {crossed.size} · {topPosts.length + extraLinks.length - ticked.size - crossed.size} unreviewed
+          </span>
+          {/* Append-mode actions — extend the candidate pool without
+              restarting. + Add competitor scrapes one or more new handles;
+              ↻ Refresh widens re-runs the existing handles deeper plus a
+              hashtag search on the project keywords. Both append, never
+              replace. */}
+          <button onClick={() => setAddCompetitorOpen(o => !o)} disabled={appendBusy}
+            style={{ ...btnSecondary, padding: "6px 12px", fontSize: 11, opacity: appendBusy ? 0.6 : 1 }}>
+            + Add competitor
+          </button>
+          <button onClick={submitWiden} disabled={appendBusy}
+            title="Re-runs the scrape on existing handles (deeper) plus a hashtag search using your keywords. Results append to the pool."
+            style={{ ...btnSecondary, padding: "6px 12px", fontSize: 11, opacity: appendBusy ? 0.6 : 1 }}>
+            {appendBusy ? "Working…" : "↻ Refresh widens"}
+          </button>
         </div>
       </div>
+
+      {/* Inline + Add competitor form. Slides in below the header so it
+          doesn't take over the page; submitting kicks off an Apify run
+          in append mode. Producers can paste multiple handles
+          comma- or newline-separated. */}
+      {addCompetitorOpen && (
+        <div style={{ marginBottom: 14, padding: 14, background: "var(--card)", border: "1px solid var(--accent)", borderRadius: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Add new competitor handle(s)</div>
+          <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 10 }}>
+            One or more Instagram handles, separated by commas or newlines. Apify scrapes them and the results append to the existing pool.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 0, background: "var(--bg)", borderRadius: 6, padding: 2, border: "1px solid var(--border)" }}>
+              <button onClick={() => setAddCompetitorTag("direct")}
+                style={{ padding: "4px 10px", borderRadius: 4, border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: addCompetitorTag === "direct" ? "rgba(34,197,94,0.2)" : "transparent", color: addCompetitorTag === "direct" ? "#22C55E" : "var(--muted)" }}>
+                Direct
+              </button>
+              <button onClick={() => setAddCompetitorTag("inspiration")}
+                style={{ padding: "4px 10px", borderRadius: 4, border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: addCompetitorTag === "inspiration" ? "rgba(168,85,247,0.2)" : "transparent", color: addCompetitorTag === "inspiration" ? "#A855F7" : "var(--muted)" }}>
+                Inspiration
+              </button>
+            </div>
+            <textarea value={addCompetitorHandles} onChange={e => setAddCompetitorHandles(e.target.value)}
+              placeholder="@brandone, @brandtwo&#10;@brandthree"
+              rows={2}
+              style={{ ...inputSt, flex: 1, fontSize: 12, fontFamily: "'JetBrains Mono',monospace", resize: "vertical" }} />
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={submitAddCompetitor} disabled={appendBusy || !addCompetitorHandles.trim()}
+              style={{ ...btnPrimary, opacity: (appendBusy || !addCompetitorHandles.trim()) ? 0.5 : 1 }}>
+              {appendBusy ? "Scraping…" : "Add and scrape"}
+            </button>
+            <button onClick={() => { setAddCompetitorOpen(false); setAddCompetitorHandles(""); setAppendError(null); }} style={btnSecondary}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {appendError && (
+        <div style={{ marginBottom: 14, padding: "8px 12px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, fontSize: 11, color: "#EF4444" }}>
+          {appendError}
+        </div>
+      )}
+
+      {/* Refresh-status banner — shows when an append-mode run is
+          mid-flight, AND a recap of "N new posts since last refresh"
+          afterwards so producers can spot what changed. */}
+      {newPostIdsSet.size > 0 && (
+        <div style={{ marginBottom: 12, padding: "6px 12px", background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 6, fontSize: 11, color: "#3B82F6", display: "inline-block" }}>
+          {newPostIdsSet.size} new post{newPostIdsSet.size === 1 ? "" : "s"} since last refresh
+        </div>
+      )}
 
       {scrapeRunning && (
         <div style={{ padding: 14, marginBottom: 14, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: 8, fontSize: 12, color: "#3B82F6" }}>
@@ -1725,6 +1870,7 @@ function VideoReviewStep({ project, onPatch }) {
                   status={status}
                   onTick={() => setStatus(p.id, "ticked")}
                   onCross={() => setStatus(p.id, "crossed")}
+                  isNew={newPostIdsSet.has(p.id)}
                 />
               );
             })}
@@ -1808,12 +1954,25 @@ function FilterChip({ label, active, colour, onClick }) {
 // memo'd because the parent re-renders on every tick/cross/sort change
 // but only the affected card actually needs to update — without memo
 // every IG embed iframe re-renders, dropping frame rate to a crawl.
-const ReviewCard = memo(function ReviewCard({ post, status, onTick, onCross }) {
+const ReviewCard = memo(function ReviewCard({ post, status, onTick, onCross, isNew }) {
   const isTicked = status === "ticked";
   const isCrossed = status === "crossed";
-  const border = isTicked ? "2px solid #22C55E" : isCrossed ? "1px solid var(--border)" : "1px solid var(--border)";
+  // Highlight new-since-last-refresh cards with a subtle blue ring so
+  // producers can spot what changed after hitting "↻ Refresh widens".
+  const border = isTicked ? "2px solid #22C55E"
+                : isNew ? "2px solid rgba(59,130,246,0.6)"
+                : "1px solid var(--border)";
   const opacity = isCrossed ? 0.45 : 1;
   const textDeco = isCrossed ? "line-through" : "none";
+
+  // Source pill — distinguishes "came from a tracked competitor handle"
+  // from "came from a hashtag search". Only shown on cards that have a
+  // source value (older posts pre-date the field and stay unmarked).
+  const sourcePill = post.source === "hashtag"
+    ? { bg: "rgba(168,85,247,0.85)", label: "#hashtag" }
+    : post.source === "handle"
+    ? { bg: "rgba(59,130,246,0.85)", label: "@handle" }
+    : null;
 
   return (
     <div style={{ background: "var(--card)", border, borderRadius: 10, overflow: "hidden", opacity, transition: "opacity 0.15s, border 0.15s", position: "relative" }}>
@@ -1822,6 +1981,16 @@ const ReviewCard = memo(function ReviewCard({ post, status, onTick, onCross }) {
         {post.overperformanceScore != null && (
           <div style={{ position: "absolute", bottom: 6, left: 6, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: "rgba(34,197,94,0.85)", color: "#fff", zIndex: 2 }}>
             {post.overperformanceScore.toFixed(1)}× avg
+          </div>
+        )}
+        {sourcePill && (
+          <div style={{ position: "absolute", top: 6, left: 6, padding: "2px 7px", borderRadius: 4, fontSize: 9, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", background: sourcePill.bg, color: "#fff", zIndex: 2 }}>
+            {sourcePill.label}
+          </div>
+        )}
+        {isNew && (
+          <div style={{ position: "absolute", top: 6, right: 6, padding: "2px 7px", borderRadius: 4, fontSize: 9, fontWeight: 800, background: "rgba(59,130,246,0.85)", color: "#fff", zIndex: 2 }}>
+            NEW
           </div>
         )}
       </div>

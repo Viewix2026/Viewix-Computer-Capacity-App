@@ -197,17 +197,48 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
     // the hashtag-search mode can include intermediate objects without
     // shortCodes, which aren't useful for video review and just break
     // downstream Firebase writes.
-    const posts = items
+    //
+    // Sidecar may carry:
+    //   mode: "initial" | "append"   — append merges into existing posts
+    //                                  (dedupe by id) instead of replacing.
+    //   source: "handle" | "hashtag" — stamped on each post so the UI can
+    //                                  distinguish where each came from.
+    // Append-mode runs are how the "+ Add competitor" + "↻ Refresh widens"
+    // flows extend the candidate pool without wiping the producer's
+    // existing tick/cross history.
+    const mode = sidecar.mode || "initial";
+    const source = sidecar.source || "handle";
+    const stampTime = new Date().toISOString();
+    const newPosts = items
       .map(raw => normaliseInstagramPost(raw, null))
-      .filter(p => p.url && p.handle !== "@unknown");
-    const handleStats = computeHandleStatsAndScore(posts);
-    const topOverperformers = [...posts]
+      .filter(p => p.url && p.handle !== "@unknown")
+      .map(p => ({ ...p, source, firstSeenAt: stampTime }));
+
+    let mergedPosts;
+    if (mode === "append") {
+      // Read existing posts and merge. Keep the older firstSeenAt /
+      // source on duplicates (so a post that was already in the pool
+      // doesn't get re-tagged as new).
+      const existing = await fbGet(`/preproduction/socialOrganic/${projectId}/competitorScrape/posts`);
+      const existingArr = Array.isArray(existing) ? existing : Object.values(existing || {});
+      const byId = new Map(existingArr.filter(p => p && p.id).map(p => [p.id, p]));
+      for (const np of newPosts) {
+        if (!byId.has(np.id)) byId.set(np.id, np);
+      }
+      mergedPosts = [...byId.values()];
+    } else {
+      mergedPosts = newPosts;
+    }
+
+    const handleStats = computeHandleStatsAndScore(mergedPosts);
+    const topOverperformers = [...mergedPosts]
       .filter(p => p.isVideo && p.overperformanceScore != null)
       .sort((a, b) => (b.overperformanceScore || 0) - (a.overperformanceScore || 0))
-      .slice(0, 25)
+      .slice(0, 50)
       .map(p => p.id);
     await fbPatch(`/preproduction/socialOrganic/${projectId}/competitorScrape`, cleanUndefined({
-      posts, handleStats, topOverperformers,
+      posts: mergedPosts, handleStats, topOverperformers,
+      lastRefreshAt: stampTime,
     }));
   } else {
     console.warn(`[apify-process] Unknown purpose ${purpose} for run ${runId}`);
