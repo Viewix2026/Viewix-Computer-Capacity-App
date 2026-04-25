@@ -41,12 +41,23 @@ function normaliseStatus(raw) {
 
 // ─── Inline edit primitives ────────────────────────────────────────
 // Single-line text input that commits on blur or Enter. Optional
-// `displayValue` lets number / date inputs keep the underlying string
-// in state but render formatted output when not focused — e.g. a date
-// stored as "2026-04-21" displays as "21 Apr".
+// `displayValue` lets number / date inputs keep the raw string in state
+// but render a formatted version when not focused — e.g. dealValue is
+// stored as 1500 but displays as "$1,500.00", or dueDate stored as
+// "2026-04-21" displays as "21 Apr".
+//
+// The trick: when the field is type="number" or type="date" and the
+// caller provides displayValue, we can't just render the formatted
+// string in the <input> itself because the browser rejects non-numeric
+// / non-ISO-date strings (the field would render blank, falling back
+// to placeholder — which is what was hiding the actual deal value
+// before this fix). Instead, swap the input out for a click-to-edit
+// div whenever the field isn't focused. Click the div → focus state
+// swaps in the real input + autofocus immediately.
 function InlineText({ value, onSave, placeholder, type = "text", displayValue, style }) {
   const [draft, setDraft] = useState(value || "");
   const [focused, setFocused] = useState(false);
+  const inputRef = useRef(null);
   // Keep draft in sync with the upstream value when it changes from
   // outside (e.g. another producer edits, listener updates).
   useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
@@ -55,11 +66,36 @@ function InlineText({ value, onSave, placeholder, type = "text", displayValue, s
     if ((draft || "") === (value || "")) return;
     onSave(draft || "");
   };
-  const showFormatted = !focused && displayValue && !draft.startsWith("");
+
+  // Swap-mode display — only relevant when the caller provided a
+  // separate `displayValue` (currency / date). For plain text fields
+  // we just render the input directly.
+  const useSwap = !!displayValue || type === "date" || type === "number";
+  if (useSwap && !focused) {
+    const showText = (value || draft) ? displayValue : "";
+    return (
+      <div
+        onClick={() => { setFocused(true); setTimeout(() => inputRef.current?.focus(), 0); }}
+        tabIndex={0}
+        onFocus={() => setFocused(true)}
+        style={{
+          width: "100%", padding: "8px 10px", borderRadius: 6,
+          border: "1px solid var(--border)", background: "var(--input-bg)",
+          color: showText ? "var(--fg)" : "var(--muted)",
+          fontSize: 13, fontWeight: 600,
+          fontFamily: "inherit", outline: "none", cursor: "text",
+          minHeight: 35, display: "flex", alignItems: "center",
+          ...style,
+        }}>
+        {showText || placeholder}
+      </div>
+    );
+  }
   return (
     <input
+      ref={inputRef}
       type={type}
-      value={focused ? draft : (displayValue || draft || "")}
+      value={draft}
       onChange={e => setDraft(e.target.value)}
       onFocus={() => setFocused(true)}
       onBlur={() => { setFocused(false); commit(); }}
