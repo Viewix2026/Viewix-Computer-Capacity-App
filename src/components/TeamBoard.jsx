@@ -11,7 +11,7 @@
 // Projects.jsx subtask drawer reads. Per-leaf fbSet writes so concurrent
 // webhook patches don't clobber producer drags.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useCallback } from "react";
 import { fbSet } from "../firebase";
 import { fmtD } from "../utils";
 import {
@@ -44,16 +44,34 @@ const addDays = (iso, n) => {
 const daysBetween = (a, b) => Math.round(
   (new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000
 );
-const dateRange = (from, to) => {
+// Snap an ISO date back to the Monday of its week. Producers expect the
+// board to start on Monday so the current week is fully visible from
+// the moment they open the tab, regardless of which weekday they're on.
+const startOfWeek = (iso) => {
+  const d = new Date(iso + "T00:00:00");
+  const wd = d.getDay();           // 0 Sun, 1 Mon, … 6 Sat
+  const shift = wd === 0 ? -6 : 1 - wd;
+  d.setDate(d.getDate() + shift);
+  return d.toISOString().slice(0, 10);
+};
+const dateRange = (from, dayCount) => {
   const out = [];
-  if (!from || !to) return out;
+  if (!from || !dayCount) return out;
   let d = from;
-  // Hard cap at 90 days so a typo in the picker can't render 10k columns.
-  for (let i = 0; d <= to && i < 90; i++) {
+  // Hard cap at 365 days — even with infinite scroll a year is plenty
+  // and protects against runaway memo recomputes if scrollLeft tracking
+  // ever loops.
+  const cap = Math.min(dayCount, 365);
+  for (let i = 0; i < cap; i++) {
     out.push(d);
     d = addDays(d, 1);
   }
   return out;
+};
+// Saturday + Sunday → true. Cheap enough to call per cell without memo.
+const isWeekendISO = (iso) => {
+  const wd = new Date(iso + "T00:00:00").getDay();
+  return wd === 0 || wd === 6;
 };
 // Drop-zone id is "{assigneeId}|{dateOrNull}". Null/undefined values
 // serialise to literal "null" so the round-trip survives split().
@@ -185,22 +203,41 @@ function UnscheduledCard({ subtask, onClick }) {
   );
 }
 
-// Drop target — wraps a row + col cell. Renders the children passed in;
-// adds a soft highlight when something is being dragged over it.
-function DropCell({ id, children, gridColumn, gridRow, sticky }) {
+// Drop target — wraps a row + col cell. Tinting props give weekends a
+// distinct grey background, today an indigo wash, alternate rows a
+// subtle stripe, and Mondays a stronger left border to break the grid
+// into visible week chunks.
+function DropCell({
+  id, children, gridColumn, gridRow, sticky,
+  isWeekend, isToday, isMonday, striped,
+}) {
   const { setNodeRef, isOver } = useDroppable({ id });
+
+  // Background priority: hover > today > weekend > striped > none.
+  // For sticky left columns we paint over with var(--card) so the
+  // assignee labels stay legible during horizontal scroll.
+  let bg = "transparent";
+  if (sticky != null) bg = "var(--card)";
+  else if (striped) bg = "rgba(255,255,255,0.018)";
+  if (isWeekend) bg = "rgba(0,0,0,0.32)";
+  if (isToday) bg = "rgba(99,102,241,0.12)";
+  if (isOver) bg = "rgba(99,102,241,0.22)";
+
   return (
     <div
       ref={setNodeRef}
       style={{
         gridColumn, gridRow,
-        background: isOver ? "rgba(99,102,241,0.15)" : "transparent",
+        background: bg,
         borderRight: "1px solid var(--border)",
-        minHeight: 56,
-        position: sticky ? "sticky" : "static",
+        // Mondays get a slightly heavier left border so the eye can
+        // scan week-by-week even at a wide zoom.
+        borderLeft: isMonday ? "2px solid var(--border)" : undefined,
+        borderBottom: "1px solid var(--border)",
+        minHeight: 60,
+        position: sticky != null ? "sticky" : "static",
         left: sticky,
-        zIndex: sticky ? 2 : 1,
-        ...(sticky != null ? { background: isOver ? "rgba(99,102,241,0.2)" : "var(--card)" } : {}),
+        zIndex: sticky != null ? 2 : 1,
       }}>
       {children}
     </div>
@@ -210,12 +247,36 @@ function DropCell({ id, children, gridColumn, gridRow, sticky }) {
 // ─── Main board ────────────────────────────────────────────────────
 
 export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
-  // 14-day rolling window starting today. Producers can override with the
-  // From/To pickers; ◀/▶ jump by 7 days; Today snaps back to default.
-  const [from, setFrom] = useState(isoToday());
-  const [to, setTo] = useState(addDays(isoToday(), 13));
+  // The board starts on the Monday of the current week so the producer
+  // sees the full current week (including past days they may have
+  // already worked) without scrolling left. From there, we render N
+  // days forward; scrolling near the right edge appends another batch
+  // (no toolbar, no manual prev/next).
+  const fromDate = useMemo(() => startOfWeek(isoToday()), []);
+  const [daysAhead, setDaysAhead] = useState(28);  // 4 weeks initial
+  const dates = useMemo(() => dateRange(fromDate, daysAhead), [fromDate, daysAhead]);
 
-  const dates = useMemo(() => dateRange(from, to), [from, to]);
+  // Scroll listener on the grid container. When the user scrolls within
+  // ~300px of the right edge, append another 14 days. We throttle via
+  // a "loading" guard so a fast flick doesn't fire the extension five
+  // times during the same momentum scroll. Cap at 365 days total.
+  const scrollRef = useRef(null);
+  const extending = useRef(false);
+  const onScroll = useCallback((e) => {
+    if (extending.current) return;
+    const el = e.currentTarget;
+    const remaining = el.scrollWidth - (el.scrollLeft + el.clientWidth);
+    if (remaining < 320 && daysAhead < 365) {
+      extending.current = true;
+      setDaysAhead(d => Math.min(365, d + 14));
+      // Reset the guard once the next render lands. Two RAFs is enough
+      // for the new columns to render and grow scrollWidth past the
+      // 320-remaining threshold.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        extending.current = false;
+      }));
+    }
+  }, [daysAhead]);
 
   // Flatten every subtask across every project, carrying parent project
   // metadata along so the bar can render "Canva: Pre Production" without
@@ -342,71 +403,65 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
   // column range that falls inside the visible window. Returns null if
   // the entire span is outside the window (= bar shouldn't render).
   // Bars that partially overlap render clipped to the window edge.
+  const lastDate = dates[dates.length - 1];
   const colsForSpan = (st) => {
     if (!st.startDate) return null;
     const end = st.endDate || st.startDate;
-    if (end < from || st.startDate > to) return null;
-    const startClamped = st.startDate < from ? from : st.startDate;
-    const endClamped = end > to ? to : end;
+    if (end < fromDate || st.startDate > lastDate) return null;
+    const startClamped = st.startDate < fromDate ? fromDate : st.startDate;
+    const endClamped = end > lastDate ? lastDate : end;
     return [dateToCol.get(startClamped), dateToCol.get(endClamped)];
   };
 
   // ─── Render ──────────────────────────────────────────────────────
   return (
     <div style={{ padding: "16px 28px 60px" }}>
-      {/* Toolbar */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 12, marginBottom: 12,
-        padding: "10px 14px", background: "var(--card)",
-        border: "1px solid var(--border)", borderRadius: 10,
-      }}>
-        <button onClick={() => { setFrom(addDays(from, -7)); setTo(addDays(to, -7)); }} style={navBtn}>◀</button>
-        <button onClick={() => { setFrom(isoToday()); setTo(addDays(isoToday(), 13)); }} style={navBtn}>Today</button>
-        <button onClick={() => { setFrom(addDays(from, 7)); setTo(addDays(to, 7)); }} style={navBtn}>▶</button>
-        <div style={{ width: 1, height: 22, background: "var(--border)" }} />
-        <label style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>From</label>
-        <input type="date" value={from} onChange={e => { if (e.target.value) setFrom(e.target.value); }} style={dateInput} />
-        <label style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>To</label>
-        <input type="date" value={to} onChange={e => { if (e.target.value) setTo(e.target.value); }} style={dateInput} />
-        <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
-          {dates.length} day{dates.length === 1 ? "" : "s"}
-        </span>
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)" }}>
-          {flatSubtasks.length} subtask{flatSubtasks.length === 1 ? "" : "s"} across {projects.length} project{projects.length === 1 ? "" : "s"}
-        </span>
-      </div>
-
-      {/* Grid wrapper — horizontal scroll when columns overflow the
-          viewport. Sticky left columns keep the assignee label + the
-          unscheduled column visible during scroll. */}
+      {/* No toolbar — the calendar is purely scroll-driven. The grid
+          starts on the Monday of the current week and extends right as
+          the producer scrolls. */}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}>
-        <div style={{
-          background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12,
-          overflow: "auto", position: "relative",
-        }}>
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          style={{
+            background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12,
+            overflow: "auto", position: "relative",
+            // Constrain height so the horizontal scroll triggers a vertical
+            // scroll handler too — without it, a wide grid with few rows
+            // doesn't expose a scrollbar to drive infinite-load.
+            maxHeight: "calc(100vh - 200px)",
+          }}>
           <div style={{ display: "grid", gridTemplateColumns, minWidth: "fit-content" }}>
             {/* Header row — col labels */}
-            <div style={{ ...headerCell, position: "sticky", left: 0, zIndex: 4, background: "var(--bg)" }}>
+            <div style={{ ...headerCell, position: "sticky", top: 0, left: 0, zIndex: 5, background: "var(--bg)" }}>
               Team
             </div>
-            <div style={{ ...headerCell, position: "sticky", left: 200, zIndex: 4, background: "var(--bg)" }}>
+            <div style={{ ...headerCell, position: "sticky", top: 0, left: 200, zIndex: 5, background: "var(--bg)" }}>
               Unscheduled
             </div>
             {dates.map(d => {
               const dt = new Date(d + "T00:00:00");
+              const dayNum = dt.getDay();
               const isToday = d === isoToday();
-              const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+              const isWeekend = dayNum === 0 || dayNum === 6;
+              const isMonday = dayNum === 1;
               return (
                 <div key={d} style={{
                   ...headerCell,
-                  background: isToday ? "rgba(99,102,241,0.2)" : isWeekend ? "rgba(0,0,0,0.15)" : "var(--bg)",
-                  color: isToday ? "var(--accent)" : "var(--muted)",
+                  position: "sticky", top: 0, zIndex: 4,
+                  // Header background mirrors the body cell tint below
+                  // so the column reads as one consistent stripe.
+                  background: isToday ? "rgba(99,102,241,0.28)"
+                            : isWeekend ? "rgba(0,0,0,0.45)"
+                            : "var(--bg)",
+                  color: isToday ? "var(--accent)" : isWeekend ? "var(--muted)" : "var(--fg)",
+                  borderLeft: isMonday ? "2px solid var(--border)" : undefined,
                 }}>
-                  <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase" }}>
+                  <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>
                     {dt.toLocaleDateString("en-AU", { weekday: "short" })}
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 700, marginTop: 2 }}>{fmtD(d)}</div>
@@ -424,6 +479,7 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
                 <Row
                   key={row.id}
                   row={row}
+                  rowIdx={rowIdx}
                   gridRow={gr}
                   scheduled={sched}
                   unscheduled={unsched}
@@ -464,15 +520,24 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
 
 // One assignee row. Split out so each row's date cells become individual
 // drop zones without ballooning the parent component's render scope.
-function Row({ row, gridRow, scheduled, unscheduled, dates, colsForSpan, onOpenProject }) {
+// `rowIdx` drives row striping so every other editor lane gets a subtle
+// tint and the eye can scan vertically.
+function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan, onOpenProject }) {
+  const striped = rowIdx % 2 === 1;
+  const todayISO = isoToday();
   return (
     <>
-      {/* Sticky left: assignee label */}
+      {/* Sticky left: assignee label. Slightly different background on
+          striped rows so the row separation reaches all the way to the
+          left edge. */}
       <div style={{
         ...rowLabel, gridColumn: 1, gridRow,
         position: "sticky", left: 0, zIndex: 3,
-        background: row.muted ? "rgba(75,85,99,0.15)" : "var(--card)",
-        borderRight: "1px solid var(--border)",
+        background: row.muted ? "rgba(75,85,99,0.18)"
+                  : striped ? "rgba(255,255,255,0.025)"
+                  : "var(--card)",
+        borderRight: "2px solid var(--border)",
+        borderBottom: "1px solid var(--border)",
       }}>
         <span style={{ fontWeight: 700, color: row.muted ? "var(--muted)" : "var(--fg)" }}>
           {row.name}
@@ -480,7 +545,7 @@ function Row({ row, gridRow, scheduled, unscheduled, dates, colsForSpan, onOpenP
       </div>
 
       {/* Sticky left: unscheduled column (drop zone) */}
-      <DropCell id={cellId(row.id, null)} gridColumn={2} gridRow={gridRow} sticky={200}>
+      <DropCell id={cellId(row.id, null)} gridColumn={2} gridRow={gridRow} sticky={200} striped={striped}>
         <div style={{ padding: 4, minHeight: 56 }}>
           {unscheduled.map(st => (
             <UnscheduledCard key={st.id} subtask={st} onClick={() => onOpenProject?.(st.projectId)} />
@@ -490,9 +555,21 @@ function Row({ row, gridRow, scheduled, unscheduled, dates, colsForSpan, onOpenP
 
       {/* One drop cell per date. Bars are added below as separate
           grid children — they span multiple columns via grid-column. */}
-      {dates.map((d, i) => (
-        <DropCell key={d} id={cellId(row.id, d)} gridColumn={i + 3} gridRow={gridRow} />
-      ))}
+      {dates.map((d, i) => {
+        const dayNum = new Date(d + "T00:00:00").getDay();
+        return (
+          <DropCell
+            key={d}
+            id={cellId(row.id, d)}
+            gridColumn={i + 3}
+            gridRow={gridRow}
+            isWeekend={dayNum === 0 || dayNum === 6}
+            isToday={d === todayISO}
+            isMonday={dayNum === 1}
+            striped={striped}
+          />
+        );
+      })}
 
       {/* Gantt bars — placed last so they stack visually above empty
           drop cells. Each occupies grid-column [startCol .. endCol+1]
@@ -533,14 +610,4 @@ const rowLabel = {
   padding: "10px 14px", display: "flex", alignItems: "center",
   borderBottom: "1px solid var(--border)",
   fontSize: 13, minHeight: 60,
-};
-const navBtn = {
-  padding: "5px 10px", borderRadius: 6, border: "1px solid var(--border)",
-  background: "var(--bg)", color: "var(--fg)",
-  fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-};
-const dateInput = {
-  padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)",
-  background: "var(--input-bg)", color: "var(--fg)",
-  fontSize: 11, fontFamily: "inherit", outline: "none",
 };
