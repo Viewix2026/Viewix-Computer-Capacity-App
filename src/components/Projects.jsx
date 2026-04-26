@@ -18,6 +18,7 @@ import { BTN } from "../config";
 import { fmtCur, fmtD } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
+import { TeamBoard } from "./TeamBoard";
 
 // Monday.com-style status values — matches the screenshot Jeremy shared.
 // Legacy records stored "active" / "onHold" — see normaliseStatus() below
@@ -1016,7 +1017,7 @@ function ProjectDetail({ project, onBack, onDelete }) {
 }
 
 export function Projects({ projects, deliveries, setDeliveries, accounts, editors, route }) {
-  const [subTab, setSubTab] = useState("projects"); // "projects" | "deliveries"
+  const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [filter, setFilter] = useState("all"); // "all" | "active" | "onHold" | "archived"
   const [search, setSearch] = useState("");
@@ -1144,6 +1145,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
           {!active && (
             <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3, marginLeft: 12 }}>
               <button onClick={() => setSubTab("projects")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "projects" ? "var(--card)" : "transparent", color: subTab === "projects" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Projects</button>
+              <button onClick={() => setSubTab("teamBoard")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "teamBoard" ? "var(--card)" : "transparent", color: subTab === "teamBoard" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Team Board</button>
               <button onClick={() => setSubTab("deliveries")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "deliveries" ? "var(--card)" : "transparent", color: subTab === "deliveries" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Deliveries</button>
             </div>
           )}
@@ -1265,6 +1267,14 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
 
       {subTab === "projects" && active && (
         <ProjectDetail project={active} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+      )}
+
+      {subTab === "teamBoard" && !active && (
+        <TeamBoard
+          projects={projects}
+          editors={editors}
+          onOpenProject={(id) => { setSubTab("projects"); setActiveProjectId(id); }}
+        />
       )}
 
       {subTab === "deliveries" && (
