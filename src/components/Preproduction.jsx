@@ -740,15 +740,21 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     const now = new Date().toISOString();
                     p.scriptTable.forEach((row, i) => {
                       const stId = `st-vid-${Date.now()}-${i}`;
+                      // Name carries the producer's videoName from the
+                      // approved script table — falls back to a positional
+                      // "Video N" only if a row has no name (legacy data).
+                      const videoName = (row.videoName || "").trim() || `Video ${i + 1}`;
                       fbSet(`/projects/${linkedProject.id}/subtasks/${stId}`, {
                         id: stId,
-                        name: row.videoName || `Video ${i + 1}`,
+                        name: videoName,
                         status: "stuck",
-                        // Approved scripts are at the start of the
-                        // physical production lifecycle — the next
-                        // touchpoint is the shoot. Producers can
-                        // bump them to Edit/Revisions later.
-                        stage: "preProduction",
+                        // Default Edit — by the time scripts are
+                        // approved and a subtask is being seeded for a
+                        // video, the next active producer touchpoint
+                        // is the cut. Producers can bump back to
+                        // Pre Production / Shoot if filming hasn't
+                        // happened yet.
+                        stage: "edit",
                         startDate: null, endDate: null, startTime: null, endTime: null,
                         assigneeId: null,
                         source: "video",

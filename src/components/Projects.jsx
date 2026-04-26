@@ -617,7 +617,10 @@ function AddSubtaskRow({ projectId, nextOrder }) {
     const now = new Date().toISOString();
     fbSet(`/projects/${projectId}/subtasks/${id}`, {
       id, name: "New subtask", status: "stuck",
-      stage: "preProduction",
+      // Manual subtasks default to the Edit stage — most ad-hoc rows
+      // producers add by hand are tracking edit/post work; rename in
+      // the dropdown if it's actually a shoot/pre-prod task.
+      stage: "edit",
       startDate: null, endDate: null, startTime: null, endTime: null,
       assigneeId: null, source: "manual", order: nextOrder,
       createdAt: now, updatedAt: now,

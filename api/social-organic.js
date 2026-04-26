@@ -2661,14 +2661,23 @@ async function handlePushToRunsheet(req, res) {
       for (let i = 0; i < scriptTable.length; i++) {
         const row = scriptTable[i];
         const stId = `st-vid-${Date.now()}-${i}`;
+        // Social Organic script rows don't carry a videoName field —
+        // they have formatName (e.g. "Day in the Life"). Meta Ads rows
+        // carry the producer-typed videoName. Trim + fall through to a
+        // numbered placeholder only if both are absent (legacy data).
+        const videoName = (row.videoName || "").trim()
+          || (row.formatName || "").trim()
+          || `Video ${i + 1}`;
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
-          name: row.videoName || row.formatName || `Video ${i + 1}`,
+          name: videoName,
           status: "stuck",
           // Mirrors the Meta Ads handler in src/components/Preproduction.jsx
-          // — newly-approved scripts default to the Pre Production
-          // stage; producers can bump them to Shoot/Edit when ready.
-          stage: "preProduction",
+          // — by the time scripts are approved and a subtask is being
+          // seeded, the next active producer touchpoint is the cut.
+          // Default to Edit; producers can bump back to Pre Production
+          // / Shoot if filming hasn't happened yet.
+          stage: "edit",
           startDate: null, endDate: null, startTime: null, endTime: null,
           assigneeId: null,
           source: "video",
