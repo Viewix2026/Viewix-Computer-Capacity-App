@@ -415,11 +415,32 @@ function SubtaskInline({ value, onSave, placeholder, type = "text", style }) {
 
 // Subtask row — indented under its parent project. Same column layout
 // as ProjectRow so the timeline / status pills line up vertically.
-// `editors` is the roster from App.jsx (/editors node).
-function SubtaskRow({ projectId, subtask, editors, onDelete, striped }) {
+// `editors` is the roster from App.jsx (/editors node). `project` is
+// passed in so we can check sibling subtasks for the auto-mark-done
+// rollup (when every subtask hits Done, the project itself flips to
+// Done too — saves producers a manual click).
+function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped }) {
   const persist = (field, value) => {
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, new Date().toISOString());
+
+    // Rollup: when a subtask flips to Done, check whether every sibling
+    // is now Done too — if so, mark the project Done. We compute against
+    // local state (treating this subtask as already-Done) because the
+    // fbSet above hasn't round-tripped through the listener yet, so the
+    // `project` prop still has the stale subtask status. Only rolls up
+    // → Done; doesn't auto-revert if a producer un-completes a subtask
+    // later (preserving any manual status change they might have made).
+    if (field === "status" && value === "done" && project) {
+      const siblings = Object.values(project.subtasks || {}).filter(Boolean);
+      const allDone = siblings.length > 0 && siblings.every(s =>
+        s.id === subtask.id ? true : normaliseSubtaskStatus(s.status) === "done"
+      );
+      if (allDone && normaliseStatus(project.status) !== "done") {
+        fbSet(`/projects/${projectId}/status`, "done");
+        fbSet(`/projects/${projectId}/updatedAt`, new Date().toISOString());
+      }
+    }
   };
   const baseBg = striped ? "rgba(255,255,255,0.02)" : "transparent";
   // Format start/end into a single timeline span if both are present —
@@ -747,6 +768,7 @@ function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleS
                       key={st.id}
                       projectId={p.id}
                       subtask={st}
+                      project={p}
                       editors={editors}
                       striped={idx % 2 === 1}
                       onDelete={(stId) => fbSet(`/projects/${p.id}/subtasks/${stId}`, null)}
