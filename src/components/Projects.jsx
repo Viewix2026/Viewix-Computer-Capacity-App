@@ -557,16 +557,35 @@ function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped })
               <option key={ed.id} value={ed.id}>{ed.name}</option>
             ))}
           </select>
+          {/* Delete subtask — visible by default in red so producers
+              don't have to hover-hunt for the × like the previous
+              implementation required. Hover deepens the background to
+              confirm the hit. */}
           <button
             onClick={() => { if (window.confirm(`Delete subtask "${subtask.name}"?`)) onDelete(subtask.id); }}
             title="Delete subtask"
+            aria-label="Delete subtask"
             style={{
-              marginLeft: "auto", padding: "2px 8px", borderRadius: 4, border: "none",
-              background: "transparent", color: "var(--muted)",
-              fontSize: 14, fontWeight: 700, cursor: "pointer",
+              marginLeft: "auto",
+              width: 24, height: 24,
+              padding: 0, borderRadius: 6,
+              border: "1px solid rgba(239,68,68,0.35)",
+              background: "rgba(239,68,68,0.10)",
+              color: "#EF4444",
+              fontSize: 16, fontWeight: 700,
+              lineHeight: 1, cursor: "pointer",
+              fontFamily: "inherit", flexShrink: 0,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              transition: "background 0.12s, border-color 0.12s",
             }}
-            onMouseEnter={e => e.currentTarget.style.color = "#EF4444"}
-            onMouseLeave={e => e.currentTarget.style.color = "var(--muted)"}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = "rgba(239,68,68,0.22)";
+              e.currentTarget.style.borderColor = "#EF4444";
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = "rgba(239,68,68,0.10)";
+              e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)";
+            }}
           >×</button>
         </div>
         {/* Time row — start/end times sit under the name on the same column */}
