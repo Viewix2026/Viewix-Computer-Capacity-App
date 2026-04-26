@@ -54,8 +54,8 @@ const SUBTASK_STATUS_OPTIONS = [
 ];
 const SUBTASK_STATUS_MAP = Object.fromEntries(SUBTASK_STATUS_OPTIONS.map(s => [s.key, s]));
 function normaliseSubtaskStatus(raw) {
-  const key = LEGACY_STATUS[raw] || raw || "scheduled";
-  return SUBTASK_STATUS_MAP[key] ? key : "scheduled";
+  const key = LEGACY_STATUS[raw] || raw || "stuck";
+  return SUBTASK_STATUS_MAP[key] ? key : "stuck";
 }
 
 // Default subtasks every project gets seeded with on first expand.
@@ -518,7 +518,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
     const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
     fbSet(`/projects/${projectId}/subtasks/${id}`, {
-      id, name: "New subtask", status: "scheduled",
+      id, name: "New subtask", status: "stuck",
       startDate: null, endDate: null, startTime: null, endTime: null,
       assigneeId: null, source: "manual", order: nextOrder,
       createdAt: now, updatedAt: now,
@@ -1007,7 +1007,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
         DEFAULT_SUBTASKS.forEach((name, i) => {
           const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
           fbSet(`/projects/${id}/subtasks/${stId}`, {
-            id: stId, name, status: "scheduled",
+            id: stId, name, status: "stuck",
             startDate: null, endDate: null, startTime: null, endTime: null,
             assigneeId: null, source: "default", order: i,
             createdAt: now, updatedAt: now,

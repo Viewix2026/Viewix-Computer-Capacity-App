@@ -2664,7 +2664,7 @@ async function handlePushToRunsheet(req, res) {
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
           name: row.videoName || row.formatName || `Video ${i + 1}`,
-          status: "scheduled",
+          status: "stuck",
           startDate: null, endDate: null, startTime: null, endTime: null,
           assigneeId: null,
           source: "video",

@@ -743,7 +743,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                       fbSet(`/projects/${linkedProject.id}/subtasks/${stId}`, {
                         id: stId,
                         name: row.videoName || `Video ${i + 1}`,
-                        status: "scheduled",
+                        status: "stuck",
                         startDate: null, endDate: null, startTime: null, endTime: null,
                         assigneeId: null,
                         source: "video",
