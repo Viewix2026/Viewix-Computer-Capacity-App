@@ -103,7 +103,7 @@ function EditModal({ title, onClose, children }) {
 }
 
 // ─── Main Component ───
-export function Preproduction({ role, isFounder, route } = {}) {
+export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
   const [subTab, setSubTab] = useState("metaAds");
 
   // Deep-link from a hash route like #preproduction/socialOrganic/social_1234.
@@ -722,6 +722,36 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     videos,
                     createdAt: new Date().toISOString(),
                   });
+
+                  // Auto-seed a subtask per approved video on the linked
+                  // /projects/{id} record. Mirrors the Deliveries push so
+                  // the Projects tab subtask drawer shows every approved
+                  // video as its own row alongside the four default phases.
+                  // Lookup is by `links.preprodId` matching this preprod
+                  // record's id — no back-reference stored on preprod.
+                  // If the producer hasn't expanded the parent project yet,
+                  // these video-name subtasks land alongside the (yet-
+                  // unseeded) defaults; the lazy seeder in Projects.jsx
+                  // checks subtasks.length === 0 before seeding defaults,
+                  // so it won't double-seed.
+                  const linkedProject = (dealProjects || []).find(pr => (pr.links || {}).preprodId === p.id);
+                  if (linkedProject) {
+                    const existingCount = Object.keys(linkedProject.subtasks || {}).length;
+                    const now = new Date().toISOString();
+                    p.scriptTable.forEach((row, i) => {
+                      const stId = `st-vid-${Date.now()}-${i}`;
+                      fbSet(`/projects/${linkedProject.id}/subtasks/${stId}`, {
+                        id: stId,
+                        name: row.videoName || `Video ${i + 1}`,
+                        status: "scheduled",
+                        startDate: null, endDate: null, startTime: null, endTime: null,
+                        assigneeId: null,
+                        source: "video",
+                        order: existingCount + i,
+                        createdAt: now, updatedAt: now,
+                      });
+                    });
+                  }
                 }
               }}
               style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}

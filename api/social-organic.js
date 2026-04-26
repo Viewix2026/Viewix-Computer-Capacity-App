@@ -2645,6 +2645,38 @@ async function handlePushToRunsheet(req, res) {
   });
   await fbSet(`/preproduction/socialOrganic/${projectId}/approvals/script`, now);
 
+  // ─── Seed video-name subtasks on the linked /projects/{id} record ───
+  // Each approved video becomes its own subtask under the parent project,
+  // alongside the four default phases (Pre Production, Shoot, Revisions,
+  // Edit) the Projects tab seeds on first expand. Mirrors the Meta Ads
+  // approval flow in src/components/Preproduction.jsx. Match by
+  // links.preprodId === this preprod record's id. Best-effort only — a
+  // failure here doesn't fail the runsheet push.
+  try {
+    const allProjects = (await fbGet(`/projects`)) || {};
+    const linkedEntry = Object.entries(allProjects).find(([, pr]) => (pr?.links || {}).preprodId === projectId);
+    if (linkedEntry) {
+      const [parentId, parent] = linkedEntry;
+      const existingCount = Object.keys(parent.subtasks || {}).length;
+      for (let i = 0; i < scriptTable.length; i++) {
+        const row = scriptTable[i];
+        const stId = `st-vid-${Date.now()}-${i}`;
+        await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
+          id: stId,
+          name: row.videoName || row.formatName || `Video ${i + 1}`,
+          status: "scheduled",
+          startDate: null, endDate: null, startTime: null, endTime: null,
+          assigneeId: null,
+          source: "video",
+          order: existingCount + i,
+          createdAt: now, updatedAt: now,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Failed to seed video subtasks on project:", e);
+  }
+
   return res.status(200).json({ success: true, runsheetId, videoCount: videos.length });
 }
 

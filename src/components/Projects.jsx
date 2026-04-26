@@ -13,7 +13,7 @@
 // to Firebase via fbSet to avoid the App.jsx debounced bulk-write clobbering
 // webhook-created records that haven't hit local state yet.
 
-import { useState, useMemo, useEffect, useRef, memo } from "react";
+import { useState, useMemo, useEffect, useRef, memo, Fragment } from "react";
 import { BTN } from "../config";
 import { fmtCur, fmtD } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
@@ -37,6 +37,44 @@ const LEGACY_STATUS = { active: "inProgress", onHold: "waitingClient" };
 function normaliseStatus(raw) {
   const key = LEGACY_STATUS[raw] || raw || "notStarted";
   return STATUS_MAP[key] ? key : "notStarted";
+}
+
+// ─── Subtask taxonomy ──────────────────────────────────────────────
+// Subtasks have a slightly different status set than their parent
+// project — Jeremy's spec calls out: Stuck, On Hold, Scheduled, In
+// Progress, Waiting on Client, Done. No "Not Started" / "Archived"
+// since subtasks are atomic units of work that always have a target.
+const SUBTASK_STATUS_OPTIONS = [
+  { key: "scheduled",     label: "Scheduled",         color: "#3B82F6" },
+  { key: "inProgress",    label: "In Progress",       color: "#F97316" },
+  { key: "waitingClient", label: "Waiting on Client", color: "#8B5CF6" },
+  { key: "onHold",        label: "On Hold",           color: "#64748B" },
+  { key: "stuck",         label: "Stuck",             color: "#EC4899" },
+  { key: "done",          label: "Done",              color: "#10B981" },
+];
+const SUBTASK_STATUS_MAP = Object.fromEntries(SUBTASK_STATUS_OPTIONS.map(s => [s.key, s]));
+function normaliseSubtaskStatus(raw) {
+  const key = LEGACY_STATUS[raw] || raw || "scheduled";
+  return SUBTASK_STATUS_MAP[key] ? key : "scheduled";
+}
+
+// Default subtasks every project gets seeded with on first expand.
+// Mirrors the four phases of the production lifecycle Jeremy walks
+// through with every client.
+const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", "Revisions", "Edit"];
+
+// Ordered list of subtask records out of the keyed Firebase object.
+// Falls back to insertion order when `order` is missing so legacy
+// records (or the auto-seeded defaults) still render in a stable order.
+function subtasksAsArray(subtasksObj) {
+  if (!subtasksObj || typeof subtasksObj !== "object") return [];
+  return Object.values(subtasksObj)
+    .filter(Boolean)
+    .sort((a, b) => {
+      const ao = a.order ?? 9999, bo = b.order ?? 9999;
+      if (ao !== bo) return ao - bo;
+      return (a.createdAt || "").localeCompare(b.createdAt || "");
+    });
 }
 
 // ─── Inline edit primitives ────────────────────────────────────────
@@ -309,7 +347,204 @@ function TimelineCell({ start, end }) {
   );
 }
 
-function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect }) {
+// Subtask-specific status pill — reuses the StatusCell visual but
+// pulls from SUBTASK_STATUS_OPTIONS so "On Hold" appears (and the
+// project-only "Not Started" / "Archived" don't).
+function SubtaskStatusCell({ value, onChange }) {
+  const key = normaliseSubtaskStatus(value);
+  const opt = SUBTASK_STATUS_MAP[key];
+  return (
+    <select
+      value={key}
+      onClick={e => e.stopPropagation()}
+      onChange={e => { e.stopPropagation(); onChange(e.target.value); }}
+      style={{
+        width: "100%", padding: "6px 10px", border: "none",
+        background: opt.color, color: "#fff",
+        fontSize: 10, fontWeight: 800, letterSpacing: 0.4,
+        textTransform: "uppercase", cursor: "pointer",
+        textAlign: "center", appearance: "none",
+        fontFamily: "inherit",
+      }}>
+      {SUBTASK_STATUS_OPTIONS.map(s => (
+        <option key={s.key} value={s.key} style={{ background: "var(--card)", color: "var(--fg)" }}>
+          {s.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// Compact inline editor used inside the subtask row — same commit-on-blur
+// behaviour as InlineText but smaller padding/font + transparent background
+// so the row stays Monday-style dense.
+function SubtaskInline({ value, onSave, placeholder, type = "text", style }) {
+  const [draft, setDraft] = useState(value || "");
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
+  const commit = () => {
+    if ((draft || "") === (value || "")) return;
+    onSave(draft || "");
+  };
+  return (
+    <input
+      type={type}
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onClick={e => e.stopPropagation()}
+      onFocus={() => setFocused(true)}
+      onBlur={() => { setFocused(false); commit(); }}
+      onKeyDown={e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setDraft(value || ""); e.target.blur(); } }}
+      placeholder={placeholder}
+      style={{
+        width: "100%", padding: "5px 8px", borderRadius: 4,
+        border: "1px solid transparent", background: "transparent",
+        color: "var(--fg)", fontSize: 12, fontWeight: 500,
+        fontFamily: "inherit", outline: "none",
+        ...style,
+      }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border)"}
+      onMouseLeave={e => { if (!focused) e.currentTarget.style.borderColor = "transparent"; }}
+    />
+  );
+}
+
+// Subtask row — indented under its parent project. Same column layout
+// as ProjectRow so the timeline / status pills line up vertically.
+// `editors` is the roster from App.jsx (/editors node).
+function SubtaskRow({ projectId, subtask, editors, onDelete, striped }) {
+  const persist = (field, value) => {
+    fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
+    fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, new Date().toISOString());
+  };
+  const baseBg = striped ? "rgba(255,255,255,0.02)" : "transparent";
+  // Format start/end into a single timeline span if both are present —
+  // mirrors the parent ProjectRow's TimelineCell so the visual lineage
+  // is obvious.
+  return (
+    <tr style={{
+      background: baseBg,
+      borderBottom: "1px solid var(--border)",
+    }}>
+      <td style={{ ...tdStyle, padding: "4px 14px" }} />
+      <td style={{ ...tdStyle, padding: "4px 14px 4px 48px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            width: 10, height: 10, borderRadius: 2,
+            background: subtask.source === "video" ? "#06B6D4"
+                       : subtask.source === "default" ? "#8B5CF6"
+                       : "#475569",
+            flexShrink: 0,
+          }} title={subtask.source === "video" ? "Auto-created from approved script" : subtask.source === "default" ? "Default project phase" : "Custom subtask"} />
+          <SubtaskInline
+            value={subtask.name || ""}
+            onSave={(v) => persist("name", v.trim() || "Untitled subtask")}
+            placeholder="Subtask name"
+            style={{ fontSize: 12, fontWeight: 600 }}
+          />
+          {/* Assignee dropdown — pulls from /editors, persists assigneeId */}
+          <select
+            value={subtask.assigneeId || ""}
+            onChange={e => persist("assigneeId", e.target.value || null)}
+            onClick={e => e.stopPropagation()}
+            title="Assign to editor"
+            style={{
+              padding: "4px 6px", borderRadius: 4, border: "1px solid var(--border)",
+              background: "var(--input-bg)", color: subtask.assigneeId ? "var(--fg)" : "var(--muted)",
+              fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+              maxWidth: 120,
+            }}>
+            <option value="">Unassigned</option>
+            {(editors || []).map(ed => (
+              <option key={ed.id} value={ed.id}>{ed.name}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => { if (window.confirm(`Delete subtask "${subtask.name}"?`)) onDelete(subtask.id); }}
+            title="Delete subtask"
+            style={{
+              marginLeft: "auto", padding: "2px 8px", borderRadius: 4, border: "none",
+              background: "transparent", color: "var(--muted)",
+              fontSize: 14, fontWeight: 700, cursor: "pointer",
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = "#EF4444"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--muted)"}
+          >×</button>
+        </div>
+        {/* Time row — start/end times sit under the name on the same column */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, marginLeft: 18 }}>
+          <span style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>Time</span>
+          <SubtaskInline
+            value={subtask.startTime || ""} type="time" placeholder="Start"
+            onSave={(v) => persist("startTime", v || null)}
+            style={{ fontSize: 11, padding: "3px 6px", maxWidth: 90 }}
+          />
+          <span style={{ fontSize: 10, color: "var(--muted)" }}>→</span>
+          <SubtaskInline
+            value={subtask.endTime || ""} type="time" placeholder="End"
+            onSave={(v) => persist("endTime", v || null)}
+            style={{ fontSize: 11, padding: "3px 6px", maxWidth: 90 }}
+          />
+        </div>
+      </td>
+      <td style={{ ...tdStyle, width: 120, padding: "4px 8px" }}>
+        <SubtaskInline
+          value={subtask.startDate || ""} type="date" placeholder="—"
+          onSave={(v) => persist("startDate", v || null)}
+          style={{ fontSize: 11, textAlign: "center" }}
+        />
+      </td>
+      <td style={{ ...tdStyle, width: 120, padding: "4px 8px" }}>
+        <SubtaskInline
+          value={subtask.endDate || ""} type="date" placeholder="—"
+          onSave={(v) => persist("endDate", v || null)}
+          style={{ fontSize: 11, textAlign: "center" }}
+        />
+      </td>
+      <td style={{ ...tdStyle, width: 140, padding: "4px 14px" }}>
+        <TimelineCell start={subtask.startDate} end={subtask.endDate} />
+      </td>
+      <td style={{ ...tdStyle, width: 180, padding: 0 }}>
+        <SubtaskStatusCell value={subtask.status} onChange={(s) => persist("status", s)} />
+      </td>
+    </tr>
+  );
+}
+
+// "+ Add subtask" footer row, anchored to the bottom of the expanded
+// subtask group. Click → push a new subtask record under the project.
+function AddSubtaskRow({ projectId, nextOrder }) {
+  const add = () => {
+    const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date().toISOString();
+    fbSet(`/projects/${projectId}/subtasks/${id}`, {
+      id, name: "New subtask", status: "scheduled",
+      startDate: null, endDate: null, startTime: null, endTime: null,
+      assigneeId: null, source: "manual", order: nextOrder,
+      createdAt: now, updatedAt: now,
+    });
+  };
+  return (
+    <tr style={{ background: "transparent", borderBottom: "1px solid var(--border)" }}>
+      <td style={{ ...tdStyle, padding: "6px 14px" }} />
+      <td colSpan={5} style={{ ...tdStyle, padding: "6px 14px 10px 48px" }}>
+        <button onClick={add}
+          style={{
+            padding: "5px 12px", borderRadius: 4, border: "1px dashed var(--border)",
+            background: "transparent", color: "var(--muted)",
+            fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.borderColor = "var(--accent)"; }}
+          onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)"; e.currentTarget.style.borderColor = "var(--border)"; }}
+        >
+          + Add subtask
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount }) {
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "—";
   const namePart = project.projectName || "Untitled project";
@@ -342,7 +577,50 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
       </td>
       <td style={{ ...tdStyle, minWidth: 320 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ color: "var(--muted)", fontSize: 14, lineHeight: 1 }}>›</span>
+          {/* Expand toggle — click reveals subtasks under this project.
+              Stop propagation so the row's row-level click (open detail)
+              doesn't fire. Larger hit area (24px) than the original tiny
+              chevron + a subtle hover background to make it feel like an
+              actual button. Caret rotates 90° when expanded. */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleExpand(project.id); }}
+            title={expanded ? "Collapse subtasks" : "Show subtasks"}
+            aria-label={expanded ? "Collapse subtasks" : "Show subtasks"}
+            style={{
+              width: 28, height: 28, borderRadius: 6,
+              border: "1px solid var(--border)",
+              background: expanded ? "rgba(99,102,241,0.15)" : "var(--bg)",
+              color: expanded ? "var(--accent)" : "var(--fg)",
+              cursor: "pointer", padding: 0,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              transition: "background 0.15s, color 0.15s, border-color 0.15s",
+              fontFamily: "inherit", flexShrink: 0,
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = "rgba(99,102,241,0.15)";
+              e.currentTarget.style.color = "var(--accent)";
+              e.currentTarget.style.borderColor = "var(--accent)";
+            }}
+            onMouseLeave={e => {
+              if (!expanded) {
+                e.currentTarget.style.background = "var(--bg)";
+                e.currentTarget.style.color = "var(--fg)";
+                e.currentTarget.style.borderColor = "var(--border)";
+              }
+            }}
+          >
+            {/* Inline SVG caret — renders identically across fonts/OSes,
+                rotates 90° via transform. Bigger + bolder than the glyph
+                version so it actually reads as "expandable" at a glance. */}
+            <svg
+              width="14" height="14" viewBox="0 0 16 16" fill="none"
+              style={{
+                transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+                transition: "transform 0.15s",
+              }}>
+              <path d="M5 3l6 5-6 5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
           <span style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.3 }}>
             <span style={{ fontWeight: 700 }}>{clientPart}:</span>{" "}
             <span style={{ fontWeight: 500 }}>{namePart}</span>
@@ -350,6 +628,17 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
           {videoCount != null && (
             <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
               {videoCount}
+            </span>
+          )}
+          {/* Subtask count badge — gives a quick "this project has 6
+              subtasks" affordance even when collapsed. Hidden when 0. */}
+          {subtaskCount > 0 && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 999,
+              background: "rgba(99,102,241,0.15)", color: "var(--accent)",
+              fontFamily: "'JetBrains Mono',monospace",
+            }} title={`${subtaskCount} subtask${subtaskCount === 1 ? "" : "s"}`}>
+              ⋮ {subtaskCount}
             </span>
           )}
         </div>
@@ -378,7 +667,7 @@ const dateCellStyle = {
   fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
 };
 
-function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll }) {
+function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
   // Header checkbox is tri-state: empty / checked (all) / indeterminate
   // (some). Browsers don't have a CSS-only indeterminate state — set
   // it on the DOM via ref.
@@ -416,17 +705,41 @@ function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleS
             </tr>
           </thead>
           <tbody>
-            {projects.map((p, i) => (
-              <ProjectRow
-                key={p.id}
-                project={p}
-                onOpen={onOpen}
-                onStatusChange={onStatusChange}
-                striped={i % 2 === 1}
-                selected={selectedIds.has(p.id)}
-                onToggleSelect={onToggleSelect}
-              />
-            ))}
+            {projects.map((p, i) => {
+              const subtasks = subtasksAsArray(p.subtasks);
+              const isExpanded = expandedIds.has(p.id);
+              return (
+                <Fragment key={p.id}>
+                  <ProjectRow
+                    project={p}
+                    onOpen={onOpen}
+                    onStatusChange={onStatusChange}
+                    striped={i % 2 === 1}
+                    selected={selectedIds.has(p.id)}
+                    onToggleSelect={onToggleSelect}
+                    expanded={isExpanded}
+                    onToggleExpand={onToggleExpand}
+                    subtaskCount={subtasks.length}
+                  />
+                  {isExpanded && subtasks.map((st, idx) => (
+                    <SubtaskRow
+                      key={st.id}
+                      projectId={p.id}
+                      subtask={st}
+                      editors={editors}
+                      striped={idx % 2 === 1}
+                      onDelete={(stId) => fbSet(`/projects/${p.id}/subtasks/${stId}`, null)}
+                    />
+                  ))}
+                  {isExpanded && (
+                    <AddSubtaskRow
+                      projectId={p.id}
+                      nextOrder={subtasks.length > 0 ? Math.max(...subtasks.map(s => s.order ?? 0)) + 1 : 0}
+                    />
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -659,7 +972,7 @@ function ProjectDetail({ project, onBack, onDelete }) {
   );
 }
 
-export function Projects({ projects, deliveries, setDeliveries, accounts, route }) {
+export function Projects({ projects, deliveries, setDeliveries, accounts, editors, route }) {
   const [subTab, setSubTab] = useState("projects"); // "projects" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [filter, setFilter] = useState("all"); // "all" | "active" | "onHold" | "archived"
@@ -670,6 +983,40 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, route 
   // selected would surprise the producer).
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   useEffect(() => { setSelectedIds(new Set()); }, [filter, subTab]);
+
+  // Expansion state for the subtask drawer under each project. Local-only
+  // (doesn't persist) so producers don't open a project to a wall of
+  // expanded rows — the table starts collapsed each visit.
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+  const toggleExpand = (id) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        return next;
+      }
+      next.add(id);
+      // Lazy-seed default subtasks the first time a project is expanded
+      // and has none yet. Mirrors the SocialOrganicResearch first-open
+      // migration pattern — defaults land in Firebase only when the
+      // producer actually engages with the project, keeping the data
+      // tree clean for projects that nobody ever drills into.
+      const project = projects.find(p => p.id === id);
+      if (project && (!project.subtasks || Object.keys(project.subtasks).length === 0)) {
+        const now = new Date().toISOString();
+        DEFAULT_SUBTASKS.forEach((name, i) => {
+          const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+          fbSet(`/projects/${id}/subtasks/${stId}`, {
+            id: stId, name, status: "scheduled",
+            startDate: null, endDate: null, startTime: null, endTime: null,
+            assigneeId: null, source: "default", order: i,
+            createdAt: now, updatedAt: now,
+          });
+        });
+      }
+      return next;
+    });
+  };
 
   const toggleSelect = (id) => {
     setSelectedIds(prev => {
@@ -864,6 +1211,9 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, route 
                 selectedIds={selectedIds}
                 onToggleSelect={toggleSelect}
                 onToggleSelectAll={toggleSelectAllVisible}
+                expandedIds={expandedIds}
+                onToggleExpand={toggleExpand}
+                editors={editors}
               />
             </>
           )}
