@@ -54,7 +54,11 @@ const SUBTASK_STATUS_OPTIONS = [
 ];
 const SUBTASK_STATUS_MAP = Object.fromEntries(SUBTASK_STATUS_OPTIONS.map(s => [s.key, s]));
 function normaliseSubtaskStatus(raw) {
-  const key = LEGACY_STATUS[raw] || raw || "stuck";
+  // Subtasks have their own status set — "onHold" is a real key here,
+  // not a legacy alias for "waitingClient" like it is on projects. So
+  // we deliberately skip LEGACY_STATUS and only fall back to "stuck"
+  // when the value isn't a valid subtask status.
+  const key = raw || "stuck";
   return SUBTASK_STATUS_MAP[key] ? key : "stuck";
 }
 
