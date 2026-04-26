@@ -71,9 +71,14 @@ function normaliseSubtaskStatus(raw) {
 // default to Pre Production until the producer moves them on.
 const SUBTASK_STAGE_OPTIONS = [
   { key: "preProduction", label: "Pre Production", color: "#8B5CF6" },
-  { key: "shoot",         label: "Shoot",          color: "#06B6D4" },
+  // Shoot is red — visually loud (filming days are the most logistics-
+  // sensitive moment of a project) and distinct from the pink Stuck
+  // status, the brighter delete-button red, and the orange Revisions
+  // stage. Avoids being mistaken for any other dropdown's colour.
+  { key: "shoot",         label: "Shoot",          color: "#DC2626" },
   { key: "revisions",     label: "Revisions",      color: "#F97316" },
-  { key: "edit",          label: "Edit",           color: "#3B82F6" },
+  // Edit uses the Viewix accent blue (matches --accent in config.js).
+  { key: "edit",          label: "Edit",           color: "#0082FA" },
   { key: "hold",          label: "Hold",           color: "#EAB308" },
 ];
 const SUBTASK_STAGE_MAP = Object.fromEntries(SUBTASK_STAGE_OPTIONS.map(s => [s.key, s]));

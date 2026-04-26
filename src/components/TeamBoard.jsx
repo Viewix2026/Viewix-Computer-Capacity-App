@@ -203,24 +203,22 @@ function UnscheduledCard({ subtask, onClick }) {
   );
 }
 
-// Drop target — wraps a row + col cell. Tinting props give weekends a
-// distinct grey background, today an indigo wash, alternate rows a
-// subtle stripe, and Mondays a stronger left border to break the grid
-// into visible week chunks.
+// Drop target — wraps a row + col cell. Column-scope visuals (weekend
+// tint, today wash, Monday week-boundary border) are NOT handled here
+// — they live on a separate background-stripe layer rendered above.
+// This cell handles only row-scope styling: optional row striping,
+// drop-hover highlight, and the row-bottom separator.
 function DropCell({
-  id, children, gridColumn, gridRow, sticky,
-  isWeekend, isToday, isMonday, striped,
+  id, children, gridColumn, gridRow, sticky, striped,
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
 
-  // Background priority: hover > today > weekend > striped > none.
-  // For sticky left columns we paint over with var(--card) so the
-  // assignee labels stay legible during horizontal scroll.
+  // Sticky left columns paint over with var(--card) so the assignee
+  // labels stay legible during horizontal scroll. Body cells stay
+  // mostly transparent so the column stripes underneath show through.
   let bg = "transparent";
   if (sticky != null) bg = "var(--card)";
   else if (striped) bg = "rgba(255,255,255,0.018)";
-  if (isWeekend) bg = "rgba(0,0,0,0.32)";
-  if (isToday) bg = "rgba(99,102,241,0.12)";
   if (isOver) bg = "rgba(99,102,241,0.22)";
 
   return (
@@ -230,13 +228,12 @@ function DropCell({
         gridColumn, gridRow,
         background: bg,
         borderRight: "1px solid var(--border)",
-        // Mondays get a slightly heavier left border so the eye can
-        // scan week-by-week even at a wide zoom.
-        borderLeft: isMonday ? "2px solid var(--border)" : undefined,
         borderBottom: "1px solid var(--border)",
         minHeight: 60,
         position: sticky != null ? "sticky" : "static",
         left: sticky,
+        // Sticky columns sit above the column-stripe layer (z 0) but
+        // below the drag overlay. Body cells sit just above the stripe.
         zIndex: sticky != null ? 2 : 1,
       }}>
       {children}
@@ -436,6 +433,38 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
             maxHeight: "calc(100vh - 200px)",
           }}>
           <div style={{ display: "grid", gridTemplateColumns, minWidth: "fit-content" }}>
+            {/* Column-stripe layer — one stripe per date, spanning every
+                row of the grid (header + all editor rows). Sit at z 0
+                with pointer-events disabled so they paint a continuous
+                vertical band beneath cells and bars without intercepting
+                drags. This is the source of weekend / today / week-
+                boundary visuals; per-cell tinting was inconsistent
+                because Gantt bars partially obscured cell backgrounds.
+                The stripes don't get obscured because they're full
+                column height. */}
+            {dates.map((d, i) => {
+              const dayNum = new Date(d + "T00:00:00").getDay();
+              const isWeekend = dayNum === 0 || dayNum === 6;
+              const isToday = d === isoToday();
+              const isMonday = dayNum === 1;
+              if (!isWeekend && !isToday && !isMonday) return null;
+              return (
+                <div
+                  key={`stripe-${d}`}
+                  style={{
+                    gridColumn: i + 3,
+                    gridRow: "1 / -1",
+                    background: isToday ? "rgba(99,102,241,0.10)"
+                              : isWeekend ? "rgba(0,0,0,0.32)"
+                              : "transparent",
+                    borderLeft: isMonday ? "2px solid var(--border)" : undefined,
+                    pointerEvents: "none",
+                    zIndex: 0,
+                  }}
+                />
+              );
+            })}
+
             {/* Header row — col labels */}
             <div style={{ ...headerCell, position: "sticky", top: 0, left: 0, zIndex: 5, background: "var(--bg)" }}>
               Team
@@ -448,18 +477,18 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
               const dayNum = dt.getDay();
               const isToday = d === isoToday();
               const isWeekend = dayNum === 0 || dayNum === 6;
-              const isMonday = dayNum === 1;
               return (
                 <div key={d} style={{
                   ...headerCell,
                   position: "sticky", top: 0, zIndex: 4,
-                  // Header background mirrors the body cell tint below
-                  // so the column reads as one consistent stripe.
+                  // Header still gets a slightly stronger tint so the
+                  // column heading remains legible above the muted body
+                  // stripe — the stripe alone reads too dim under bold
+                  // header text.
                   background: isToday ? "rgba(99,102,241,0.28)"
                             : isWeekend ? "rgba(0,0,0,0.45)"
                             : "var(--bg)",
                   color: isToday ? "var(--accent)" : isWeekend ? "var(--muted)" : "var(--fg)",
-                  borderLeft: isMonday ? "2px solid var(--border)" : undefined,
                 }}>
                   <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>
                     {dt.toLocaleDateString("en-AU", { weekday: "short" })}
@@ -524,7 +553,6 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
 // tint and the eye can scan vertically.
 function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan, onOpenProject }) {
   const striped = rowIdx % 2 === 1;
-  const todayISO = isoToday();
   return (
     <>
       {/* Sticky left: assignee label. Slightly different background on
@@ -553,23 +581,20 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
         </div>
       </DropCell>
 
-      {/* One drop cell per date. Bars are added below as separate
-          grid children — they span multiple columns via grid-column. */}
-      {dates.map((d, i) => {
-        const dayNum = new Date(d + "T00:00:00").getDay();
-        return (
-          <DropCell
-            key={d}
-            id={cellId(row.id, d)}
-            gridColumn={i + 3}
-            gridRow={gridRow}
-            isWeekend={dayNum === 0 || dayNum === 6}
-            isToday={d === todayISO}
-            isMonday={dayNum === 1}
-            striped={striped}
-          />
-        );
-      })}
+      {/* One drop cell per date. Column-scope tinting (weekend / today
+          / Monday border) lives on the dedicated stripe layer in the
+          parent component — these cells just handle row striping and
+          drop-hover state. Bars are placed below as separate grid
+          children. */}
+      {dates.map((d, i) => (
+        <DropCell
+          key={d}
+          id={cellId(row.id, d)}
+          gridColumn={i + 3}
+          gridRow={gridRow}
+          striped={striped}
+        />
+      ))}
 
       {/* Gantt bars — placed last so they stack visually above empty
           drop cells. Each occupies grid-column [startCol .. endCol+1]
