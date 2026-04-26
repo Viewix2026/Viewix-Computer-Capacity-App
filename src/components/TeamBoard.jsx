@@ -28,7 +28,7 @@ const STATUS_COLOURS = {
   scheduled:     "#3B82F6",
   inProgress:    "#F97316",
   waitingClient: "#8B5CF6",
-  onHold:        "#64748B",
+  onHold:        "#EAB308",
   stuck:         "#EC4899",
   done:          "#10B981",
 };

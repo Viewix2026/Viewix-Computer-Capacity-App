@@ -49,7 +49,7 @@ const SUBTASK_STATUS_OPTIONS = [
   { key: "scheduled",     label: "Scheduled",         color: "#3B82F6" },
   { key: "inProgress",    label: "In Progress",       color: "#F97316" },
   { key: "waitingClient", label: "Waiting on Client", color: "#8B5CF6" },
-  { key: "onHold",        label: "On Hold",           color: "#64748B" },
+  { key: "onHold",        label: "On Hold",           color: "#EAB308" },
   { key: "stuck",         label: "Stuck",             color: "#EC4899" },
   { key: "done",          label: "Done",              color: "#10B981" },
 ];
@@ -63,9 +63,41 @@ function normaliseSubtaskStatus(raw) {
   return SUBTASK_STATUS_MAP[key] ? key : "stuck";
 }
 
+// Stage = which phase of the production lifecycle this subtask sits in
+// (Pre Production → Shoot → Revisions → Edit, plus Hold for paused
+// work). Independent from status — a subtask can be "Stuck" inside any
+// stage, "Done" for that stage, etc. The four default phase subtasks
+// get auto-tagged with their matching stage; manual + video subtasks
+// default to Pre Production until the producer moves them on.
+const SUBTASK_STAGE_OPTIONS = [
+  { key: "preProduction", label: "Pre Production", color: "#8B5CF6" },
+  { key: "shoot",         label: "Shoot",          color: "#06B6D4" },
+  { key: "revisions",     label: "Revisions",      color: "#F97316" },
+  { key: "edit",          label: "Edit",           color: "#3B82F6" },
+  { key: "hold",          label: "Hold",           color: "#EAB308" },
+];
+const SUBTASK_STAGE_MAP = Object.fromEntries(SUBTASK_STAGE_OPTIONS.map(s => [s.key, s]));
+
+// Infer a sensible stage from the subtask's name when no `stage` field
+// has been written yet. Saves the producer from having to retro-tag
+// every existing subtask manually after this feature ships — the four
+// default phases (and any video subtasks named after a phase) light up
+// correctly on first render, and the inferred value gets persisted the
+// first time the producer opens the dropdown.
+function inferStage(subtask) {
+  if (subtask?.stage && SUBTASK_STAGE_MAP[subtask.stage]) return subtask.stage;
+  const name = (subtask?.name || "").toLowerCase();
+  if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
+  if (name.includes("revision")) return "revisions";  // before "shoot" since "reshoot" might match
+  if (name.includes("shoot")) return "shoot";
+  if (name.includes("edit")) return "edit";
+  return "preProduction";
+}
+
 // Default subtasks every project gets seeded with on first expand.
 // Mirrors the four phases of the production lifecycle Jeremy walks
-// through with every client.
+// through with every client. Each default's name maps cleanly onto a
+// SUBTASK_STAGE_OPTIONS key via inferStage().
 const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", "Revisions", "Edit"];
 
 // Ordered list of subtask records out of the keyed Firebase object.
@@ -352,6 +384,41 @@ function TimelineCell({ start, end }) {
   );
 }
 
+// Inline stage dropdown — sits next to the subtask name. Smaller than
+// the right-column status pill (which classifies *how* the work is
+// going); this one classifies *which phase of production* the work is
+// in. Replaces the earlier purple/cyan/slate source-indicator square.
+function SubtaskStageCell({ value, onChange, subtask }) {
+  // inferStage gives us a sensible default when the subtask predates
+  // this feature and has no stage field yet. We don't write the
+  // inferred value back automatically — only when the producer touches
+  // the dropdown does it get persisted.
+  const key = inferStage({ ...subtask, stage: value });
+  const opt = SUBTASK_STAGE_MAP[key];
+  return (
+    <select
+      value={key}
+      onClick={e => e.stopPropagation()}
+      onChange={e => { e.stopPropagation(); onChange(e.target.value); }}
+      title={`Stage: ${opt.label}`}
+      style={{
+        padding: "3px 7px", border: "none", borderRadius: 4,
+        background: opt.color, color: "#fff",
+        fontSize: 9, fontWeight: 800, letterSpacing: 0.4,
+        textTransform: "uppercase", cursor: "pointer",
+        textAlign: "center", appearance: "none",
+        fontFamily: "inherit",
+        flexShrink: 0,
+      }}>
+      {SUBTASK_STAGE_OPTIONS.map(s => (
+        <option key={s.key} value={s.key} style={{ background: "var(--card)", color: "var(--fg)" }}>
+          {s.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 // Subtask-specific status pill — reuses the StatusCell visual but
 // pulls from SUBTASK_STATUS_OPTIONS so "On Hold" appears (and the
 // project-only "Not Started" / "Archived" don't).
@@ -455,13 +522,18 @@ function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped })
       <td style={{ ...tdStyle, padding: "4px 14px" }} />
       <td style={{ ...tdStyle, padding: "4px 14px 4px 48px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{
-            width: 10, height: 10, borderRadius: 2,
-            background: subtask.source === "video" ? "#06B6D4"
-                       : subtask.source === "default" ? "#8B5CF6"
-                       : "#475569",
-            flexShrink: 0,
-          }} title={subtask.source === "video" ? "Auto-created from approved script" : subtask.source === "default" ? "Default project phase" : "Custom subtask"} />
+          {/* Stage pill — replaces the previous purple/cyan/slate
+              source-indicator square. The pill's colour communicates
+              which production phase this subtask sits in (Pre
+              Production / Shoot / Revisions / Edit / Hold). Click to
+              reclassify. The right-column Status pill (Stuck / In
+              Progress / Done / etc.) stays — they answer different
+              questions: stage = where, status = how. */}
+          <SubtaskStageCell
+            value={subtask.stage}
+            subtask={subtask}
+            onChange={(s) => persist("stage", s)}
+          />
           <SubtaskInline
             value={subtask.name || ""}
             onSave={(v) => persist("name", v.trim() || "Untitled subtask")}
@@ -545,6 +617,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
     const now = new Date().toISOString();
     fbSet(`/projects/${projectId}/subtasks/${id}`, {
       id, name: "New subtask", status: "stuck",
+      stage: "preProduction",
       startDate: null, endDate: null, startTime: null, endTime: null,
       assigneeId: null, source: "manual", order: nextOrder,
       createdAt: now, updatedAt: now,
@@ -1052,6 +1125,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
           const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
           fbSet(`/projects/${id}/subtasks/${stId}`, {
             id: stId, name, status: "stuck",
+            stage: inferStage({ name }),
             startDate: null, endDate: null, startTime: null, endTime: null,
             assigneeId: null, source: "default", order: i,
             createdAt: now, updatedAt: now,

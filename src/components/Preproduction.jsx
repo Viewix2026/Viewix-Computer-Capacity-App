@@ -744,6 +744,11 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                         id: stId,
                         name: row.videoName || `Video ${i + 1}`,
                         status: "stuck",
+                        // Approved scripts are at the start of the
+                        // physical production lifecycle — the next
+                        // touchpoint is the shoot. Producers can
+                        // bump them to Edit/Revisions later.
+                        stage: "preProduction",
                         startDate: null, endDate: null, startTime: null, endTime: null,
                         assigneeId: null,
                         source: "video",

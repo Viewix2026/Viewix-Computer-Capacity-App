@@ -2665,6 +2665,10 @@ async function handlePushToRunsheet(req, res) {
           id: stId,
           name: row.videoName || row.formatName || `Video ${i + 1}`,
           status: "stuck",
+          // Mirrors the Meta Ads handler in src/components/Preproduction.jsx
+          // — newly-approved scripts default to the Pre Production
+          // stage; producers can bump them to Shoot/Edit when ready.
+          stage: "preProduction",
           startDate: null, endDate: null, startTime: null, endTime: null,
           assigneeId: null,
           source: "video",
