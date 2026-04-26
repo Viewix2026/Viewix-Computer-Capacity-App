@@ -548,7 +548,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
   );
 }
 
-function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount }) {
+function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount }) {
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "—";
   const namePart = project.projectName || "Untitled project";
@@ -629,22 +629,38 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
             <span style={{ fontWeight: 700 }}>{clientPart}:</span>{" "}
             <span style={{ fontWeight: 500 }}>{namePart}</span>
           </span>
+          {/* Video count — bare-number monospace badge, labelled "vids"
+              so it can't be mistaken for the subtask badge sitting next
+              to it. Both used to render as "4" / "4" when the counts
+              happened to match — looked like a duplicate. */}
           {videoCount != null && (
-            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
-              {videoCount}
-            </span>
-          )}
-          {/* Subtask count badge — gives a quick "this project has 6
-              subtasks" affordance even when collapsed. Hidden when 0. */}
-          {subtaskCount > 0 && (
             <span style={{
-              fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 999,
-              background: "rgba(99,102,241,0.15)", color: "var(--accent)",
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+              background: "var(--bg)", color: "var(--muted)",
               fontFamily: "'JetBrains Mono',monospace",
-            }} title={`${subtaskCount} subtask${subtaskCount === 1 ? "" : "s"}`}>
-              ⋮ {subtaskCount}
+            }} title={`${videoCount} video${videoCount === 1 ? "" : "s"}`}>
+              <span style={{ fontFamily: "inherit" }}>🎬</span> {videoCount}
             </span>
           )}
+          {/* Subtask progress — done/total instead of bare count, so it
+              both disambiguates from the video count and gives an
+              at-a-glance progress read. Pill goes green once everything
+              is Done. Hidden when there are no subtasks. */}
+          {subtaskCount > 0 && (() => {
+            const allDone = subtaskDoneCount === subtaskCount;
+            return (
+              <span style={{
+                display: "inline-flex", alignItems: "center", gap: 4,
+                fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
+                background: allDone ? "rgba(16,185,129,0.15)" : "rgba(99,102,241,0.15)",
+                color: allDone ? "#10B981" : "var(--accent)",
+                fontFamily: "'JetBrains Mono',monospace",
+              }} title={`${subtaskDoneCount} of ${subtaskCount} subtask${subtaskCount === 1 ? "" : "s"} done`}>
+                {allDone ? "✓" : "☐"} {subtaskDoneCount}/{subtaskCount}
+              </span>
+            );
+          })()}
         </div>
       </td>
       <td style={{ ...tdStyle, width: 120, textAlign: "center" }}>
@@ -724,6 +740,7 @@ function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleS
                     expanded={isExpanded}
                     onToggleExpand={onToggleExpand}
                     subtaskCount={subtasks.length}
+                    subtaskDoneCount={subtasks.filter(s => normaliseSubtaskStatus(s.status) === "done").length}
                   />
                   {isExpanded && subtasks.map((st, idx) => (
                     <SubtaskRow
