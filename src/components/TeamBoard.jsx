@@ -13,33 +13,64 @@
 
 import { useMemo, useState, useRef, useCallback } from "react";
 import { fbSet } from "../firebase";
-import { fmtD } from "../utils";
 import {
   DndContext, PointerSensor, useSensor, useSensors,
   useDraggable, useDroppable, closestCenter, DragOverlay,
 } from "@dnd-kit/core";
 
-// ─── Subtask status palette ────────────────────────────────────────
-// Mirrors SUBTASK_STATUS_OPTIONS in Projects.jsx — kept duplicated here
-// (not imported) because the Projects file has a *separate* project-level
-// status taxonomy and re-exporting just the subtask one would invite
-// confusion. If the palette ever changes, change it in both places.
-const STATUS_COLOURS = {
-  scheduled:     "#3B82F6",
-  inProgress:    "#F97316",
-  waitingClient: "#8B5CF6",
-  onHold:        "#EAB308",
-  stuck:         "#EC4899",
-  done:          "#10B981",
+// ─── Subtask stage palette ────────────────────────────────────────
+// Mirrors SUBTASK_STAGE_OPTIONS in Projects.jsx — kept duplicated here
+// (not imported) for the same reason as the rest of TeamBoard's local
+// constants: tight coupling-by-import would force Projects.jsx to
+// export every visual fragment. If the palette ever changes, change
+// it in both places.
+//
+// Bars on the Team Board are coloured by STAGE (which production phase
+// is this in) rather than STATUS (how is the work going). Stage gives
+// a much more useful at-a-glance read of where the team's effort is
+// concentrated — "lots of red bars next week" = lots of shoot days.
+const STAGE_COLOURS = {
+  preProduction: "#8B5CF6",
+  shoot:         "#DC2626",
+  revisions:     "#F97316",
+  edit:          "#0082FA",
+  hold:          "#EAB308",
 };
-const colourFor = (status) => STATUS_COLOURS[status] || STATUS_COLOURS.stuck;
+// Mirrors inferStage in Projects.jsx — falls back to a name-based guess
+// when the stage field is missing (legacy data) or invalid. Keeps the
+// Team Board readable for projects that haven't been touched since the
+// stage feature shipped.
+const stageOf = (st) => {
+  if (st?.stage && STAGE_COLOURS[st.stage]) return st.stage;
+  const name = (st?.name || "").toLowerCase();
+  if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
+  if (name.includes("revision")) return "revisions";
+  if (name.includes("shoot")) return "shoot";
+  if (name.includes("edit")) return "edit";
+  return "preProduction";
+};
+const colourFor = (subtask) => STAGE_COLOURS[stageOf(subtask)];
 
 // ─── Date helpers (local — too narrow for src/utils.js) ────────────
-const isoToday = () => new Date().toISOString().slice(0, 10);
+//
+// These all work in the browser's LOCAL timezone, not UTC. Earlier the
+// helpers used `d.toISOString().slice(0, 10)` which silently converted
+// to UTC — for users in positive timezones (e.g. Sydney UTC+10) the
+// converted ISO string lands a day earlier than intended, and chaining
+// `addDays` produced the same date repeatedly because the +1 day shift
+// and the timezone roll-back cancelled. Result: every Team Board column
+// rendered as the same day.
+const toISO = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const isoToday = () => toISO(new Date());
 const addDays = (iso, n) => {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return toISO(d);
 };
 const daysBetween = (a, b) => Math.round(
   (new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000
@@ -52,7 +83,16 @@ const startOfWeek = (iso) => {
   const wd = d.getDay();           // 0 Sun, 1 Mon, … 6 Sat
   const shift = wd === 0 ? -6 : 1 - wd;
   d.setDate(d.getDate() + shift);
-  return d.toISOString().slice(0, 10);
+  return toISO(d);
+};
+// Format a YYYY-MM-DD as "21 Apr" using the en-AU locale. Parses the
+// ISO with an explicit T00:00:00 so the browser uses local time (not
+// UTC) — same reasoning as toISO above. Avoids using utils.js#fmtD
+// which parses a bare YYYY-MM-DD as UTC midnight and can render the
+// previous calendar day in negative timezones.
+const fmtDateLabel = (iso) => {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 };
 const dateRange = (from, dayCount) => {
   const out = [];
@@ -98,7 +138,7 @@ function GanttBar({ subtask, onClick }) {
     data: { mode: "resize", subtask },
   });
 
-  const colour = colourFor(subtask.status);
+  const colour = colourFor(subtask);
   const span = (subtask.startDate && subtask.endDate)
     ? Math.max(1, daysBetween(subtask.startDate, subtask.endDate) + 1)
     : 1;
@@ -106,7 +146,7 @@ function GanttBar({ subtask, onClick }) {
   const baseStyle = {
     width: "100%", boxSizing: "border-box",
     margin: "3px 0",
-    padding: "6px 10px",
+    padding: "7px 10px 7px 12px",
     borderRadius: 6,
     background: `${colour}38`,
     borderLeft: `3px solid ${colour}`,
@@ -114,9 +154,13 @@ function GanttBar({ subtask, onClick }) {
     fontSize: 11,
     fontWeight: 600,
     cursor: isDragging ? "grabbing" : "grab",
+    // Allow content to wrap so the bar grows taller (rectangular)
+    // rather than smearing into a thin sliver. Wrap on word
+    // boundaries; long unbroken strings break anywhere to avoid
+    // overflowing the cell.
     overflow: "hidden",
     position: "relative",
-    minHeight: 40,
+    minHeight: 56,
     opacity: isDragging ? 0.4 : 1,
     transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
     userSelect: "none",
@@ -131,14 +175,29 @@ function GanttBar({ subtask, onClick }) {
         // (no drag) lands here unmolested. Open the parent project.
         if (!isDragging) onClick?.();
       }}
-      title={`${subtask.clientName}: ${subtask.name}\n${subtask.startDate} → ${subtask.endDate}\n${subtask.status}`}
+      title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\n${subtask.startDate} → ${subtask.endDate}\nStage: ${stageOf(subtask)}`}
       {...listeners}
       {...attributes}>
-      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        <span style={{ fontWeight: 700 }}>{subtask.clientName}:</span>{" "}
-        <span style={{ fontWeight: 500 }}>{subtask.name}</span>
+      {/* Line 1: client name + project name. Bold so the row is
+          identifiable at a glance even when the bar is short. */}
+      <div style={{
+        fontWeight: 700, fontSize: 11, lineHeight: 1.3,
+        whiteSpace: "normal", wordBreak: "break-word",
+        marginBottom: 2,
+      }}>
+        {subtask.clientName}: {subtask.projectName}
       </div>
-      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 1, fontFamily: "'JetBrains Mono',monospace" }}>
+      {/* Line 2: subtask name. Slightly muted to distinguish from
+          the client/project headline above. */}
+      <div style={{
+        fontWeight: 500, fontSize: 11, lineHeight: 1.3,
+        whiteSpace: "normal", wordBreak: "break-word",
+        opacity: 0.85,
+      }}>
+        {subtask.name}
+      </div>
+      {/* Footer: time range or span days, monospace for legibility. */}
+      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 4, fontFamily: "'JetBrains Mono',monospace" }}>
         {subtask.startTime && subtask.endTime
           ? `${subtask.startTime} → ${subtask.endTime}`
           : `${span}d`}
@@ -173,32 +232,42 @@ function UnscheduledCard({ subtask, onClick }) {
     id: dragId,
     data: { mode: "move", subtask },
   });
-  const colour = colourFor(subtask.status);
+  const colour = colourFor(subtask);
   return (
     <div
       ref={setNodeRef}
       style={{
         margin: "3px 0",
-        padding: "5px 8px",
+        padding: "6px 10px",
         borderRadius: 6,
         background: `${colour}38`,
         borderLeft: `3px solid ${colour}`,
         color: "var(--fg)",
         fontSize: 11,
         cursor: isDragging ? "grabbing" : "grab",
+        // Wrap to two-plus lines so the card stays rectangular instead
+        // of clipping to a thin one-liner.
         overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
         opacity: isDragging ? 0.4 : 1,
         transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
         userSelect: "none",
       }}
       onClick={() => { if (!isDragging) onClick?.(); }}
-      title={`${subtask.clientName}: ${subtask.name}\nUnscheduled • ${subtask.status}`}
+      title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\nUnscheduled · Stage: ${stageOf(subtask)}`}
       {...listeners}
       {...attributes}>
-      <span style={{ fontWeight: 700 }}>{subtask.clientName}:</span>{" "}
-      <span style={{ fontWeight: 500 }}>{subtask.name}</span>
+      <div style={{
+        fontWeight: 700, lineHeight: 1.3,
+        whiteSpace: "normal", wordBreak: "break-word", marginBottom: 2,
+      }}>
+        {subtask.clientName}: {subtask.projectName}
+      </div>
+      <div style={{
+        fontWeight: 500, lineHeight: 1.3, opacity: 0.85,
+        whiteSpace: "normal", wordBreak: "break-word",
+      }}>
+        {subtask.name}
+      </div>
     </div>
   );
 }
@@ -213,11 +282,13 @@ function DropCell({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
 
-  // Sticky left columns paint over with var(--card) so the assignee
-  // labels stay legible during horizontal scroll. Body cells stay
-  // mostly transparent so the column stripes underneath show through.
+  // Sticky left columns get solid backgrounds (matching the assignee
+  // label cells in Row()) so the column-stripe layer behind doesn't
+  // bleed through translucent rgba and break the "frozen" feel of the
+  // left columns. Body cells stay transparent / very faintly striped
+  // so the stripes show through.
   let bg = "transparent";
-  if (sticky != null) bg = "var(--card)";
+  if (sticky != null) bg = striped ? "#1E2638" : "#1A2236";
   else if (striped) bg = "rgba(255,255,255,0.018)";
   if (isOver) bg = "rgba(99,102,241,0.22)";
 
@@ -425,14 +496,29 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
           ref={scrollRef}
           onScroll={onScroll}
           style={{
-            background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12,
+            // Slightly brighter than var(--card) so the team board
+            // reads as a distinct surface from the rest of the app.
+            background: "#1A2236",
+            border: "1px solid var(--border)", borderRadius: 12,
             overflow: "auto", position: "relative",
-            // Constrain height so the horizontal scroll triggers a vertical
-            // scroll handler too — without it, a wide grid with few rows
-            // doesn't expose a scrollbar to drive infinite-load.
-            maxHeight: "calc(100vh - 200px)",
+            // Fixed (not max) height so the inner grid's min-height: 100%
+            // can stretch the filler row, which makes the column stripes
+            // carry all the way down to the bottom even when there are
+            // only a handful of editor rows.
+            height: "calc(100vh - 200px)",
           }}>
-          <div style={{ display: "grid", gridTemplateColumns, minWidth: "fit-content" }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns,
+            // Final 1fr row absorbs remaining vertical space below the
+            // last editor row. The column-stripe layer's grid-row 1/-1
+            // span includes this filler, so weekend tints reach the
+            // bottom of the scroll container instead of stopping at the
+            // last data row.
+            gridTemplateRows: `auto repeat(${rows.length}, minmax(60px, auto)) 1fr`,
+            minWidth: "fit-content",
+            minHeight: "100%",
+          }}>
             {/* Column-stripe layer — one stripe per date, spanning every
                 row of the grid (header + all editor rows). Sit at z 0
                 with pointer-events disabled so they paint a continuous
@@ -493,7 +579,7 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
                   <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>
                     {dt.toLocaleDateString("en-AU", { weekday: "short" })}
                   </div>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginTop: 2 }}>{fmtD(d)}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginTop: 2 }}>{fmtDateLabel(d)}</div>
                 </div>
               );
             })}
@@ -527,7 +613,7 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
           {dragPreview && (
             <div style={{
               padding: "6px 10px", borderRadius: 6,
-              background: `${colourFor(dragPreview.status)}`,
+              background: `${colourFor(dragPreview)}`,
               color: "#fff", fontSize: 11, fontWeight: 700,
               boxShadow: "0 6px 16px rgba(0,0,0,0.4)",
               maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
@@ -555,15 +641,18 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
   const striped = rowIdx % 2 === 1;
   return (
     <>
-      {/* Sticky left: assignee label. Slightly different background on
-          striped rows so the row separation reaches all the way to the
-          left edge. */}
+      {/* Sticky left: assignee label. SOLID backgrounds — the column
+          stripe layer painting weekend / today / Monday tints behind
+          the grid would otherwise bleed through translucent rgba and
+          the "frozen" left columns would stop looking frozen. Striped
+          rows use a slightly brighter solid shade so the row separation
+          still reaches the left edge. */}
       <div style={{
         ...rowLabel, gridColumn: 1, gridRow,
         position: "sticky", left: 0, zIndex: 3,
-        background: row.muted ? "rgba(75,85,99,0.18)"
-                  : striped ? "rgba(255,255,255,0.025)"
-                  : "var(--card)",
+        background: row.muted ? "#1F1822"
+                  : striped ? "#1E2638"
+                  : "#1A2236",
         borderRight: "2px solid var(--border)",
         borderBottom: "1px solid var(--border)",
       }}>
