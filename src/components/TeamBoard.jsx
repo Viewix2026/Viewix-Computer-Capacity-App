@@ -560,6 +560,18 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
             // carry all the way down to the bottom even when there are
             // only a handful of editor rows.
             height: "calc(100vh - 200px)",
+            // Native CSS resize handle. Producers can drag the bottom-
+            // right corner to resize the team board to whatever height
+            // (and width, within the viewport) suits their screen. The
+            // browser draws a small drag-grip glyph in the corner and
+            // handles the resize itself — no JS event handling needed.
+            // minWidth + minHeight stop the table being shrunk past
+            // usefulness; maxWidth caps it at the viewport so dragging
+            // can't push it off-screen on the right.
+            resize: "both",
+            minHeight: 240,
+            minWidth: 600,
+            maxWidth: "100%",
           }}>
           <div style={{
             display: "grid",
