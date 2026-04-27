@@ -85,6 +85,55 @@ const startOfWeek = (iso) => {
   d.setDate(d.getDate() + shift);
   return toISO(d);
 };
+// ─── Lane assignment ───────────────────────────────────────────────
+// Given the scheduled subtasks for a single editor row, group them
+// into "lanes" (vertical slots) so overlapping bars stack instead of
+// rendering on top of each other. Lane 0 is the topmost; new lanes
+// are created lazily as needed. Within a lane, bars never overlap.
+//
+// Algorithm: greedy interval scheduling. Sort by startDate, then for
+// each bar walk through existing lanes in order and place it in the
+// first lane whose previous bar ended before this one starts. If no
+// lane can hold it, open a new lane.
+//
+// LANE_HEIGHT below is the vertical space allotted per lane (bar +
+// gap). Bars taller than this clip with overflow: hidden — keeps the
+// row predictable at the cost of long subtask names being truncated
+// when stacked.
+const LANE_HEIGHT = 64;
+function assignLanes(scheduledBars) {
+  const sorted = [...scheduledBars].sort((a, b) => {
+    const sa = a.startDate || "";
+    const sb = b.startDate || "";
+    if (sa !== sb) return sa.localeCompare(sb);
+    return (a.endDate || a.startDate || "").localeCompare(b.endDate || b.startDate || "");
+  });
+
+  const laneEnds = []; // laneEnds[i] = ISO endDate of the last bar in lane i
+  const result = [];
+  for (const bar of sorted) {
+    const start = bar.startDate;
+    const end = bar.endDate || bar.startDate;
+    let lane = -1;
+    for (let i = 0; i < laneEnds.length; i++) {
+      // Strict less-than: if the previous bar ends on the same day
+      // this one starts, treat it as overlap (visually they'd touch
+      // edge-to-edge and read as a continuous bar). Force a new lane.
+      if (laneEnds[i] < start) {
+        lane = i;
+        laneEnds[i] = end;
+        break;
+      }
+    }
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(end);
+    }
+    result.push({ ...bar, lane });
+  }
+  return { bars: result, laneCount: laneEnds.length };
+}
+
 // Format a YYYY-MM-DD as "21 Apr" using the en-AU locale. Parses the
 // ISO with an explicit T00:00:00 so the browser uses local time (not
 // UTC) — same reasoning as toISO above. Avoids using utils.js#fmtD
@@ -145,8 +194,8 @@ function GanttBar({ subtask, onClick }) {
 
   const baseStyle = {
     width: "100%", boxSizing: "border-box",
-    margin: "3px 0",
-    padding: "7px 10px 7px 12px",
+    margin: 0,
+    padding: "6px 10px 6px 12px",
     borderRadius: 6,
     background: `${colour}38`,
     borderLeft: `3px solid ${colour}`,
@@ -154,13 +203,12 @@ function GanttBar({ subtask, onClick }) {
     fontSize: 11,
     fontWeight: 600,
     cursor: isDragging ? "grabbing" : "grab",
-    // Allow content to wrap so the bar grows taller (rectangular)
-    // rather than smearing into a thin sliver. Wrap on word
-    // boundaries; long unbroken strings break anywhere to avoid
-    // overflowing the cell.
+    // Wrap on word boundaries for rectangular shape, but clip at the
+    // lane height so the bar can't push into the next stacked lane
+    // when text wraps to many lines.
     overflow: "hidden",
     position: "relative",
-    minHeight: 56,
+    height: LANE_HEIGHT - 8,
     opacity: isDragging ? 0.4 : 1,
     transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
     userSelect: "none",
@@ -278,7 +326,7 @@ function UnscheduledCard({ subtask, onClick }) {
 // This cell handles only row-scope styling: optional row striping,
 // drop-hover highlight, and the row-bottom separator.
 function DropCell({
-  id, children, gridColumn, gridRow, sticky, striped,
+  id, children, gridColumn, gridRow, sticky, striped, minHeight,
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
 
@@ -300,7 +348,9 @@ function DropCell({
         background: bg,
         borderRight: "1px solid var(--border)",
         borderBottom: "1px solid var(--border)",
-        minHeight: 60,
+        // Caller drives row height via minHeight so the cell expands
+        // with the lane count of the parent row. Falls back to 60.
+        minHeight: minHeight ?? 60,
         position: sticky != null ? "sticky" : "static",
         left: sticky,
         // Sticky columns sit above the column-stripe layer (z 0) but
@@ -460,7 +510,11 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
 
   // ─── Layout maths ────────────────────────────────────────────────
   // Grid columns: 1 = assignee label, 2 = unscheduled, 3..(N+2) = dates.
-  const gridTemplateColumns = `200px 240px repeat(${dates.length}, minmax(110px, 1fr))`;
+  // 140px minimum per date column. Wider than the previous 110 so the
+  // dual-line bars (client + project name on top, subtask below)
+  // breathe before clipping. 1fr lets columns share the remaining
+  // viewport width if there's room.
+  const gridTemplateColumns = `200px 240px repeat(${dates.length}, minmax(140px, 1fr))`;
   const dateToCol = useMemo(() => {
     const m = new Map();
     dates.forEach((d, i) => m.set(d, i + 3));
@@ -655,6 +709,15 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
 // tint and the eye can scan vertically.
 function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan, onOpenProject }) {
   const striped = rowIdx % 2 === 1;
+
+  // Group overlapping scheduled bars into vertical lanes so two bars on
+  // the same day don't render on top of each other. Lane 0 is topmost;
+  // we set the row's minHeight from laneCount so the grid track grows
+  // to fit. Recomputed every render — cheap (<= a few dozen bars per
+  // editor row in any realistic workload).
+  const { bars: laneBars, laneCount } = assignLanes(scheduled);
+  const rowMinHeight = Math.max(60, laneCount * LANE_HEIGHT + 8);
+
   return (
     <>
       {/* Sticky left: assignee label. SOLID backgrounds — the column
@@ -671,6 +734,7 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
                   : "#1A2236",
         borderRight: "2px solid var(--border)",
         borderBottom: "1px solid var(--border)",
+        minHeight: rowMinHeight,
       }}>
         <span style={{ fontWeight: 700, color: row.muted ? "var(--muted)" : "var(--fg)" }}>
           {row.name}
@@ -678,8 +742,8 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
       </div>
 
       {/* Sticky left: unscheduled column (drop zone) */}
-      <DropCell id={cellId(row.id, null)} gridColumn={2} gridRow={gridRow} sticky={200} striped={striped}>
-        <div style={{ padding: 4, minHeight: 56 }}>
+      <DropCell id={cellId(row.id, null)} gridColumn={2} gridRow={gridRow} sticky={200} striped={striped} minHeight={rowMinHeight}>
+        <div style={{ padding: 4 }}>
           {unscheduled.map(st => (
             <UnscheduledCard key={st.id} subtask={st} onClick={() => onOpenProject?.(st.projectId)} />
           ))}
@@ -690,7 +754,9 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
           / Monday border) lives on the dedicated stripe layer in the
           parent component — these cells just handle row striping and
           drop-hover state. Bars are placed below as separate grid
-          children. */}
+          children. minHeight tracks the lane count so the cell stays
+          tall enough to receive drops anywhere along its vertical
+          extent, even when bars stack to multiple lanes. */}
       {dates.map((d, i) => (
         <DropCell
           key={d}
@@ -698,13 +764,17 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
           gridColumn={i + 3}
           gridRow={gridRow}
           striped={striped}
+          minHeight={rowMinHeight}
         />
       ))}
 
       {/* Gantt bars — placed last so they stack visually above empty
           drop cells. Each occupies grid-column [startCol .. endCol+1]
-          inside this row. */}
-      {scheduled.map(st => {
+          inside this row, plus a paddingTop offset based on its
+          assigned lane so overlapping bars don't render on top of each
+          other. The wrapper itself is a transparent positioning shim;
+          the bar visual lives inside <GanttBar>. */}
+      {laneBars.map(st => {
         const cols = colsForSpan(st);
         if (!cols) return null;
         return (
@@ -712,7 +782,8 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
             gridColumn: `${cols[0]} / ${cols[1] + 1}`,
             gridRow,
             alignSelf: "start",
-            padding: "0 4px",
+            paddingTop: st.lane * LANE_HEIGHT + 4,
+            paddingLeft: 4, paddingRight: 4,
             // Sit above DropCell so the bar receives drags before the
             // cell underneath does.
             zIndex: 1,
