@@ -148,11 +148,16 @@ function InlineText({ value, onSave, placeholder, type = "text", displayValue, s
   };
 
   // Swap-mode display — only relevant when the caller provided a
-  // separate `displayValue` (currency / date). For plain text fields
-  // we just render the input directly.
+  // separate `displayValue` (currency / date) OR the input is a
+  // number/date type (browser rejects formatted strings for those).
+  // For plain text fields we just render the input directly.
   const useSwap = !!displayValue || type === "date" || type === "number";
   if (useSwap && !focused) {
-    const showText = (value || draft) ? displayValue : "";
+    // Fall back to the raw value when no displayValue was supplied.
+    // Without this, a number field like "Number of Videos" with no
+    // displayValue would render blank and fall through to placeholder
+    // text — same bug the deal-value field had before fefe8a1.
+    const showText = (value || draft) ? (displayValue ?? (value || draft)) : "";
     return (
       <div
         onClick={() => { setFocused(true); setTimeout(() => inputRef.current?.focus(), 0); }}
@@ -959,7 +964,7 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   );
 });
 
-function ProjectDetail({ project, onBack, onDelete }) {
+function ProjectDetail({ project, onBack, onDelete, editors }) {
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
@@ -1100,6 +1105,96 @@ function ProjectDetail({ project, onBack, onDelete }) {
         </div>
       </div>
 
+      {/* Subtasks — embed the same SubtaskRow used by the row-
+          expansion drawer so producers can see + edit each subtask's
+          stage, status, assignee, and dates without leaving the detail
+          view. Especially important when this view is rendered inside
+          the Team Board's quick-view modal — there's no row drawer
+          accessible from there. SubtaskRow renders a <tr>, so it needs
+          a <table> wrapper.
+          Auto-seeds the four default phase subtasks the first time
+          this section renders for a project that has none — same lazy
+          migration pattern the row-expansion uses. */}
+      {(() => {
+        const subtasks = subtasksAsArray(project.subtasks);
+        const seedDefaults = () => {
+          const now = new Date().toISOString();
+          DEFAULT_SUBTASKS.forEach((name, i) => {
+            const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+            fbSet(`/projects/${project.id}/subtasks/${stId}`, {
+              id: stId, name, status: "stuck",
+              stage: inferStage({ name }),
+              startDate: null, endDate: null, startTime: null, endTime: null,
+              assigneeId: null, source: "default", order: i,
+              createdAt: now, updatedAt: now,
+            });
+          });
+        };
+        const addManual = () => {
+          const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const now = new Date().toISOString();
+          const nextOrder = subtasks.length > 0
+            ? Math.max(...subtasks.map(s => s.order ?? 0)) + 1
+            : 0;
+          fbSet(`/projects/${project.id}/subtasks/${id}`, {
+            id, name: "New subtask", status: "stuck",
+            stage: "edit",
+            startDate: null, endDate: null, startTime: null, endTime: null,
+            assigneeId: null, source: "manual", order: nextOrder,
+            createdAt: now, updatedAt: now,
+          });
+        };
+        return (
+          <FieldCard label="Subtasks" hint="Stage = production phase. Status = how the work's going.">
+            {subtasks.length === 0 ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px" }}>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>No subtasks yet.</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={seedDefaults}
+                    style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 11, padding: "5px 10px" }}>
+                    Seed default phases
+                  </button>
+                  <button onClick={addManual}
+                    style={{ ...BTN, background: "var(--accent)", color: "#fff", border: "none", fontSize: 11, padding: "5px 10px" }}>
+                    + Add subtask
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <tbody>
+                      {subtasks.map((st, idx) => (
+                        <SubtaskRow
+                          key={st.id}
+                          projectId={project.id}
+                          subtask={st}
+                          project={project}
+                          editors={editors}
+                          striped={idx % 2 === 1}
+                          onDelete={(stId) => fbSet(`/projects/${project.id}/subtasks/${stId}`, null)}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                  <button onClick={addManual}
+                    style={{ padding: "5px 12px", borderRadius: 4, border: "1px dashed var(--border)",
+                      background: "transparent", color: "var(--muted)",
+                      fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                    onMouseEnter={e => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.borderColor = "var(--accent)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
+                    + Add subtask
+                  </button>
+                </div>
+              </>
+            )}
+          </FieldCard>
+        );
+      })()}
+
       <FieldCard label="Producer Notes" hint="Internal — won't be shown to the client.">
         <InlineTextArea value={project.producerNotes || ""}
           placeholder="Anything your future self / the editor needs to know about this project…"
@@ -1121,7 +1216,7 @@ function ProjectDetail({ project, onBack, onDelete }) {
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete }) {
+function ProjectQuickView({ project, onClose, onDelete, editors }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -1176,6 +1271,7 @@ function ProjectQuickView({ project, onClose, onDelete }) {
         >×</button>
         <ProjectDetail
           project={project}
+          editors={editors}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -1442,7 +1538,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
       )}
 
       {subTab === "projects" && active && (
-        <ProjectDetail project={active} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+        <ProjectDetail project={active} editors={editors} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
       )}
 
       {subTab === "teamBoard" && !active && (
@@ -1465,6 +1561,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
             return qv ? (
               <ProjectQuickView
                 project={qv}
+                editors={editors}
                 onClose={() => setQuickViewProjectId(null)}
                 onDelete={async () => {
                   await deleteProject(qv.id);
