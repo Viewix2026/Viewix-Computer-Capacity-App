@@ -271,55 +271,6 @@ function GanttBar({ subtask, onClick }) {
   );
 }
 
-// Unscheduled card — same drag handle as a bar but renders as a stacked
-// pill in the left "Unscheduled" column. Its drag.data still uses
-// mode: "move" so the same onDragEnd handler can reschedule it.
-function UnscheduledCard({ subtask, onClick }) {
-  const dragId = `bar:${subtask.id}`;
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: dragId,
-    data: { mode: "move", subtask },
-  });
-  const colour = colourFor(subtask);
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        margin: "3px 0",
-        padding: "6px 10px",
-        borderRadius: 6,
-        background: `${colour}38`,
-        borderLeft: `3px solid ${colour}`,
-        color: "var(--fg)",
-        fontSize: 11,
-        cursor: isDragging ? "grabbing" : "grab",
-        // Wrap to two-plus lines so the card stays rectangular instead
-        // of clipping to a thin one-liner.
-        overflow: "hidden",
-        opacity: isDragging ? 0.4 : 1,
-        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
-        userSelect: "none",
-      }}
-      onClick={() => { if (!isDragging) onClick?.(); }}
-      title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\nUnscheduled · Stage: ${stageOf(subtask)}`}
-      {...listeners}
-      {...attributes}>
-      <div style={{
-        fontWeight: 700, lineHeight: 1.3,
-        whiteSpace: "normal", wordBreak: "break-word", marginBottom: 2,
-      }}>
-        {subtask.clientName}: {subtask.projectName}
-      </div>
-      <div style={{
-        fontWeight: 500, lineHeight: 1.3, opacity: 0.85,
-        whiteSpace: "normal", wordBreak: "break-word",
-      }}>
-        {subtask.name}
-      </div>
-    </div>
-  );
-}
-
 // Drop target — wraps a row + col cell. Column-scope visuals (weekend
 // tint, today wash, Monday week-boundary border) are NOT handled here
 // — they live on a separate background-stripe layer rendered above.
@@ -416,33 +367,43 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
     return out;
   }, [projects]);
 
-  // Bins for fast cell-lookup during render.
-  // - byAssigneeScheduled[assigneeId] = [subtask, ...] (those with startDate)
-  //   These get positioned by computing their grid columns from startDate/endDate.
-  // - byAssigneeUnscheduled[assigneeId] = [subtask, ...] (no startDate)
-  // assigneeId="null" is the bin for unassigned subtasks.
-  const { scheduled, unscheduled } = useMemo(() => {
+  // Two bins: subtasks that are fully on the schedule (have BOTH a
+  // startDate AND an assigneeId) go into the main grid, everything
+  // else goes into the bottom "pool" drawer. The pool is sorted so
+  // unassigned items float to the top, then by assignee name, then
+  // by client name — gives producers a stable scan order.
+  const { scheduled, pool } = useMemo(() => {
     const scheduled = new Map();
-    const unscheduled = new Map();
+    const pool = [];
     for (const st of flatSubtasks) {
-      const aKey = st.assigneeId || "null";
-      if (st.startDate) {
-        if (!scheduled.has(aKey)) scheduled.set(aKey, []);
-        scheduled.get(aKey).push(st);
+      if (st.assigneeId && st.startDate) {
+        if (!scheduled.has(st.assigneeId)) scheduled.set(st.assigneeId, []);
+        scheduled.get(st.assigneeId).push(st);
       } else {
-        if (!unscheduled.has(aKey)) unscheduled.set(aKey, []);
-        unscheduled.get(aKey).push(st);
+        pool.push(st);
       }
     }
-    return { scheduled, unscheduled };
-  }, [flatSubtasks]);
+    const editorById = new Map(editors.map(e => [e.id, e.name || ""]));
+    pool.sort((a, b) => {
+      // "_" < "a-z" so unassigned sorts to the front.
+      const aName = a.assigneeId ? (editorById.get(a.assigneeId) || "zzz") : "_unassigned";
+      const bName = b.assigneeId ? (editorById.get(b.assigneeId) || "zzz") : "_unassigned";
+      if (aName !== bName) return aName.localeCompare(bName);
+      return (a.clientName || "").localeCompare(b.clientName || "");
+    });
+    return { scheduled, pool };
+  }, [flatSubtasks, editors]);
 
-  // Row ordering: pinned "Unassigned" lane on top, then editors in the
-  // order /editors hands them to us.
-  const rows = useMemo(() => [
-    { id: "null", name: "Unassigned", muted: true },
-    ...editors.map(e => ({ id: e.id, name: e.name, muted: false })),
-  ], [editors]);
+  // Rows are just the editor roster now. The "Unassigned" lane has
+  // moved out of the main grid into the bottom pool drawer below it.
+  const rows = useMemo(() =>
+    editors.map(e => ({ id: e.id, name: e.name, muted: false })),
+    [editors]
+  );
+
+  // Single droppable id for the bottom pool. Used by both the
+  // useDroppable hook on the drawer and by onDragEnd to detect drops.
+  const POOL_ID = "__pool__";
 
   // ─── Drag handler ────────────────────────────────────────────────
   const sensors = useSensors(useSensor(PointerSensor, {
@@ -466,10 +427,12 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
     const now = new Date().toISOString();
 
     if (mode === "resize") {
-      // For resize we treat over.id as the date we want to extend to —
-      // any cell in any row works (we only care about the date column).
+      // For resize we treat over.id as the date we want to extend to.
+      // Pool drop on a resize handle is a no-op (the resize gesture
+      // doesn't make sense outside the date grid).
+      if (over.id === POOL_ID) return;
       const { date } = parseCellId(over.id);
-      if (!date) return;  // can't resize onto unscheduled column
+      if (!date) return;
       // New endDate = the date we dropped on. If it's earlier than
       // startDate, swap startDate to the dropped date so the bar stays
       // valid (treating it as a "drag the end past the start" gesture).
@@ -486,38 +449,45 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
     }
 
     // mode === "move"
-    const { assigneeId: newAssignee, date: newDate } = parseCellId(over.id);
-    const oldStart = subtask.startDate;
-    const oldEnd = subtask.endDate;
-
-    // Compute new endDate preserving duration.
-    let newStart = newDate;
-    let newEnd = newDate;
-    if (newDate && oldStart && oldEnd) {
-      const delta = daysBetween(oldStart, newDate);
-      newEnd = addDays(oldEnd, delta);
-    } else if (!newDate) {
-      // Dropped onto unscheduled column → clear both dates.
-      newStart = null;
-      newEnd = null;
+    if (over.id === POOL_ID) {
+      // Drop into the pool drawer = unschedule. Keeps the assigneeId
+      // intact so the producer can drop the card back into a date cell
+      // later without having to re-pick the editor — pool cards still
+      // show the assignee name in their footer.
+      fbSet(`${path}/startDate`, null);
+      fbSet(`${path}/endDate`, null);
+      fbSet(`${path}/updatedAt`, now);
+      return;
     }
 
+    // Drop into a date cell on the main grid. Both newAssignee and
+    // newDate must be set (the grid only renders date cells; bail
+    // safely if somehow we get a malformed id).
+    const { assigneeId: newAssignee, date: newDate } = parseCellId(over.id);
+    if (!newAssignee || !newDate) return;
+    const oldStart = subtask.startDate;
+    const oldEnd = subtask.endDate;
+    let newEnd = newDate;
+    if (oldStart && oldEnd) {
+      const delta = daysBetween(oldStart, newDate);
+      newEnd = addDays(oldEnd, delta);
+    }
     fbSet(`${path}/assigneeId`, newAssignee);
-    fbSet(`${path}/startDate`, newStart);
+    fbSet(`${path}/startDate`, newDate);
     fbSet(`${path}/endDate`, newEnd);
     fbSet(`${path}/updatedAt`, now);
   };
 
   // ─── Layout maths ────────────────────────────────────────────────
-  // Grid columns: 1 = assignee label, 2 = unscheduled, 3..(N+2) = dates.
-  // 140px minimum per date column. Wider than the previous 110 so the
-  // dual-line bars (client + project name on top, subtask below)
-  // breathe before clipping. 1fr lets columns share the remaining
-  // viewport width if there's room.
-  const gridTemplateColumns = `200px 240px repeat(${dates.length}, minmax(140px, 1fr))`;
+  // Grid columns: 1 = assignee label, 2..(N+1) = dates. The dedicated
+  // Unscheduled column is gone — its job moved to the bottom pool
+  // drawer that sits below the grid.
+  // 140px minimum per date column so the dual-line bars (client +
+  // project name on top, subtask below) breathe before clipping.
+  const gridTemplateColumns = `200px repeat(${dates.length}, minmax(140px, 1fr))`;
   const dateToCol = useMemo(() => {
     const m = new Map();
-    dates.forEach((d, i) => m.set(d, i + 3));
+    dates.forEach((d, i) => m.set(d, i + 2));
     return m;
   }, [dates]);
 
@@ -546,151 +516,141 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
         collisionDetection={closestCenter}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}>
+        {/* Outer container = vertical flex column, resizable via the
+            CSS handle in the bottom-right corner. The schedule grid
+            takes the remaining height (flex 1, scrolls internally),
+            and the pool drawer is pinned at the bottom (fixed height,
+            scrolls horizontally on its own). The drawer staying inside
+            the same DndContext means cards can be dragged between the
+            two regions in either direction. */}
         <div
-          ref={scrollRef}
-          onScroll={onScroll}
           style={{
-            // Slightly brighter than var(--card) so the team board
-            // reads as a distinct surface from the rest of the app.
+            display: "flex", flexDirection: "column",
             background: "#1A2236",
             border: "1px solid var(--border)", borderRadius: 12,
-            overflow: "auto", position: "relative",
-            // Fixed (not max) height so the inner grid's min-height: 100%
-            // can stretch the filler row, which makes the column stripes
-            // carry all the way down to the bottom even when there are
-            // only a handful of editor rows.
+            overflow: "hidden", position: "relative",
             height: "calc(100vh - 200px)",
-            // Native CSS resize handle. Producers can drag the bottom-
-            // right corner to resize the team board to whatever height
-            // (and width, within the viewport) suits their screen. The
-            // browser draws a small drag-grip glyph in the corner and
-            // handles the resize itself — no JS event handling needed.
-            // minWidth + minHeight stop the table being shrunk past
-            // usefulness; maxWidth caps it at the viewport so dragging
-            // can't push it off-screen on the right.
             resize: "both",
-            minHeight: 240,
-            minWidth: 600,
-            maxWidth: "100%",
+            minHeight: 360, minWidth: 600, maxWidth: "100%",
           }}>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns,
-            // Final 1fr row absorbs remaining vertical space below the
-            // last editor row. The column-stripe layer's grid-row 1/-1
-            // span includes this filler, so weekend tints reach the
-            // bottom of the scroll container instead of stopping at the
-            // last data row.
-            gridTemplateRows: `auto repeat(${rows.length}, minmax(60px, auto)) 1fr`,
-            minWidth: "fit-content",
-            minHeight: "100%",
-          }}>
-            {/* Column-stripe layer — one stripe per date, spanning every
-                row of the grid (header + all editor rows). Sit at z 0
-                with pointer-events disabled so they paint a continuous
-                vertical band beneath cells and bars without intercepting
-                drags. This is the source of weekend / today / week-
-                boundary visuals; per-cell tinting was inconsistent
-                because Gantt bars partially obscured cell backgrounds.
-                The stripes don't get obscured because they're full
-                column height. */}
-            {dates.map((d, i) => {
-              const dayNum = new Date(d + "T00:00:00").getDay();
-              const isWeekend = dayNum === 0 || dayNum === 6;
-              const isToday = d === isoToday();
-              const isMonday = dayNum === 1;
-              if (!isWeekend && !isToday && !isMonday) return null;
-              return (
-                <div
-                  key={`stripe-${d}`}
-                  style={{
-                    gridColumn: i + 3,
-                    gridRow: "1 / -1",
-                    background: isToday ? "rgba(99,102,241,0.10)"
-                              : isWeekend ? "rgba(0,0,0,0.32)"
-                              : "transparent",
-                    borderLeft: isMonday ? "2px solid var(--border)" : undefined,
-                    pointerEvents: "none",
-                    zIndex: 0,
-                  }}
-                />
-              );
-            })}
+          {/* ── Top: the schedule grid ── */}
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            style={{
+              flex: 1, minHeight: 0,
+              overflow: "auto",
+              position: "relative",
+            }}>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns,
+              // Final 1fr row absorbs remaining vertical space below
+              // the last editor row, so the column-stripe layer
+              // (grid-row 1/-1) carries weekend / today tints all the
+              // way down rather than stopping at the last data row.
+              gridTemplateRows: `auto repeat(${rows.length}, minmax(60px, auto)) 1fr`,
+              minWidth: "fit-content",
+              minHeight: "100%",
+            }}>
+              {/* Column-stripe layer — one stripe per date, spanning
+                  every row of the grid (header + all editor rows).
+                  Sits at z 0 with pointer-events disabled so it paints
+                  a continuous vertical band beneath cells and bars
+                  without intercepting drags. */}
+              {dates.map((d, i) => {
+                const dayNum = new Date(d + "T00:00:00").getDay();
+                const isWeekend = dayNum === 0 || dayNum === 6;
+                const isToday = d === isoToday();
+                const isMonday = dayNum === 1;
+                if (!isWeekend && !isToday && !isMonday) return null;
+                return (
+                  <div
+                    key={`stripe-${d}`}
+                    style={{
+                      gridColumn: i + 2,
+                      gridRow: "1 / -1",
+                      background: isToday ? "rgba(99,102,241,0.10)"
+                                : isWeekend ? "rgba(0,0,0,0.32)"
+                                : "transparent",
+                      borderLeft: isMonday ? "2px solid var(--border)" : undefined,
+                      pointerEvents: "none",
+                      zIndex: 0,
+                    }}
+                  />
+                );
+              })}
 
-            {/* Header row — col labels.
-                EVERY header cell gets an explicit gridRow:1 + gridColumn.
-                Without this, CSS Grid auto-placement runs and skips the
-                row-1 cells already occupied by the column-stripe layer
-                (which spans grid-row 1/-1 in the columns where it
-                renders). The skipped headers shift into the wrong
-                columns and the leftover labels overflow into an implicit
-                row at the bottom of the grid — both bugs producers
-                reported as "blank highlighted column" + "row of dates
-                at the bottom". Explicit placement = no auto-flow. */}
-            <div style={{
-              ...headerCell, gridRow: 1, gridColumn: 1,
-              position: "sticky", top: 0, left: 0, zIndex: 5, background: "var(--bg)",
-            }}>
-              Team
-            </div>
-            <div style={{
-              ...headerCell, gridRow: 1, gridColumn: 2,
-              position: "sticky", top: 0, left: 200, zIndex: 5, background: "var(--bg)",
-            }}>
-              Unscheduled
-            </div>
-            {dates.map((d, i) => {
-              const dt = new Date(d + "T00:00:00");
-              const dayNum = dt.getDay();
-              const isToday = d === isoToday();
-              const isWeekend = dayNum === 0 || dayNum === 6;
-              return (
-                <div key={d} style={{
-                  ...headerCell,
-                  gridRow: 1, gridColumn: i + 3,
-                  position: "sticky", top: 0, zIndex: 4,
-                  // Header still gets a slightly stronger tint so the
-                  // column heading remains legible above the muted body
-                  // stripe — the stripe alone reads too dim under bold
-                  // header text.
-                  background: isToday ? "rgba(99,102,241,0.28)"
-                            : isWeekend ? "rgba(0,0,0,0.45)"
-                            : "var(--bg)",
-                  color: isToday ? "var(--accent)" : isWeekend ? "var(--muted)" : "var(--fg)",
-                }}>
-                  <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>
-                    {dt.toLocaleDateString("en-AU", { weekday: "short" })}
+              {/* Header row — col labels. Every header cell gets an
+                  explicit gridRow:1 + gridColumn so auto-placement
+                  doesn't get blocked by the stripe layer above. */}
+              <div style={{
+                ...headerCell, gridRow: 1, gridColumn: 1,
+                position: "sticky", top: 0, left: 0, zIndex: 5, background: "var(--bg)",
+              }}>
+                Team
+              </div>
+              {dates.map((d, i) => {
+                const dt = new Date(d + "T00:00:00");
+                const dayNum = dt.getDay();
+                const isToday = d === isoToday();
+                const isWeekend = dayNum === 0 || dayNum === 6;
+                return (
+                  <div key={d} style={{
+                    ...headerCell,
+                    gridRow: 1, gridColumn: i + 2,
+                    position: "sticky", top: 0, zIndex: 4,
+                    background: isToday ? "rgba(99,102,241,0.28)"
+                              : isWeekend ? "rgba(0,0,0,0.45)"
+                              : "var(--bg)",
+                    color: isToday ? "var(--accent)" : isWeekend ? "var(--muted)" : "var(--fg)",
+                  }}>
+                    <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>
+                      {dt.toLocaleDateString("en-AU", { weekday: "short" })}
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginTop: 2 }}>{fmtDateLabel(d)}</div>
                   </div>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginTop: 2 }}>{fmtDateLabel(d)}</div>
-                </div>
-              );
-            })}
+                );
+              })}
 
-            {/* Rows */}
-            {rows.map((row, rowIdx) => {
-              // grid-row index for this assignee, +2 because row 1 = header.
-              const gr = rowIdx + 2;
-              const sched = scheduled.get(row.id) || [];
-              const unsched = unscheduled.get(row.id) || [];
-              return (
-                <Row
-                  key={row.id}
-                  row={row}
-                  rowIdx={rowIdx}
-                  gridRow={gr}
-                  scheduled={sched}
-                  unscheduled={unsched}
-                  dates={dates}
-                  colsForSpan={colsForSpan}
-                  onOpenProject={onOpenProject}
-                />
-              );
-            })}
+              {/* Rows */}
+              {rows.map((row, rowIdx) => {
+                const gr = rowIdx + 2;
+                const sched = scheduled.get(row.id) || [];
+                return (
+                  <Row
+                    key={row.id}
+                    row={row}
+                    rowIdx={rowIdx}
+                    gridRow={gr}
+                    scheduled={sched}
+                    dates={dates}
+                    colsForSpan={colsForSpan}
+                    onOpenProject={onOpenProject}
+                  />
+                );
+              })}
+            </div>
+
+            {rows.length === 0 && (
+              <div style={{ padding: 16, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+                No editors in the roster yet. Add team members in the Editors tab.
+              </div>
+            )}
           </div>
+
+          {/* ── Bottom: pool drawer ── */}
+          <PoolDrawer
+            poolId={POOL_ID}
+            pool={pool}
+            editors={editors}
+            onOpenProject={onOpenProject}
+          />
         </div>
 
-        {/* Subtle drag preview floating with the cursor — gives a clear
-            "you're dragging this" cue when the bar leaves its row. */}
+        {/* Drag preview floating with the cursor — clear "you're
+            dragging this" cue when the bar leaves its row or the pool
+            card leaves the drawer. */}
         <DragOverlay dropAnimation={null}>
           {dragPreview && (
             <div style={{
@@ -705,12 +665,6 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
           )}
         </DragOverlay>
       </DndContext>
-
-      {rows.length <= 1 && (
-        <div style={{ marginTop: 12, padding: 16, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
-          No editors in the roster yet. Add team members in the Editors tab.
-        </div>
-      )}
     </div>
   );
 }
@@ -719,7 +673,7 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
 // drop zones without ballooning the parent component's render scope.
 // `rowIdx` drives row striping so every other editor lane gets a subtle
 // tint and the eye can scan vertically.
-function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan, onOpenProject }) {
+function Row({ row, rowIdx, gridRow, scheduled, dates, colsForSpan, onOpenProject }) {
   const striped = rowIdx % 2 === 1;
 
   // Group overlapping scheduled bars into vertical lanes so two bars on
@@ -735,45 +689,34 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
       {/* Sticky left: assignee label. SOLID backgrounds — the column
           stripe layer painting weekend / today / Monday tints behind
           the grid would otherwise bleed through translucent rgba and
-          the "frozen" left columns would stop looking frozen. Striped
+          the "frozen" left column would stop looking frozen. Striped
           rows use a slightly brighter solid shade so the row separation
           still reaches the left edge. */}
       <div style={{
         ...rowLabel, gridColumn: 1, gridRow,
         position: "sticky", left: 0, zIndex: 3,
-        background: row.muted ? "#1F1822"
-                  : striped ? "#1E2638"
-                  : "#1A2236",
+        background: striped ? "#1E2638" : "#1A2236",
         borderRight: "2px solid var(--border)",
         borderBottom: "1px solid var(--border)",
         minHeight: rowMinHeight,
       }}>
-        <span style={{ fontWeight: 700, color: row.muted ? "var(--muted)" : "var(--fg)" }}>
+        <span style={{ fontWeight: 700, color: "var(--fg)" }}>
           {row.name}
         </span>
       </div>
 
-      {/* Sticky left: unscheduled column (drop zone) */}
-      <DropCell id={cellId(row.id, null)} gridColumn={2} gridRow={gridRow} sticky={200} striped={striped} minHeight={rowMinHeight}>
-        <div style={{ padding: 4 }}>
-          {unscheduled.map(st => (
-            <UnscheduledCard key={st.id} subtask={st} onClick={() => onOpenProject?.(st.projectId)} />
-          ))}
-        </div>
-      </DropCell>
-
-      {/* One drop cell per date. Column-scope tinting (weekend / today
-          / Monday border) lives on the dedicated stripe layer in the
-          parent component — these cells just handle row striping and
-          drop-hover state. Bars are placed below as separate grid
-          children. minHeight tracks the lane count so the cell stays
-          tall enough to receive drops anywhere along its vertical
-          extent, even when bars stack to multiple lanes. */}
+      {/* One drop cell per date (cols 2..N+1). Column-scope tinting
+          (weekend / today / Monday border) lives on the dedicated
+          stripe layer in the parent component — these cells just
+          handle row striping and drop-hover state. Bars are placed
+          below as separate grid children. minHeight tracks the lane
+          count so the cell stays tall enough to receive drops anywhere
+          along its vertical extent. */}
       {dates.map((d, i) => (
         <DropCell
           key={d}
           id={cellId(row.id, d)}
-          gridColumn={i + 3}
+          gridColumn={i + 2}
           gridRow={gridRow}
           striped={striped}
           minHeight={rowMinHeight}
@@ -808,6 +751,121 @@ function Row({ row, rowIdx, gridRow, scheduled, unscheduled, dates, colsForSpan,
         );
       })}
     </>
+  );
+}
+
+// ─── Pool drawer ───────────────────────────────────────────────────
+// Pinned to the bottom of the team board. Shows every subtask that's
+// either unassigned or unscheduled (or both). Producers drag cards
+// from here onto a date cell to schedule + assign in one move; or drag
+// a scheduled bar from the grid down here to clear the dates and send
+// the subtask back to the pile. The whole drawer is one big drop zone.
+function PoolDrawer({ poolId, pool, editors, onOpenProject }) {
+  const { setNodeRef, isOver } = useDroppable({ id: poolId });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        flexShrink: 0,
+        height: 180,
+        background: isOver ? "rgba(99,102,241,0.16)" : "#0F1421",
+        borderTop: "2px solid var(--border)",
+        // Horizontal scroll only — vertical contained inside the cards.
+        overflowX: "auto",
+        overflowY: "hidden",
+        transition: "background 0.15s",
+        padding: "10px 14px 14px",
+      }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        marginBottom: 8,
+      }}>
+        <span style={{
+          fontSize: 11, fontWeight: 800, textTransform: "uppercase",
+          letterSpacing: 0.6, color: "var(--muted)",
+        }}>
+          Unscheduled & Unassigned · {pool.length}
+        </span>
+        <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
+          Drag a card up to schedule it · drag a scheduled bar down to clear it
+        </span>
+      </div>
+      {pool.length === 0 ? (
+        <div style={{
+          padding: "16px 8px", color: "var(--muted)", fontSize: 12,
+          fontStyle: "italic",
+        }}>
+          Everything's scheduled and assigned. Nice.
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          {pool.map(st => (
+            <PoolCard
+              key={st.id}
+              subtask={st}
+              editors={editors}
+              onClick={() => onOpenProject?.(st.projectId)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One card in the bottom pool drawer. Horizontal-scrollable strip of
+// these. Carries the same drag payload as a Gantt bar so onDragEnd's
+// "move" branch can route it onto either a date cell or back into the
+// pool drop zone.
+function PoolCard({ subtask, editors, onClick }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `bar:${subtask.id}`,
+    data: { mode: "move", subtask },
+  });
+  const colour = colourFor(subtask);
+  const editor = (editors || []).find(e => e.id === subtask.assigneeId);
+  const assigneeLabel = editor?.name || "Unassigned";
+  return (
+    <div
+      ref={setNodeRef}
+      onClick={() => { if (!isDragging) onClick?.(); }}
+      title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\n${assigneeLabel} · Stage: ${stageOf(subtask)}`}
+      {...listeners}
+      {...attributes}
+      style={{
+        flexShrink: 0,
+        width: 220,
+        padding: "8px 10px",
+        borderRadius: 6,
+        background: `${colour}38`,
+        borderLeft: `3px solid ${colour}`,
+        color: "var(--fg)",
+        fontSize: 11,
+        cursor: isDragging ? "grabbing" : "grab",
+        opacity: isDragging ? 0.4 : 1,
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+        userSelect: "none",
+        boxSizing: "border-box",
+      }}>
+      <div style={{
+        fontWeight: 700, lineHeight: 1.3,
+        whiteSpace: "normal", wordBreak: "break-word", marginBottom: 2,
+      }}>
+        {subtask.clientName}: {subtask.projectName}
+      </div>
+      <div style={{
+        fontWeight: 500, lineHeight: 1.3, opacity: 0.85, marginBottom: 4,
+        whiteSpace: "normal", wordBreak: "break-word",
+      }}>
+        {subtask.name}
+      </div>
+      <div style={{
+        fontSize: 9, fontWeight: 700, color: editor ? "var(--muted)" : "#EAB308",
+        textTransform: "uppercase", letterSpacing: 0.4,
+      }}>
+        {assigneeLabel}
+      </div>
+    </div>
   );
 }
 
