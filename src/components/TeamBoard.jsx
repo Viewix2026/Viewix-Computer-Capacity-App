@@ -180,30 +180,48 @@ const parseCellId = (id) => {
 
 // ─── Static UI ────────────────────────────────────────────────────
 
-// Tiny stage colour key. Sits above the resizable scroll container so
+// Stage colour key. Sits above the resizable scroll container so
 // producers can match a coloured bar back to its stage name without
-// having to memorise the palette. Non-interactive; intentionally low-
-// contrast so it defers to the data below it.
+// having to memorise the palette. The bars themselves use the muted
+// stage palette (so wrapped multi-line text stays readable on top of
+// the tinted bg); the LEGEND uses brighter "neon" variants of the
+// same hues + a soft glow so the key reads punchily even at this
+// small size. Text is full-fg so it's easy to scan.
+const LEGEND_COLOURS = {
+  preProduction: "#A78BFA",   // brighter violet
+  shoot:         "#EF4444",   // brighter red
+  revisions:     "#FB923C",   // brighter orange
+  edit:          "#38BDF8",   // brighter sky-blue
+  hold:          "#FACC15",   // brighter yellow
+};
 function StageLegend() {
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 14,
-      padding: "0 4px 10px",
+      display: "flex", alignItems: "center", gap: 16,
+      padding: "0 4px 12px",
       flexWrap: "wrap",
     }}>
-      {STAGE_LEGEND.map(s => (
-        <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{
-            width: 10, height: 10, borderRadius: 2,
-            background: STAGE_COLOURS[s.key],
-            flexShrink: 0,
-          }}/>
-          <span style={{
-            fontSize: 10, color: "var(--muted)",
-            letterSpacing: 0.2, whiteSpace: "nowrap",
-          }}>{s.label}</span>
-        </div>
-      ))}
+      {STAGE_LEGEND.map(s => {
+        const c = LEGEND_COLOURS[s.key];
+        return (
+          <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <span style={{
+              width: 12, height: 12, borderRadius: 3,
+              background: c,
+              // Soft "neon" glow so the swatch pops without needing
+              // a bigger size. Two layered shadows: a tighter inner
+              // halo and a softer outer glow at the same hue.
+              boxShadow: `0 0 4px ${c}, 0 0 10px ${c}88`,
+              flexShrink: 0,
+            }}/>
+            <span style={{
+              fontSize: 11, fontWeight: 600,
+              color: "var(--fg)",
+              letterSpacing: 0.2, whiteSpace: "nowrap",
+            }}>{s.label}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
