@@ -51,6 +51,16 @@ const stageOf = (st) => {
 };
 const colourFor = (subtask) => STAGE_COLOURS[stageOf(subtask)];
 
+// Ordered list for the legend strip — same order as the dropdown in
+// Projects.jsx so producers see the same sequence in both places.
+const STAGE_LEGEND = [
+  { key: "preProduction", label: "Pre Production" },
+  { key: "shoot",         label: "Shoot" },
+  { key: "revisions",     label: "Revisions" },
+  { key: "edit",          label: "Edit" },
+  { key: "hold",          label: "Hold" },
+];
+
 // ─── Date helpers (local — too narrow for src/utils.js) ────────────
 //
 // These all work in the browser's LOCAL timezone, not UTC. Earlier the
@@ -168,6 +178,36 @@ const parseCellId = (id) => {
   return { assigneeId: a === "null" ? null : a, date: d === "null" ? null : d };
 };
 
+// ─── Static UI ────────────────────────────────────────────────────
+
+// Tiny stage colour key. Sits above the resizable scroll container so
+// producers can match a coloured bar back to its stage name without
+// having to memorise the palette. Non-interactive; intentionally low-
+// contrast so it defers to the data below it.
+function StageLegend() {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 14,
+      padding: "0 4px 10px",
+      flexWrap: "wrap",
+    }}>
+      {STAGE_LEGEND.map(s => (
+        <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{
+            width: 10, height: 10, borderRadius: 2,
+            background: STAGE_COLOURS[s.key],
+            flexShrink: 0,
+          }}/>
+          <span style={{
+            fontSize: 10, color: "var(--muted)",
+            letterSpacing: 0.2, whiteSpace: "nowrap",
+          }}>{s.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Drag-related primitives ───────────────────────────────────────
 
 // A scheduled Gantt bar. The parent passes the grid column span via the
@@ -205,7 +245,9 @@ function GanttBar({ subtask, onClick }) {
   const baseStyle = {
     width: "100%", boxSizing: "border-box",
     margin: 0,
-    padding: "6px 10px 6px 12px",
+    // Right padding bumped to leave room for the drag-handle dot
+     // cluster pinned in the top-right corner.
+    padding: "6px 22px 6px 12px",
     borderRadius: 6,
     background: `${colour}38`,
     borderLeft: `3px solid ${colour}`,
@@ -237,6 +279,25 @@ function GanttBar({ subtask, onClick }) {
       title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\n${subtask.startDate} → ${subtask.endDate}\nStage: ${stageOf(subtask)}`}
       {...listeners}
       {...attributes}>
+      {/* Drag-handle resting cue — small 2-row × 2-col dot grid in
+          the top-right corner so producers see the bar is grabbable
+          without hovering. Top-RIGHT instead of top-left because the
+          left edge already has the resize handle stripe; piling them
+          up would read as visual noise. Painted via radial gradients
+          so no extra DOM. */}
+      <div style={{
+        position: "absolute", top: 4, right: 8,
+        width: 8, height: 10,
+        backgroundImage: `
+          radial-gradient(circle at 1px 1px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+          radial-gradient(circle at 7px 1px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+          radial-gradient(circle at 1px 5px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+          radial-gradient(circle at 7px 5px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+          radial-gradient(circle at 1px 9px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+          radial-gradient(circle at 7px 9px, rgba(255,255,255,0.35) 1px, transparent 1.5px)
+        `,
+        pointerEvents: "none",
+      }}/>
       {/* Line 1: client name + project name. Bold so the row is
           identifiable at a glance even when the bar is short. */}
       <div style={{
@@ -261,9 +322,11 @@ function GanttBar({ subtask, onClick }) {
           ? `${subtask.startTime} → ${subtask.endTime}`
           : `${span}d`}
       </div>
-      {/* Left-edge resize handle. Drag to pull startDate earlier
-          (extend) or later (shrink). Sits inside the bar so its hit
-          area tracks with the bar's grid-column span automatically. */}
+      {/* Resting-state grip cue: a 2px coloured stripe inset 3px from
+          each long edge of the bar. Painted via a linear gradient so
+          there's no extra DOM. The 8px wide hit area + ew-resize
+          cursor on hover is unchanged; this just makes the handle
+          visible without hovering. */}
       <div
         ref={resizeStart.setNodeRef}
         {...resizeStart.listeners}
@@ -272,19 +335,20 @@ function GanttBar({ subtask, onClick }) {
         style={{
           position: "absolute", top: 0, left: 0, bottom: 0,
           width: 8, cursor: "ew-resize",
-          background: resizeStart.isDragging ? colour : "transparent",
+          background: resizeStart.isDragging
+            ? colour
+            : `linear-gradient(to right, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`,
           borderTopLeftRadius: 6, borderBottomLeftRadius: 6,
-          // Subtle vertical grip indicator on hover so producers can
-          // see the handle is there. Painted via a CSS gradient so we
-          // don't need a child element.
           zIndex: 2,
         }}
         onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
-        onMouseLeave={e => { if (!resizeStart.isDragging) e.currentTarget.style.background = "transparent"; }}
+        onMouseLeave={e => {
+          if (!resizeStart.isDragging) {
+            e.currentTarget.style.background = `linear-gradient(to right, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`;
+          }
+        }}
         title="Drag to change start date"
       />
-      {/* Right-edge resize handle. Drag to pull endDate later (extend)
-          or earlier (shrink). */}
       <div
         ref={resizeEnd.setNodeRef}
         {...resizeEnd.listeners}
@@ -293,12 +357,18 @@ function GanttBar({ subtask, onClick }) {
         style={{
           position: "absolute", top: 0, right: 0, bottom: 0,
           width: 8, cursor: "ew-resize",
-          background: resizeEnd.isDragging ? colour : "transparent",
+          background: resizeEnd.isDragging
+            ? colour
+            : `linear-gradient(to left, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`,
           borderTopRightRadius: 6, borderBottomRightRadius: 6,
           zIndex: 2,
         }}
         onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
-        onMouseLeave={e => { if (!resizeEnd.isDragging) e.currentTarget.style.background = "transparent"; }}
+        onMouseLeave={e => {
+          if (!resizeEnd.isDragging) {
+            e.currentTarget.style.background = `linear-gradient(to left, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`;
+          }
+        }}
         title="Drag to change end date"
       />
     </div>
@@ -614,6 +684,10 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
   // ─── Render ──────────────────────────────────────────────────────
   return (
     <div style={{ padding: "16px 28px 60px" }}>
+      {/* Stage colour key — sits above the calendar so producers can
+          map a coloured bar back to its stage name. Static, subtle,
+          defers to the data below. */}
+      <StageLegend />
       {/* No toolbar — the calendar is purely scroll-driven. The grid
           starts on the Monday of the current week and extends right as
           the producer scrolls. */}
@@ -677,8 +751,12 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
                     style={{
                       gridColumn: i + 2,
                       gridRow: "1 / -1",
-                      background: isToday ? "rgba(99,102,241,0.10)"
-                                : isWeekend ? "rgba(0,0,0,0.32)"
+                      // Today bumped 0.10 → 0.18 so the active column
+                      // reads as the brightest in view from across the
+                      // board. Weekend bumped 0.32 → 0.42 so Sat + Sun
+                      // are clear column boundaries, not faint texture.
+                      background: isToday ? "rgba(99,102,241,0.18)"
+                                : isWeekend ? "rgba(0,0,0,0.42)"
                                 : "transparent",
                       borderLeft: isMonday ? "2px solid var(--border)" : undefined,
                       pointerEvents: "none",
@@ -711,6 +789,11 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
                               : isWeekend ? "rgba(0,0,0,0.45)"
                               : "var(--bg)",
                     color: isToday ? "var(--accent)" : isWeekend ? "var(--muted)" : "var(--fg)",
+                    // Today's header gets a solid accent underline so
+                    // the column "head" pops without further tinting.
+                    // Override headerCell's existing 1px muted bottom
+                    // border for this one column only.
+                    borderBottom: isToday ? "2px solid var(--accent)" : undefined,
                   }}>
                     <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>
                       {dt.toLocaleDateString("en-AU", { weekday: "short" })}
@@ -826,10 +909,17 @@ function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
         title="Drag to reorder"
         style={{
           cursor: isDragging ? "grabbing" : "grab",
-          color: "var(--muted)", fontSize: 14, lineHeight: 1,
+          // Resting opacity bumped from var(--muted) to fg-at-55%
+          // so the grip reads as legible at rest. Hover takes it to
+          // full white via onMouseEnter below.
+          color: "var(--fg)", opacity: 0.55,
+          fontSize: 14, lineHeight: 1,
           padding: "4px 2px", marginLeft: -4,
           fontFamily: "inherit", userSelect: "none",
+          transition: "opacity 0.12s",
         }}
+        onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+        onMouseLeave={e => { if (!isDragging) e.currentTarget.style.opacity = 0.55; }}
       >⋮⋮</span>
       <span style={{ fontWeight: 700, color: "var(--fg)" }}>
         {row.name}
