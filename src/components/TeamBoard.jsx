@@ -96,11 +96,9 @@ const startOfWeek = (iso) => {
 // first lane whose previous bar ended before this one starts. If no
 // lane can hold it, open a new lane.
 //
-// LANE_HEIGHT below is the vertical space allotted per lane (bar +
-// gap). Bars taller than this clip with overflow: hidden — keeps the
-// row predictable at the cost of long subtask names being truncated
-// when stacked.
-const LANE_HEIGHT = 64;
+// Each lane gets its own CSS Grid sub-row in the parent layout, so
+// lane heights are content-driven (auto-sized) and bars are free to
+// grow as tall as their wrapped text needs.
 function assignLanes(scheduledBars) {
   const sorted = [...scheduledBars].sort((a, b) => {
     const sa = a.startDate || "";
@@ -215,12 +213,13 @@ function GanttBar({ subtask, onClick }) {
     fontSize: 11,
     fontWeight: 600,
     cursor: isDragging ? "grabbing" : "grab",
-    // Wrap on word boundaries for rectangular shape, but clip at the
-    // lane height so the bar can't push into the next stacked lane
-    // when text wraps to many lines.
-    overflow: "hidden",
+    // No fixed height — the bar grows with content so wrapped titles
+    // (long client + project + subtask names) display in full. Each
+    // bar lives in its own auto-sized lane sub-row in the parent grid,
+    // so growing taller doesn't bleed into another bar's lane.
+    minHeight: 48,
+    overflow: "visible",
     position: "relative",
-    height: LANE_HEIGHT - 8,
     opacity: isDragging ? 0.4 : 1,
     transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
     userSelect: "none",
@@ -451,6 +450,27 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
   // useDroppable hook on the drawer and by onDragEnd to detect drops.
   const POOL_ID = "__pool__";
 
+  // Per-editor layout: walks the rows in order assigning each editor a
+  // contiguous block of grid rows = (laneCount) sub-rows. Each lane
+  // gets its own auto-sizing grid track so bars in different lanes
+  // grow vertically without overlapping. Replaces the previous
+  // paddingTop hack which assumed every bar was the same fixed height.
+  const editorLayout = useMemo(() => {
+    let cursor = 2;  // grid row 1 = header row
+    const items = rows.map(row => {
+      const sched = scheduled.get(row.id) || [];
+      const { bars: laneBars, laneCount } = assignLanes(sched);
+      // Empty editor rows still need at least 1 lane sub-row so the
+      // editor label has somewhere to sit and the date cells get a
+      // valid gridRow span.
+      const rowCount = Math.max(1, laneCount);
+      const startRow = cursor;
+      cursor += rowCount;
+      return { row, laneBars, laneCount: rowCount, startRow };
+    });
+    return { items, totalRows: cursor - 2 };
+  }, [rows, scheduled]);
+
   // ─── Drag handler ────────────────────────────────────────────────
   const sensors = useSensors(useSensor(PointerSensor, {
     // 6px buffer so producers reading a card don't accidentally pick it.
@@ -631,11 +651,12 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
             <div style={{
               display: "grid",
               gridTemplateColumns,
-              // Final 1fr row absorbs remaining vertical space below
-              // the last editor row, so the column-stripe layer
-              // (grid-row 1/-1) carries weekend / today tints all the
-              // way down rather than stopping at the last data row.
-              gridTemplateRows: `auto repeat(${rows.length}, minmax(60px, auto)) 1fr`,
+              // Header row, then one auto-sized track per LANE (not per
+              // editor — each editor expands to as many lane sub-rows
+              // as its busiest day demands), then a 1fr filler so the
+              // column-stripe layer (grid-row 1/-1) carries weekend
+              // tints all the way to the bottom of the scroll viewport.
+              gridTemplateRows: `auto repeat(${editorLayout.totalRows}, minmax(56px, auto)) 1fr`,
               minWidth: "fit-content",
               minHeight: "100%",
             }}>
@@ -699,23 +720,23 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
                 );
               })}
 
-              {/* Rows */}
-              {rows.map((row, rowIdx) => {
-                const gr = rowIdx + 2;
-                const sched = scheduled.get(row.id) || [];
-                return (
-                  <Row
-                    key={row.id}
-                    row={row}
-                    rowIdx={rowIdx}
-                    gridRow={gr}
-                    scheduled={sched}
-                    dates={dates}
-                    colsForSpan={colsForSpan}
-                    onOpenProject={onOpenProject}
-                  />
-                );
-              })}
+              {/* Rows — each editor occupies a contiguous block of
+                  laneCount sub-rows. The block info (startRow,
+                  laneCount, laneBars) is computed once in editorLayout
+                  above so the grid template can size correctly. */}
+              {editorLayout.items.map((item, rowIdx) => (
+                <Row
+                  key={item.row.id}
+                  row={item.row}
+                  rowIdx={rowIdx}
+                  startRow={item.startRow}
+                  laneCount={item.laneCount}
+                  laneBars={item.laneBars}
+                  dates={dates}
+                  colsForSpan={colsForSpan}
+                  onOpenProject={onOpenProject}
+                />
+              ))}
             </div>
 
             {rows.length === 0 && (
@@ -760,7 +781,12 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
 // drag here to insert at this position). Pulled out from Row() so the
 // useDraggable / useDroppable hook calls don't fire for the date cells
 // it doesn't apply to.
-function EditorLabel({ row, rowIdx, gridRow, striped, minHeight }) {
+//
+// Spans every lane sub-row of its editor block via gridRow:
+// "${startRow} / ${startRow + laneCount}". The auto-sized lanes inside
+// the block drive the editor's total height; the label stretches to
+// match.
+function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
   const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
     id: `editor-drag:${row.id}`,
     data: { mode: "reorderEditor", editorId: row.id, fromIdx: rowIdx },
@@ -776,7 +802,9 @@ function EditorLabel({ row, rowIdx, gridRow, striped, minHeight }) {
       ref={setRef}
       {...attributes}
       style={{
-        ...rowLabel, gridColumn: 1, gridRow,
+        ...rowLabel,
+        gridColumn: 1,
+        gridRow: `${startRow} / ${startRow + laneCount}`,
         position: "sticky", left: 0, zIndex: 3,
         background: isOver ? "rgba(99,102,241,0.22)"
                   : striped ? "#1E2638" : "#1A2236",
@@ -785,7 +813,6 @@ function EditorLabel({ row, rowIdx, gridRow, striped, minHeight }) {
         // Drop hint: a 2px line at the top edge when something is
         // being dragged over this row.
         borderTop: isOver ? "2px solid var(--accent)" : undefined,
-        minHeight,
         opacity: isDragging ? 0.4 : 1,
         transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
         userSelect: "none",
@@ -811,68 +838,62 @@ function EditorLabel({ row, rowIdx, gridRow, striped, minHeight }) {
   );
 }
 
-// One assignee row. Split out so each row's date cells become individual
-// drop zones without ballooning the parent component's render scope.
-// `rowIdx` drives row striping so every other editor lane gets a subtle
-// tint and the eye can scan vertically.
-function Row({ row, rowIdx, gridRow, scheduled, dates, colsForSpan, onOpenProject }) {
+// One assignee row, split into laneCount sub-rows. Each lane sub-row is
+// its own auto-sizing CSS Grid track, so bars in different lanes can
+// have different content-driven heights without overlapping. The
+// editor label and the date drop cells span ALL lane sub-rows via
+// gridRow ranges; bars sit in their specific lane's sub-row.
+//
+// Replaces the previous fixed-height + paddingTop arrangement which
+// clipped wrapped text whenever a bar's content exceeded the bar's
+// height.
+function Row({ row, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, onOpenProject }) {
   const striped = rowIdx % 2 === 1;
-
-  // Group overlapping scheduled bars into vertical lanes so two bars on
-  // the same day don't render on top of each other. Lane 0 is topmost;
-  // we set the row's minHeight from laneCount so the grid track grows
-  // to fit. Recomputed every render — cheap (<= a few dozen bars per
-  // editor row in any realistic workload).
-  const { bars: laneBars, laneCount } = assignLanes(scheduled);
-  const rowMinHeight = Math.max(60, laneCount * LANE_HEIGHT + 8);
+  const endRow = startRow + laneCount;  // exclusive end for grid-row range
 
   return (
     <>
       <EditorLabel
         row={row}
         rowIdx={rowIdx}
-        gridRow={gridRow}
+        startRow={startRow}
+        laneCount={laneCount}
         striped={striped}
-        minHeight={rowMinHeight}
       />
 
-      {/* One drop cell per date (cols 2..N+1). Column-scope tinting
-          (weekend / today / Monday border) lives on the dedicated
-          stripe layer in the parent component — these cells just
-          handle row striping and drop-hover state. Bars are placed
-          below as separate grid children. minHeight tracks the lane
-          count so the cell stays tall enough to receive drops anywhere
-          along its vertical extent. */}
+      {/* One drop cell per date (cols 2..N+1). Each cell spans all of
+          this editor's lane sub-rows so a producer can drop anywhere
+          in the editor + day cell, regardless of how many lanes are
+          stacked. Column-scope tinting (weekend / today / Monday
+          border) still lives on the stripe layer above. */}
       {dates.map((d, i) => (
         <DropCell
           key={d}
           id={cellId(row.id, d)}
           gridColumn={i + 2}
-          gridRow={gridRow}
+          gridRow={`${startRow} / ${endRow}`}
           striped={striped}
-          minHeight={rowMinHeight}
         />
       ))}
 
-      {/* Gantt bars — placed last so they stack visually above empty
-          drop cells. Each occupies grid-column [startCol .. endCol+1]
-          inside this row, plus a paddingTop offset based on its
-          assigned lane so overlapping bars don't render on top of each
-          other. The wrapper itself is a transparent positioning shim;
-          the bar visual lives inside <GanttBar>. */}
+      {/* Gantt bars — placed last so they stack above the drop cells.
+          Each occupies its own lane sub-row (gridRow = startRow + lane),
+          and spans grid-column [startCol .. endCol+1] for its date
+          range. The wrapper is a transparent positioning shim; the
+          visual bar lives inside <GanttBar> and grows to fit content. */}
       {laneBars.map(st => {
         const cols = colsForSpan(st);
         if (!cols) return null;
         return (
           <div key={st.id} style={{
             gridColumn: `${cols[0]} / ${cols[1] + 1}`,
-            gridRow,
-            alignSelf: "start",
-            paddingTop: st.lane * LANE_HEIGHT + 4,
-            paddingLeft: 4, paddingRight: 4,
-            // Sit above DropCell so the bar receives drags before the
+            gridRow: startRow + st.lane,
+            padding: 4,
+            // Above DropCell so the bar receives drags before the
             // cell underneath does.
             zIndex: 1,
+            display: "flex",
+            alignItems: "stretch",
           }}>
             <GanttBar
               subtask={st}
