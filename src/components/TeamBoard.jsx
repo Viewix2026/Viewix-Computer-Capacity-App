@@ -174,17 +174,29 @@ const parseCellId = (id) => {
 
 // A scheduled Gantt bar. The parent passes the grid column span via the
 // outer wrapper in Row(); this component is the visual bar that fills
-// that wrapper. Drag → reassign + reschedule. Right-edge handle →
-// extend endDate.
+// that wrapper.
+//
+// Three drag interactions:
+//   - Body → "move": reassign + reschedule.
+//   - Right-edge handle → "resizeEnd": pull endDate to the dropped day.
+//     If the dropped day is BEFORE startDate, that day becomes the new
+//     startDate (treats "drag the right end past the left" as a flip).
+//   - Left-edge handle → "resizeStart": pull startDate to the dropped
+//     day. If the dropped day is AFTER endDate, that day becomes the
+//     new endDate (mirror of the right-flip).
 function GanttBar({ subtask, onClick }) {
   const dragId = `bar:${subtask.id}`;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: dragId,
     data: { mode: "move", subtask },
   });
-  const resize = useDraggable({
-    id: `resize:${subtask.id}`,
-    data: { mode: "resize", subtask },
+  const resizeEnd = useDraggable({
+    id: `resize-end:${subtask.id}`,
+    data: { mode: "resizeEnd", subtask },
+  });
+  const resizeStart = useDraggable({
+    id: `resize-start:${subtask.id}`,
+    data: { mode: "resizeStart", subtask },
   });
 
   const colour = colourFor(subtask);
@@ -250,22 +262,45 @@ function GanttBar({ subtask, onClick }) {
           ? `${subtask.startTime} → ${subtask.endTime}`
           : `${span}d`}
       </div>
-      {/* Right-edge resize handle. Sits inside the bar so its hit area
-          tracks with the bar's grid-column span automatically. */}
+      {/* Left-edge resize handle. Drag to pull startDate earlier
+          (extend) or later (shrink). Sits inside the bar so its hit
+          area tracks with the bar's grid-column span automatically. */}
       <div
-        ref={resize.setNodeRef}
-        {...resize.listeners}
-        {...resize.attributes}
+        ref={resizeStart.setNodeRef}
+        {...resizeStart.listeners}
+        {...resizeStart.attributes}
+        onClick={e => e.stopPropagation()}
+        style={{
+          position: "absolute", top: 0, left: 0, bottom: 0,
+          width: 8, cursor: "ew-resize",
+          background: resizeStart.isDragging ? colour : "transparent",
+          borderTopLeftRadius: 6, borderBottomLeftRadius: 6,
+          // Subtle vertical grip indicator on hover so producers can
+          // see the handle is there. Painted via a CSS gradient so we
+          // don't need a child element.
+          zIndex: 2,
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
+        onMouseLeave={e => { if (!resizeStart.isDragging) e.currentTarget.style.background = "transparent"; }}
+        title="Drag to change start date"
+      />
+      {/* Right-edge resize handle. Drag to pull endDate later (extend)
+          or earlier (shrink). */}
+      <div
+        ref={resizeEnd.setNodeRef}
+        {...resizeEnd.listeners}
+        {...resizeEnd.attributes}
         onClick={e => e.stopPropagation()}
         style={{
           position: "absolute", top: 0, right: 0, bottom: 0,
-          width: 6, cursor: "ew-resize",
-          background: resize.isDragging ? colour : "transparent",
+          width: 8, cursor: "ew-resize",
+          background: resizeEnd.isDragging ? colour : "transparent",
           borderTopRightRadius: 6, borderBottomRightRadius: 6,
+          zIndex: 2,
         }}
-        onMouseEnter={e => e.currentTarget.style.background = `${colour}88`}
-        onMouseLeave={e => { if (!resize.isDragging) e.currentTarget.style.background = "transparent"; }}
-        title="Drag to extend"
+        onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
+        onMouseLeave={e => { if (!resizeEnd.isDragging) e.currentTarget.style.background = "transparent"; }}
+        title="Drag to change end date"
       />
     </div>
   );
@@ -459,22 +494,40 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
     const path = `/projects/${subtask.projectId}/subtasks/${subtask.id}`;
     const now = new Date().toISOString();
 
-    if (mode === "resize") {
-      // For resize we treat over.id as the date we want to extend to.
+    if (mode === "resizeEnd" || mode === "resizeStart") {
       // Pool drop on a resize handle is a no-op (the resize gesture
       // doesn't make sense outside the date grid).
       if (over.id === POOL_ID) return;
       const { date } = parseCellId(over.id);
       if (!date) return;
-      // New endDate = the date we dropped on. If it's earlier than
-      // startDate, swap startDate to the dropped date so the bar stays
-      // valid (treating it as a "drag the end past the start" gesture).
-      let newStart = subtask.startDate || date;
-      let newEnd = date;
-      if (subtask.startDate && date < subtask.startDate) {
-        newStart = date;
-        newEnd = subtask.startDate;
+
+      const oldStart = subtask.startDate;
+      const oldEnd = subtask.endDate || subtask.startDate;
+      let newStart = oldStart;
+      let newEnd = oldEnd;
+
+      if (mode === "resizeEnd") {
+        // Pull the right edge to the dropped date. If it lands before
+        // the current startDate, the gesture has flipped the bar — the
+        // dropped date becomes the new startDate and the previous
+        // startDate becomes the new endDate.
+        if (oldStart && date < oldStart) {
+          newStart = date;
+          newEnd = oldStart;
+        } else {
+          newEnd = date;
+        }
+      } else {
+        // resizeStart: mirror of the above. Pull the left edge to the
+        // dropped date. If it lands after endDate, flip the bar.
+        if (oldEnd && date > oldEnd) {
+          newStart = oldEnd;
+          newEnd = date;
+        } else {
+          newStart = date;
+        }
       }
+
       fbSet(`${path}/startDate`, newStart);
       fbSet(`${path}/endDate`, newEnd);
       fbSet(`${path}/updatedAt`, now);
