@@ -551,14 +551,29 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
               );
             })}
 
-            {/* Header row — col labels */}
-            <div style={{ ...headerCell, position: "sticky", top: 0, left: 0, zIndex: 5, background: "var(--bg)" }}>
+            {/* Header row — col labels.
+                EVERY header cell gets an explicit gridRow:1 + gridColumn.
+                Without this, CSS Grid auto-placement runs and skips the
+                row-1 cells already occupied by the column-stripe layer
+                (which spans grid-row 1/-1 in the columns where it
+                renders). The skipped headers shift into the wrong
+                columns and the leftover labels overflow into an implicit
+                row at the bottom of the grid — both bugs producers
+                reported as "blank highlighted column" + "row of dates
+                at the bottom". Explicit placement = no auto-flow. */}
+            <div style={{
+              ...headerCell, gridRow: 1, gridColumn: 1,
+              position: "sticky", top: 0, left: 0, zIndex: 5, background: "var(--bg)",
+            }}>
               Team
             </div>
-            <div style={{ ...headerCell, position: "sticky", top: 0, left: 200, zIndex: 5, background: "var(--bg)" }}>
+            <div style={{
+              ...headerCell, gridRow: 1, gridColumn: 2,
+              position: "sticky", top: 0, left: 200, zIndex: 5, background: "var(--bg)",
+            }}>
               Unscheduled
             </div>
-            {dates.map(d => {
+            {dates.map((d, i) => {
               const dt = new Date(d + "T00:00:00");
               const dayNum = dt.getDay();
               const isToday = d === isoToday();
@@ -566,6 +581,7 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
               return (
                 <div key={d} style={{
                   ...headerCell,
+                  gridRow: 1, gridColumn: i + 3,
                   position: "sticky", top: 0, zIndex: 4,
                   // Header still gets a slightly stronger tint so the
                   // column heading remains legible above the muted body
