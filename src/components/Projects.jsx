@@ -1116,9 +1116,84 @@ function ProjectDetail({ project, onBack, onDelete }) {
   );
 }
 
+// Modal wrapper around <ProjectDetail>. Used by the Team Board so the
+// producer can pop open a project's full editor without leaving the
+// calendar. Click outside or press ESC to close. The modal stops click
+// propagation on its content so clicks on inputs inside the editor
+// don't accidentally trigger the backdrop close.
+function ProjectQuickView({ project, onClose, onDelete }) {
+  // ESC closes — registered globally so it works regardless of which
+  // input has focus. Cleaned up on unmount.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        backdropFilter: "blur(3px)",
+        WebkitBackdropFilter: "blur(3px)",
+        zIndex: 100,
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        padding: "5vh 4vw",
+        overflowY: "auto",
+      }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "var(--card)",
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          width: "min(960px, 100%)",
+          maxHeight: "90vh",
+          overflowY: "auto",
+          position: "relative",
+          boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+        }}>
+        {/* Close × at top-right of the modal — sticky so it stays
+            visible while scrolling through a long project. */}
+        <button
+          onClick={onClose}
+          title="Close (Esc)"
+          aria-label="Close"
+          style={{
+            position: "sticky", top: 12, float: "right", marginRight: 12, marginTop: 0,
+            zIndex: 2,
+            width: 32, height: 32, borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "var(--bg)", color: "var(--fg)",
+            fontSize: 18, fontWeight: 700, cursor: "pointer",
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            fontFamily: "inherit",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.18)"; e.currentTarget.style.borderColor = "#EF4444"; e.currentTarget.style.color = "#EF4444"; }}
+          onMouseLeave={e => { e.currentTarget.style.background = "var(--bg)"; e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--fg)"; }}
+        >×</button>
+        <ProjectDetail
+          project={project}
+          onBack={onClose}
+          onDelete={onDelete}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function Projects({ projects, deliveries, setDeliveries, accounts, editors, route }) {
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
+  // Quick-view modal — opened when a producer clicks a bar on the
+  // Team Board. Renders the same <ProjectDetail> as the full sub-tab
+  // view, but inside a backdrop overlay so the user stays on the Team
+  // Board. Click outside or press ESC to close. Edits sync via the
+  // same Firebase paths the full view writes to, so no extra wiring
+  // needed for cross-tab sync.
+  const [quickViewProjectId, setQuickViewProjectId] = useState(null);
   const [filter, setFilter] = useState("all"); // "all" | "active" | "onHold" | "archived"
   const [search, setSearch] = useState("");
   // Bulk-action selection — Set of project ids checked via the row
@@ -1371,11 +1446,34 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
       )}
 
       {subTab === "teamBoard" && !active && (
-        <TeamBoard
-          projects={projects}
-          editors={editors}
-          onOpenProject={(id) => { setSubTab("projects"); setActiveProjectId(id); }}
-        />
+        <>
+          <TeamBoard
+            projects={projects}
+            editors={editors}
+            onOpenProject={(id) => setQuickViewProjectId(id)}
+          />
+          {/* Quick-view modal — renders the full ProjectDetail editor
+              over the team board. All edits persist to the same
+              Firebase paths the Projects sub-tab writes to, so the
+              two views are always in sync (the listener on /projects
+              flows updates back into the live `projects` array). If
+              the project gets deleted (or its id otherwise vanishes),
+              quickViewProject becomes undefined and the modal
+              auto-unmounts. */}
+          {(() => {
+            const qv = projects.find(p => p.id === quickViewProjectId);
+            return qv ? (
+              <ProjectQuickView
+                project={qv}
+                onClose={() => setQuickViewProjectId(null)}
+                onDelete={async () => {
+                  await deleteProject(qv.id);
+                  setQuickViewProjectId(null);
+                }}
+              />
+            ) : null;
+          })()}
+        </>
       )}
 
       {subTab === "deliveries" && (
