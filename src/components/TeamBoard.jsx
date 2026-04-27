@@ -275,25 +275,35 @@ function GanttBar({ subtask, onClick }) {
 // tint, today wash, Monday week-boundary border) are NOT handled here
 // — they live on a separate background-stripe layer rendered above.
 // This cell handles only row-scope styling: optional row striping,
-// drop-hover highlight, and the row-bottom separator.
+// drop-hover highlight, mouse-hover highlight, and the row-bottom
+// separator.
 function DropCell({
   id, children, gridColumn, gridRow, sticky, striped, minHeight,
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  // Local state so we can highlight on plain mouse hover (no drag
+  // active). React state per cell is fine at this scale (~150 cells in
+  // the typical 4-week × 5-editor board); avoids the global stylesheet
+  // hop that inline-style :hover would otherwise need.
+  const [hovered, setHovered] = useState(false);
 
   // Sticky left columns get solid backgrounds (matching the assignee
   // label cells in Row()) so the column-stripe layer behind doesn't
   // bleed through translucent rgba and break the "frozen" feel of the
   // left columns. Body cells stay transparent / very faintly striped
   // so the stripes show through.
+  // Hover priority: drag-over > mouse hover > striped/sticky > base.
   let bg = "transparent";
   if (sticky != null) bg = striped ? "#1E2638" : "#1A2236";
   else if (striped) bg = "rgba(255,255,255,0.018)";
+  if (hovered && sticky == null) bg = "rgba(99,102,241,0.10)";
   if (isOver) bg = "rgba(99,102,241,0.22)";
 
   return (
     <div
       ref={setNodeRef}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         gridColumn, gridRow,
         background: bg,
@@ -307,6 +317,7 @@ function DropCell({
         // Sticky columns sit above the column-stripe layer (z 0) but
         // below the drag overlay. Body cells sit just above the stripe.
         zIndex: sticky != null ? 2 : 1,
+        transition: "background 0.1s",
       }}>
       {children}
     </div>
@@ -315,7 +326,7 @@ function DropCell({
 
 // ─── Main board ────────────────────────────────────────────────────
 
-export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
+export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProject }) {
   // The board starts on the Monday of the current week so the producer
   // sees the full current week (including past days they may have
   // already worked) without scrolling left. From there, we render N
@@ -422,7 +433,29 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
     const { active, over } = e;
     if (!over || !active?.data?.current) return;
 
-    const { mode, subtask } = active.data.current;
+    const activeData = active.data.current;
+    const overData = over.data?.current;
+
+    // Editor-row reorder. Insert dragged editor at the target's
+    // position. Persist via setEditors — the App.jsx debounced bulk
+    // write will save the new array order to /editors. Last-write-
+    // wins is fine; simultaneous edits across tabs would be rare.
+    if (activeData.mode === "reorderEditor") {
+      if (!setEditors) return;
+      if (overData?.mode !== "reorderEditor") return;
+      const fromIdx = activeData.fromIdx;
+      const toIdx = overData.targetIdx;
+      if (fromIdx === toIdx || fromIdx == null || toIdx == null) return;
+      setEditors(prev => {
+        const next = [...prev];
+        const [moved] = next.splice(fromIdx, 1);
+        next.splice(toIdx, 0, moved);
+        return next;
+      });
+      return;
+    }
+
+    const { mode, subtask } = activeData;
     const path = `/projects/${subtask.projectId}/subtasks/${subtask.id}`;
     const now = new Date().toISOString();
 
@@ -669,6 +702,62 @@ export function TeamBoard({ projects = [], editors = [], onOpenProject }) {
   );
 }
 
+// Sticky-left editor label. Draggable (drag the ⋮⋮ grip — or just the
+// row — to reorder editors) and droppable (drop another editor's
+// drag here to insert at this position). Pulled out from Row() so the
+// useDraggable / useDroppable hook calls don't fire for the date cells
+// it doesn't apply to.
+function EditorLabel({ row, rowIdx, gridRow, striped, minHeight }) {
+  const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
+    id: `editor-drag:${row.id}`,
+    data: { mode: "reorderEditor", editorId: row.id, fromIdx: rowIdx },
+  });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: `editor-drop:${row.id}`,
+    data: { mode: "reorderEditor", targetIdx: rowIdx },
+  });
+  // Combine draggable + droppable refs onto the same DOM node.
+  const setRef = (node) => { setDragRef(node); setDropRef(node); };
+  return (
+    <div
+      ref={setRef}
+      {...attributes}
+      style={{
+        ...rowLabel, gridColumn: 1, gridRow,
+        position: "sticky", left: 0, zIndex: 3,
+        background: isOver ? "rgba(99,102,241,0.22)"
+                  : striped ? "#1E2638" : "#1A2236",
+        borderRight: "2px solid var(--border)",
+        borderBottom: "1px solid var(--border)",
+        // Drop hint: a 2px line at the top edge when something is
+        // being dragged over this row.
+        borderTop: isOver ? "2px solid var(--accent)" : undefined,
+        minHeight,
+        opacity: isDragging ? 0.4 : 1,
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+        userSelect: "none",
+        gap: 8,
+      }}>
+      {/* Drag handle. Only this is the "grip" listener target — the
+          rest of the row is unaffected so producers can still click
+          the editor name without picking up the row by accident. */}
+      <span
+        {...listeners}
+        title="Drag to reorder"
+        style={{
+          cursor: isDragging ? "grabbing" : "grab",
+          color: "var(--muted)", fontSize: 14, lineHeight: 1,
+          padding: "4px 2px", marginLeft: -4,
+          fontFamily: "inherit", userSelect: "none",
+        }}
+      >⋮⋮</span>
+      <span style={{ fontWeight: 700, color: "var(--fg)" }}>
+        {row.name}
+      </span>
+    </div>
+  );
+}
+
 // One assignee row. Split out so each row's date cells become individual
 // drop zones without ballooning the parent component's render scope.
 // `rowIdx` drives row striping so every other editor lane gets a subtle
@@ -686,24 +775,13 @@ function Row({ row, rowIdx, gridRow, scheduled, dates, colsForSpan, onOpenProjec
 
   return (
     <>
-      {/* Sticky left: assignee label. SOLID backgrounds — the column
-          stripe layer painting weekend / today / Monday tints behind
-          the grid would otherwise bleed through translucent rgba and
-          the "frozen" left column would stop looking frozen. Striped
-          rows use a slightly brighter solid shade so the row separation
-          still reaches the left edge. */}
-      <div style={{
-        ...rowLabel, gridColumn: 1, gridRow,
-        position: "sticky", left: 0, zIndex: 3,
-        background: striped ? "#1E2638" : "#1A2236",
-        borderRight: "2px solid var(--border)",
-        borderBottom: "1px solid var(--border)",
-        minHeight: rowMinHeight,
-      }}>
-        <span style={{ fontWeight: 700, color: "var(--fg)" }}>
-          {row.name}
-        </span>
-      </div>
+      <EditorLabel
+        row={row}
+        rowIdx={rowIdx}
+        gridRow={gridRow}
+        striped={striped}
+        minHeight={rowMinHeight}
+      />
 
       {/* One drop cell per date (cols 2..N+1). Column-scope tinting
           (weekend / today / Monday border) lives on the dedicated
