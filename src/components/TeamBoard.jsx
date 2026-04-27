@@ -15,7 +15,7 @@ import { useMemo, useState, useRef, useCallback } from "react";
 import { fbSet } from "../firebase";
 import {
   DndContext, PointerSensor, useSensor, useSensors,
-  useDraggable, useDroppable, closestCenter, DragOverlay,
+  useDraggable, useDroppable, useDndContext, closestCenter, DragOverlay,
 } from "@dnd-kit/core";
 
 // ─── Subtask stage palette ────────────────────────────────────────
@@ -164,11 +164,6 @@ const dateRange = (from, dayCount) => {
     d = addDays(d, 1);
   }
   return out;
-};
-// Saturday + Sunday → true. Cheap enough to call per cell without memo.
-const isWeekendISO = (iso) => {
-  const wd = new Date(iso + "T00:00:00").getDay();
-  return wd === 0 || wd === 6;
 };
 // Drop-zone id is "{assigneeId}|{dateOrNull}". Null/undefined values
 // serialise to literal "null" so the round-trip survives split().
@@ -403,10 +398,15 @@ function DropCell({
   id, children, gridColumn, gridRow, sticky, striped, minHeight,
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
-  // Local state so we can highlight on plain mouse hover (no drag
-  // active). React state per cell is fine at this scale (~150 cells in
-  // the typical 4-week × 5-editor board); avoids the global stylesheet
-  // hop that inline-style :hover would otherwise need.
+  // Only highlight on drag-over if the active drag is compatible with
+  // this drop zone. Date cells accept "move" + "resizeEnd" +
+  // "resizeStart" (anything from a bar/pool card). Editor reorder drags
+  // shouldn't tint date cells — confusing because the drop is silently
+  // ignored anyway.
+  const { active } = useDndContext();
+  const activeMode = active?.data?.current?.mode;
+  const isCompatible = !activeMode
+    || activeMode === "move" || activeMode === "resizeEnd" || activeMode === "resizeStart";
   const [hovered, setHovered] = useState(false);
 
   // Sticky left columns get solid backgrounds (matching the assignee
@@ -414,12 +414,12 @@ function DropCell({
   // bleed through translucent rgba and break the "frozen" feel of the
   // left columns. Body cells stay transparent / very faintly striped
   // so the stripes show through.
-  // Hover priority: drag-over > mouse hover > striped/sticky > base.
+  // Hover priority: drag-over (only if compatible) > mouse hover > striped/sticky > base.
   let bg = "transparent";
   if (sticky != null) bg = striped ? "#1E2638" : "#1A2236";
   else if (striped) bg = "rgba(255,255,255,0.018)";
   if (hovered && sticky == null) bg = "rgba(99,102,241,0.10)";
-  if (isOver) bg = "rgba(99,102,241,0.22)";
+  if (isOver && isCompatible) bg = "rgba(99,102,241,0.22)";
 
   return (
     <div
@@ -501,31 +501,37 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
   }, [projects]);
 
   // Two bins: subtasks that are fully on the schedule (have BOTH a
-  // startDate AND an assigneeId) go into the main grid, everything
-  // else goes into the bottom "pool" drawer. The pool is sorted so
-  // unassigned items float to the top, then by assignee name, then
-  // by client name — gives producers a stable scan order.
+  // startDate AND an assigneeId pointing to a CURRENT editor) go into
+  // the main grid; everything else goes into the bottom "pool" drawer.
+  // The "current editor" check is critical — without it, a subtask
+  // assigned to a deleted/legacy editor would land in a `scheduled`
+  // bin that no Row consumes, hiding the bar from the producer with
+  // no way to see or fix it. Orphans now surface in the pool with
+  // their stale assigneeId still set; producers can drag them onto a
+  // valid editor's row to reassign + reschedule in one move.
+  const editorIds = useMemo(() => new Set(editors.map(e => e.id)), [editors]);
+  const editorById = useMemo(() => new Map(editors.map(e => [e.id, e.name || ""])), [editors]);
   const { scheduled, pool } = useMemo(() => {
     const scheduled = new Map();
     const pool = [];
     for (const st of flatSubtasks) {
-      if (st.assigneeId && st.startDate) {
+      const onSchedule = st.assigneeId && st.startDate && editorIds.has(st.assigneeId);
+      if (onSchedule) {
         if (!scheduled.has(st.assigneeId)) scheduled.set(st.assigneeId, []);
         scheduled.get(st.assigneeId).push(st);
       } else {
         pool.push(st);
       }
     }
-    const editorById = new Map(editors.map(e => [e.id, e.name || ""]));
     pool.sort((a, b) => {
-      // "_" < "a-z" so unassigned sorts to the front.
+      // "_" < "a-z" so unassigned (and orphan) sorts to the front.
       const aName = a.assigneeId ? (editorById.get(a.assigneeId) || "zzz") : "_unassigned";
       const bName = b.assigneeId ? (editorById.get(b.assigneeId) || "zzz") : "_unassigned";
       if (aName !== bName) return aName.localeCompare(bName);
       return (a.clientName || "").localeCompare(b.clientName || "");
     });
     return { scheduled, pool };
-  }, [flatSubtasks, editors]);
+  }, [flatSubtasks, editorIds, editorById]);
 
   // Rows are just the editor roster now. The "Unassigned" lane has
   // moved out of the main grid into the bottom pool drawer below it.
@@ -568,7 +574,17 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
   const [dragPreview, setDragPreview] = useState(null);
 
   const onDragStart = (e) => {
-    setDragPreview(e.active?.data?.current?.subtask || null);
+    // Only show the floating preview for "move" drags. Resize gestures
+    // are an edge-pull on a bar that stays put — a floating preview
+    // following the cursor would suggest the whole bar is moving, which
+    // it isn't. Editor reorder drags also skip the preview (the row
+    // visually translates via its own transform).
+    const mode = e.active?.data?.current?.mode;
+    if (mode === "move") {
+      setDragPreview(e.active?.data?.current?.subtask || null);
+    } else {
+      setDragPreview(null);
+    }
   };
 
   const onDragEnd = (e) => {
@@ -603,32 +619,32 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
     const now = new Date().toISOString();
 
     if (mode === "resizeEnd" || mode === "resizeStart") {
-      // Pool drop on a resize handle is a no-op (the resize gesture
-      // doesn't make sense outside the date grid).
+      // Pool drop on a resize handle is a no-op.
       if (over.id === POOL_ID) return;
       const { date } = parseCellId(over.id);
       if (!date) return;
 
-      const oldStart = subtask.startDate;
-      const oldEnd = subtask.endDate || subtask.startDate;
+      // If the bar somehow has no startDate (orphan / corrupted data),
+      // treat the dropped date as both ends — collapses to a 1-day bar.
+      const oldStart = subtask.startDate || date;
+      const oldEnd = subtask.endDate || oldStart;
       let newStart = oldStart;
       let newEnd = oldEnd;
 
       if (mode === "resizeEnd") {
         // Pull the right edge to the dropped date. If it lands before
-        // the current startDate, the gesture has flipped the bar — the
+        // the current startDate, the gesture flips the bar — the
         // dropped date becomes the new startDate and the previous
         // startDate becomes the new endDate.
-        if (oldStart && date < oldStart) {
+        if (date < oldStart) {
           newStart = date;
           newEnd = oldStart;
         } else {
           newEnd = date;
         }
       } else {
-        // resizeStart: mirror of the above. Pull the left edge to the
-        // dropped date. If it lands after endDate, flip the bar.
-        if (oldEnd && date > oldEnd) {
+        // resizeStart: mirror. Pull the left edge to the dropped date.
+        if (date > oldEnd) {
           newStart = oldEnd;
           newEnd = date;
         } else {
@@ -692,11 +708,19 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
   const lastDate = dates[dates.length - 1];
   const colsForSpan = (st) => {
     if (!st.startDate) return null;
+    // Guard against an empty visible range (lastDate undefined). Shouldn't
+    // happen in normal use given useState(28) and a valid fromDate, but
+    // `dateToCol.get(undefined)` would silently return undefined and the
+    // bar wrapper would receive a malformed grid-column value.
+    if (!lastDate) return null;
     const end = st.endDate || st.startDate;
     if (end < fromDate || st.startDate > lastDate) return null;
     const startClamped = st.startDate < fromDate ? fromDate : st.startDate;
     const endClamped = end > lastDate ? lastDate : end;
-    return [dateToCol.get(startClamped), dateToCol.get(endClamped)];
+    const startCol = dateToCol.get(startClamped);
+    const endCol = dateToCol.get(endClamped);
+    if (startCol == null || endCol == null) return null;
+    return [startCol, endCol];
   };
 
   // ─── Render ──────────────────────────────────────────────────────
@@ -896,6 +920,12 @@ function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
     id: `editor-drop:${row.id}`,
     data: { mode: "reorderEditor", targetIdx: rowIdx },
   });
+  // Only highlight as a drop target when a reorder drag is in flight.
+  // Bar drags hovering the editor label would otherwise tint it
+  // suggesting a drop will work — silently ignored at dragEnd.
+  const { active } = useDndContext();
+  const isCompatible = active?.data?.current?.mode === "reorderEditor";
+  const showDrop = isOver && isCompatible;
   // Combine draggable + droppable refs onto the same DOM node.
   const setRef = (node) => { setDragRef(node); setDropRef(node); };
   return (
@@ -907,13 +937,13 @@ function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
         gridColumn: 1,
         gridRow: `${startRow} / ${startRow + laneCount}`,
         position: "sticky", left: 0, zIndex: 3,
-        background: isOver ? "rgba(99,102,241,0.22)"
+        background: showDrop ? "rgba(99,102,241,0.22)"
                   : striped ? "#1E2638" : "#1A2236",
         borderRight: "2px solid var(--border)",
         borderBottom: "1px solid var(--border)",
         // Drop hint: a 2px line at the top edge when something is
         // being dragged over this row.
-        borderTop: isOver ? "2px solid var(--accent)" : undefined,
+        borderTop: showDrop ? "2px solid var(--accent)" : undefined,
         opacity: isDragging ? 0.4 : 1,
         transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
         userSelect: "none",
@@ -1022,13 +1052,18 @@ function Row({ row, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, o
 // the subtask back to the pile. The whole drawer is one big drop zone.
 function PoolDrawer({ poolId, pool, editors, onOpenProject }) {
   const { setNodeRef, isOver } = useDroppable({ id: poolId });
+  // Only show the drop highlight for "move" drags. Resize and reorder
+  // drops on the pool are no-ops — tinting would mislead the producer
+  // into thinking the drop will do something.
+  const { active } = useDndContext();
+  const showDrop = isOver && active?.data?.current?.mode === "move";
   return (
     <div
       ref={setNodeRef}
       style={{
         flexShrink: 0,
         height: 180,
-        background: isOver ? "rgba(99,102,241,0.16)" : "#0F1421",
+        background: showDrop ? "rgba(99,102,241,0.16)" : "#0F1421",
         borderTop: "2px solid var(--border)",
         // Horizontal scroll only — vertical contained inside the cards.
         overflowX: "auto",
