@@ -1402,7 +1402,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors }) {
   );
 }
 
-export function Projects({ projects, deliveries, setDeliveries, accounts, editors, setEditors, route }) {
+export function Projects({ projects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, route }) {
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   // Quick-view modal — opened when a producer clicks a bar on the
@@ -1669,6 +1669,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
             projects={projects}
             editors={editors}
             setEditors={setEditors}
+            weekData={weekData}
             onOpenProject={(id) => setQuickViewProjectId(id)}
           />
           {/* Quick-view modal — renders the full ProjectDetail editor

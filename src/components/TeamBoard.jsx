@@ -165,6 +165,53 @@ const dateRange = (from, dayCount) => {
   }
   return out;
 };
+// Look up an editor's working status for a specific date, integrating
+// the Capacity tab's weekly schedule into the Team Board. Returns:
+//   "weekend" — Saturday/Sunday (always non-working; cell is left for
+//                 the column-stripe layer to dim)
+//   "off"     — weekday this editor is marked as not coming in
+//   "in"      — weekday this editor is working
+//   "shoot"   — weekday this editor is on a shoot day (still working)
+//
+// Resolution order:
+//   1. /weekData/{mondayISO}/editors[] — week-specific override set in
+//      the Capacity tab's Weekly Schedule grid.
+//   2. editor.defaultDays[mon|tue|...] — the editor's standing default.
+//   3. Falls back to "in" if neither is set, so missing data doesn't
+//      silently grey out the entire grid.
+//
+// Mirrors the same dayVal() logic the Capacity tab uses (see utils.js)
+// so the two surfaces stay consistent: a cell that reads "off" in
+// Capacity reads "off" here, no exceptions.
+const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+function getEditorDayStatus(weekData, editor, dateISO) {
+  if (!editor || !dateISO) return "in";
+  const d = new Date(dateISO + "T00:00:00");
+  const dow = d.getDay();
+  if (dow === 0 || dow === 6) return "weekend";
+
+  const dayKey = DAY_KEYS[dow];
+
+  // Compute the wKey (ISO Monday) for this date's week.
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + (1 - dow));
+  const wkey = toISO(monday);
+
+  let dayValue;
+  const weekEditors = weekData?.[wkey]?.editors;
+  if (Array.isArray(weekEditors)) {
+    const weekEd = weekEditors.find(e => e.id === editor.id);
+    if (weekEd) dayValue = weekEd.days?.[dayKey];
+  }
+  if (dayValue === undefined) {
+    dayValue = editor.defaultDays?.[dayKey];
+  }
+
+  if (dayValue === true || dayValue === "in") return "in";
+  if (dayValue === "shoot") return "shoot";
+  return "off";
+}
+
 // Read a subtask's assignees as an array. New schema is `assigneeIds`;
 // legacy schema was `assigneeId`. Mirrors the helper in Projects.jsx
 // (kept local rather than imported — same convention as the rest of
@@ -409,7 +456,7 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
 // drop-hover highlight, mouse-hover highlight, and the row-bottom
 // separator.
 function DropCell({
-  id, children, gridColumn, gridRow, sticky, striped, minHeight,
+  id, children, gridColumn, gridRow, sticky, striped, minHeight, dayStatus,
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   // Only highlight on drag-over if the active drag is compatible with
@@ -423,14 +470,26 @@ function DropCell({
     || activeMode === "move" || activeMode === "resizeEnd" || activeMode === "resizeStart";
   const [hovered, setHovered] = useState(false);
 
+  // Capacity-driven cell tint:
+  //   - "off" (editor not coming in that weekday): heavily dimmed so
+  //     the producer can see at a glance that no one's available.
+  //   - "in" / "shoot" (working): brighter than the default striped
+  //     wash so working cells stand out vs the off ones. Producer
+  //     asked specifically for this contrast.
+  //   - "weekend": leave the column-stripe layer to handle it (we
+  //     don't double-darken — would otherwise read pure black).
+  const isOff = dayStatus === "off";
+  const isWorking = dayStatus === "in" || dayStatus === "shoot";
+
   // Sticky left columns get solid backgrounds (matching the assignee
   // label cells in Row()) so the column-stripe layer behind doesn't
   // bleed through translucent rgba and break the "frozen" feel of the
-  // left columns. Body cells stay transparent / very faintly striped
-  // so the stripes show through.
-  // Hover priority: drag-over (only if compatible) > mouse hover > striped/sticky > base.
+  // left columns.
+  // Background priority: drag-over > mouse hover > capacity off > capacity working > striped/sticky > base.
   let bg = "transparent";
   if (sticky != null) bg = striped ? "#1E2638" : "#1A2236";
+  else if (isOff) bg = "rgba(0,0,0,0.45)";
+  else if (isWorking) bg = striped ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.04)";
   else if (striped) bg = "rgba(255,255,255,0.018)";
   if (hovered && sticky == null) bg = "rgba(99,102,241,0.10)";
   if (isOver && isCompatible) bg = "rgba(99,102,241,0.22)";
@@ -462,7 +521,7 @@ function DropCell({
 
 // ─── Main board ────────────────────────────────────────────────────
 
-export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProject }) {
+export function TeamBoard({ projects = [], editors = [], setEditors, weekData = {}, onOpenProject }) {
   // The board starts on the Monday of the current week so the producer
   // sees the full current week (including past days they may have
   // already worked) without scrolling left. From there, we render N
@@ -570,23 +629,22 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
   // Per-editor layout: walks the rows in order assigning each editor a
   // contiguous block of grid rows = (laneCount) sub-rows. Each lane
   // gets its own auto-sizing grid track so bars in different lanes
-  // grow vertically without overlapping. Replaces the previous
-  // paddingTop hack which assumed every bar was the same fixed height.
+  // grow vertically without overlapping. Carries the full editor
+  // record (including defaultDays for the Capacity-tab integration)
+  // alongside the simplified row info.
   const editorLayout = useMemo(() => {
     let cursor = 2;  // grid row 1 = header row
-    const items = rows.map(row => {
-      const sched = scheduled.get(row.id) || [];
+    const items = editors.map(editor => {
+      const row = { id: editor.id, name: editor.name, muted: false };
+      const sched = scheduled.get(editor.id) || [];
       const { bars: laneBars, laneCount } = assignLanes(sched);
-      // Empty editor rows still need at least 1 lane sub-row so the
-      // editor label has somewhere to sit and the date cells get a
-      // valid gridRow span.
       const rowCount = Math.max(1, laneCount);
       const startRow = cursor;
       cursor += rowCount;
-      return { row, laneBars, laneCount: rowCount, startRow };
+      return { row, editor, laneBars, laneCount: rowCount, startRow };
     });
     return { items, totalRows: cursor - 2 };
-  }, [rows, scheduled]);
+  }, [editors, scheduled]);
 
   // ─── Drag handler ────────────────────────────────────────────────
   const sensors = useSensors(useSensor(PointerSensor, {
@@ -911,6 +969,8 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
                 <Row
                   key={item.row.id}
                   row={item.row}
+                  editor={item.editor}
+                  weekData={weekData}
                   rowIdx={rowIdx}
                   startRow={item.startRow}
                   laneCount={item.laneCount}
@@ -1043,7 +1103,7 @@ function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
 // Replaces the previous fixed-height + paddingTop arrangement which
 // clipped wrapped text whenever a bar's content exceeded the bar's
 // height.
-function Row({ row, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, onOpenProject }) {
+function Row({ row, editor, weekData, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, onOpenProject }) {
   const striped = rowIdx % 2 === 1;
   const endRow = startRow + laneCount;  // exclusive end for grid-row range
 
@@ -1069,6 +1129,7 @@ function Row({ row, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, o
           gridColumn={i + 2}
           gridRow={`${startRow} / ${endRow}`}
           striped={striped}
+          dayStatus={getEditorDayStatus(weekData, editor, d)}
         />
       ))}
 
