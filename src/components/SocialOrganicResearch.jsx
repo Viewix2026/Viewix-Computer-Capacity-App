@@ -17,6 +17,26 @@ import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewrite
 import { DescriptionField } from "./shared/DescriptionField";
 import { ReelPreview } from "./shared/ReelPreview";
 
+// Read a fetch Response as JSON, but fall back gracefully when the
+// body isn't actually JSON. Vercel timeout pages, gateway 502/504
+// errors, and unhandled exceptions all return plain text or HTML
+// starting with "An error occurred…" — calling r.json() on that
+// throws "Unexpected token 'A' is not valid JSON" which is useless
+// to producers. This helper surfaces the actual response so they
+// see "HTTP 504 — An error occurred with this application…" and
+// know to retry / report.
+async function readJsonResponse(r) {
+  const text = await r.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const preview = text.slice(0, 240).replace(/\s+/g, " ").trim();
+    throw new Error(r.ok
+      ? `Server returned non-JSON response: ${preview}`
+      : `HTTP ${r.status} — ${preview || "request failed"}`);
+  }
+}
+
 // ─── Constants ───
 const STATUS_COLORS = {
   draft:        { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85" },
@@ -415,7 +435,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "scrape", projectId: project.id, inputs: project.inputs }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
       // Firebase listener will rehydrate the project with posts + handleStats automatically.
       if (d.errors?.length) {
@@ -671,7 +691,7 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "runPipeline", projectId: project.id, fast: fastClassify }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${JSON.stringify(d.detail).slice(0, 200)}` : ""));
       const bits = [];
       if (d.scrape?.postsCollected != null) bits.push(`${d.scrape.postsCollected} posts scraped`);
@@ -698,7 +718,7 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "classify", projectId: project.id, fast: fastClassify }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       let msg = `Classified ${d.classified} post${d.classified === 1 ? "" : "s"}`;
       if (d.batchErrors?.length) {
@@ -1255,7 +1275,7 @@ function TranscriptSection({ project, addCompetitor, addKeyword }) {
           googleDocUrl: useGoogleDoc ? docUrl.trim() : undefined,
         }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setDocUrl("");
     } catch (e) {
@@ -1434,7 +1454,7 @@ function CostEstimateBar({ handles, postsPerHandle }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "estimate", handles, postsPerHandle }),
         });
-        const d = await r.json();
+        const d = await readJsonResponse(r);
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         setEstimate(d);
       } catch (e) {
@@ -1663,7 +1683,7 @@ function VideoReviewStep({ project, onPatch }) {
           resultsLimit: 50,
         }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       setAddCompetitorOpen(false);
       setAddCompetitorHandles("");
@@ -1692,7 +1712,7 @@ function VideoReviewStep({ project, onPatch }) {
           includeHashtags: true,
         }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
     } catch (e) {
       setAppendError(e.message);
@@ -2579,7 +2599,7 @@ function IdeaSelectionStep({ project, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "generateFormatIdeas", projectId: project.id }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) {
         fbSet(`/preproduction/socialOrganic/${project.id}/formatIdeasProcessingAt`, null);
         throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
@@ -2743,7 +2763,7 @@ function ScriptStep({ project, onPatch }) {
           numberOfVideos: project.numberOfVideos ?? null,
         }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
       // Firebase listener rehydrates preproductionDoc automatically.
     } catch (e) {
@@ -3041,7 +3061,7 @@ function RowFeedbackModal({ target, project, onClose }) {
           instruction: note.trim(),
         }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
       onClose();
     } catch (e) {
@@ -3201,7 +3221,7 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
       // Firebase listener rehydrates fields automatically.
     } catch (e) {
@@ -3435,7 +3455,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startClientScrape", projectId: project.id, handle: clientHandle }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       fbSet(`/preproduction/socialOrganic/${project.id}/approvals/research_a`, new Date().toISOString());
     } catch (e) {
@@ -3501,7 +3521,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       // Auto-add suggested competitors + keywords if empty; otherwise just
       // leave the suggestions in research.aiSuggestions for manual accept.
@@ -3538,7 +3558,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startCompetitorScrape", projectId: project.id }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       fbSet(`/preproduction/socialOrganic/${project.id}/approvals/research_b`, new Date().toISOString());
     } catch (e) {
@@ -3829,7 +3849,7 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "refreshScrapes", projectId }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       const replayed = (d.results || []).filter(x => x.outcome === "replayed").length;
       const stillRunning = (d.results || []).filter(x => x.outcome === "still_running").length;
@@ -3985,7 +4005,7 @@ function ClientResearchStep({ project, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startClientScrape", projectId: project.id, handle: clean }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
       // Firebase listener rehydrates clientScrape.status → "running"
       // and the rest of the tab's UI responds accordingly.
@@ -4031,7 +4051,7 @@ function ClientResearchStep({ project, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startProfileScrape", projectId: project.id, platform, handle: clean }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
 
       // TT/YT profile scrapes don't flip clientScrape.status to "running"
@@ -4332,7 +4352,7 @@ function ScriptToolbar({ project, onRegenerate, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "pushToRunsheet", projectId: project.id }),
       });
-      const d = await r.json();
+      const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
     } catch (e) {
       setPushError(e.message);
