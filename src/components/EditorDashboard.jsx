@@ -4,8 +4,14 @@ import { todayKey, tomorrowKey, fmtSecs, fmtSecsShort, categorizeContent } from 
 import { initFB, onFB, fbSet, fbListen } from "../firebase";
 import { fetchMondayUsers, fetchEditorTasks, fetchItemUpdates } from "../monday";
 import { Logo } from "./Logo";
+import { EditorDashboardViewix } from "./EditorDashboardViewix";
 
-export function EditorDashboard({embedded,onLogout}){
+export function EditorDashboard({ embedded, onLogout, projects = [], editors: viewixEditors = [] }) {
+  // Sub-tab between the original Monday.com-driven view and the new
+  // Viewix Dashboard view (Firebase-backed, reads /editors + /projects
+  // subtasks). Default to Monday so existing producers don't lose
+  // their landing surface; producers can switch any time.
+  const [subTab, setSubTab] = useState("monday");
   const[editorId,setEditorId]=useState(null);
   const[tasks,setTasks]=useState([]);
   const[loading,setLoading]=useState(false);
@@ -198,8 +204,45 @@ export function EditorDashboard({embedded,onLogout}){
   const overdueTasks=tasks.filter(t=>t.endDate&&t.endDate<today&&t.status!=="DONE"&&!isOnDay(t,today));
   const tomorrowTasks=tasks.filter(t=>isOnDay(t,tomorrow)&&!isOnDay(t,today));
 
+  // Sub-tab toggle bar — rendered above whichever sub-tab is active
+  // so producers can flip between Monday.com and the Viewix Dashboard
+  // without leaving the Editors tab.
+  const subTabBar = (
+    <div style={{
+      padding: "12px 28px", borderBottom: "1px solid var(--border)",
+      background: "var(--card)",
+      display: "flex", alignItems: "center", gap: 12, flexShrink: 0,
+    }}>
+      <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>Editors</span>
+      <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3, marginLeft: 4 }}>
+        <button onClick={() => setSubTab("monday")}
+          style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: subTab === "monday" ? "var(--card)" : "transparent", color: subTab === "monday" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+          Monday.com
+        </button>
+        <button onClick={() => setSubTab("viewix")}
+          style={{ padding: "6px 14px", borderRadius: 6, border: "none", background: subTab === "viewix" ? "var(--card)" : "transparent", color: subTab === "viewix" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+          Viewix Dashboard
+        </button>
+      </div>
+    </div>
+  );
+
+  // Viewix sub-tab — entirely separate component to keep the Monday
+  // code path untouched and avoid bloating this file with two parallel
+  // dashboards' state and side-effects.
+  if (subTab === "viewix") {
+    return (
+      <div style={{ fontFamily: "'DM Sans',-apple-system,sans-serif", background: embedded ? "transparent" : "var(--bg)", color: "var(--fg)", minHeight: embedded ? "auto" : "100vh" }}>
+        {subTabBar}
+        <EditorDashboardViewix projects={projects} editors={viewixEditors} />
+      </div>
+    );
+  }
+
   if(!editorId){
-    return(<div style={{minHeight:embedded?"auto":"100vh",display:"flex",alignItems:embedded?"flex-start":"center",justifyContent:"center",background:embedded?"transparent":"var(--bg)",fontFamily:"'DM Sans',-apple-system,sans-serif",padding:embedded?"24px 28px":0}}>
+    return(<div style={{minHeight:embedded?"auto":"100vh",background:embedded?"transparent":"var(--bg)",fontFamily:"'DM Sans',-apple-system,sans-serif"}}>
+      {subTabBar}
+      <div style={{display:"flex",alignItems:embedded?"flex-start":"center",justifyContent:"center",padding:embedded?"24px 28px":0}}>
       <div style={{width:420,padding:"48px 40px",background:"var(--card)",borderRadius:16,border:"1px solid var(--border)",textAlign:"center"}}>
         {!embedded&&<div style={{marginBottom:32,display:"flex",justifyContent:"center"}}><Logo h={36}/></div>}
         <div style={{fontSize:18,fontWeight:700,color:"var(--fg)",marginBottom:6}}>Editor Dashboard</div>
@@ -215,10 +258,12 @@ export function EditorDashboard({embedded,onLogout}){
         </div>
         <button onClick={()=>{setEditorsLoading(true);fetchMondayUsers().then(users=>{if(users&&users.length>0){setMondayEditors(users);fbSet("/mondayEditors",users);}setEditorsLoading(false);}).catch(()=>setEditorsLoading(false));}} style={{marginTop:16,padding:"8px 16px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:11,fontWeight:600,cursor:"pointer",width:"100%"}}>{editorsLoading?"Syncing...":"Sync from Monday.com"}</button>
       </div>
+      </div>
     </div>);
   }
 
   return(<div style={{fontFamily:"'DM Sans',-apple-system,sans-serif",background:embedded?"transparent":"var(--bg)",color:"var(--fg)",minHeight:embedded?"auto":"100vh"}}>
+    {subTabBar}
     {/* Header */}
     <div style={{padding:"16px 28px",borderBottom:"1px solid var(--border)",background:"var(--card)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
       <div style={{display:"flex",alignItems:"center",gap:16}}>
