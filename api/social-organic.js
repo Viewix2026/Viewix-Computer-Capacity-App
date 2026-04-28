@@ -2679,6 +2679,7 @@ async function handlePushToRunsheet(req, res) {
           // / Shoot if filming hasn't happened yet.
           stage: "edit",
           startDate: null, endDate: null, startTime: null, endTime: null,
+          assigneeIds: [],
           assigneeId: null,
           source: "video",
           order: existingCount + i,

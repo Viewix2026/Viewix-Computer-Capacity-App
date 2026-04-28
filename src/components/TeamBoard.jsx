@@ -165,6 +165,16 @@ const dateRange = (from, dayCount) => {
   }
   return out;
 };
+// Read a subtask's assignees as an array. New schema is `assigneeIds`;
+// legacy schema was `assigneeId`. Mirrors the helper in Projects.jsx
+// (kept local rather than imported — same convention as the rest of
+// TeamBoard's local constants).
+function getAssigneeIds(subtask) {
+  if (Array.isArray(subtask?.assigneeIds)) return subtask.assigneeIds.filter(Boolean);
+  if (subtask?.assigneeId) return [subtask.assigneeId];
+  return [];
+}
+
 // Drop-zone id is "{assigneeId}|{dateOrNull}". Null/undefined values
 // serialise to literal "null" so the round-trip survives split().
 const cellId = (assigneeId, date) => `${assigneeId || "null"}|${date || "null"}`;
@@ -235,19 +245,23 @@ function StageLegend() {
 //   - Left-edge handle → "resizeStart": pull startDate to the dropped
 //     day. If the dropped day is AFTER endDate, that day becomes the
 //     new endDate (mirror of the right-flip).
-function GanttBar({ subtask, onClick }) {
-  const dragId = `bar:${subtask.id}`;
+function GanttBar({ subtask, sourceAssigneeId, onClick }) {
+  // Drag IDs include the sourceAssigneeId so multi-assignee subtasks
+  // (which render once per assignee row) each have a unique draggable.
+  // Without the suffix dnd-kit would see two useDraggables with the
+  // same id and only the last would respond to events.
+  const dragId = `bar:${subtask.id}:${sourceAssigneeId}`;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: dragId,
-    data: { mode: "move", subtask },
+    data: { mode: "move", subtask, sourceAssigneeId },
   });
   const resizeEnd = useDraggable({
-    id: `resize-end:${subtask.id}`,
-    data: { mode: "resizeEnd", subtask },
+    id: `resize-end:${subtask.id}:${sourceAssigneeId}`,
+    data: { mode: "resizeEnd", subtask, sourceAssigneeId },
   });
   const resizeStart = useDraggable({
-    id: `resize-start:${subtask.id}`,
-    data: { mode: "resizeStart", subtask },
+    id: `resize-start:${subtask.id}:${sourceAssigneeId}`,
+    data: { mode: "resizeStart", subtask, sourceAssigneeId },
   });
 
   const colour = colourFor(subtask);
@@ -500,33 +514,42 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
     return out;
   }, [projects]);
 
-  // Two bins: subtasks that are fully on the schedule (have BOTH a
-  // startDate AND an assigneeId pointing to a CURRENT editor) go into
-  // the main grid; everything else goes into the bottom "pool" drawer.
-  // The "current editor" check is critical — without it, a subtask
-  // assigned to a deleted/legacy editor would land in a `scheduled`
-  // bin that no Row consumes, hiding the bar from the producer with
-  // no way to see or fix it. Orphans now surface in the pool with
-  // their stale assigneeId still set; producers can drag them onto a
-  // valid editor's row to reassign + reschedule in one move.
+  // Two bins:
+  //   - scheduled: per-editor list of bars to render in that editor's
+  //     row. A multi-assignee subtask appears once in EACH of its
+  //     assignees' rows.
+  //   - pool: subtasks that are missing a startDate, missing all
+  //     assignees, or whose assignees are all stale (orphaned to
+  //     deleted editors). One entry per subtask, not per assignee.
+  //
+  // The "valid current editor" check on each assignee is critical —
+  // without it, a subtask assigned only to a deleted editor would have
+  // no row to render in, silently disappearing.
   const editorIds = useMemo(() => new Set(editors.map(e => e.id)), [editors]);
   const editorById = useMemo(() => new Map(editors.map(e => [e.id, e.name || ""])), [editors]);
   const { scheduled, pool } = useMemo(() => {
     const scheduled = new Map();
     const pool = [];
     for (const st of flatSubtasks) {
-      const onSchedule = st.assigneeId && st.startDate && editorIds.has(st.assigneeId);
-      if (onSchedule) {
-        if (!scheduled.has(st.assigneeId)) scheduled.set(st.assigneeId, []);
-        scheduled.get(st.assigneeId).push(st);
+      const ids = getAssigneeIds(st);
+      const validIds = ids.filter(id => editorIds.has(id));
+      const isScheduled = !!st.startDate && validIds.length > 0;
+      if (isScheduled) {
+        // Render one bar per valid assignee in their respective rows.
+        for (const aid of validIds) {
+          if (!scheduled.has(aid)) scheduled.set(aid, []);
+          scheduled.get(aid).push(st);
+        }
       } else {
         pool.push(st);
       }
     }
     pool.sort((a, b) => {
+      const aIds = getAssigneeIds(a);
+      const bIds = getAssigneeIds(b);
       // "_" < "a-z" so unassigned (and orphan) sorts to the front.
-      const aName = a.assigneeId ? (editorById.get(a.assigneeId) || "zzz") : "_unassigned";
-      const bName = b.assigneeId ? (editorById.get(b.assigneeId) || "zzz") : "_unassigned";
+      const aName = aIds[0] ? (editorById.get(aIds[0]) || "zzz") : "_unassigned";
+      const bName = bIds[0] ? (editorById.get(bIds[0]) || "zzz") : "_unassigned";
       if (aName !== bName) return aName.localeCompare(bName);
       return (a.clientName || "").localeCompare(b.clientName || "");
     });
@@ -614,9 +637,19 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
       return;
     }
 
-    const { mode, subtask } = activeData;
+    const { mode, subtask, sourceAssigneeId } = activeData;
     const path = `/projects/${subtask.projectId}/subtasks/${subtask.id}`;
     const now = new Date().toISOString();
+
+    // Helper: write a new assignee list back to Firebase, keeping the
+    // legacy `assigneeId` field in sync as the first entry so any code
+    // that still reads it gets a sensible value. Pass null/empty to
+    // unassign entirely.
+    const writeAssignees = (nextIds) => {
+      const cleaned = (nextIds || []).filter(Boolean);
+      fbSet(`${path}/assigneeIds`, cleaned);
+      fbSet(`${path}/assigneeId`, cleaned[0] || null);
+    };
 
     if (mode === "resizeEnd" || mode === "resizeStart") {
       // Pool drop on a resize handle is a no-op.
@@ -660,31 +693,56 @@ export function TeamBoard({ projects = [], editors = [], setEditors, onOpenProje
 
     // mode === "move"
     if (over.id === POOL_ID) {
-      // Drop into the pool drawer = unschedule. Keeps the assigneeId
+      // Drop into the pool drawer = unschedule. Keeps the assigneeIds
       // intact so the producer can drop the card back into a date cell
-      // later without having to re-pick the editor — pool cards still
-      // show the assignee name in their footer.
+      // later without re-picking everyone — pool cards still show all
+      // assignees in their footer.
       fbSet(`${path}/startDate`, null);
       fbSet(`${path}/endDate`, null);
       fbSet(`${path}/updatedAt`, now);
       return;
     }
 
-    // Drop into a date cell on the main grid. Both newAssignee and
-    // newDate must be set (the grid only renders date cells; bail
-    // safely if somehow we get a malformed id).
+    // Drop into a date cell. Both newAssignee + newDate must be set.
     const { assigneeId: newAssignee, date: newDate } = parseCellId(over.id);
     if (!newAssignee || !newDate) return;
     const oldStart = subtask.startDate;
     const oldEnd = subtask.endDate;
+
+    // Date logic: shift the WHOLE subtask (all assignees move together
+    // — they're co-scheduled). Preserve duration when both ends exist.
     let newEnd = newDate;
     if (oldStart && oldEnd) {
       const delta = daysBetween(oldStart, newDate);
       newEnd = addDays(oldEnd, delta);
     }
-    fbSet(`${path}/assigneeId`, newAssignee);
     fbSet(`${path}/startDate`, newDate);
     fbSet(`${path}/endDate`, newEnd);
+
+    // Assignee logic for multi-assignee subtasks:
+    //   - If the producer dragged from an editor row's bar, sourceAssigneeId
+    //     identifies which assignee the bar represented.
+    //   - Drop on the SAME editor row → only the date changed; assignees stay.
+    //   - Drop on a DIFFERENT editor row → swap source for target. If target
+    //     is already assigned, just drop source (avoids duplicates). If
+    //     somehow there's no source (legacy single-assignee bar dragged from
+    //     pool, no row context), just ensure the target is in the list.
+    const currentIds = getAssigneeIds(subtask);
+    const droppedFromRow = !!sourceAssigneeId && sourceAssigneeId !== newAssignee;
+    let nextIds;
+    if (droppedFromRow) {
+      const stripped = currentIds.filter(id => id !== sourceAssigneeId);
+      nextIds = stripped.includes(newAssignee) ? stripped : [...stripped, newAssignee];
+    } else if (!sourceAssigneeId) {
+      // From the pool: just add target if not already present.
+      nextIds = currentIds.includes(newAssignee) ? currentIds : [...currentIds, newAssignee];
+    } else {
+      // sourceAssigneeId === newAssignee → just a date change, no assignee change.
+      nextIds = currentIds;
+    }
+    if (JSON.stringify(nextIds) !== JSON.stringify(currentIds)) {
+      writeAssignees(nextIds);
+    }
     fbSet(`${path}/updatedAt`, now);
   };
 
@@ -1035,6 +1093,7 @@ function Row({ row, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, o
           }}>
             <GanttBar
               subtask={st}
+              sourceAssigneeId={row.id}
               onClick={() => onOpenProject?.(st.projectId)}
             />
           </div>
@@ -1113,13 +1172,26 @@ function PoolDrawer({ poolId, pool, editors, onOpenProject }) {
 // "move" branch can route it onto either a date cell or back into the
 // pool drop zone.
 function PoolCard({ subtask, editors, onClick }) {
+  // Pool cards have no source row — sourceAssigneeId is null, which
+  // onDragEnd's "move" branch handles by ADDING the target editor to
+  // the assigneeIds list rather than swapping anyone out.
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: `bar:${subtask.id}`,
-    data: { mode: "move", subtask },
+    id: `bar:${subtask.id}:pool`,
+    data: { mode: "move", subtask, sourceAssigneeId: null },
   });
   const colour = colourFor(subtask);
-  const editor = (editors || []).find(e => e.id === subtask.assigneeId);
-  const assigneeLabel = editor?.name || "Unassigned";
+  const editorById = useMemo(() =>
+    new Map((editors || []).map(e => [e.id, e.name || ""])),
+    [editors]
+  );
+  const ids = getAssigneeIds(subtask);
+  const names = ids.map(id => editorById.get(id)).filter(Boolean);
+  const assigneeLabel = names.length === 0
+    ? "Unassigned"
+    : names.length <= 2
+    ? names.join(", ")
+    : `${names[0]}, ${names[1]} +${names.length - 2}`;
+  const isUnassigned = names.length === 0;
   return (
     <div
       ref={setNodeRef}
@@ -1155,7 +1227,8 @@ function PoolCard({ subtask, editors, onClick }) {
         {subtask.name}
       </div>
       <div style={{
-        fontSize: 9, fontWeight: 700, color: editor ? "var(--muted)" : "#EAB308",
+        fontSize: 9, fontWeight: 700,
+        color: isUnassigned ? "#EAB308" : "var(--muted)",
         textTransform: "uppercase", letterSpacing: 0.4,
       }}>
         {assigneeLabel}

@@ -756,6 +756,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                         // happened yet.
                         stage: "edit",
                         startDate: null, endDate: null, startTime: null, endTime: null,
+                        assigneeIds: [],
                         assigneeId: null,
                         source: "video",
                         order: existingCount + i,

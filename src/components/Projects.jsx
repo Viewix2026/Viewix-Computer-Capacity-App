@@ -119,6 +119,18 @@ function subtasksAsArray(subtasksObj) {
     });
 }
 
+// Read a subtask's assignees as an array. New schema is
+// `assigneeIds: string[]`; legacy schema was `assigneeId: string`.
+// This helper transparently reads both so we don't need to migrate
+// every record up-front. Writes always set the new field; the legacy
+// `assigneeId` is kept in sync as the first element so any code that
+// still reads it sees a consistent value.
+export function getAssigneeIds(subtask) {
+  if (Array.isArray(subtask?.assigneeIds)) return subtask.assigneeIds.filter(Boolean);
+  if (subtask?.assigneeId) return [subtask.assigneeId];
+  return [];
+}
+
 // ─── Inline edit primitives ────────────────────────────────────────
 // Single-line text input that commits on blur or Enter. Optional
 // `displayValue` lets number / date inputs keep the raw string in state
@@ -497,6 +509,119 @@ function SubtaskInline({ value, onSave, placeholder, type = "text", style }) {
 // passed in so we can check sibling subtasks for the auto-mark-done
 // rollup (when every subtask hits Done, the project itself flips to
 // Done too — saves producers a manual click).
+// Multi-assignee picker. Click the button → popover with one row per
+// editor + a checkbox. Toggling persists immediately via `onChange`.
+// Designed for inline use inside a subtask row, so width is constrained
+// and the popover floats below the button.
+function MultiAssigneePicker({ value, editors, onChange }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const ids = Array.isArray(value) ? value : [];
+  const idSet = new Set(ids);
+  const assigned = (editors || []).filter(e => idSet.has(e.id));
+
+  // Close on outside-click. Bound only while the popover is open so
+  // we don't re-render the whole table on every document click.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const label = assigned.length === 0
+    ? "Unassigned"
+    : assigned.length === 1
+    ? assigned[0].name
+    : `${assigned[0].name} +${assigned.length - 1}`;
+
+  const toggle = (editorId) => {
+    const next = idSet.has(editorId)
+      ? ids.filter(x => x !== editorId)
+      : [...ids, editorId];
+    onChange(next);
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        title={assigned.length > 0 ? assigned.map(a => a.name).join(", ") : "Click to assign"}
+        style={{
+          padding: "4px 8px", borderRadius: 4,
+          border: "1px solid var(--border)",
+          background: assigned.length > 0 ? "var(--input-bg)" : "var(--bg)",
+          color: assigned.length > 0 ? "var(--fg)" : "var(--muted)",
+          fontSize: 11, fontWeight: 600, cursor: "pointer",
+          fontFamily: "inherit",
+          maxWidth: 160, overflow: "hidden",
+          textOverflow: "ellipsis", whiteSpace: "nowrap",
+          display: "inline-flex", alignItems: "center", gap: 4,
+        }}>
+        {label} <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
+      </button>
+      {open && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: "absolute", top: "100%", left: 0, marginTop: 4,
+            minWidth: 200, maxHeight: 280, overflowY: "auto",
+            background: "var(--card)", border: "1px solid var(--border)",
+            borderRadius: 6, boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+            zIndex: 10,
+            padding: 4,
+          }}>
+          {(editors || []).length === 0 ? (
+            <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>
+              No editors in roster.
+            </div>
+          ) : (editors || []).map(ed => {
+            const checked = idSet.has(ed.id);
+            return (
+              <label
+                key={ed.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "6px 8px", borderRadius: 4,
+                  fontSize: 12, cursor: "pointer",
+                  color: "var(--fg)",
+                  background: checked ? "rgba(99,102,241,0.12)" : "transparent",
+                }}
+                onMouseEnter={e => { if (!checked) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+                onMouseLeave={e => { if (!checked) e.currentTarget.style.background = "transparent"; }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(ed.id)}
+                  style={{ accentColor: "var(--accent)", cursor: "pointer" }}
+                />
+                <span style={{ fontWeight: checked ? 600 : 500 }}>{ed.name}</span>
+              </label>
+            );
+          })}
+          {assigned.length > 0 && (
+            <button
+              onClick={() => onChange([])}
+              style={{
+                width: "100%", marginTop: 4,
+                padding: "5px 8px", borderRadius: 4,
+                border: "1px solid var(--border)",
+                background: "transparent", color: "var(--muted)",
+                fontSize: 10, fontWeight: 600, cursor: "pointer",
+                fontFamily: "inherit",
+              }}>
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped }) {
   const persist = (field, value) => {
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
@@ -550,23 +675,20 @@ function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped })
             placeholder="Subtask name"
             style={{ fontSize: 12, fontWeight: 600 }}
           />
-          {/* Assignee dropdown — pulls from /editors, persists assigneeId */}
-          <select
-            value={subtask.assigneeId || ""}
-            onChange={e => persist("assigneeId", e.target.value || null)}
-            onClick={e => e.stopPropagation()}
-            title="Assign to editor"
-            style={{
-              padding: "4px 6px", borderRadius: 4, border: "1px solid var(--border)",
-              background: "var(--input-bg)", color: subtask.assigneeId ? "var(--fg)" : "var(--muted)",
-              fontSize: 11, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
-              maxWidth: 120,
-            }}>
-            <option value="">Unassigned</option>
-            {(editors || []).map(ed => (
-              <option key={ed.id} value={ed.id}>{ed.name}</option>
-            ))}
-          </select>
+          {/* Multi-assignee picker — supports multiple people on the
+              same subtask (e.g. shoot crew). Writes to assigneeIds and
+              keeps legacy assigneeId in sync as the first element so
+              any code still reading the singular field gets a sensible
+              value. Reads via getAssigneeIds() so existing records
+              with only assigneeId render correctly without migration. */}
+          <MultiAssigneePicker
+            value={getAssigneeIds(subtask)}
+            editors={editors}
+            onChange={(nextIds) => {
+              persist("assigneeIds", nextIds);
+              persist("assigneeId", nextIds[0] || null);
+            }}
+          />
           {/* Delete subtask — visible by default in red so producers
               don't have to hover-hunt for the × like the previous
               implementation required. Hover deepens the background to
@@ -651,7 +773,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
       // the dropdown if it's actually a shoot/pre-prod task.
       stage: "edit",
       startDate: null, endDate: null, startTime: null, endTime: null,
-      assigneeId: null, source: "manual", order: nextOrder,
+      assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
       createdAt: now, updatedAt: now,
     });
   };
@@ -1125,7 +1247,7 @@ function ProjectDetail({ project, onBack, onDelete, editors }) {
               id: stId, name, status: "stuck",
               stage: inferStage({ name }),
               startDate: null, endDate: null, startTime: null, endTime: null,
-              assigneeId: null, source: "default", order: i,
+              assigneeIds: [], assigneeId: null, source: "default", order: i,
               createdAt: now, updatedAt: now,
             });
           });
@@ -1140,7 +1262,7 @@ function ProjectDetail({ project, onBack, onDelete, editors }) {
             id, name: "New subtask", status: "stuck",
             stage: "edit",
             startDate: null, endDate: null, startTime: null, endTime: null,
-            assigneeId: null, source: "manual", order: nextOrder,
+            assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
             createdAt: now, updatedAt: now,
           });
         };
@@ -1325,7 +1447,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
             id: stId, name, status: "stuck",
             stage: inferStage({ name }),
             startDate: null, endDate: null, startTime: null, endTime: null,
-            assigneeId: null, source: "default", order: i,
+            assigneeIds: [], assigneeId: null, source: "default", order: i,
             createdAt: now, updatedAt: now,
           });
         });
