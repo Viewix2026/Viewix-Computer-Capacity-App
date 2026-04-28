@@ -134,7 +134,7 @@ function PersonPicker({ editors, onPick }) {
       <div style={{ width: 460, maxWidth: "100%", padding: "40px 36px", background: "var(--card)", borderRadius: 16, border: "1px solid var(--border)", textAlign: "center" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>Viewix Team Dashboard</div>
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 26 }}>
-          Pick yourself to see today's tasks pulled from the Projects + Team Board.
+          Select your name to see today's tasks
         </div>
         <div style={{ display: "grid", gap: 10 }}>
           {editors.map(ed => (
