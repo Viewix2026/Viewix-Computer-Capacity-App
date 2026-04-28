@@ -682,22 +682,8 @@ export function Founders({
           <div style={{ marginBottom: 20, padding: "24px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 24 }}>
               <div>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
-                  <span>Current Revenue (YTD)</span>
-                  <button
-                    onClick={() => setRevenueVisible(v => !v)}
-                    title={revenueVisible ? "Hide" : "Reveal"}
-                    aria-label={revenueVisible ? "Hide revenue" : "Reveal revenue"}
-                    style={{
-                      width: 22, height: 22, borderRadius: 4,
-                      border: "1px solid var(--border)",
-                      background: "var(--bg)", color: "var(--muted)",
-                      fontSize: 12, cursor: "pointer", padding: 0,
-                      display: "inline-flex", alignItems: "center", justifyContent: "center",
-                      fontFamily: "inherit",
-                    }}>
-                    {revenueVisible ? "🙈" : "👁"}
-                  </button>
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>
+                  Current Revenue (YTD)
                 </div>
                 <div
                   onClick={() => setRevenueVisible(v => !v)}
@@ -707,12 +693,13 @@ export function Founders({
                     cursor: "pointer", userSelect: "none",
                     fontSize: 36, fontWeight: 800,
                     fontFamily: "'JetBrains Mono',monospace",
-                    color: "#10B981",
-                    textShadow: "0 0 16px rgba(16,185,129,0.45)",
+                    color: revenueVisible ? "#10B981" : "var(--muted)",
+                    textShadow: revenueVisible ? "0 0 16px rgba(16,185,129,0.45)" : "none",
+                    letterSpacing: revenueVisible ? 0 : 2,
                     minHeight: 48,
                     width: 280, maxWidth: "100%",
                   }}>
-                  {revenueVisible ? fmtCurNoCents(currentRevenue) : "$ • • • • • • •"}
+                  {revenueVisible ? fmtCurNoCents(currentRevenue) : "HIDDEN"}
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
