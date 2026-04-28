@@ -923,6 +923,80 @@ async function getFantasticExample() {
   return (typeof ex === "string" && ex.trim()) ? ex : null;
 }
 
+// Split the selected formats + their ticked ideas into chunks no
+// larger than `batchSize` videos each. Each chunk is a self-contained
+// `selectedFormatObjects` array that buildScriptUserMessage can render
+// independently. A single format's ideas may span multiple chunks if
+// it has more ideas than the batch ceiling — the chunker creates one
+// fmt entry per chunk holding only that chunk's slice of ideas.
+//
+// Used to keep each Claude call's response under Sonnet's 8000-token
+// output ceiling (a script row is ~400-500 output tokens; 12 rows
+// fits comfortably with headroom).
+//
+// Legacy fallback (no ticked ideas, projects pre-dating the format
+// idea selector): we keep the format whole and use _videoCount as a
+// rough estimate for chunking. Beyond batchSize we just split each
+// format's videoCount as-is — Claude will produce however many rows
+// the format declares.
+function chunkSelectedFormatsForScripting(formats, batchSize) {
+  const batches = [];
+  let currentBatch = [];
+  let currentCount = 0;
+
+  const flushIfFull = () => {
+    if (currentCount >= batchSize) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentCount = 0;
+    }
+  };
+
+  for (const fmt of formats) {
+    const ideas = Array.isArray(fmt._tickedIdeas) ? fmt._tickedIdeas : null;
+
+    if (!ideas) {
+      // Legacy path — single fmt entry, weighted by its video count.
+      currentBatch.push(fmt);
+      currentCount += Math.max(1, fmt._videoCount || 1);
+      flushIfFull();
+      continue;
+    }
+
+    if (ideas.length === 0) {
+      // No ticked ideas for this format — skip entirely, no rows to gen.
+      continue;
+    }
+
+    let remaining = ideas;
+    while (remaining.length > 0) {
+      const room = Math.max(1, batchSize - currentCount);
+      const take = remaining.slice(0, room);
+      remaining = remaining.slice(room);
+
+      // Re-use an existing fmt entry in the current batch if one is
+      // already there (rare — only happens if a format's ideas
+      // straddle the boundary just-so), otherwise add a fresh entry.
+      let fmtEntry = currentBatch.find(f => f.id === fmt.id);
+      if (!fmtEntry) {
+        fmtEntry = { ...fmt, _tickedIdeas: [] };
+        currentBatch.push(fmtEntry);
+      }
+      fmtEntry._tickedIdeas.push(...take);
+      currentCount += take.length;
+
+      if (remaining.length > 0) flushIfFull();
+    }
+  }
+
+  if (currentBatch.length > 0) batches.push(currentBatch);
+
+  // Always at least one batch — empty selectedFormats is filtered out
+  // earlier in handleGenerateScript before we get here, but defensive.
+  if (batches.length === 0) batches.push([]);
+  return batches;
+}
+
 function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample }) {
   // New schema sources — Brand Truth and client research are already approved.
   const bt = project.brandTruth?.fields || {};
@@ -1188,26 +1262,8 @@ async function handleGenerateScript(req, res) {
     return res.status(400).json({ error: "No ideas ticked. Go to Idea Selection and tick the ideas you want to progress." });
   }
 
-  // Pre-flight check: each script row is ~400-500 output tokens. With
-  // Sonnet capped at 8000 max_tokens per call, ~16-18 rows is a safe
-  // ceiling; beyond that the JSON gets truncated and we throw a parse
-  // error which looks like a server bug to the producer. Surface a
-  // clear message asking them to split into batches instead.
-  const totalTickedIdeas = selectedFormatObjects.reduce(
-    (sum, f) => sum + (f._tickedIdeas?.length || 0),
-    0
-  );
-  const SCRIPT_BATCH_LIMIT = 18;
-  if (hasIdeas && totalTickedIdeas > SCRIPT_BATCH_LIMIT) {
-    return res.status(400).json({
-      error: `Too many ideas in one batch (${totalTickedIdeas} ticked).`,
-      detail: `The current generator handles up to ${SCRIPT_BATCH_LIMIT} videos per call. Untick some ideas and try again, then come back and tick the rest for a second pass.`,
-    });
-  }
-
   const systemPrompt = await getPromptOverride();
   const fantasticExample = await getFantasticExample();
-  const userMessage = buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample });
 
   const runId = `script_${Date.now()}_${crypto.randomBytes(2).toString("hex")}`;
   const startedAt = Date.now();
@@ -1215,35 +1271,58 @@ async function handleGenerateScript(req, res) {
   // Bulk script generation runs against Sonnet rather than Opus.
   // Opus consistently took 200-400s on 10+ ticked ideas, hitting
   // Vercel's 300s function-execution ceiling and throwing 504
-  // FUNCTION_INVOCATION_TIMEOUT for producers. Sonnet 4.6 finishes
-  // the same work in 30-90s with quality plenty good for structured
-  // JSON output (hook / scriptNotes / textHook etc. are short, well-
-  // defined fields). For per-cell polish afterwards, the producer
-  // can still use the rewrite-this-cell modal which has its own
-  // small Claude call where quality matters more per token.
-  // maxTokens 8000 = Sonnet's per-call output ceiling. Enough for
-  // ~15-20 video script rows; if a producer ticks more ideas than
-  // that they should split into batches.
+  // FUNCTION_INVOCATION_TIMEOUT. Sonnet 4.6 finishes the same work
+  // in 30-90s with quality plenty good for structured JSON output.
+  // Per-cell polish via the rewrite modal stays on its own model.
+  //
+  // maxTokens 8000 = Sonnet's per-call output ceiling. Each script
+  // row is ~400-500 output tokens, so a single call comfortably fits
+  // ~12 rows. For larger batches we split the ticked ideas across
+  // parallel calls and merge the resulting rows; total Vercel run
+  // time stays bounded by the SLOWEST batch (parallel), not the sum.
   const SCRIPT_MODEL = "claude-sonnet-4-6";
   const SCRIPT_MAX_TOKENS = 8000;
-  let raw;
+  const BATCH_SIZE = 12;
+
+  const batches = chunkSelectedFormatsForScripting(selectedFormatObjects, BATCH_SIZE);
+
+  let allRows;
   try {
-    raw = await callClaude({
-      model: SCRIPT_MODEL,
-      systemPrompt,
-      userMessage,
-      maxTokens: SCRIPT_MAX_TOKENS,
-      apiKey: ANTHROPIC_KEY,
-    });
+    const responses = await Promise.all(batches.map(batch => {
+      const userMessage = buildScriptUserMessage({ project, selectedFormatObjects: batch, fantasticExample });
+      return callClaude({
+        model: SCRIPT_MODEL,
+        systemPrompt,
+        userMessage,
+        maxTokens: SCRIPT_MAX_TOKENS,
+        apiKey: ANTHROPIC_KEY,
+      });
+    }));
+
+    allRows = [];
+    for (let i = 0; i < responses.length; i++) {
+      let parsed;
+      try {
+        parsed = parseJSON(responses[i]);
+      } catch (e) {
+        return res.status(422).json({
+          error: `Claude returned invalid JSON for batch ${i + 1} of ${batches.length}`,
+          detail: e.message,
+          rawPreview: responses[i].slice(0, 500),
+        });
+      }
+      if (Array.isArray(parsed.scriptTable)) {
+        allRows.push(...parsed.scriptTable);
+      }
+    }
+    // Renumber video rows sequentially across batches — each batch
+    // numbers its own scriptTable starting from 1, so without this
+    // a 24-idea generation would produce 1,2,...,12,1,2,...,12.
+    allRows.forEach((row, i) => { row.videoNumber = i + 1; });
   } catch (e) {
     return res.status(502).json({ error: "Claude call failed", detail: e.message });
   }
-
-  let parsed;
-  try { parsed = parseJSON(raw); }
-  catch (e) {
-    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
-  }
+  const parsed = { scriptTable: allRows };
 
   // Build the `formats` section from the selectedFormatObjects themselves
   // rather than letting Claude invent format descriptions. This is the
@@ -1288,6 +1367,8 @@ async function handleGenerateScript(req, res) {
       projectId,
       durationMs: Date.now() - startedAt,
       model: SCRIPT_MODEL,
+      batchCount: batches.length,
+      rowCount: allRows.length,
       createdAt: new Date().toISOString(),
     });
   } catch { /* noop */ }
