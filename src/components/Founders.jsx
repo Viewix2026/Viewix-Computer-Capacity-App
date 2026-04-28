@@ -90,6 +90,14 @@ function HoverTip({ m, prev, yoy }) {
   );
 }
 
+// Format a dollar value as "$1,234,567" — no cents. Used for the
+// headline revenue numbers (YTD + target) where rounded thousands
+// read more cleanly than the .00-suffixed fmtCur output.
+function fmtCurNoCents(v) {
+  const n = Math.round(Number(v) || 0);
+  return `$${n.toLocaleString("en-AU")}`;
+}
+
 // ─── Ticker bar ─────────────────────────────────────────────────────
 // Stock-ticker style strip that scrolls horizontally across the top
 // of the Dashboard tab. Each entry shows a 3-letter "symbol", value,
@@ -586,6 +594,10 @@ export function Founders({
 }) {
   const [attioLoading, setAttioLoading] = useState(false);
   const [revenueTableExpanded, setRevenueTableExpanded] = useState(false);
+  // YTD revenue is hidden by default — clicked to reveal, click again
+  // to re-hide. Default false so a casual glance over the founder's
+  // shoulder doesn't expose the headline number.
+  const [revenueVisible, setRevenueVisible] = useState(false);
 
   const REVENUE_TARGET = foundersData.revenueTarget || 3000000;
   const now = new Date();
@@ -598,7 +610,6 @@ export function Founders({
   const onTrackRevenue = REVENUE_TARGET * yearProgress;
   const revenueDelta = currentRevenue - onTrackRevenue;
 
-  const updateRevenue = val => setFoundersData(p => ({ ...p, currentRevenue: parseFloat(val) || 0 }));
   const updateMetric = (key, val) => setFoundersData(p => ({ ...p, [key]: val }));
 
   // ─── Attio sync: pulls all deals, auto-fills north-star metrics, caches in Firebase ───
@@ -671,17 +682,48 @@ export function Founders({
           <div style={{ marginBottom: 20, padding: "24px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 24 }}>
               <div>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Current Revenue (YTD)</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 18, color: "#10B981", fontWeight: 700 }}>$</span>
-                  <input type="number" value={currentRevenue || ""} onChange={e => updateRevenue(e.target.value)} placeholder="0" style={{ fontSize: 36, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981", background: "transparent", border: "none", borderBottom: "1px dashed rgba(16,185,129,0.4)", outline: "none", width: 280, textShadow: "0 0 16px rgba(16,185,129,0.45)" }} />
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>Current Revenue (YTD)</span>
+                  <button
+                    onClick={() => setRevenueVisible(v => !v)}
+                    title={revenueVisible ? "Hide" : "Reveal"}
+                    aria-label={revenueVisible ? "Hide revenue" : "Reveal revenue"}
+                    style={{
+                      width: 22, height: 22, borderRadius: 4,
+                      border: "1px solid var(--border)",
+                      background: "var(--bg)", color: "var(--muted)",
+                      fontSize: 12, cursor: "pointer", padding: 0,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      fontFamily: "inherit",
+                    }}>
+                    {revenueVisible ? "🙈" : "👁"}
+                  </button>
+                </div>
+                <div
+                  onClick={() => setRevenueVisible(v => !v)}
+                  title={revenueVisible ? "Click to hide" : "Click to reveal"}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    cursor: "pointer", userSelect: "none",
+                    fontSize: 36, fontWeight: 800,
+                    fontFamily: "'JetBrains Mono',monospace",
+                    color: "#10B981",
+                    textShadow: "0 0 16px rgba(16,185,129,0.45)",
+                    minHeight: 48,
+                    width: 280, maxWidth: "100%",
+                  }}>
+                  {revenueVisible ? fmtCurNoCents(currentRevenue) : "$ • • • • • • •"}
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Revenue Target {now.getFullYear()}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                  <span style={{ fontSize: 14, color: "var(--muted)" }}>$</span>
-                  <input type="number" value={REVENUE_TARGET || ""} onChange={e => updateMetric("revenueTarget", parseFloat(e.target.value) || 0)} style={{ fontSize: 28, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)", background: "transparent", border: "none", borderBottom: "1px dashed #3A4558", outline: "none", width: 240, textAlign: "right" }} />
+                <div style={{
+                  fontSize: 28, fontWeight: 800,
+                  fontFamily: "'JetBrains Mono',monospace",
+                  color: "var(--fg)",
+                  width: 240, textAlign: "right", maxWidth: "100%",
+                }}>
+                  {fmtCurNoCents(REVENUE_TARGET)}
                 </div>
               </div>
             </div>
