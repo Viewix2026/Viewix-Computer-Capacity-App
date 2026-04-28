@@ -399,6 +399,7 @@ export default function App(){
         mondayEditorList={mondayEditorList}
         teamLunch={teamLunch} setTeamLunch={setTeamLunch}
         foundersData={foundersData} setFoundersData={setFoundersData}
+        projects={projects}
         isFounder={isFounder}
       />
     )}

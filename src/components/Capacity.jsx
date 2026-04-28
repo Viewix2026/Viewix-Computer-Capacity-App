@@ -26,6 +26,7 @@ export function Capacity({
   mondayEditorList,
   teamLunch, setTeamLunch,
   foundersData, setFoundersData,
+  projects,
   isFounder,
 }) {
   // ─── Local UI state ───
@@ -254,7 +255,7 @@ export function Capacity({
                 </div>
               </div>
             </div>
-            <Grid wk={curW} weekData={weekData} onUpdate={upWeek} masterEds={scheduleEditors} inputs={ai} onUpdateSuites={v => { if (scMode) setScIn(p => ({ ...(p || inputs), totalSuites: v })); else setInputs(p => ({ ...p, totalSuites: v })); }} />
+            <Grid wk={curW} weekData={weekData} onUpdate={upWeek} masterEds={scheduleEditors} inputs={ai} projects={projects} onUpdateSuites={v => { if (scMode) setScIn(p => ({ ...(p || inputs), totalSuites: v })); else setInputs(p => ({ ...p, totalSuites: v })); }} />
           </div>
         )}
 

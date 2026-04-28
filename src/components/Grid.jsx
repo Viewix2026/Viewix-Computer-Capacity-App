@@ -1,10 +1,67 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { DK, DL, TH, TD, BTN } from "../config";
 import { fmtD, dayDates, dayVal, nextState } from "../utils";
 import { fbSet } from "../firebase";
 import { UBar } from "./UIComponents";
 
-export function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
+// Format a JS Date as a YYYY-MM-DD string in LOCAL time. Mirrors
+// TeamBoard's toISO so we agree on the same calendar day.
+function toISODate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Walk all projects' subtasks and stamp every (assigneeId, dateISO)
+// pair across each subtask's date range with whether a shoot-stage
+// subtask covers it and whether any non-shoot subtask covers it.
+// Mirrors the Team Board's stage-from-name fallback so legacy records
+// without an explicit stage field still classify correctly.
+function inferStage(st) {
+  if (st?.stage && ["preProduction","shoot","revisions","edit","hold"].includes(st.stage)) return st.stage;
+  const name = (st?.name || "").toLowerCase();
+  if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
+  if (name.includes("revision")) return "revisions";
+  if (name.includes("shoot")) return "shoot";
+  if (name.includes("edit")) return "edit";
+  return "preProduction";
+}
+function buildSubtaskOverlay(projects) {
+  // overlay[`${editorId}|${dateISO}`] = { hasShoot, hasOther }
+  const overlay = new Map();
+  if (!Array.isArray(projects)) return overlay;
+  const stamp = (key, isShoot) => {
+    let cur = overlay.get(key);
+    if (!cur) { cur = { hasShoot: false, hasOther: false }; overlay.set(key, cur); }
+    if (isShoot) cur.hasShoot = true; else cur.hasOther = true;
+  };
+  for (const p of projects) {
+    const subs = p?.subtasks ? Object.values(p.subtasks) : [];
+    for (const st of subs) {
+      if (!st || !st.startDate) continue;
+      const ids = Array.isArray(st.assigneeIds)
+        ? st.assigneeIds.filter(Boolean)
+        : (st.assigneeId ? [st.assigneeId] : []);
+      if (ids.length === 0) continue;
+      const isShoot = inferStage(st) === "shoot";
+      const start = new Date(st.startDate + "T00:00:00");
+      const end = new Date((st.endDate || st.startDate) + "T00:00:00");
+      // Walk from start to end inclusive, day by day.
+      const cur = new Date(start);
+      let safety = 0;
+      while (cur <= end && safety < 365) {
+        const dateISO = toISODate(cur);
+        for (const aid of ids) stamp(`${aid}|${dateISO}`, isShoot);
+        cur.setDate(cur.getDate() + 1);
+        safety++;
+      }
+    }
+  }
+  return overlay;
+}
+
+export function Grid({wk,weekData,onUpdate,masterEds,inputs,projects,onUpdateSuites}){
   const md=new Date(wk+"T00:00:00");const dd=dayDates(md);const data=weekData[wk]||{};
   // Migrate legacy boolean days to new format
   const eds=(data.editors||masterEds.map(e=>({...e,days:{...e.defaultDays},notes:{}}))).map(e=>({...e,notes:e.notes||{}}));
@@ -23,8 +80,36 @@ export function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
   const saveNote=()=>{if(!noteEdit)return;const txt=noteText.trim();const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};if(txt){newNotes[noteEdit.day]=txt;}else{newNotes[noteEdit.day]=null;}return{...e,notes:newNotes};});sv({editors:updated});fbSet(`/weekData/${wk}`,{...data,editors:updated});setNoteEdit(null);setNoteText("");};
   const clearNote=()=>{if(!noteEdit)return;const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};newNotes[noteEdit.day]=null;return{...e,notes:newNotes};});sv({editors:updated});fbSet(`/weekData/${wk}`,{...data,editors:updated});setNoteEdit(null);setNoteText("");};
 
-  // Only "in" counts as occupying a suite. "shoot" = working but no suite.
-  const occPerDay=DK.map(d=>eds.filter(e=>dayVal(e.days[d])==="in").length);
+  // Subtask overlay map: lets us merge Team Board shoot assignments
+  // into the manual schedule. Memoised so we don't rebuild it per
+  // render when typing into the note popup or toggling cells.
+  const subtaskOverlay = useMemo(() => buildSubtaskOverlay(projects || []), [projects]);
+
+  // Effective day status takes both manual + subtask overlay into
+  // account:
+  //   Manual "in" + shoot subtask + other subtask  → "in+shoot"
+  //   Manual "in" + shoot subtask only             → "shoot"  (overlay overrides)
+  //   Manual "off" + shoot subtask                  → "off-conflict" (warning)
+  //   Manual <anything> + only non-shoot subtasks   → manual (no override)
+  //   No subtasks at all                            → manual as-is
+  function effectiveStatus(ed, day, dayIdx) {
+    const manual = dayVal(ed.days[day]);
+    const dateISO = toISODate(dd[dayIdx]);
+    const ov = subtaskOverlay.get(`${ed.id}|${dateISO}`);
+    if (!ov) return manual;
+    if (manual === "off") return ov.hasShoot ? "off-conflict" : "off";
+    // manual is "in" or "shoot"
+    if (ov.hasShoot && (ov.hasOther || manual === "in")) return "in+shoot";
+    if (ov.hasShoot) return "shoot";
+    return manual;
+  }
+
+  // A suite is occupied if the editor needs a computer that day:
+  // "in" alone OR "in+shoot" (mixed). Pure "shoot" doesn't need a
+  // suite; "off" / "off-conflict" don't either (the conflict warning
+  // surfaces the issue but doesn't allocate a suite).
+  const dayOccupiesSuite = (s) => s === "in" || s === "in+shoot";
+  const occPerDay=DK.map((d, di)=>eds.filter(e=>dayOccupiesSuite(effectiveStatus(e, d, di))).length);
   const avPerDay=occPerDay.map(o=>inputs.totalSuites-o);
   const totalOcc=occPerDay.reduce((a,b)=>a+b,0);const totalAv=avPerDay.reduce((a,b)=>a+b,0);const maxSD=inputs.totalSuites*5;
   const occCol=o=>{if(o>inputs.totalSuites)return"#F472B6";const r=o/inputs.totalSuites;if(r>=1)return"#10B981";if(r>=0.7)return"#EAB308";if(r>=0.5)return"#F59E0B";return"#EF4444";};
@@ -32,24 +117,65 @@ export function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
   useEffect(()=>{if(editingId&&editRef.current)editRef.current.focus();},[editingId]);
   useEffect(()=>{if(noteEdit&&noteRef.current)noteRef.current.focus();},[noteEdit]);
 
-  const cellStyle=(ed,day)=>{
-    const v=dayVal(ed.days[day]);const hasNote=ed.notes?.[day]!=null&&ed.notes[day]!=="";
+  const cellStyle=(ed,day,dayIdx)=>{
+    const v=effectiveStatus(ed,day,dayIdx);
+    const hasNote=ed.notes?.[day]!=null&&ed.notes[day]!=="";
     if(v==="in")return{background:hasNote?"rgba(0,130,250,0.22)":"var(--accent-soft)",color:"var(--accent)"};
     if(v==="shoot")return{background:hasNote?"rgba(248,119,0,0.22)":"rgba(248,119,0,0.12)",color:"#F87700"};
+    if(v==="in+shoot"){
+      // Split visual: blue (in) on the left, orange (shoot) on the
+      // right via a linear-gradient. Producer gets the at-a-glance
+      // "needs a suite AND on a shoot" read.
+      return{
+        background:`linear-gradient(90deg, var(--accent-soft) 0%, var(--accent-soft) 50%, rgba(248,119,0,0.18) 50%, rgba(248,119,0,0.18) 100%)`,
+        color:"var(--accent)",
+      };
+    }
+    if(v==="off-conflict"){
+      // Producer marked off, but a shoot subtask exists. Faint pink
+      // wash + warning colour text so it pops against the regular
+      // off cells around it.
+      return{background:"rgba(244,114,182,0.14)",color:"#F472B6"};
+    }
     return{background:"transparent",color:"#3A4558"};
   };
-  const cellLabel=v=>{if(v==="in")return"IN";if(v==="shoot")return"SHOOT";return"-";};
+  const cellLabel=v=>{
+    if(v==="in")return"IN";
+    if(v==="shoot")return"SHOOT";
+    if(v==="in+shoot")return"IN + SHOOT";
+    if(v==="off-conflict")return"⚠ OFF";
+    return"-";
+  };
 
   return(<div><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:13}}>
     <thead><tr><th style={{...TH,width:150,textAlign:"left"}}>Editor</th>{DK.map((_,i)=>(<th key={i} style={{...TH,textAlign:"center",minWidth:90}}><div>{DL[i]}</div><div style={{fontSize:11,fontWeight:600,color:"var(--accent)",marginTop:2}}>{fmtD(dd[i])}</div></th>))}<th style={{...TH,width:55,textAlign:"center"}}>Days</th><th style={{...TH,width:40}}></th></tr></thead>
-    <tbody>{eds.map(ed=>{const dn=DK.filter(d=>dayVal(ed.days[d])!=="off").length;const isE=editingId===ed.id;return(<tr key={ed.id}>
+    <tbody>{eds.map(ed=>{const dn=DK.filter((d,di)=>{const s=effectiveStatus(ed,d,di);return s!=="off"&&s!=="off-conflict";}).length;const isE=editingId===ed.id;return(<tr key={ed.id}>
       <td style={{...TD,fontWeight:700,color:"var(--fg)",cursor:"pointer"}} onClick={()=>{if(!isE)startEdit(ed);}}>{isE?(<input ref={editRef} type="text" value={editName} onChange={e=>setEditName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doRename();if(e.key==="Escape")setEditingId(null);}} onBlur={doRename} style={{width:"100%",padding:"3px 6px",borderRadius:4,border:"1px solid var(--accent)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,fontWeight:700,outline:"none"}}/>):(<span style={{borderBottom:"1px dashed #3A4558"}} title="Click to rename">{ed.name}</span>)}</td>
-      {DK.map(day=>{const v=dayVal(ed.days[day]);const cs=cellStyle(ed,day);const hasNote=ed.notes?.[day]!=null&&ed.notes[day]!=="";return(
+      {DK.map((day, di)=>{
+        const eff=effectiveStatus(ed,day,di);
+        const manual=dayVal(ed.days[day]);
+        const cs=cellStyle(ed,day,di);
+        const hasNote=ed.notes?.[day]!=null&&ed.notes[day]!=="";
+        // Tooltip surfaces the conflict reason when the displayed
+        // status differs from what the producer manually set.
+        const conflictTitle = eff !== manual
+          ? (eff === "off-conflict"
+              ? `Marked off — but a shoot subtask is assigned. Reassign or move the shoot.`
+              : eff === "in+shoot"
+              ? `Editing day + shoot booked. Computer still allocated.`
+              : eff === "shoot"
+              ? `Shoot subtask assigned. Computer freed up.`
+              : "")
+          : "";
+        const title = hasNote
+          ? (conflictTitle ? `${conflictTitle}\nNote: ${ed.notes[day]}` : `Note: ${ed.notes[day]}`)
+          : (conflictTitle || "Right-click to add note");
+        return(
         <td key={day} onClick={()=>tog(ed.id,day)} onContextMenu={e=>{e.preventDefault();openNote(ed.id,day);}}
           style={{...TD,textAlign:"center",cursor:"pointer",userSelect:"none",transition:"all 0.15s",position:"relative",...cs,fontWeight:700}}
-          title={hasNote?`Note: ${hasNote}`:"Right-click to add note"}>
-          <div>{cellLabel(v)}</div>
-          {hasNote&&<div style={{fontSize:8,color:v==="shoot"?"#F87700":"var(--accent)",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:80,margin:"0 auto"}}>📝 {hasNote}</div>}
+          title={title}>
+          <div style={{fontSize:eff==="in+shoot"?9:undefined,letterSpacing:eff==="in+shoot"?0.3:undefined}}>{cellLabel(eff)}</div>
+          {hasNote&&<div style={{fontSize:8,color:eff==="shoot"||eff==="in+shoot"?"#F87700":"var(--accent)",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:80,margin:"0 auto"}}>📝 {hasNote}</div>}
         </td>);})}
       <td style={{...TD,textAlign:"center",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{dn}</td>
       <td style={{...TD,textAlign:"center"}}><button onClick={()=>rmEd(ed.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#5A6B85",fontSize:16,padding:"2px 6px",borderRadius:4}}>x</button></td>
@@ -73,9 +199,11 @@ export function Grid({wk,weekData,onUpdate,masterEds,inputs,onUpdateSuites}){
   </div>)}
   <div style={{display:"flex",gap:8,marginTop:12,alignItems:"center",flexWrap:"wrap"}}>
     {!adding&&<button onClick={()=>setAdding(true)} style={{padding:"8px 16px",borderRadius:8,border:"1px dashed var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Editor</button>}
-    <div style={{marginLeft:"auto",display:"flex",gap:12,fontSize:11,color:"var(--muted)"}}>
+    <div style={{marginLeft:"auto",display:"flex",gap:12,fontSize:11,color:"var(--muted)",flexWrap:"wrap"}}>
       <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"var(--accent-soft)",marginRight:4,verticalAlign:"middle"}}/>IN = editing (uses suite)</span>
       <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"rgba(248,119,0,0.12)",marginRight:4,verticalAlign:"middle"}}/>SHOOT = on shoot (no suite)</span>
+      <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,backgroundImage:"linear-gradient(90deg,var(--accent-soft) 50%,rgba(248,119,0,0.18) 50%)",marginRight:4,verticalAlign:"middle"}}/>IN + SHOOT = both (uses suite)</span>
+      <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"rgba(244,114,182,0.14)",marginRight:4,verticalAlign:"middle"}}/>⚠ OFF = conflict (off but shoot assigned)</span>
       <span>Right-click cell = add note</span>
     </div>
   </div>
