@@ -10,6 +10,9 @@ import { FoundersData } from "./FoundersData";
 import { FoundersLearnings } from "./FoundersLearnings";
 import { BuyerJourney } from "./BuyerJourney";
 import { computeFoundersMetrics } from "../../api/_attio-metrics";
+import {
+  CATEGORIES, CATEGORY_COLORS, ALL_FIELDS, formatValue,
+} from "./foundersShared";
 
 // ─── Monthly revenue chart ─────────────────────────────────────────
 // Bars glow with the brand neon green (#10B981) at rest; the current
@@ -83,6 +86,417 @@ function HoverTip({ m, prev, yoy }) {
       <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 6 }}>
         {m.count} deal{m.count === 1 ? "" : "s"}
       </div>
+    </div>
+  );
+}
+
+// ─── Ticker bar ─────────────────────────────────────────────────────
+// Stock-ticker style strip that scrolls horizontally across the top
+// of the Dashboard tab. Each entry shows a 3-letter "symbol", value,
+// and a coloured arrow + delta. We render the entries TWICE in a row
+// and animate -50% so the loop is seamless (no visible reset).
+//
+// Pulls from foundersData (north-star fields, current month) +
+// foundersMetrics (latest two months for vs-last-month deltas).
+function buildTickerEntries(foundersData, foundersMetrics) {
+  // Find the two most recent months in foundersMetrics to compute
+  // mom deltas for fields that have history.
+  const sortedKeys = Object.keys(foundersMetrics || {}).sort().reverse();
+  const latest = sortedKeys[0] ? foundersMetrics[sortedKeys[0]] : null;
+  const prev = sortedKeys[1] ? foundersMetrics[sortedKeys[1]] : null;
+
+  const fmt = (v, kind) => {
+    if (v == null || !isFinite(v)) return "—";
+    if (kind === "money") return fmtCur(v);
+    if (kind === "pct") return `${(+v).toFixed(1)}%`;
+    if (kind === "ratio") return `${(+v).toFixed(2)}x`;
+    return String(v);
+  };
+  const delta = (curr, p) => {
+    if (curr == null || p == null || p === 0) return null;
+    return ((curr - p) / Math.abs(p)) * 100;
+  };
+
+  const entries = [];
+  const push = (sym, value, kind, mom) => {
+    entries.push({ sym, value: fmt(value, kind), delta: mom });
+  };
+
+  // North-star metrics from /foundersData (also driven by the Attio
+  // Sync button). Best-effort vs-last-month using foundersMetrics.
+  push("REV/MO",   foundersData?.monthlyRevenue,    "money", delta(latest?.monthlyRevenue, prev?.monthlyRevenue));
+  push("YTD",      foundersData?.currentRevenue,    "money", null);
+  push("TARGET",   foundersData?.revenueTarget,     "money", null);
+  push("CLIENTS",  foundersData?.activeClients,     "num",   delta(latest?.activeClients, prev?.activeClients));
+  push("RETAINER", foundersData?.avgRetainerValue,  "money", delta(latest?.avgRetainerValue, prev?.avgRetainerValue));
+  push("PIPELINE", foundersData?.leadPipelineValue, "money", null);
+  push("CLOSE",    foundersData?.closingRate,       "pct",   delta(latest?.closeRateCallToDeal, prev?.closeRateCallToDeal));
+  push("CHURN",    foundersData?.churnRate,         "pct",   delta(latest?.retainerChurnRate, prev?.retainerChurnRate));
+  push("LTV:CAC",  latest?.ltvCacRatio,             "ratio", delta(latest?.ltvCacRatio, prev?.ltvCacRatio));
+  push("CPL",      latest?.cpl,                     "money", delta(latest?.cpl, prev?.cpl));
+
+  return entries.filter(e => e.value !== "—");
+}
+function FoundersTicker({ foundersData, foundersMetrics }) {
+  const entries = buildTickerEntries(foundersData, foundersMetrics);
+  if (entries.length === 0) return null;
+  // Render the row twice for the seamless -50% loop.
+  const renderRow = (keyPrefix) => entries.map((e, i) => {
+    // For CHURN and CPL "lower is better" — invert delta colour.
+    const inverted = e.sym === "CHURN" || e.sym === "CPL";
+    const positive = e.delta != null && (inverted ? e.delta < 0 : e.delta > 0);
+    const negative = e.delta != null && (inverted ? e.delta > 0 : e.delta < 0);
+    const arrow = e.delta == null ? "" : (e.delta >= 0 ? "↗" : "↘");
+    const colour = positive ? "#10B981" : negative ? "#F472B6" : "var(--muted)";
+    return (
+      <span key={`${keyPrefix}-${i}`} style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        padding: "0 28px",
+        whiteSpace: "nowrap",
+        fontFamily: "'JetBrains Mono',monospace",
+        fontSize: 12,
+      }}>
+        <span style={{ color: "var(--muted)", fontWeight: 700, letterSpacing: 0.6 }}>{e.sym}</span>
+        <span style={{ color: "var(--fg)", fontWeight: 700 }}>{e.value}</span>
+        {e.delta != null && (
+          <>
+            <span style={{ color: colour, fontSize: 13, fontWeight: 800 }}>{arrow}</span>
+            <span style={{ color: colour, fontWeight: 700 }}>{Math.abs(e.delta).toFixed(2)}%</span>
+          </>
+        )}
+        <span style={{ color: "rgba(255,255,255,0.06)" }}>·</span>
+      </span>
+    );
+  });
+  return (
+    <div style={{
+      width: "100%",
+      overflow: "hidden",
+      background: "linear-gradient(180deg, rgba(16,185,129,0.04), transparent)",
+      borderTop: "1px solid var(--border)",
+      borderBottom: "1px solid var(--border)",
+      padding: "10px 0",
+      marginBottom: 24,
+      maskImage: "linear-gradient(90deg, transparent 0, black 60px, black calc(100% - 60px), transparent 100%)",
+      WebkitMaskImage: "linear-gradient(90deg, transparent 0, black 60px, black calc(100% - 60px), transparent 100%)",
+    }}>
+      <div className="founders-ticker-track" style={{
+        display: "inline-flex",
+        whiteSpace: "nowrap",
+      }}>
+        {renderRow("a")}
+        {renderRow("b")}
+      </div>
+    </div>
+  );
+}
+
+// ─── Neon-styled metric card ────────────────────────────────────────
+// Wraps a label + value (optional delta) in a card with a coloured
+// glow ring matching the chart aesthetic. `tone` picks the colour
+// family: green (default), blue (current month / target), pink
+// (negative metrics like churn), amber (warning).
+function NeonCard({ label, children, tone = "green", style = {} }) {
+  const tones = {
+    green:  { ring: "rgba(16,185,129,0.35)",   glow: "rgba(16,185,129,0.25)" },
+    blue:   { ring: "rgba(0,130,250,0.40)",    glow: "rgba(0,130,250,0.28)" },
+    pink:   { ring: "rgba(244,114,182,0.35)",  glow: "rgba(244,114,182,0.20)" },
+    amber:  { ring: "rgba(245,158,11,0.35)",   glow: "rgba(245,158,11,0.18)" },
+  };
+  const t = tones[tone] || tones.green;
+  return (
+    <div style={{
+      padding: "14px 18px",
+      background: "var(--bg)",
+      border: `1px solid ${t.ring}`,
+      borderRadius: 10,
+      boxShadow: `0 0 0 1px ${t.ring}, 0 0 18px ${t.glow}`,
+      ...style,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ─── SparkChart: one tiny chart per logged metric ──────────────────
+// Self-scaled Y-axis, minimal X-axis ticks, soft area fill in the
+// category colour. Top-right number aggregates: "sum" for flow
+// metrics (cumulative), "latest" otherwise (last non-empty point).
+function SparkChart({ entries, field }) {
+  if (!entries || entries.length < 2) return null;
+  const W = 280, H = 110, PAD = { t: 14, r: 10, b: 22, l: 36 };
+  const cw = W - PAD.l - PAD.r, ch = H - PAD.t - PAD.b;
+  const colour = CATEGORY_COLORS[field.category] || "#8B5CF6";
+
+  const pairs = entries
+    .map(e => ({ v: parseFloat(e[field.key]), date: e.date }))
+    .filter(p => !Number.isNaN(p.v));
+  const vals = pairs.map(p => p.v);
+
+  if (vals.length === 0) {
+    return (
+      <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, minHeight: H + 38 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>{field.label}</div>
+        <div style={{ fontSize: 10, color: "var(--muted)", height: H, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "0 8px", fontStyle: "italic" }}>
+          No data in this window — try <strong style={{ fontWeight: 700 }}>All time</strong>
+        </div>
+      </div>
+    );
+  }
+
+  if (vals.length < 2) {
+    const single = pairs[0];
+    const fmtDateSingle = (iso) => {
+      if (!iso) return "";
+      const [y, m] = iso.split("-");
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      return `${months[parseInt(m) - 1] || m} '${y?.slice(2)}`;
+    };
+    return (
+      <div style={{ background: "var(--bg)", border: `1px solid ${colour}33`, borderRadius: 8, padding: 12, minHeight: H + 38, display: "flex", flexDirection: "column", boxShadow: `0 0 12px ${colour}1A` }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>{field.label}</div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: colour, fontFamily: "'JetBrains Mono',monospace", textShadow: `0 0 10px ${colour}55` }}>
+            {formatValue(single.v, field.unit)}
+          </div>
+          <div style={{ fontSize: 9, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+            {fmtDateSingle(single.date)} · 1 month logged
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const minV = Math.min(...vals);
+  const maxV = Math.max(...vals);
+  const pad = (maxV - minV) * 0.12 || Math.abs(maxV) * 0.12 || 1;
+  const yMin = minV - pad;
+  const yMax = maxV + pad;
+  const range = yMax - yMin || 1;
+
+  const xStep = cw / (entries.length - 1);
+  const yScale = v => PAD.t + ch - ((v - yMin) / range) * ch;
+  const xPos = i => PAD.l + i * xStep;
+
+  const points = entries.map((e, i) => {
+    const v = parseFloat(e[field.key]);
+    if (Number.isNaN(v)) return null;
+    return { x: xPos(i), y: yScale(v), v, date: e.date };
+  }).filter(Boolean);
+
+  const dPath = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  const areaD = `${dPath} L${points[points.length - 1].x},${PAD.t + ch} L${points[0].x},${PAD.t + ch} Z`;
+
+  const yTick = (v) => {
+    const abs = Math.abs(v);
+    if (field.unit === "$") {
+      if (abs >= 1000) return `$${(v / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
+      return `$${Math.round(v)}`;
+    }
+    if (field.unit === "%") return `${v.toFixed(0)}%`;
+    if (field.unit === "x") return `${v.toFixed(1)}×`;
+    if (abs >= 1000) return `${(v / 1000).toFixed(1)}k`;
+    return `${Math.round(v)}`;
+  };
+
+  const fmtDate = (iso) => {
+    if (!iso) return "";
+    const [y, m] = iso.split("-");
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return `${months[parseInt(m) - 1] || m} '${y?.slice(2)}`;
+  };
+
+  let displayVal = null;
+  let displaySuffix = null;
+  if (field.agg === "sum") {
+    const sum = entries.reduce((acc, e) => {
+      const v = parseFloat(e?.[field.key]);
+      return Number.isNaN(v) ? acc : acc + v;
+    }, 0);
+    if (vals.length > 0) {
+      displayVal = sum;
+      displaySuffix = "total";
+    }
+  } else {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const v = entries[i]?.[field.key];
+      if (v !== "" && v != null && !Number.isNaN(parseFloat(v))) {
+        displayVal = v;
+        break;
+      }
+    }
+  }
+  const formatted = formatValue(displayVal, field.unit);
+
+  return (
+    <div style={{
+      background: "var(--bg)",
+      border: `1px solid ${colour}33`,
+      borderRadius: 8,
+      padding: 12,
+      // Soft per-card neon ring matching the chart category — keeps
+      // the trend grid visually consistent with the rest of the
+      // dashboard's "live trading" surface.
+      boxShadow: `0 0 0 1px ${colour}22, 0 0 14px ${colour}1A`,
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6, marginBottom: 6 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={field.label}>
+          {field.label}
+        </div>
+        {formatted && (
+          <div style={{ fontSize: 12, fontWeight: 700, color: colour, fontFamily: "'JetBrains Mono',monospace", flexShrink: 0, textAlign: "right", textShadow: `0 0 8px ${colour}55` }}>
+            {formatted}
+            {displaySuffix && (
+              <div style={{ fontSize: 9, fontWeight: 500, color: "var(--muted)", marginTop: -1, textShadow: "none" }}>{displaySuffix}</div>
+            )}
+          </div>
+        )}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
+        <defs>
+          <linearGradient id={`grad-${field.key}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={colour} stopOpacity="0.32" />
+            <stop offset="100%" stopColor={colour} stopOpacity="0" />
+          </linearGradient>
+          <filter id={`glow-${field.key}`}>
+            <feGaussianBlur stdDeviation="1.6" result="b" />
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <text x={PAD.l - 4} y={PAD.t + 4} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMax)}</text>
+        <text x={PAD.l - 4} y={PAD.t + ch} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMin)}</text>
+        <line x1={PAD.l} y1={PAD.t + ch} x2={W - PAD.r} y2={PAD.t + ch} stroke="#1E2A3A" strokeWidth={1} />
+        <path d={areaD} fill={`url(#grad-${field.key})`} />
+        <path d={dPath} fill="none" stroke={colour} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" filter={`url(#glow-${field.key})`} />
+        {points.length > 0 && (
+          <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r={3.5} fill={colour} stroke="#0B0F1A" strokeWidth={1.5} filter={`url(#glow-${field.key})`} />
+        )}
+        <text x={PAD.l} y={H - 6} fill="#5A6B85" fontSize={8} textAnchor="start" fontFamily="'JetBrains Mono',monospace">
+          {fmtDate(entries[0].date)}
+        </text>
+        <text x={W - PAD.r} y={H - 6} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">
+          {fmtDate(entries[entries.length - 1].date)}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+// ─── Trend grid: small-multiples sparkline gallery ─────────────────
+// Mounted on the Dashboard tab below the existing KPIs / bar chart.
+// Year filter narrows the X axis; category chips show/hide whole
+// groups. Reads from /foundersMetrics (logged via the Data tab's
+// monthly form).
+function FoundersTrendGrid({ metrics }) {
+  const [yearFilter, setYearFilter] = useState("last12");
+  const [visibleCats, setVisibleCats] = useState(
+    Object.fromEntries(CATEGORIES.map(c => [c.key, true]))
+  );
+
+  const entries = Object.values(metrics || {}).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  if (entries.length < 1) return null;
+
+  const filtered = entries.filter(e => {
+    if (!yearFilter || yearFilter === "all") return true;
+    if (yearFilter === "last12") {
+      const latestDate = entries[entries.length - 1]?.date;
+      if (!latestDate) return true;
+      const [ly, lm] = latestDate.split("-").map(Number);
+      const cutoff = new Date(ly, lm - 12, 1);
+      const [ey, em] = e.date.split("-").map(Number);
+      return new Date(ey, em - 1, 1) >= cutoff;
+    }
+    return e.date.startsWith(yearFilter);
+  });
+
+  const years = Array.from(new Set(entries.map(e => e.date.split("-")[0]))).sort();
+  const filterChips = [
+    { key: "last12", label: "Last 12 months" },
+    { key: "all",    label: "All time" },
+    ...years.map(y => ({ key: y, label: y })),
+  ];
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "18px 20px", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "var(--fg)", letterSpacing: 0.2 }}>Trends</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+            One line per logged metric. Each chart is scaled to its own range so the shape is always readable. Latest value (or window total for flow metrics) on the top right.
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+        {filterChips.map(f => {
+          const active = yearFilter === f.key;
+          return (
+            <button key={f.key} onClick={() => setYearFilter(f.key)}
+              style={{
+                padding: "5px 12px", borderRadius: 4, border: "none",
+                background: active ? "var(--accent)" : "var(--bg)",
+                color: active ? "#fff" : "var(--muted)",
+                fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                boxShadow: active ? "0 0 10px rgba(0,130,250,0.35)" : "none",
+              }}>
+              {f.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
+        {CATEGORIES.map(cat => {
+          const catFields = ALL_FIELDS.filter(f => f.category === cat.key);
+          if (!catFields.length) return null;
+          const active = !!visibleCats[cat.key];
+          const colour = CATEGORY_COLORS[cat.key];
+          return (
+            <button key={cat.key} onClick={() => setVisibleCats(p => ({ ...p, [cat.key]: !p[cat.key] }))}
+              style={{
+                padding: "4px 10px", borderRadius: 4, border: "none",
+                background: active ? `${colour}20` : "var(--bg)",
+                color: active ? colour : "var(--muted)",
+                fontSize: 10, fontWeight: 600, cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 4, fontFamily: "inherit",
+                boxShadow: active ? `0 0 8px ${colour}33` : "none",
+              }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: active ? colour : "var(--muted)", opacity: active ? 1 : 0.3, boxShadow: active ? `0 0 6px ${colour}` : "none" }} />
+              {cat.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {filtered.length < 2 ? (
+        <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+          Not enough data points in the selected window. Widen the filter or wait for another month of data.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 18 }}>
+          {CATEGORIES.map(cat => {
+            if (!visibleCats[cat.key]) return null;
+            const catFields = ALL_FIELDS.filter(f => f.category === cat.key);
+            if (!catFields.length) return null;
+            const colour = CATEGORY_COLORS[cat.key];
+            return (
+              <div key={cat.key}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: colour, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8, textShadow: `0 0 8px ${colour}55` }}>
+                  {cat.label}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
+                  {catFields.map(f => (
+                    <SparkChart key={f.key} entries={filtered} field={f} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -245,21 +659,29 @@ export function Founders({
 
         {foundersTab === "dashboard" && (<>
 
-          {/* Revenue Tracker */}
+          {/* KPI Ticker — auto-scrolling stock-ticker style strip with
+              the headline numbers + month-on-month deltas. Pauses on
+              hover so producers can read individual entries. */}
+          <FoundersTicker foundersData={foundersData} foundersMetrics={foundersMetrics} />
+
+          {/* Revenue Tracker — YTD on the left (the bigger neon green
+              number you actually want to see), Target on the right as
+              the goalpost. Producer asked to flip from the previous
+              target-left arrangement. */}
           <div style={{ marginBottom: 20, padding: "24px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 24 }}>
               <div>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Revenue Target {now.getFullYear()}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ fontSize: 14, color: "var(--muted)" }}>$</span>
-                  <input type="number" value={REVENUE_TARGET || ""} onChange={e => updateMetric("revenueTarget", parseFloat(e.target.value) || 0)} style={{ fontSize: 32, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)", background: "transparent", border: "none", borderBottom: "1px dashed #3A4558", outline: "none", width: 260 }} />
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Current Revenue (YTD)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 18, color: "#10B981", fontWeight: 700 }}>$</span>
+                  <input type="number" value={currentRevenue || ""} onChange={e => updateRevenue(e.target.value)} placeholder="0" style={{ fontSize: 36, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981", background: "transparent", border: "none", borderBottom: "1px dashed rgba(16,185,129,0.4)", outline: "none", width: 280, textShadow: "0 0 16px rgba(16,185,129,0.45)" }} />
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Current Revenue (YTD)</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>$</span>
-                  <input type="number" value={currentRevenue || ""} onChange={e => updateRevenue(e.target.value)} placeholder="0" style={{ fontSize: 28, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981", background: "transparent", border: "none", borderBottom: "1px dashed #3A4558", outline: "none", width: 200, textAlign: "right" }} />
+                <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Revenue Target {now.getFullYear()}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                  <span style={{ fontSize: 14, color: "var(--muted)" }}>$</span>
+                  <input type="number" value={REVENUE_TARGET || ""} onChange={e => updateMetric("revenueTarget", parseFloat(e.target.value) || 0)} style={{ fontSize: 28, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)", background: "transparent", border: "none", borderBottom: "1px dashed #3A4558", outline: "none", width: 240, textAlign: "right" }} />
                 </div>
               </div>
             </div>
@@ -270,44 +692,51 @@ export function Founders({
                 <span style={{ fontSize: 11, color: "var(--muted)" }}>Year: {pct(yearProgress)} through</span>
               </div>
               <div style={{ width: "100%", height: 20, background: "var(--bar-bg)", borderRadius: 10, overflow: "hidden", position: "relative" }}>
-                <div style={{ width: `${Math.min(revenueProgress * 100, 100)}%`, height: "100%", borderRadius: 10, background: revenueProgress >= yearProgress ? "#10B981" : "#EF4444", transition: "width 0.4s" }} />
-                <div style={{ position: "absolute", left: `${yearProgress * 100}%`, top: 0, bottom: 0, width: 2, background: "#F59E0B" }} title="Where you should be" />
+                <div style={{
+                  width: `${Math.min(revenueProgress * 100, 100)}%`, height: "100%",
+                  borderRadius: 10,
+                  background: revenueProgress >= yearProgress ? "#10B981" : "#EF4444",
+                  boxShadow: revenueProgress >= yearProgress
+                    ? "0 0 12px rgba(16,185,129,0.6), 0 0 24px rgba(16,185,129,0.35)"
+                    : "0 0 12px rgba(239,68,68,0.55)",
+                  transition: "width 0.4s",
+                }} />
+                <div style={{ position: "absolute", left: `${yearProgress * 100}%`, top: 0, bottom: 0, width: 2, background: "#F59E0B", boxShadow: "0 0 6px rgba(245,158,11,0.8)" }} title="Where you should be" />
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-              <div style={{ padding: "12px 16px", background: "var(--bg)", borderRadius: 8 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>On Track Amount</div>
+              <NeonCard label="On Track Amount" tone="amber">
                 <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{fmtCur(onTrackRevenue)}</div>
-              </div>
-              <div style={{ padding: "12px 16px", background: "var(--bg)", borderRadius: 8 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>Delta</div>
-                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: revenueDelta >= 0 ? "#10B981" : "#EF4444" }}>{revenueDelta >= 0 ? "+" : ""}{fmtCur(revenueDelta)}</div>
-              </div>
-              <div style={{ padding: "12px 16px", background: "var(--bg)", borderRadius: 8 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>Monthly Run Rate Needed</div>
+              </NeonCard>
+              <NeonCard label="Delta" tone={revenueDelta >= 0 ? "green" : "pink"}>
+                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: revenueDelta >= 0 ? "#10B981" : "#F472B6", textShadow: revenueDelta >= 0 ? "0 0 10px rgba(16,185,129,0.4)" : "0 0 10px rgba(244,114,182,0.4)" }}>{revenueDelta >= 0 ? "+" : ""}{fmtCur(revenueDelta)}</div>
+              </NeonCard>
+              <NeonCard label="Monthly Run Rate Needed" tone="blue">
                 <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{fmtCur(Math.max(0, (REVENUE_TARGET - currentRevenue) / (12 - now.getMonth())))}</div>
-              </div>
+              </NeonCard>
             </div>
           </div>
 
-          {/* North Star Metrics */}
+          {/* North Star Metrics — neon-glow cards in the same green
+              palette as the chart bars so the dashboard reads as a
+              consistent "live trading" surface. Churn flips to pink
+              since lower is better there. */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12, marginBottom: 20 }}>
             {[
-              { key: "monthlyRevenue", label: "Monthly Revenue", prefix: "$" },
-              { key: "activeClients", label: "Active Clients", prefix: "" },
-              { key: "avgRetainerValue", label: "Avg Retainer Value", prefix: "$" },
-              { key: "clientChurnRate", label: "Client Churn Rate", suffix: "%" },
-              { key: "leadPipelineValue", label: "Lead Pipeline Value", prefix: "$" },
-              { key: "closingRate", label: "Close Rate (3mo)", suffix: "%" },
+              { key: "monthlyRevenue",    label: "Monthly Revenue",    prefix: "$", tone: "green" },
+              { key: "activeClients",     label: "Active Clients",     prefix: "",  tone: "blue"  },
+              { key: "avgRetainerValue",  label: "Avg Retainer Value", prefix: "$", tone: "green" },
+              { key: "clientChurnRate",   label: "Client Churn Rate",  suffix: "%", tone: "pink"  },
+              { key: "leadPipelineValue", label: "Lead Pipeline Value",prefix: "$", tone: "amber" },
+              { key: "closingRate",       label: "Close Rate (3mo)",   suffix: "%", tone: "green" },
             ].map(m => (
-              <div key={m.key} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "16px 20px" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>{m.label}</div>
+              <NeonCard key={m.key} label={m.label} tone={m.tone}>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                   {m.prefix && <span style={{ fontSize: 14, color: "var(--muted)" }}>{m.prefix}</span>}
                   <input type="number" value={foundersData[m.key] || ""} onChange={e => updateMetric(m.key, parseFloat(e.target.value) || 0)} placeholder="0" style={{ fontSize: 24, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)", background: "transparent", border: "none", borderBottom: "1px dashed #3A4558", outline: "none", width: "100%" }} />
                   {m.suffix && <span style={{ fontSize: 14, color: "var(--muted)" }}>{m.suffix}</span>}
                 </div>
-              </div>
+              </NeonCard>
             ))}
           </div>
           {attioDeals?.data && <div style={{ fontSize: 11, color: "var(--accent)", marginTop: -12, marginBottom: 16, padding: "0 4px" }}>✓ Auto-populated from Attio. Values are still editable.</div>}
@@ -365,18 +794,15 @@ export function Founders({
               return (
                 <div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
-                    <div style={{ padding: "12px 16px", background: "var(--bg)", borderRadius: 8 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>All Time Revenue</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981" }}>{fmtCur(allTimeTotal)}</div>
-                    </div>
-                    <div style={{ padding: "12px 16px", background: "var(--bg)", borderRadius: 8 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>Total Deals</div>
+                    <NeonCard label="All Time Revenue" tone="green">
+                      <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981", textShadow: "0 0 12px rgba(16,185,129,0.4)" }}>{fmtCur(allTimeTotal)}</div>
+                    </NeonCard>
+                    <NeonCard label="Total Deals" tone="blue">
                       <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{dealCount}</div>
-                    </div>
-                    <div style={{ padding: "12px 16px", background: "var(--bg)", borderRadius: 8 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>Avg Deal Size</div>
+                    </NeonCard>
+                    <NeonCard label="Avg Deal Size" tone="amber">
                       <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{dealCount > 0 ? fmtCur(allTimeTotal / dealCount) : "$0"}</div>
-                    </div>
+                    </NeonCard>
                   </div>
 
                   {/* Bar chart — neon glow, hover-to-magnify, popover
@@ -430,6 +856,11 @@ export function Founders({
               </div>
             )}
           </div>
+
+          {/* Trend grid — every logged metric, grouped by category,
+              filtered by year/window. Moved here from the Data tab so
+              all the visualisations live together on the Dashboard. */}
+          <FoundersTrendGrid metrics={foundersMetrics} />
         </>)}
 
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}

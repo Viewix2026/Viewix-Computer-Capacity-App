@@ -222,4 +222,7 @@ input[type="number"]{-moz-appearance:textfield;}
 ::-webkit-scrollbar-track{background:var(--bg);}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
+@keyframes founders-ticker-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+.founders-ticker-track{animation:founders-ticker-scroll 60s linear infinite;}
+.founders-ticker-track:hover{animation-play-state:paused;}
 `;
