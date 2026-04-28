@@ -1188,6 +1188,23 @@ async function handleGenerateScript(req, res) {
     return res.status(400).json({ error: "No ideas ticked. Go to Idea Selection and tick the ideas you want to progress." });
   }
 
+  // Pre-flight check: each script row is ~400-500 output tokens. With
+  // Sonnet capped at 8000 max_tokens per call, ~16-18 rows is a safe
+  // ceiling; beyond that the JSON gets truncated and we throw a parse
+  // error which looks like a server bug to the producer. Surface a
+  // clear message asking them to split into batches instead.
+  const totalTickedIdeas = selectedFormatObjects.reduce(
+    (sum, f) => sum + (f._tickedIdeas?.length || 0),
+    0
+  );
+  const SCRIPT_BATCH_LIMIT = 18;
+  if (hasIdeas && totalTickedIdeas > SCRIPT_BATCH_LIMIT) {
+    return res.status(400).json({
+      error: `Too many ideas in one batch (${totalTickedIdeas} ticked).`,
+      detail: `The current generator handles up to ${SCRIPT_BATCH_LIMIT} videos per call. Untick some ideas and try again, then come back and tick the rest for a second pass.`,
+    });
+  }
+
   const systemPrompt = await getPromptOverride();
   const fantasticExample = await getFantasticExample();
   const userMessage = buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample });
@@ -1195,13 +1212,27 @@ async function handleGenerateScript(req, res) {
   const runId = `script_${Date.now()}_${crypto.randomBytes(2).toString("hex")}`;
   const startedAt = Date.now();
 
+  // Bulk script generation runs against Sonnet rather than Opus.
+  // Opus consistently took 200-400s on 10+ ticked ideas, hitting
+  // Vercel's 300s function-execution ceiling and throwing 504
+  // FUNCTION_INVOCATION_TIMEOUT for producers. Sonnet 4.6 finishes
+  // the same work in 30-90s with quality plenty good for structured
+  // JSON output (hook / scriptNotes / textHook etc. are short, well-
+  // defined fields). For per-cell polish afterwards, the producer
+  // can still use the rewrite-this-cell modal which has its own
+  // small Claude call where quality matters more per token.
+  // maxTokens 8000 = Sonnet's per-call output ceiling. Enough for
+  // ~15-20 video script rows; if a producer ticks more ideas than
+  // that they should split into batches.
+  const SCRIPT_MODEL = "claude-sonnet-4-6";
+  const SCRIPT_MAX_TOKENS = 8000;
   let raw;
   try {
     raw = await callClaude({
-      model: "claude-opus-4-6",
+      model: SCRIPT_MODEL,
       systemPrompt,
       userMessage,
-      maxTokens: 16000,
+      maxTokens: SCRIPT_MAX_TOKENS,
       apiKey: ANTHROPIC_KEY,
     });
   } catch (e) {
@@ -1236,7 +1267,7 @@ async function handleGenerateScript(req, res) {
     formats: formatsSection,
     scriptTable: Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [],
     generatedAt: new Date().toISOString(),
-    modelUsed: "claude-opus-4-6",
+    modelUsed: SCRIPT_MODEL,
     runId,
     rewriteHistory: project.preproductionDoc?.rewriteHistory || [],
     clientFeedback: project.preproductionDoc?.clientFeedback || {},
@@ -1256,7 +1287,7 @@ async function handleGenerateScript(req, res) {
       type: "script",
       projectId,
       durationMs: Date.now() - startedAt,
-      model: "claude-opus-4-6",
+      model: SCRIPT_MODEL,
       createdAt: new Date().toISOString(),
     });
   } catch { /* noop */ }
