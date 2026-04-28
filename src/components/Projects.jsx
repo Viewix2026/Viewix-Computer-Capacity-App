@@ -1164,12 +1164,12 @@ function ProjectDetail({ project, onBack, onDelete, editors }) {
             placeholder="e.g. 12" type="number"
             onSave={(v) => persistField("numberOfVideos", v.trim() === "" ? null : parseInt(v, 10) || 0)} />
         </FieldCard>
-        <FieldCard label="Deal Value">
-          <InlineText value={project.dealValue != null ? String(project.dealValue) : ""}
-            placeholder="$ AUD" type="number"
-            displayValue={project.dealValue != null ? fmtCur(Number(project.dealValue) || 0) : ""}
-            onSave={(v) => persistField("dealValue", v.trim() === "" ? null : parseFloat(v) || 0)} />
-        </FieldCard>
+        {/* Deal Value field intentionally removed from the detail
+            view (both the inline page detail and the Team Board's
+            quick-view modal). The value is still persisted on the
+            /projects/{id} record — Attio webhook keeps writing it,
+            and it still surfaces in places like the project card chip
+            in the list view. Just not in the editable detail panel. */}
         <FieldCard label="Due Date">
           <InlineText value={project.dueDate || ""} placeholder="YYYY-MM-DD" type="date"
             displayValue={project.dueDate ? fmtD(project.dueDate) : ""}
