@@ -23,12 +23,19 @@
     },
     "api/meta-ads.js": {
       "maxDuration": 300
+    },
+    "api/founders-advisor.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
     {
       "path": "/api/check-contacts",
       "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/founders-advisor?cron=1",
+      "schedule": "0 22 * * 0"
     }
   ],
   "rewrites": [

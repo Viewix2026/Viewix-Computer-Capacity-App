@@ -8,6 +8,8 @@ import { pct, fmtCur } from "../utils";
 import { fbSet } from "../firebase";
 import { FoundersData } from "./FoundersData";
 import { FoundersLearnings } from "./FoundersLearnings";
+import { FoundersGoals } from "./FoundersGoals";
+import { FoundersAdvisor } from "./FoundersAdvisor";
 import { BuyerJourney } from "./BuyerJourney";
 import { computeFoundersMetrics } from "../../api/_attio-metrics";
 import {
@@ -650,7 +652,7 @@ export function Founders({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Founders Dashboard</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "goals", label: "Goals" }, { key: "advisor", label: "Advisor" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }].map(t => (
             <button key={t.key} onClick={() => setFoundersTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: foundersTab === t.key ? "var(--card)" : "transparent", color: foundersTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
@@ -893,6 +895,8 @@ export function Founders({
           <FoundersTrendGrid metrics={foundersMetrics} />
         </>)}
 
+        {foundersTab === "goals" && <FoundersGoals foundersData={foundersData} setFoundersData={setFoundersData} />}
+        {foundersTab === "advisor" && <FoundersAdvisor foundersData={foundersData} foundersMetrics={foundersMetrics} attioDeals={attioDeals} />}
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
         {foundersTab === "thankyou" && <ThankYouEditor saleThankYou={saleThankYou} setSaleThankYou={setSaleThankYou} />}
