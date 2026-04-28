@@ -670,11 +670,6 @@ export function Founders({
 
         {foundersTab === "dashboard" && (<>
 
-          {/* KPI Ticker — auto-scrolling stock-ticker style strip with
-              the headline numbers + month-on-month deltas. Pauses on
-              hover so producers can read individual entries. */}
-          <FoundersTicker foundersData={foundersData} foundersMetrics={foundersMetrics} />
-
           {/* Revenue Tracker — YTD on the left (the bigger neon green
               number you actually want to see), Target on the right as
               the goalpost. Producer asked to flip from the previous
@@ -745,6 +740,12 @@ export function Founders({
               </NeonCard>
             </div>
           </div>
+
+          {/* KPI Ticker — sits BETWEEN the revenue tracker and the
+              north-star metrics so the producer sees the headline
+              numbers first, then the live ticker as a transition into
+              the broader metrics surface below. Pauses on hover. */}
+          <FoundersTicker foundersData={foundersData} foundersMetrics={foundersMetrics} />
 
           {/* North Star Metrics — neon-glow cards in the same green
               palette as the chart bars so the dashboard reads as a
