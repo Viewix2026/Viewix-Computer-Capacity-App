@@ -1272,21 +1272,24 @@ async function handleGenerateScript(req, res) {
   // first-pass ideas matters more here than speed. Producers have said
   // they'd rather wait the extra minute than re-write rows by hand
   // afterwards, and Opus consistently produces more concrete hooks +
-  // less "find an article" filler than Sonnet on this prompt.
+  // less filler than Sonnet on this prompt.
   //
   // Opus is slower than Sonnet, so batch size is small to keep any
-  // single Claude call under Vercel's 300s function ceiling. 8 rows
-  // per batch finishes in ~60-150s on Opus; multiple batches run as
-  // parallel calls so total wall-clock stays bounded by the SLOWEST
-  // batch (not their sum). 24 ticked ideas → 3 batches in parallel
-  // ≈ same wall-clock as 8 ideas, just burns more concurrent tokens.
+  // single Claude call under Vercel's 300s function ceiling. Multiple
+  // batches run as parallel calls so total wall-clock stays bounded
+  // by the SLOWEST batch (not their sum). 24 ticked ideas → 4 batches
+  // in parallel ≈ same wall-clock as 6 ideas alone, just burns more
+  // concurrent tokens.
   //
-  // maxTokens 6000 leaves comfortable headroom for 8 rows × ~500
-  // tokens each. Per-cell polish (rewriteScriptSection / Row) keeps
-  // its own model setting downstream.
+  // BATCH_SIZE = 6 and SCRIPT_MAX_TOKENS = 12000 give every row room
+  // to breathe (~2000 tokens per row). Earlier 8/6000 cut a script
+  // off mid-scriptNotes string when a particularly rich row used
+  // >700 tokens; the JSON parse then failed for the whole batch. Per-
+  // cell polish (rewriteScriptSection / Row) keeps its own model
+  // setting downstream.
   const SCRIPT_MODEL = "claude-opus-4-6";
-  const SCRIPT_MAX_TOKENS = 6000;
-  const BATCH_SIZE = 8;
+  const SCRIPT_MAX_TOKENS = 12000;
+  const BATCH_SIZE = 6;
 
   const batches = chunkSelectedFormatsForScripting(selectedFormatObjects, BATCH_SIZE);
 
