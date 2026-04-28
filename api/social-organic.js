@@ -1268,21 +1268,25 @@ async function handleGenerateScript(req, res) {
   const runId = `script_${Date.now()}_${crypto.randomBytes(2).toString("hex")}`;
   const startedAt = Date.now();
 
-  // Bulk script generation runs against Sonnet rather than Opus.
-  // Opus consistently took 200-400s on 10+ ticked ideas, hitting
-  // Vercel's 300s function-execution ceiling and throwing 504
-  // FUNCTION_INVOCATION_TIMEOUT. Sonnet 4.6 finishes the same work
-  // in 30-90s with quality plenty good for structured JSON output.
-  // Per-cell polish via the rewrite modal stays on its own model.
+  // Bulk script generation runs against Opus 4.6 — quality of the
+  // first-pass ideas matters more here than speed. Producers have said
+  // they'd rather wait the extra minute than re-write rows by hand
+  // afterwards, and Opus consistently produces more concrete hooks +
+  // less "find an article" filler than Sonnet on this prompt.
   //
-  // maxTokens 8000 = Sonnet's per-call output ceiling. Each script
-  // row is ~400-500 output tokens, so a single call comfortably fits
-  // ~12 rows. For larger batches we split the ticked ideas across
-  // parallel calls and merge the resulting rows; total Vercel run
-  // time stays bounded by the SLOWEST batch (parallel), not the sum.
-  const SCRIPT_MODEL = "claude-sonnet-4-6";
-  const SCRIPT_MAX_TOKENS = 8000;
-  const BATCH_SIZE = 12;
+  // Opus is slower than Sonnet, so batch size is small to keep any
+  // single Claude call under Vercel's 300s function ceiling. 8 rows
+  // per batch finishes in ~60-150s on Opus; multiple batches run as
+  // parallel calls so total wall-clock stays bounded by the SLOWEST
+  // batch (not their sum). 24 ticked ideas → 3 batches in parallel
+  // ≈ same wall-clock as 8 ideas, just burns more concurrent tokens.
+  //
+  // maxTokens 6000 leaves comfortable headroom for 8 rows × ~500
+  // tokens each. Per-cell polish (rewriteScriptSection / Row) keeps
+  // its own model setting downstream.
+  const SCRIPT_MODEL = "claude-opus-4-6";
+  const SCRIPT_MAX_TOKENS = 6000;
+  const BATCH_SIZE = 8;
 
   const batches = chunkSelectedFormatsForScripting(selectedFormatObjects, BATCH_SIZE);
 
