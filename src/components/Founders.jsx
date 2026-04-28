@@ -11,6 +11,150 @@ import { FoundersLearnings } from "./FoundersLearnings";
 import { BuyerJourney } from "./BuyerJourney";
 import { computeFoundersMetrics } from "../../api/_attio-metrics";
 
+// ─── Monthly revenue chart ─────────────────────────────────────────
+// Bars glow with the brand neon green (#10B981) at rest; the current
+// month uses Viewix accent blue. Hovering a bar brightens it, scales
+// it up slightly, and floats a tooltip card above it with the month
+// label, revenue, growth vs last month, and growth vs same month
+// last year.
+function deltaPct(curr, prev) {
+  if (prev == null || prev === 0) return null;
+  return ((curr - prev) / prev) * 100;
+}
+function fmtPct(d) {
+  if (d == null || !isFinite(d)) return "—";
+  const sign = d >= 0 ? "+" : "";
+  return `${sign}${d.toFixed(1)}%`;
+}
+function pctColour(d) {
+  if (d == null || !isFinite(d)) return "var(--muted)";
+  return d >= 0 ? "#10B981" : "#F472B6";
+}
+function prevMonthKey(key) {
+  const [y, m] = key.split("-").map(Number);
+  if (m === 1) return `${y - 1}-12`;
+  return `${y}-${String(m - 1).padStart(2, "0")}`;
+}
+function lastYearKey(key) {
+  const [y, m] = key.split("-").map(Number);
+  return `${y - 1}-${String(m).padStart(2, "0")}`;
+}
+
+function HoverTip({ m, prev, yoy }) {
+  const dPrev = deltaPct(m.revenue, prev?.revenue);
+  const dYoy = deltaPct(m.revenue, yoy?.revenue);
+  return (
+    <div style={{
+      position: "absolute",
+      bottom: "calc(100% + 16px)",
+      left: "50%",
+      transform: "translateX(-50%)",
+      minWidth: 200,
+      background: "var(--card)",
+      border: "1px solid rgba(16,185,129,0.5)",
+      borderRadius: 8,
+      padding: "10px 14px",
+      boxShadow: "0 10px 28px rgba(0,0,0,0.55), 0 0 18px rgba(16,185,129,0.25)",
+      zIndex: 10,
+      fontSize: 11,
+      lineHeight: 1.5,
+      whiteSpace: "nowrap",
+      pointerEvents: "none",
+      fontFamily: "inherit",
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: "var(--muted)", marginBottom: 4 }}>
+        {m.label}
+      </div>
+      <div style={{ fontFamily: "'JetBrains Mono',monospace", color: "#10B981", fontSize: 18, fontWeight: 800, marginBottom: 8, letterSpacing: 0.3 }}>
+        {fmtCur(m.revenue)}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)", marginBottom: 3 }}>
+        <span>vs last month</span>
+        <span style={{ color: pctColour(dPrev), fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", marginLeft: 12 }}>
+          {fmtPct(dPrev)}
+        </span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
+        <span>vs same month last year</span>
+        <span style={{ color: pctColour(dYoy), fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", marginLeft: 12 }}>
+          {fmtPct(dYoy)}
+        </span>
+      </div>
+      <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 6 }}>
+        {m.count} deal{m.count === 1 ? "" : "s"}
+      </div>
+    </div>
+  );
+}
+
+function MonthlyRevenueChart({ chronological, monthlyByKey, now, maxRev }) {
+  const [hovered, setHovered] = useState(null);
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 170, padding: "12px 4px 0" }}>
+        {chronological.map(([key, m]) => {
+          const h = Math.max((m.revenue / maxRev) * 130, 4);
+          const isCurrent = key === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+          const isHovered = hovered === key;
+          const baseColour = isCurrent ? "#0082FA" : "#10B981";
+          const glowAlpha = isHovered ? "BB" : "55";
+          const glowFar = isHovered ? "32px" : "12px";
+          return (
+            <div
+              key={key}
+              onMouseEnter={() => setHovered(key)}
+              onMouseLeave={() => setHovered(null)}
+              style={{
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                gap: 3, minWidth: 0, position: "relative", cursor: "pointer",
+                // Lift hovered column above neighbours so the tooltip
+                // and glow aren't clipped by the next-bar's stacking.
+                zIndex: isHovered ? 5 : 1,
+              }}>
+              <div style={{
+                fontSize: isHovered ? 10 : 8, fontWeight: 800,
+                color: isHovered ? baseColour : "var(--muted)",
+                fontFamily: "'JetBrains Mono',monospace",
+                whiteSpace: "nowrap", overflow: "hidden",
+                transition: "all 0.15s",
+                textShadow: isHovered ? `0 0 8px ${baseColour}66` : "none",
+              }}>
+                {fmtCur(m.revenue).replace("$", "")}
+              </div>
+              <div style={{
+                width: isHovered ? "94%" : "82%",
+                height: isHovered ? Math.round(h * 1.07) : h,
+                background: baseColour,
+                borderRadius: "4px 4px 0 0",
+                // Layered glow: tight halo + soft outer bloom. Resting
+                // bars also get a subtle glow so the whole chart reads
+                // as neon.
+                boxShadow: `0 0 6px ${baseColour}, 0 0 ${glowFar} ${baseColour}${glowAlpha}`,
+                transition: "all 0.15s ease-out",
+              }}/>
+              <div style={{
+                fontSize: 7, color: isHovered ? baseColour : "var(--muted)",
+                fontFamily: "'JetBrains Mono',monospace", whiteSpace: "nowrap",
+                fontWeight: isHovered ? 800 : 500,
+                transition: "all 0.15s",
+              }}>
+                {m.label.split(" ").join("\n")}
+              </div>
+              {isHovered && (
+                <HoverTip
+                  m={m}
+                  prev={monthlyByKey[prevMonthKey(key)]}
+                  yoy={monthlyByKey[lastYearKey(key)]}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function Founders({
   foundersData, setFoundersData,
   foundersMetrics, setFoundersMetrics,
@@ -235,23 +379,15 @@ export function Founders({
                     </div>
                   </div>
 
-                  {/* Bar chart */}
+                  {/* Bar chart — neon glow, hover-to-magnify, popover
+                      with month / sales / vs-last-month / YoY deltas. */}
                   {sorted.length > 0 && (
-                    <div style={{ marginBottom: 20 }}>
-                      <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 140, padding: "0 4px" }}>
-                        {sorted.slice(0, 24).reverse().map(([key, m]) => {
-                          const h = Math.max((m.revenue / maxRev) * 120, 4);
-                          const isCurrentMonth = key === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-                          return (
-                            <div key={key} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 0 }}>
-                              <div style={{ fontSize: 8, fontWeight: 700, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", whiteSpace: "nowrap", overflow: "hidden" }}>{fmtCur(m.revenue).replace("$", "")}</div>
-                              <div style={{ width: "80%", height: h, background: isCurrentMonth ? "var(--accent)" : "#10B981", borderRadius: "3px 3px 0 0", opacity: isCurrentMonth ? 1 : 0.7 }} title={`${m.label}: ${fmtCur(m.revenue)} (${m.count} deals)`} />
-                              <div style={{ fontSize: 7, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", whiteSpace: "nowrap" }}>{m.label.replace(" ", "\\n").split(" ")[0]}</div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    <MonthlyRevenueChart
+                      chronological={sorted.slice(0, 24).reverse()}
+                      monthlyByKey={monthly}
+                      now={now}
+                      maxRev={maxRev}
+                    />
                   )}
 
                   {/* Monthly table */}
