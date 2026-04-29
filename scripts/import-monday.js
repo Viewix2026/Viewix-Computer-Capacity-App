@@ -151,14 +151,31 @@ const NON_PERSON_NAMES = new Set([
 // Resolve "Jeremy Farrugia, Steve Chestney" against /editors. Returns
 // { ids: [...], unresolved: [...] }. Unresolved sink only collects
 // names that look like real people — filters out Monday meta-strings.
-function resolveAssignees(rawPeople, editorsByName) {
+//
+// Matching strategy (in order):
+//   1. Exact full-name match (lowercase)        — "Steve Chestney" → "Steve Chestney"
+//   2. First-word match either direction        — "Steve Chestney" → "Steve"
+//                                              — "Steve"          → "Steve Chestney"
+//
+// Why both directions: the Monday file usually uses full names while
+// the Viewix /editors roster usually stores first names only. If both
+// happen to be full ("Steve Chestney" on both sides) the exact match
+// wins. If a roster entry happens to be ambiguous (two editors
+// sharing a first name), we resolve to the first registered match.
+function resolveAssignees(rawPeople, editorsByName, editorsByFirstWord) {
   if (!rawPeople) return { ids: [], unresolved: [] };
   const names = String(rawPeople).split(/[,;\n]/).map(n => n.trim()).filter(Boolean);
   const ids = [];
   const unresolved = [];
   for (const n of names) {
-    if (NON_PERSON_NAMES.has(n.toLowerCase())) continue;
-    const id = editorsByName.get(n.toLowerCase());
+    const lc = n.toLowerCase();
+    if (NON_PERSON_NAMES.has(lc)) continue;
+    let id = editorsByName.get(lc);
+    if (!id) {
+      // First-word match: "Steve Chestney" → look up "steve".
+      const firstWord = lc.split(/\s+/)[0];
+      if (firstWord) id = editorsByFirstWord.get(firstWord);
+    }
     if (id) ids.push(id);
     else unresolved.push(n);
   }
@@ -285,13 +302,13 @@ function parseSheet(filePath) {
 }
 
 // ─── Map a Monday parent to the /projects schema ──────────────────
-function buildProjectFromParent(p, editorsByName, unresolvedSink) {
+function buildProjectFromParent(p, editorsByName, editorsByFirstWord, unresolvedSink) {
   const { clientName, projectName } = splitName(p.name);
   const status = normaliseStatus(p.status);
   const dueDate = parseDate(p.projectDueDate) || parseDate(p.dueDate) || parseDate(p.timelineEnd);
   const closeDate = parseDate(p.startDate) || parseDate(p.timelineStart) || parseDate(p.dateCreated);
   const createdAt = parseDateTimeISO(p.dateCreated) || nowISO();
-  const { ids: assigneeIds, unresolved } = resolveAssignees(p.people, editorsByName);
+  const { ids: assigneeIds, unresolved } = resolveAssignees(p.people, editorsByName, editorsByFirstWord);
   unresolved.forEach(n => unresolvedSink.add(n));
 
   const clientContact = (p.clientFirstName || p.clientEmail) ? {
@@ -327,11 +344,11 @@ function buildProjectFromParent(p, editorsByName, unresolvedSink) {
   };
 }
 
-function buildSubtasksFromSubitems(subitems, editorsByName, unresolvedSink) {
+function buildSubtasksFromSubitems(subitems, editorsByName, editorsByFirstWord, unresolvedSink) {
   const out = [];
   subitems.forEach((s, i) => {
     if (!s.name) return;
-    const { ids, unresolved } = resolveAssignees(s.people, editorsByName);
+    const { ids, unresolved } = resolveAssignees(s.people, editorsByName, editorsByFirstWord);
     unresolved.forEach(n => unresolvedSink.add(n));
     const start = parseDate(s.startDate) || parseDate(s.timelineStart);
     const end   = parseDate(s.dueDate)   || parseDate(s.timelineEnd) || start;
@@ -454,7 +471,21 @@ async function main() {
   const editorsByName = new Map(
     editorsArr.filter(Boolean).map(e => [(e.name || "").toLowerCase(), e.id])
   );
-  console.log(`Loaded ${editorsByName.size} editors for assignee resolution.`);
+  // First-word index: "Steve Chestney" in Monday → "Steve" in editors.
+  // Skip blanks; on collision (two editors share a first name) the
+  // earlier registered entry wins — log a warning so the producer
+  // can disambiguate by editing the roster.
+  const editorsByFirstWord = new Map();
+  for (const e of editorsArr.filter(Boolean)) {
+    const firstWord = (e.name || "").trim().toLowerCase().split(/\s+/)[0];
+    if (!firstWord) continue;
+    if (editorsByFirstWord.has(firstWord)) {
+      console.warn(`  [warn] First-word collision on "${firstWord}" — keeping ${editorsByFirstWord.get(firstWord)}, ignoring ${e.id}. Rename one editor in /editors to disambiguate.`);
+      continue;
+    }
+    editorsByFirstWord.set(firstWord, e.id);
+  }
+  console.log(`Loaded ${editorsByName.size} editors for assignee resolution (${editorsByFirstWord.size} unique first-name keys).`);
 
   const projectsArr = Object.values(projects).filter(Boolean);
   const projectsByAttio = new Map();
@@ -482,7 +513,7 @@ async function main() {
     processed++;
     if (processed % 100 === 0) console.log(`  …${processed}/${parents.length}`);
     try {
-      const incoming = buildProjectFromParent(parent, editorsByName, report.unresolvedAssignees);
+      const incoming = buildProjectFromParent(parent, editorsByName, editorsByFirstWord, report.unresolvedAssignees);
       const matchedId = findExistingProjectId(parent, projectsByAttio, projectsByNameKey);
 
       let projectId;
@@ -510,7 +541,7 @@ async function main() {
       report.parents.total++;
 
       const isDone = parent.section === "Done ✅";
-      const subtasks = buildSubtasksFromSubitems(parent.subitems, editorsByName, report.unresolvedAssignees);
+      const subtasks = buildSubtasksFromSubitems(parent.subitems, editorsByName, editorsByFirstWord, report.unresolvedAssignees);
       report.subtasks.total += subtasks.length;
 
       if (isDone) {
