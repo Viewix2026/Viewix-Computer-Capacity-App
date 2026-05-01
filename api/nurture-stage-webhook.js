@@ -32,10 +32,14 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   try {
-    const body = req.body || {};
-    const { dealId, secret, stage, companyName } = body;
+    const body = (Array.isArray(req.body) ? req.body[0] : req.body) || {};
+    // Tolerate common Zapier field-naming variants. Order = preference.
+    const dealId = body.dealId || body.dealid || body["Deal ID"] || body.deal_id || body.recordId || body["Record Id"];
+    const stage = body.stage || body.Stage || body.satge;
+    const secret = body.secret || body.Secret;
+    const companyName = body.companyName || body.company_name || body["Company Name"] || null;
     if (secret !== SECRET) return res.status(401).json({ error: "Invalid secret" });
-    if (!dealId) return res.status(400).json({ error: "dealId is required" });
+    if (!dealId) return res.status(400).json({ error: "dealId is required", receivedKeys: Object.keys(body) });
 
     // Soft guard: only act on Quoted-stage transitions. Zapier should
     // already filter, but if the zap fires on every update we can drop
