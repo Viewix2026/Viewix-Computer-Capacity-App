@@ -1,0 +1,65 @@
+// api/nurture-stage-webhook.js
+// Real-time Attio (via Zapier) stage-change receiver.
+//
+// Wire-up (Zapier zap):
+//   Trigger:  Attio → "Updated Record" on the deals object
+//   Filter:   only continue if Stage equals "Quoted"
+//   Action:   Webhook POST to https://<vercel>/api/nurture-stage-webhook
+//             body JSON: { dealId, secret, stage }  (companyName optional)
+//
+// On receipt: stamp /nurture/quotedAt/{dealId} with the current ISO time,
+// source "webhook", IF the deal has no entry yet (avoids overwriting an
+// older accurate timestamp on a re-fire).
+
+import { adminGet, adminPatch, getAdmin } from "./_fb-admin.js";
+
+const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
+const SECRET = "viewix-webhook-2026"; // matches webhook-deal-won.js convention
+
+async function fbGet(path) {
+  const { err } = getAdmin();
+  if (!err) return adminGet(path);
+  const r = await fetch(`${FB_URL}${path}.json`);
+  return r.json();
+}
+async function fbPatch(path, data) {
+  const { err } = getAdmin();
+  if (!err) return adminPatch(path, data);
+  await fetch(`${FB_URL}${path}.json`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+
+  try {
+    const body = req.body || {};
+    const { dealId, secret, stage, companyName } = body;
+    if (secret !== SECRET) return res.status(401).json({ error: "Invalid secret" });
+    if (!dealId) return res.status(400).json({ error: "dealId is required" });
+
+    // Soft guard: only act on Quoted-stage transitions. Zapier should
+    // already filter, but if the zap fires on every update we can drop
+    // the noise here.
+    if (stage && stage !== "Quoted") {
+      return res.status(200).json({ ok: true, skipped: `stage is ${stage}, not Quoted` });
+    }
+
+    const existing = (await fbGet(`/nurture/quotedAt/${dealId}`)) || null;
+    if (existing?.timestamp) {
+      return res.status(200).json({ ok: true, skipped: "already stamped", existing });
+    }
+
+    const stamp = {
+      timestamp: new Date().toISOString(),
+      source: "webhook",
+      recordedAt: new Date().toISOString(),
+      companyName: companyName || null,
+    };
+    await fbPatch(`/nurture/quotedAt`, { [dealId]: stamp });
+
+    return res.status(200).json({ ok: true, dealId, stamp });
+  } catch (e) {
+    console.error("nurture-stage-webhook error:", e);
+    return res.status(500).json({ error: e.message });
+  }
+}

@@ -26,6 +26,9 @@
     },
     "api/founders-advisor.js": {
       "maxDuration": 300
+    },
+    "api/sync-attio-cache.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -36,6 +39,10 @@
     {
       "path": "/api/founders-advisor?cron=1",
       "schedule": "0 22 * * 0"
+    },
+    {
+      "path": "/api/sync-attio-cache",
+      "schedule": "0 19 * * *"
     }
   ],
   "rewrites": [

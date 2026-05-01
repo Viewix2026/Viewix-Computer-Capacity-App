@@ -17,6 +17,7 @@ import {
 import { Logo } from "./components/Logo";
 import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./components/UIComponents";
 import { Grid } from "./components/Grid";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 // Eager imports — needed on first render or tiny enough that lazy-load
 // adds more cost (in extra HTTP round-trips) than it saves.
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
@@ -38,6 +39,7 @@ const Preproduction            = lazy(() => import("./components/Preproduction")
 const PreproductionPublicView  = lazy(() => import("./components/PreproductionPublicView").then(m => ({ default: m.PreproductionPublicView })));
 const RoasCalculator           = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculator })));
 const RoasCalculatorPublicView = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculatorPublicView })));
+const Nurture                  = lazy(() => import("./components/Nurture").then(m => ({ default: m.Nurture })));
 
 export default function App(){
   const[role,setRole]=useState(null); // "founder" | "closer"
@@ -370,6 +372,7 @@ export default function App(){
       {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       {(isFounder||role==="closer"||isLead)&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
+      {isFounder&&<SideIcon icon="🌱" label="Nurture" active={tool==="nurture"} onClick={()=>setTool("nurture")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {isFounder&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
@@ -386,6 +389,12 @@ export default function App(){
         sidebar render. The fallback re-uses the dashboard "Loading…"
         screen so the visual transition is consistent. */}
     <div style={{flex:1,overflow:"auto"}}>
+    {/* Tab-scoped error boundary. `key={tool}` resets the boundary when
+        the producer switches tabs, so a crash on one tab doesn't stick
+        when they navigate away — they don't need to click "Try again"
+        first. The root boundary in main.jsx still catches anything
+        thrown outside the tab area (sidebar, top-level Firebase setup). */}
+    <ErrorBoundary key={tool} label={`the ${tool} tab`}>
     <Suspense fallback={<div style={{padding:40,color:"var(--muted)",fontSize:13}}>Loading…</div>}>
 
     {/* ═══ CAPACITY PLANNER ═══ */}
@@ -575,6 +584,9 @@ export default function App(){
     {/* ═══ PREPRODUCTION ═══ */}
     {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder} dealProjects={projects} route={route.tool==="preproduction"?route:null}/>)}
 
+    {/* ═══ NURTURE — Lapsed-Proposal Auto-Recovery ═══ */}
+    {tool==="nurture"&&isFounder&&(<Nurture attioDeals={attioDeals} isFounder={isFounder}/>)}
+
     {/* ═══ RESOURCES ═══ */}
     {tool==="resources"&&(isFounder||role==="closer")&&(<>
       <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
@@ -697,6 +709,7 @@ export default function App(){
 
 
     </Suspense>
+    </ErrorBoundary>
     </div>
   </div>);
 }
