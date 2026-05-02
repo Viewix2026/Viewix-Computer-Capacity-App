@@ -86,6 +86,24 @@ function loadEnvLocal() {
 }
 loadEnvLocal();
 
+// Lightweight sanity log so we know whether FIREBASE_SERVICE_ACCOUNT
+// actually parsed cleanly. Just logs the project_id field — never
+// the private key or the raw blob.
+(function logEnvSanity() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (!raw) {
+    console.log("  FIREBASE_SERVICE_ACCOUNT: NOT SET");
+    return;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    console.log(`  FIREBASE_SERVICE_ACCOUNT: ✓ project_id=${parsed.project_id}`);
+  } catch (e) {
+    console.log(`  FIREBASE_SERVICE_ACCOUNT: ✗ JSON parse failed: ${e.message}`);
+    console.log(`  raw length=${raw.length}, first 60: ${raw.slice(0, 60)}…`);
+  }
+})();
+
 // ─── CLI args ──────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
@@ -521,10 +539,20 @@ async function main() {
   // Pull existing /editors + /projects for matching.
   let editors = {}, projects = {};
   if (dryRun) {
-    try { editors = (await adminGet("/editors")) || {}; }
-    catch { editors = {}; console.log("[dry-run] could not read /editors (will only resolve names if ENV set)"); }
-    try { projects = (await adminGet("/projects")) || {}; }
-    catch { projects = {}; console.log("[dry-run] could not read /projects (assuming none exist)"); }
+    // Sanity-check admin init up front in dry-run too. If the env
+    // var didn't load or the JSON's malformed, the whole resolver
+    // is useless — surface the actual error instead of silently
+    // continuing with 0 editors.
+    const { err: adminErr } = getAdmin();
+    if (adminErr) {
+      console.warn(`[dry-run] firebase-admin init failed: ${adminErr}`);
+      console.warn("[dry-run]   → skipping /editors + /projects fetch");
+    } else {
+      try { editors = (await adminGet("/editors")) || {}; }
+      catch (e) { editors = {}; console.warn(`[dry-run] /editors read failed: ${e.message}`); }
+      try { projects = (await adminGet("/projects")) || {}; }
+      catch (e) { projects = {}; console.warn(`[dry-run] /projects read failed: ${e.message}`); }
+    }
   } else {
     editors = (await adminGet("/editors")) || {};
     projects = (await adminGet("/projects")) || {};
