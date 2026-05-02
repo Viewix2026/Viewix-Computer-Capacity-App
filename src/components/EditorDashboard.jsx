@@ -9,9 +9,10 @@ import { EditorDashboardViewix } from "./EditorDashboardViewix";
 export function EditorDashboard({ embedded, onLogout, projects = [], editors: viewixEditors = [] }) {
   // Sub-tab between the original Monday.com-driven view and the new
   // Viewix Dashboard view (Firebase-backed, reads /editors + /projects
-  // subtasks). Default to Monday so existing producers don't lose
-  // their landing surface; producers can switch any time.
-  const [subTab, setSubTab] = useState("monday");
+  // subtasks). Defaults to Viewix — that's where the Projects + Team
+  // Board data lives; Monday.com stays one click away via the toggle
+  // for legacy reference.
+  const [subTab, setSubTab] = useState("viewix");
   const[editorId,setEditorId]=useState(null);
   const[tasks,setTasks]=useState([]);
   const[loading,setLoading]=useState(false);

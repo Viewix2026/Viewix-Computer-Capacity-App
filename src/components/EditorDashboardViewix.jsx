@@ -279,6 +279,11 @@ export function EditorDashboardViewix({ projects = [], editors = [] }) {
   const [editorId, setEditorId] = useState(null);
   const [timers, setTimers] = useState({});
   const [timeLogs, setTimeLogs] = useState({});
+  // History across all days for stats computation (avg hrs / Edit
+  // task etc). Keyed by date → { taskId → { secs, stage, ... } }.
+  // Separate from `timeLogs` (today only) so the live-tick UX
+  // doesn't get clobbered by every history-listener pulse.
+  const [allDaysLogs, setAllDaysLogs] = useState({});
   const [adjustingTask, setAdjustingTask] = useState(null);
   const [adjustMins, setAdjustMins] = useState("");
   const [timerWarning, setTimerWarning] = useState(null);
@@ -329,6 +334,47 @@ export function EditorDashboardViewix({ projects = [], editors = [] }) {
     });
     return () => { cancelled = true; unsub(); };
   }, [editorId, today]);
+
+  // History listener — pulls every day's logs for this editor so the
+  // stats grid can compute trailing averages. Cheap: one editor's
+  // /timeLogs node is small (one entry per task per day) so a full
+  // listener is fine even at 6 months of data.
+  useEffect(() => {
+    if (!editorId) return;
+    const path = `/timeLogs/${editorId}`;
+    let unsub = () => {};
+    let cancelled = false;
+    onFB(() => {
+      if (cancelled) return;
+      unsub = fbListen(path, (data) => {
+        setAllDaysLogs(data || {});
+      });
+    });
+    return () => { cancelled = true; unsub(); };
+  }, [editorId]);
+
+  // Avg hours per Edit-stage task. Aggregates `secs` per taskId
+  // across every logged day, filtering to entries marked `stage:
+  // "edit"`. Returns { avgHours, taskCount } so the tile can show
+  // both the headline and the sample size in its sub-line.
+  const editStats = useMemo(() => {
+    const perTask = new Map();
+    for (const day of Object.values(allDaysLogs || {})) {
+      if (!day || typeof day !== "object") continue;
+      for (const [taskId, entry] of Object.entries(day)) {
+        if (taskId === "_running") continue;
+        if (!entry) continue;
+        const stage = typeof entry === "object" ? entry.stage : null;
+        if (stage !== "edit") continue;
+        const secs = typeof entry === "number" ? entry : (entry.secs || 0);
+        perTask.set(taskId, (perTask.get(taskId) || 0) + secs);
+      }
+    }
+    const tasks = [...perTask.values()].filter(s => s > 0);
+    if (tasks.length === 0) return { avgHours: null, taskCount: 0 };
+    const totalSecs = tasks.reduce((a, b) => a + b, 0);
+    return { avgHours: totalSecs / 3600 / tasks.length, taskCount: tasks.length };
+  }, [allDaysLogs]);
 
   // Tick the running timer's elapsed value once per second.
   useEffect(() => {
@@ -463,28 +509,66 @@ export function EditorDashboardViewix({ projects = [], editors = [] }) {
           <div style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)" }}>Viewix Dashboard</div>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>{editorName} · {today}</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          {/* Stats grid — Today's progress + Avg per Edit task. Each
+              tile is its own glow-ringed card so the row reads as a
+              dashboard, not a chrome strip. Wraps on narrow screens. */}
           <div style={{
-            padding: "8px 16px", borderRadius: 10,
-            background: totalToday > 0 ? "rgba(16,185,129,0.12)" : "var(--bg)",
-            border: `1px solid ${totalToday > 0 ? "rgba(16,185,129,0.4)" : "var(--border)"}`,
-            minWidth: 200,
+            display: "flex", gap: 10, flexWrap: "wrap",
           }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>Today</span>
-              <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: totalToday > 0 ? "#10B981" : "var(--fg)" }}>
-                {fmtSecsShort(totalToday)} / 8h
-              </span>
+            {/* Today's hours */}
+            <div style={{
+              padding: "10px 14px", borderRadius: 10,
+              background: "var(--bg)",
+              border: `1px solid ${totalToday > 0 ? "rgba(16,185,129,0.4)" : "var(--border)"}`,
+              boxShadow: totalToday > 0 ? "0 0 14px rgba(16,185,129,0.18)" : "none",
+              minWidth: 200,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>Today</span>
+                <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: totalToday > 0 ? "#10B981" : "var(--fg)", textShadow: totalToday > 0 ? "0 0 8px rgba(16,185,129,0.4)" : "none" }}>
+                  {fmtSecsShort(totalToday)} / 8h
+                </span>
+              </div>
+              <div style={{ width: "100%", height: 6, background: "var(--bg)", borderRadius: 3, overflow: "hidden", border: "1px solid var(--border)" }}>
+                <div style={{
+                  width: `${Math.min((totalToday / (8 * 3600)) * 100, 100)}%`, height: "100%",
+                  background: totalToday >= 8 * 3600 ? "#F59E0B" : "#10B981",
+                  borderRadius: 3, transition: "width 0.3s",
+                  boxShadow: totalToday > 0 ? "0 0 8px rgba(16,185,129,0.55)" : "none",
+                }}/>
+              </div>
             </div>
-            <div style={{ width: "100%", height: 6, background: "var(--bg)", borderRadius: 3, overflow: "hidden" }}>
-              <div style={{
-                width: `${Math.min((totalToday / (8 * 3600)) * 100, 100)}%`, height: "100%",
-                background: totalToday >= 8 * 3600 ? "#F59E0B" : "#10B981",
-                borderRadius: 3, transition: "width 0.3s",
-                boxShadow: totalToday > 0 ? "0 0 8px rgba(16,185,129,0.45)" : "none",
-              }}/>
+
+            {/* Avg hrs per Edit task — needs at least one logged
+                edit-stage task to light up. Empty state shows "—"
+                with an explanatory sub-line so the tile doesn't read
+                as broken before any data has accumulated. */}
+            <div style={{
+              padding: "10px 14px", borderRadius: 10,
+              background: "var(--bg)",
+              border: `1px solid ${editStats.taskCount > 0 ? "rgba(0,130,250,0.4)" : "var(--border)"}`,
+              boxShadow: editStats.taskCount > 0 ? "0 0 14px rgba(0,130,250,0.2)" : "none",
+              minWidth: 200,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>Avg / Edit task</span>
+                <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: editStats.taskCount > 0 ? "#0082FA" : "var(--muted)", textShadow: editStats.taskCount > 0 ? "0 0 8px rgba(0,130,250,0.4)" : "none" }}>
+                  {editStats.avgHours == null
+                    ? "—"
+                    : `${editStats.avgHours.toFixed(editStats.avgHours >= 10 ? 0 : 1)}h`}
+                </span>
+              </div>
+              <div style={{ fontSize: 9, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.3 }}>
+                {editStats.taskCount === 0
+                  ? "Once you log a few edit tasks, this lights up"
+                  : editStats.taskCount === 1
+                  ? "1 task logged · trend settles with more"
+                  : `across ${editStats.taskCount} tasks`}
+              </div>
             </div>
           </div>
+
           <button onClick={() => setEditorId(null)}
             style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
             Switch editor
