@@ -614,10 +614,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
               </div>
               <div style={{ fontSize: 9, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.3 }}>
                 {editStats.taskCount === 0
-                  ? "Once you log a few edit tasks, this lights up"
-                  : editStats.taskCount === 1
-                  ? "1 task logged · trend settles with more"
-                  : `across ${editStats.taskCount} tasks`}
+                  ? "no tasks yet"
+                  : `across ${editStats.taskCount} task${editStats.taskCount === 1 ? "" : "s"}`}
               </div>
             </div>
           </div>
