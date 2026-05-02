@@ -1412,7 +1412,11 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
   // same Firebase paths the full view writes to, so no extra wiring
   // needed for cross-tab sync.
   const [quickViewProjectId, setQuickViewProjectId] = useState(null);
-  const [filter, setFilter] = useState("all"); // "all" | "active" | "onHold" | "archived"
+  // Default to "active" so producers land on the workable pipeline
+  // (everything except Done + Archived). They can still flip to All
+  // / Done / Archived from the filter pills. The Projects sub-tab is
+  // already the default sub-tab via subTab's initial state above.
+  const [filter, setFilter] = useState("active"); // "all" | "active" | "done" | "archived"
   const [search, setSearch] = useState("");
   // Bulk-action selection — Set of project ids checked via the row
   // checkbox or the header select-all. Clears when the filter or
