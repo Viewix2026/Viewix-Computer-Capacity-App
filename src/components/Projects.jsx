@@ -115,16 +115,24 @@ function subtasksAsArray(subtasksObj) {
     .sort((a, b) => {
       const ao = a.order ?? 9999, bo = b.order ?? 9999;
       if (ao !== bo) return ao - bo;
-      return (a.createdAt || "").localeCompare(b.createdAt || "");
+      const ct = (a.createdAt || "").localeCompare(b.createdAt || "");
+      if (ct !== 0) return ct;
+      // Final tiebreaker — without this, two subtasks created in the
+      // same millisecond render in non-deterministic order across
+      // reloads, which makes "stable list" assumptions break.
+      return (a.id || "").localeCompare(b.id || "");
     });
 }
 
-// Find the Sherpa Doc Google Drive URL associated with a project.
-// Lookup order:
-//   1. project.links.sherpaId → /clients/{id}.docUrl   (set by the
-//      Attio deal-won webhook; see api/webhook-deal-won.js).
-//   2. case-insensitive name match between project.clientName and
-//      a /clients record.
+// Resolve a project's Sherpa Doc URL for the chip rendered in the
+// Project detail panel (Projects list + Team Board modal). Lookup
+// order:
+//   1. project.links.sherpaId → /clients/{id}.docUrl   (the hard
+//      link set by api/webhook-deal-won.js when an Attio deal flips
+//      to Won).
+//   2. matchSherpaForName() fuzzy fallback so legacy /clients
+//      records typed manually with short names ("Canva") still
+//      resolve against full Attio clientNames ("Canva Pty Ltd").
 // Returns null if no record is linked or the matched record has no
 // docUrl. `clients` may arrive as an array or undefined.
 export function findSherpaDocUrl(project, clients) {
@@ -1142,7 +1150,10 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
   const dests = Array.isArray(project.destinations) ? project.destinations : [];
   const accountId = links.accountId || null;
   const navigate = (hash) => { window.location.hash = hash; };
-  const openSherpa   = () => links.sherpaId   && navigate(`sherpas/${links.sherpaId}`);
+  // openSherpa was removed when the Sherpas tab dissolved — the
+  // sherpa doc is now opened via the external "Sherpa Doc ↗" chip
+  // rendered below (uses findSherpaDocUrl()). Don't add a navigate()
+  // back here unless a Sherpa-detail route is reintroduced.
   const openPreprod  = () => links.preprodId  && navigate(`preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`);
   const openRunsheet = () => links.runsheetId && navigate(`preproduction/runsheets/${links.runsheetId}`);
   const openDelivery = () => links.deliveryId && navigate(`projects/deliveries/${links.deliveryId}`);
@@ -1464,7 +1475,23 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
   // (everything except Done + Archived). They can still flip to All
   // / Done / Archived from the filter pills. The Projects sub-tab is
   // already the default sub-tab via subTab's initial state above.
-  const [filter, setFilter] = useState("active"); // "all" | "active" | "done" | "archived"
+  // Persisted to localStorage so a producer who's chosen Done or
+  // Archived doesn't have it reset to "active" on every refresh.
+  // Per-user, browser-local — not shared via URL because the filter
+  // is a viewing preference, not a routable state.
+  const FILTER_KEY = "viewix.projects.filter";
+  const VALID_FILTERS = ["all", "active", "done", "archived"];
+  const [filter, setFilter] = useState(() => {
+    try {
+      const saved = typeof window !== "undefined" ? window.localStorage.getItem(FILTER_KEY) : null;
+      return VALID_FILTERS.includes(saved) ? saved : "active";
+    } catch { return "active"; }
+  });
+  useEffect(() => {
+    try {
+      if (typeof window !== "undefined") window.localStorage.setItem(FILTER_KEY, filter);
+    } catch { /* private mode / disabled storage — ignore */ }
+  }, [filter]);
   const [search, setSearch] = useState("");
   // Bulk-action selection — Set of project ids checked via the row
   // checkbox or the header select-all. Clears when the filter or

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { DEFAULT_MONDAY_EDITORS, BTN, NB, CAT_COLORS } from "../config";
-import { todayKey, tomorrowKey, fmtSecs, fmtSecsShort, categorizeContent } from "../utils";
+import { todayKey, tomorrowKey, fmtSecs, fmtSecsShort, categorizeContent, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
 import { initFB, onFB, fbSet, fbListen } from "../firebase";
 import { fetchMondayUsers, fetchEditorTasks, fetchItemUpdates } from "../monday";
 import { Logo } from "./Logo";
@@ -282,10 +282,10 @@ export function EditorDashboard({ embedded, onLogout, projects = [], editors: vi
         <div style={{padding:"8px 16px",borderRadius:8,background:totalToday>0?"rgba(16,185,129,0.12)":"var(--bg)",border:"1px solid var(--border)",minWidth:180}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
             <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.05em"}}>Today </span>
-            <span style={{fontSize:14,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:totalToday>0?"#10B981":"var(--fg)"}}>{fmtSecsShort(totalToday)} / 8h</span>
+            <span style={{fontSize:14,fontWeight:800,fontFamily:"'JetBrains Mono',monospace",color:totalToday>0?"#10B981":"var(--fg)"}}>{fmtSecsShort(totalToday)} / {EDITOR_DAILY_TARGET_HOURS}h</span>
           </div>
           <div style={{width:"100%",height:6,background:"var(--bg)",borderRadius:3,overflow:"hidden"}}>
-            <div style={{width:`${Math.min((totalToday/(8*3600))*100,100)}%`,height:"100%",background:totalToday>=8*3600?"#F59E0B":"#10B981",borderRadius:3,transition:"width 0.3s"}}/>
+            <div style={{width:`${Math.min((totalToday/EDITOR_DAILY_TARGET_SECS)*100,100)}%`,height:"100%",background:totalToday>=EDITOR_DAILY_TARGET_SECS?"#F59E0B":"#10B981",borderRadius:3,transition:"width 0.3s"}}/>
           </div>
         </div>
         <button onClick={()=>{setLoading(true);const ed=mondayEditors.find(e=>e.id===editorId);if(ed)fetchEditorTasks(ed.name).then(items=>{setTasks(items);setLoading(false);}).catch(()=>setLoading(false));}} style={{padding:"8px 14px",borderRadius:8,border:"1px solid var(--border)",background:"transparent",color:"var(--muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>Refresh</button>

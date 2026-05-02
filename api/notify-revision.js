@@ -2,6 +2,21 @@
 // Receives batched revision status changes from client delivery page
 // Posts a single message to #revisions Slack channel
 
+// Escape Slack mrkdwn special characters in client-supplied strings
+// so a video name containing `*hello*` doesn't bold-format the
+// surrounding line, and `<script>` doesn't get rendered as a link.
+// Reference: https://api.slack.com/reference/surfaces/formatting#escaping
+function escapeSlack(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    // Defang mrkdwn formatting characters by inserting a zero-width
+    // space — preserves readability of the original text while
+    // breaking the parser's ability to interpret them as syntax.
+    .replace(/([*_`~|])/g, "​$1");
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
@@ -13,10 +28,13 @@ export default async function handler(req, res) {
     if (!changes || !Array.isArray(changes) || changes.length === 0) return res.status(400).json({ error: "No changes provided" });
 
     const lines = changes.map(c => {
-      return `• *${c.videoName || "Video"}* — ${c.field === "revision1" ? "Round 1" : "Round 2"}: ${c.oldValue || "Not Started"} → ${c.newValue}`;
+      const name = escapeSlack(c.videoName || "Video");
+      const oldV = escapeSlack(c.oldValue || "Not Started");
+      const newV = escapeSlack(c.newValue);
+      return `• *${name}* — ${c.field === "revision1" ? "Round 1" : "Round 2"}: ${oldV} → ${newV}`;
     });
 
-    const message = `:pencil2: *Revision update from ${clientName || "a client"}*\n${lines.join("\n")}`;
+    const message = `:pencil2: *Revision update from ${escapeSlack(clientName || "a client")}*\n${lines.join("\n")}`;
 
     const slackResp = await fetch(webhookUrl, {
       method: "POST",

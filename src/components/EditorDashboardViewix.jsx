@@ -15,7 +15,7 @@
 // Mounted by EditorDashboard.jsx via its sub-tab toggle.
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { fmtSecsShort, matchSherpaForName } from "../utils";
+import { fmtSecsShort, matchSherpaForName, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
 import { fbSet, fbListen, onFB } from "../firebase";
 
 // ─── Date helpers (local, in browser timezone) ─────────────────────
@@ -580,13 +580,13 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <span style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>Today</span>
                 <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: totalToday > 0 ? "#10B981" : "var(--fg)", textShadow: totalToday > 0 ? "0 0 8px rgba(16,185,129,0.4)" : "none" }}>
-                  {fmtSecsShort(totalToday)} / 8h
+                  {fmtSecsShort(totalToday)} / {EDITOR_DAILY_TARGET_HOURS}h
                 </span>
               </div>
               <div style={{ width: "100%", height: 6, background: "var(--bg)", borderRadius: 3, overflow: "hidden", border: "1px solid var(--border)" }}>
                 <div style={{
-                  width: `${Math.min((totalToday / (8 * 3600)) * 100, 100)}%`, height: "100%",
-                  background: totalToday >= 8 * 3600 ? "#F59E0B" : "#10B981",
+                  width: `${Math.min((totalToday / EDITOR_DAILY_TARGET_SECS) * 100, 100)}%`, height: "100%",
+                  background: totalToday >= EDITOR_DAILY_TARGET_SECS ? "#F59E0B" : "#10B981",
                   borderRadius: 3, transition: "width 0.3s",
                   boxShadow: totalToday > 0 ? "0 0 8px rgba(16,185,129,0.55)" : "none",
                 }}/>

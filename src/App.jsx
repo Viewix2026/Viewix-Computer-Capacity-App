@@ -57,7 +57,9 @@ export default function App(){
   //   #preproduction/runsheets/rs-1234           → opens that runsheet
   //   #projects/deliveries/del-1234              → opens that delivery
   //   #accounts/acct-1234                        → highlights that account
-  //   #sherpas/cl-1234                           → highlights that sherpa
+  // (The old #sherpas/cl-1234 deep-link was removed when the Sherpas
+  // tab dissolved — sherpa docs now open inline from Projects /
+  // Accounts / EditorDashboardViewix via findSherpaDocUrl().)
   // Each tab component reads `route` as a prop and reacts on mount or
   // when the recordId changes. Click handlers anywhere in the app set
   // window.location.hash and the listener below propagates state.

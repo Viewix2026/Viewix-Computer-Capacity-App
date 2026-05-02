@@ -49,6 +49,16 @@ export function addW(d, n) {
   return x;
 }
 
+// ─── Editor daily target ───
+// Single source of truth for the editor's daily logged-hours target.
+// Drives the Today tile in both EditorDashboard (Monday view) and
+// EditorDashboardViewix (Viewix view) — label, percent fill, and
+// over-target colour flip. Used to be hardcoded `8h` / `8*3600` in
+// four places; pulled here so producer-driven changes only edit one
+// number.
+export const EDITOR_DAILY_TARGET_HOURS = 8;
+export const EDITOR_DAILY_TARGET_SECS = EDITOR_DAILY_TARGET_HOURS * 3600;
+
 // ─── Time Formatters ───
 export function fmtSecs(s) {
   const h = Math.floor(s / 3600);
@@ -187,6 +197,26 @@ export function normaliseImageUrl(url, size = 400) {
   // Also: https://drive.google.com/uc?export=view&id=FILE_ID
   const m = trimmed.match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?[^#]*\bid=)([A-Za-z0-9_-]{20,})/);
   if (m) return `https://drive.google.com/thumbnail?id=${m[1]}&sz=w${size}`;
+  // Reject anything that isn't HTTPS — http:// trips mixed-content
+  // blocks on the production HTTPS frontend (image fails to load with
+  // a console warning), and `javascript:` / `data:` URLs in an <img>
+  // src are an XSS vector if they ever slipped through founder input.
+  // Drive thumbnails handled above are always rewritten to https.
+  if (!/^https:\/\//i.test(trimmed)) return "";
+  return trimmed;
+}
+
+// Validate a URL is safe to use as an `<a href>` external link.
+// Rejects `javascript:`, `data:`, `file:`, `http:` (insecure) — only
+// `https:` passes. Returns the trimmed URL on success or empty string
+// on failure so callers can do `href={validateLinkUrl(x) || undefined}`.
+export function validateLinkUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  let parsed;
+  try { parsed = new URL(trimmed); } catch { return ""; }
+  if (parsed.protocol !== "https:") return "";
   return trimmed;
 }
 
@@ -217,6 +247,7 @@ export function isEmbeddableBookingUrl(url) {
 // iframe src on the customer-facing thank-you page). Audit finding 2026-04.
 const YT_EMBED_HOSTS = ["youtube.com", "youtu.be", "youtube-nocookie.com"];
 const LOOM_EMBED_HOSTS = ["loom.com"];
+const VIMEO_EMBED_HOSTS = ["vimeo.com", "player.vimeo.com"];
 export function embedUrl(url) {
   if (!url || typeof url !== "string") return "";
   const trimmed = url.trim();
@@ -227,14 +258,30 @@ export function embedUrl(url) {
   const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
 
   // YouTube: watch?v=X  /  youtu.be/X  /  youtube.com/shorts/X
+  // Honour list= and t= query params on the way through so playlists
+  // and timestamp deep-links survive the rewrite.
   if (YT_EMBED_HOSTS.some(h => host === h || host.endsWith("." + h))) {
-    const ytWatch = trimmed.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{6,})/);
-    if (ytWatch) return `https://www.youtube.com/embed/${ytWatch[1]}`;
+    const ytWatch = trimmed.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/);
+    if (ytWatch) {
+      const ytPlaylist = trimmed.match(/[?&]list=([\w-]+)/);
+      const ytStart = trimmed.match(/[?&]t=(\d+)/);
+      const params = [];
+      if (ytPlaylist) params.push(`list=${ytPlaylist[1]}`);
+      if (ytStart) params.push(`start=${ytStart[1]}`);
+      return `https://www.youtube.com/embed/${ytWatch[1]}${params.length ? "?" + params.join("&") : ""}`;
+    }
   }
   // Loom: loom.com/share/HASH  →  loom.com/embed/HASH
   if (LOOM_EMBED_HOSTS.some(h => host === h || host.endsWith("." + h))) {
     const loomShare = trimmed.match(/loom\.com\/share\/([a-f0-9]{16,})/);
     if (loomShare) return `https://www.loom.com/embed/${loomShare[1]}`;
+  }
+  // Vimeo: vimeo.com/123 or vimeo.com/video/123 → player.vimeo.com/video/123.
+  // Already-embed URLs pass through unchanged.
+  if (VIMEO_EMBED_HOSTS.some(h => host === h || host.endsWith("." + h))) {
+    if (host === "player.vimeo.com") return trimmed;
+    const vimeoMatch = trimmed.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+    if (vimeoMatch) return `https://player.vimeo.com/video/${vimeoMatch[1]}`;
   }
   // Unrecognised host or URL shape — refuse rather than blindly iframe
   // something that might be hostile or render blank.
@@ -415,21 +462,29 @@ export function matchSherpaForName(targetName, clients) {
   let m = list.find(c => (c?.name || "").trim().toLowerCase() === lc);
   if (m) return m;
 
-  // 2. Bidirectional startsWith (4-char floor on both sides)
-  m = list.find(c => {
+  // 2. Bidirectional startsWith (4-char floor on both sides). A brand
+  //    stem like "Auto" can collide on multiple records ("Automation
+  //    Co" + "Automotive Inc") so we collect all candidates and only
+  //    accept a single unambiguous winner — otherwise we punt to the
+  //    next strategy / null and let the producer disambiguate via
+  //    the explicit Sherpa Doc field on the Account row.
+  const swMatches = list.filter(c => {
     const cn = (c?.name || "").trim().toLowerCase();
     if (cn.length < 4 || lc.length < 4) return false;
     return cn.startsWith(lc) || lc.startsWith(cn);
   });
-  if (m) return m;
+  if (swMatches.length === 1) return swMatches[0];
 
-  // 3. First-word match (4-char floor on the brand word)
+  // 3. First-word match (4-char floor on the brand word). Same
+  //    collision-safety rule as strategy 2.
   const fwTarget = lc.split(/\s+/)[0];
   if (!fwTarget || fwTarget.length < 4) return null;
-  return list.find(c => {
+  const fwMatches = list.filter(c => {
     const cn = (c?.name || "").trim().toLowerCase();
     return cn.split(/\s+/)[0] === fwTarget;
-  }) || null;
+  });
+  if (fwMatches.length === 1) return fwMatches[0];
+  return null;
 }
 
 // ─── Delivery Helpers ───

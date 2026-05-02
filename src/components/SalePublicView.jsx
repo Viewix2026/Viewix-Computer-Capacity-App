@@ -15,7 +15,7 @@ import { useState, useEffect, useMemo } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 import { SALE_VIDEO_TYPES } from "../config";
-import { fmtCur, fmtCurExact, logoBg, embedUrl, isEmbeddableBookingUrl, normaliseImageUrl } from "../utils";
+import { fmtCur, fmtCurExact, logoBg, embedUrl, isEmbeddableBookingUrl, normaliseImageUrl, validateLinkUrl } from "../utils";
 import { scheduleForVideoType } from "../../api/_tiers";
 import { loadStripe } from "@stripe/stripe-js";
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
@@ -705,8 +705,13 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
                   loading="lazy"
                 />
               )
-            ) : bookingUrl ? (
-              <a href={bookingUrl} target="_blank" rel="noopener noreferrer" className="vx-btn vx-btn-primary">
+            ) : validateLinkUrl(bookingUrl) ? (
+              // bookingUrl exists but isn't iframe-embeddable — render
+              // as an external link, but only if it passes the same
+              // https-only protocol check the iframe path uses.
+              // Anything else (http://, javascript:, malformed) falls
+              // through to the "not configured" placeholder below.
+              <a href={validateLinkUrl(bookingUrl)} target="_blank" rel="noopener noreferrer" className="vx-btn vx-btn-primary">
                 Book your kickoff call →
               </a>
             ) : (

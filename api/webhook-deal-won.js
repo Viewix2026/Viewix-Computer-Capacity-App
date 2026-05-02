@@ -8,7 +8,37 @@ import { identifyDeal, productLineLabel } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
-const SECRET = "viewix-webhook-2026";
+// Webhook shared secret. Prefer the env var so the value isn't
+// committed to source. Falls back to the historical hardcoded value
+// only while we transition — once ATTIO_WEBHOOK_SECRET is set in
+// Vercel + Zapier, delete the fallback. See LOOSE_ENDS in the bug-
+// sweep plan for the rotation procedure.
+const SECRET = process.env.ATTIO_WEBHOOK_SECRET || "viewix-webhook-2026";
+
+// ─── Payload validation ─────────────────────────────────────────
+// Reject obviously-malformed Zapier payloads BEFORE we let them
+// near Firebase. Catches: oversized strings (someone accidentally
+// pastes a CSV into companyName), wrong types (numberOfVideos
+// arrives as "five"), absurd destination lists, malformed emails.
+// Returns null on success or an error string on failure.
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function validatePayload(p) {
+  if (typeof p !== "object" || p === null) return "body must be an object";
+  const s = (v) => (typeof v === "string" ? v : "");
+  if (s(p.companyName).length > 256) return "companyName too long (max 256)";
+  if (s(p.dealName).length > 512) return "dealName too long (max 512)";
+  if (s(p["Description"] || p.description || p.scopeOfWork).length > 4000) return "description too long (max 4000)";
+  if (s(p["Target Audience"] || p.targetAudience || p.audience).length > 1000) return "targetAudience too long (max 1000)";
+  if (s(p["First Name"] || p.firstName).length > 128) return "firstName too long (max 128)";
+  const email = s(p["Client Email"] || p.clientEmail || p.email);
+  if (email && !EMAIL_RX.test(email)) return "clientEmail is not a valid email";
+  if (p.dealValue != null && p.dealValue !== "" && !Number.isFinite(Number(p.dealValue))) return "dealValue must be a number";
+  if (p.numberOfVideos != null && p.numberOfVideos !== "" && !Number.isFinite(Number(p.numberOfVideos))) return "numberOfVideos must be a number";
+  const destRaw = p["Destination"] || p.destinations || p.destination;
+  if (typeof destRaw === "string" && destRaw.length > 2000) return "destinations too long (max 2000 chars)";
+  if (Array.isArray(destRaw) && destRaw.length > 50) return "too many destinations (max 50)";
+  return null;
+}
 
 // Generate a 6-char unguessable short id for share URLs (matches frontend utils.makeShortId)
 function makeShortId() {
@@ -67,6 +97,13 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body || {};
+
+    // Validate the payload shape BEFORE we touch Firebase. Bad data
+    // here would otherwise create malformed /accounts and /projects
+    // records that producers would have to clean up by hand.
+    const validationErr = validatePayload(body);
+    if (validationErr) return res.status(400).json({ error: validationErr });
+
     const { companyName, companyId, dealName, dealValue, closeDate, videoType, numberOfVideos, secret } = body;
 
     // New Attio fields (Zapier sends these with capital letters / spaces —
@@ -74,9 +111,15 @@ export default async function handler(req, res) {
     // comma-separated which we split client-side for chip rendering.
     const description = body["Description"] || body.description || body.scopeOfWork || "";
     const destinationRaw = body["Destination"] || body.destinations || body.destination || "";
-    const destinations = typeof destinationRaw === "string"
+    const destinations = (typeof destinationRaw === "string"
       ? destinationRaw.split(",").map(s => s.trim()).filter(Boolean)
-      : (Array.isArray(destinationRaw) ? destinationRaw : []);
+      : (Array.isArray(destinationRaw) ? destinationRaw : []))
+      // Defence-in-depth: cap individual entries and the list size
+      // even though validatePayload() already rejects pathological
+      // inputs. Keeps Firebase records small if validation ever
+      // gets bypassed by a future code path.
+      .map(s => String(s).slice(0, 100))
+      .slice(0, 50);
     const targetAudience = body["Target Audience"] || body.targetAudience || body.audience || "";
     const dueDate = body["Due Date"] || body.dueDate || body.projectDueDate || null;
     const firstName = body["First Name"] || body.firstName || "";
