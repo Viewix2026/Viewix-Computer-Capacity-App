@@ -20,9 +20,71 @@
 // the project already has source: "mondayImport" subtasks.
 
 import XLSX from "xlsx";
-import { adminGet, adminSet, adminPatch, getAdmin } from "../api/_fb-admin.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { adminGet, adminSet, adminPatch, getAdmin } from "../api/_fb-admin.js";
+
+// ─── Auto-load .env.local ──────────────────────────────────────────
+//
+// `vercel env pull .env.local` writes multi-line JSON values
+// (FIREBASE_SERVICE_ACCOUNT contains a literal-newline private key),
+// which `source .env.local` chokes on. Instead, parse the file
+// ourselves before the firebase-admin module is imported — that
+// module reads FIREBASE_SERVICE_ACCOUNT at module-load time, so the
+// load has to happen first.
+function loadEnvLocal() {
+  const candidates = [
+    path.resolve(process.cwd(), ".env.local"),
+    path.resolve(process.cwd(), ".env"),
+  ];
+  const file = candidates.find(p => existsSync(p));
+  if (!file) return;
+  const content = readFileSync(file, "utf8");
+  // Mini state machine — handles KEY="multi-line value with \n escapes"
+  // and KEY=plain alike. Doesn't try to be a full POSIX env parser;
+  // just enough for the Vercel CLI's output format.
+  let i = 0;
+  while (i < content.length) {
+    while (i < content.length && /\s/.test(content[i])) i++;
+    if (content[i] === "#") {
+      while (i < content.length && content[i] !== "\n") i++;
+      continue;
+    }
+    let key = "";
+    while (i < content.length && /[A-Z0-9_]/.test(content[i])) key += content[i++];
+    if (!key) break;
+    if (content[i] !== "=") {
+      while (i < content.length && content[i] !== "\n") i++;
+      continue;
+    }
+    i++;
+    let value = "";
+    if (content[i] === '"' || content[i] === "'") {
+      const quote = content[i++];
+      while (i < content.length && content[i] !== quote) {
+        if (content[i] === "\\" && i + 1 < content.length) {
+          const next = content[i + 1];
+          if (next === "n") { value += "\n"; i += 2; continue; }
+          if (next === "r") { value += "\r"; i += 2; continue; }
+          if (next === "t") { value += "\t"; i += 2; continue; }
+          if (next === "\\") { value += "\\"; i += 2; continue; }
+          if (next === '"' || next === "'") { value += next; i += 2; continue; }
+          value += next;
+          i += 2;
+          continue;
+        }
+        value += content[i++];
+      }
+      if (content[i] === quote) i++;
+    } else {
+      while (i < content.length && content[i] !== "\n") value += content[i++];
+    }
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+  console.log(`Loaded env from ${path.basename(file)}.`);
+}
+loadEnvLocal();
 
 // ─── CLI args ──────────────────────────────────────────────────────
 const args = process.argv.slice(2);
