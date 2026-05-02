@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { fbSet } from "../firebase";
 import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS } from "../config";
-import { logoBg } from "../utils";
+import { logoBg, matchSherpaForName } from "../utils";
 
 // Alias kept so local references to DEFAULT_GAPS inside this file read
 // naturally — the canonical export in config.js is DEFAULT_MILESTONE_GAPS.
@@ -407,10 +407,11 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
 // upserts to /clients (creates a record if none exists for this
 // account name yet, otherwise patches in place).
 function SherpaDocField({ acct, clients, setClients }) {
-  // Match by case-insensitive name. Old /clients records were keyed
-  // off the same companyName so this round-trips with existing data.
-  const lcName = (acct.companyName || "").trim().toLowerCase();
-  const existing = clients.find(c => (c?.name || "").trim().toLowerCase() === lcName);
+  // Match by name with the shared fuzzy matcher: exact → bidirectional
+  // startsWith → first-word. Catches the common "Canva" (typed manually
+  // in the old Sherpas tab) ↔ "Canva Pty Ltd" (Attio's registered name)
+  // mismatch so existing docs surface against the matching Account row.
+  const existing = matchSherpaForName(acct.companyName, clients);
   const [draft, setDraft] = React.useState(existing?.docUrl || "");
   React.useEffect(() => { setDraft(existing?.docUrl || ""); }, [existing?.id, existing?.docUrl]);
 

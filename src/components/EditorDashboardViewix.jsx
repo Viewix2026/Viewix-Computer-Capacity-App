@@ -15,7 +15,7 @@
 // Mounted by EditorDashboard.jsx via its sub-tab toggle.
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { fmtSecsShort } from "../utils";
+import { fmtSecsShort, matchSherpaForName } from "../utils";
 import { fbSet, fbListen, onFB } from "../firebase";
 
 // ─── Date helpers (local, in browser timezone) ─────────────────────
@@ -61,27 +61,32 @@ function getAssigneeIds(st) {
 // Walk every project's subtasks, find the ones assigned to this editor,
 // flatten into a single list with parent metadata stamped on each row
 // for the "Client: Project" sub-line.
-// Build a fast `clientName.lower → docUrl` lookup AND a
-// `client.id → docUrl` lookup so we can stamp each task's Sherpa
-// link in the same pass that flattens it. Falls back gracefully if
-// `clients` arrives as an object or undefined.
+// Build a `client.id → docUrl` map for hard-linked sherpas (set by the
+// Attio webhook), plus carry the raw client list along so the fuzzy
+// name matcher can be applied per-project for everything else. We
+// memo the per-clientName resolution downstream so we don't re-walk
+// the list on every task row of a busy editor's queue.
 function buildSherpaIndex(clients) {
   const list = Array.isArray(clients) ? clients : Object.values(clients || {}).filter(Boolean);
-  const byName = new Map();
   const byId = new Map();
   for (const c of list) {
     if (!c?.docUrl) continue;
-    const lc = (c.name || "").trim().toLowerCase();
-    if (lc) byName.set(lc, c.docUrl);
     if (c.id) byId.set(c.id, c.docUrl);
   }
-  return { byName, byId };
+  return { byId, list, byName: new Map() };
 }
 function sherpaUrlForProject(p, sherpaIdx) {
   const sherpaId = p?.links?.sherpaId;
   if (sherpaId && sherpaIdx.byId.has(sherpaId)) return sherpaIdx.byId.get(sherpaId);
   const lcName = (p?.clientName || "").trim().toLowerCase();
-  return sherpaIdx.byName.get(lcName) || null;
+  if (!lcName) return null;
+  // Cheap per-build cache so the same clientName isn't re-fuzzy-matched
+  // for every subtask in a project.
+  if (sherpaIdx.byName.has(lcName)) return sherpaIdx.byName.get(lcName);
+  const match = matchSherpaForName(p.clientName, sherpaIdx.list);
+  const url = match?.docUrl || null;
+  sherpaIdx.byName.set(lcName, url);
+  return url;
 }
 function tasksForEditor(projects, editorId, sherpaIdx) {
   const out = [];

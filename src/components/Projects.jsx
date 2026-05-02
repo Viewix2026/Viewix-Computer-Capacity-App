@@ -15,7 +15,7 @@
 
 import { useState, useMemo, useEffect, useRef, memo, Fragment } from "react";
 import { BTN } from "../config";
-import { fmtCur, fmtD } from "../utils";
+import { fmtCur, fmtD, matchSherpaForName } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
@@ -130,15 +130,17 @@ function subtasksAsArray(subtasksObj) {
 export function findSherpaDocUrl(project, clients) {
   if (!project || !clients) return null;
   const list = Array.isArray(clients) ? clients : Object.values(clients).filter(Boolean);
+  // 1. Hard-link via Attio webhook id wins when present.
   const sherpaId = project?.links?.sherpaId;
   if (sherpaId) {
     const byId = list.find(c => c?.id === sherpaId);
     if (byId?.docUrl) return byId.docUrl;
   }
-  const lcName = (project.clientName || "").trim().toLowerCase();
-  if (!lcName) return null;
-  const byName = list.find(c => (c?.name || "").trim().toLowerCase() === lcName);
-  return byName?.docUrl || null;
+  // 2. Fall through to the fuzzy name matcher so legacy short-name
+  //    /clients records ("Canva") still resolve against full Attio
+  //    project clientNames ("Canva Pty Ltd").
+  const match = matchSherpaForName(project.clientName, list);
+  return match?.docUrl || null;
 }
 
 // Read a subtask's assignees as an array. New schema is

@@ -391,6 +391,47 @@ export function preproductionShareUrl(p) {
   return `${origin}/?p=${p.id}`;
 }
 
+// ─── Sherpa Lookup ───
+// Match a project / account name against /clients records to find its
+// sherpa Google Doc. Old /clients records were typed manually with short
+// names ("Canva") in the now-removed Sherpas tab; new ones come from the
+// Attio webhook with full registered names ("Canva Pty Ltd"). An exact
+// match would miss either side, so we layer three strategies, strictest
+// first:
+//   1. Exact case-insensitive match.
+//   2. Bidirectional startsWith — "Canva Pty Ltd".startsWith("Canva") OR
+//      "Canva".startsWith() of the longer one. 4-char floor stops e.g.
+//      "AB" matching "ABC Corp".
+//   3. First-word match for cases where the registered name diverges
+//      after the brand word ("Trimble Geospatial" ↔ "Trimble Group").
+// Returns the matched /clients record or null.
+export function matchSherpaForName(targetName, clients) {
+  if (!targetName) return null;
+  const list = Array.isArray(clients) ? clients : Object.values(clients || {}).filter(Boolean);
+  const lc = targetName.trim().toLowerCase();
+  if (!lc) return null;
+
+  // 1. Exact case-insensitive
+  let m = list.find(c => (c?.name || "").trim().toLowerCase() === lc);
+  if (m) return m;
+
+  // 2. Bidirectional startsWith (4-char floor on both sides)
+  m = list.find(c => {
+    const cn = (c?.name || "").trim().toLowerCase();
+    if (cn.length < 4 || lc.length < 4) return false;
+    return cn.startsWith(lc) || lc.startsWith(cn);
+  });
+  if (m) return m;
+
+  // 3. First-word match (4-char floor on the brand word)
+  const fwTarget = lc.split(/\s+/)[0];
+  if (!fwTarget || fwTarget.length < 4) return null;
+  return list.find(c => {
+    const cn = (c?.name || "").trim().toLowerCase();
+    return cn.split(/\s+/)[0] === fwTarget;
+  }) || null;
+}
+
 // ─── Delivery Helpers ───
 export function newDelivery(clientName, projectName) {
   return { id: `del-${Date.now()}`, shortId: makeShortId(), clientName: clientName || "", projectName: projectName || "", logoUrl: "", videos: [], createdAt: new Date().toISOString() };
