@@ -49,6 +49,7 @@ export default function App(){
   const[foundersTab,setFoundersTab]=useState("dashboard");
   const[resourceTab,setResourceTab]=useState("roas");
   const[saleTab,setSaleTab]=useState("payment");
+  const[nurtureTab,setNurtureTab]=useState("lapsed");
 
   // ─── Hash-based deep-linking ───────────────────────────────────────
   // Format: #<tool>[/<subTab>][/<recordId>]
@@ -584,8 +585,8 @@ export default function App(){
     {/* ═══ PREPRODUCTION ═══ */}
     {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder} dealProjects={projects} route={route.tool==="preproduction"?route:null}/>)}
 
-    {/* ═══ NURTURE — Lapsed-Proposal Auto-Recovery ═══ */}
-    {tool==="nurture"&&isFounder&&(<Nurture attioDeals={attioDeals} isFounder={isFounder}/>)}
+    {/* ═══ NURTURE — sequence hub (Lapsed Proposals + 5 stub sub-tabs) ═══ */}
+    {tool==="nurture"&&isFounder&&(<Nurture attioDeals={attioDeals} isFounder={isFounder} nurtureTab={nurtureTab} setNurtureTab={setNurtureTab} route={route.tool==="nurture"?route:null}/>)}
 
     {/* ═══ RESOURCES ═══ */}
     {tool==="resources"&&(isFounder||role==="closer")&&(<>
