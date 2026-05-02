@@ -83,8 +83,8 @@ export default function App(){
   // change.
   useEffect(()=>{
     if(!route.tool||!route.subTab)return;
-    if(route.tool!=="sherpas"&&route.tool!=="accounts")return;
-    const id=route.tool==="sherpas"?`sherpa-row-${route.subTab}`:`account-row-${route.subTab}`;
+    if(route.tool!=="accounts")return;
+    const id=`account-row-${route.subTab}`;
     const t=setTimeout(()=>{
       const el=document.getElementById(id);
       if(el)el.scrollIntoView({behavior:"smooth",block:"center"});
@@ -378,7 +378,6 @@ export default function App(){
       {isFounder&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
-      <SideIcon icon="📋" label="Sherpas" active={tool==="sherpas"} onClick={()=>setTool("sherpas")}/>
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
       {(isFounder||role==="closer")&&<SideIcon icon="📚" label="Resources" active={tool==="resources"} onClick={()=>setTool("resources")}/>}
       <div style={{flex:1}}/>
@@ -602,81 +601,17 @@ export default function App(){
     </>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
-    {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded projects={projects} editors={editors}/>)}
+    {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
-    {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} route={route.tool==="projects"?route:null}/>)}
+    {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
 
     {/* Legacy direct-to-Deliveries route (kept so old bookmarks still resolve). */}
-    {tool==="deliveries"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} route={route.tool==="projects"?route:null}/>)}
+    {tool==="deliveries"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
 
-
-    {/* ═══ SHERPAS ═══ */}
-    {tool==="sherpas"&&(<>
-      <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
-        <span style={{fontSize:15,fontWeight:700,color:"var(--fg)"}}>Sherpas</span>
-        {!clientAdding&&<button onClick={()=>setClientAdding(true)} style={{...BTN,background:"var(--accent)",color:"white"}}>+ Add Client</button>}
-      </div>
-      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 28px 60px"}}>
-        <a href="https://drive.google.com/drive/folders/1G11LcWKYrEckvh3ip_duYMyVNuoKAqnN" target="_blank" rel="noopener noreferrer" style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,textDecoration:"none",marginBottom:20}}>
-          <span style={{fontSize:18}}>📁</span>
-          <span style={{fontSize:13,fontWeight:600,color:"var(--fg)"}}>Project Briefs</span>
-          <span style={{marginLeft:"auto",color:"var(--muted)",fontSize:12}}>↗</span>
-        </a>
-        {clientAdding&&(<div style={{marginBottom:16,padding:"16px 20px",background:"var(--card)",border:"1px solid var(--accent)",borderRadius:10}}>
-          <div style={{fontSize:13,fontWeight:700,color:"var(--fg)",marginBottom:12}}>New Client</div>
-          <div style={{display:"flex",gap:8,marginBottom:8}}>
-            <input type="text" value={clientNewName} onChange={e=>setClientNewName(e.target.value)} placeholder="Client name..." autoFocus
-              style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none"}}/>
-          </div>
-          <div style={{display:"flex",gap:8,marginBottom:12}}>
-            <input type="text" value={clientNewDoc} onChange={e=>setClientNewDoc(e.target.value)} placeholder="Google Doc URL (optional)..."
-              style={{flex:1,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none"}}/>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>{if(!clientNewName.trim())return;setClients(p=>[...p,{id:`cl-${Date.now()}`,name:clientNewName.trim(),projectLead:"",docUrl:clientNewDoc.trim()}]);setClientNewName("");setClientNewDoc("");setClientAdding(false);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Add</button>
-            <button onClick={()=>{setClientAdding(false);setClientNewName("");setClientNewDoc("");}} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
-          </div>
-        </div>)}
-        {clients.length===0&&!clientAdding?(<div style={{textAlign:"center",padding:60,color:"var(--muted)",background:"var(--card)",borderRadius:12,border:"1px solid var(--border)"}}><div style={{fontSize:40,marginBottom:12}}>📋</div><div style={{fontSize:16,fontWeight:600,marginBottom:8}}>No clients yet</div><div style={{fontSize:13}}>Click "+ Add Client" to get started</div></div>)
-        :(<div style={{display:"grid",gap:8}}>
-          {clients.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(cl=>{
-            const isEditing=clientEditId===cl.id;
-            const isHighlighted=route.tool==="sherpas"&&route.subTab===cl.id;
-            return(<div key={cl.id} id={`sherpa-row-${cl.id}`} style={{background:isHighlighted?"rgba(245,158,11,0.06)":"var(--card)",border:`1px solid ${isEditing?"var(--accent)":isHighlighted?"#F59E0B":"var(--border)"}`,borderRadius:10,padding:"14px 20px",transition:"background 0.4s, border 0.4s"}}>
-              {isEditing?(<div>
-                <input type="text" defaultValue={cl.name} id={`cl-name-${cl.id}`}
-                  style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:600,outline:"none",marginBottom:8}}/>
-                <input type="text" defaultValue={cl.docUrl||""} id={`cl-doc-${cl.id}`} placeholder="Google Doc URL..."
-                  style={{width:"100%",padding:"8px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,outline:"none",marginBottom:8}}/>
-                {(cl.projectLead||cl.accountManager)&&<div style={{padding:"8px 12px",marginBottom:8,fontSize:12,color:"var(--muted)",background:"var(--bg)",borderRadius:6}}>
-                  {cl.projectLead&&<span>Project Lead: <span style={{color:"var(--fg)",fontWeight:600}}>{cl.projectLead}</span></span>}
-                  {cl.projectLead&&cl.accountManager&&<span style={{margin:"0 8px"}}>|</span>}
-                  {cl.accountManager&&<span>Account Manager: <span style={{color:"var(--accent)",fontWeight:600}}>{cl.accountManager}</span></span>}
-                </div>}
-                <div style={{display:"flex",gap:8}}>
-                  <button onClick={()=>{const n=document.getElementById(`cl-name-${cl.id}`)?.value?.trim();const d=document.getElementById(`cl-doc-${cl.id}`)?.value?.trim();if(!n)return;setClients(p=>p.map(c=>c.id===cl.id?{...c,name:n,docUrl:d||""}:c));setClientEditId(null);}} style={{...BTN,background:"var(--accent)",color:"white"}}>Save</button>
-                  <button onClick={()=>setClientEditId(null)} style={{...BTN,background:"#374151",color:"#9CA3AF"}}>Cancel</button>
-                  <button onClick={()=>{deletedPaths.current.push("/clients/"+cl.id);setClients(p=>p.filter(c=>c.id!==cl.id));setClientEditId(null);}} style={{...BTN,background:"#374151",color:"#EF4444",marginLeft:"auto"}}>Delete</button>
-                </div>
-              </div>)
-              :(<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div>
-                  <div style={{fontSize:14,fontWeight:700,color:"var(--fg)"}}>{cl.name}</div>
-                  {cl.projectLead&&<div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Project Lead: <span style={{color:"var(--fg)",fontWeight:600}}>{cl.projectLead}</span></div>}
-                  {cl.accountManager&&<div style={{fontSize:12,color:"var(--muted)",marginTop:2}}>Account Manager: <span style={{color:"var(--accent)",fontWeight:600}}>{cl.accountManager}</span></div>}
-                  {cl.docUrl&&<a href={cl.docUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:"var(--accent)",textDecoration:"none",display:"inline-flex",alignItems:"center",gap:4,marginTop:4}}>📄 Open Google Doc</a>}
-                </div>
-                <button onClick={()=>setClientEditId(cl.id)} style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}>Edit</button>
-              </div>)}
-            </div>);
-          })}
-        </div>)}
-      </div>
-    </>)}
 
     {/* ═══ TRAINING ═══ */}
     {tool==="training"&&(

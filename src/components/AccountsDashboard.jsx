@@ -376,6 +376,15 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Attio ID</div>
                               <input type="text" value={acct.attioId || ""} onChange={e => updateAccount(acct.id, { attioId: e.target.value })} placeholder="(not linked)" style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", width: "100%", fontFamily: "'JetBrains Mono',monospace", boxSizing: "border-box" }} />
                             </div>
+                            {/* Sherpa Doc — the project-brief Google Doc that
+                                used to live in the now-removed Sherpas tab.
+                                Lookup is by case-insensitive name match
+                                between the account and a /clients record.
+                                If no record exists yet, "Save URL" creates
+                                one keyed by the account's companyName. */}
+                            <div style={{ gridColumn: "1 / -1" }}>
+                              <SherpaDocField acct={acct} clients={clients || []} setClients={setClients} />
+                            </div>
                           </div>
                         </td>
                       </tr>
@@ -390,4 +399,70 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
       </div>
     )}
   </>);
+}
+
+// ─── Sherpa doc field ────────────────────────────────────────────
+// Surfaces the matching /clients record's docUrl as an editable URL.
+// Click "Open" to launch the Google Doc; the "Save URL" button
+// upserts to /clients (creates a record if none exists for this
+// account name yet, otherwise patches in place).
+function SherpaDocField({ acct, clients, setClients }) {
+  // Match by case-insensitive name. Old /clients records were keyed
+  // off the same companyName so this round-trips with existing data.
+  const lcName = (acct.companyName || "").trim().toLowerCase();
+  const existing = clients.find(c => (c?.name || "").trim().toLowerCase() === lcName);
+  const [draft, setDraft] = React.useState(existing?.docUrl || "");
+  React.useEffect(() => { setDraft(existing?.docUrl || ""); }, [existing?.id, existing?.docUrl]);
+
+  const save = () => {
+    const url = (draft || "").trim();
+    if (existing) {
+      setClients(prev => prev.map(c => c.id === existing.id ? { ...c, docUrl: url } : c));
+    } else {
+      const id = `cl-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+      setClients(prev => [
+        ...(prev || []),
+        { id, name: acct.companyName, docUrl: url, projectLead: "", accountManager: "" },
+      ]);
+    }
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+        Sherpa Doc
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          type="text"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+          placeholder="https://docs.google.com/..."
+          style={{
+            flex: 1, minWidth: 260,
+            padding: "6px 10px", borderRadius: 4,
+            border: "1px solid var(--border)", background: "var(--input-bg)",
+            color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit",
+            boxSizing: "border-box",
+          }}
+        />
+        {(existing?.docUrl || "").trim() && (
+          <a
+            href={existing.docUrl}
+            target="_blank" rel="noopener noreferrer"
+            style={{
+              padding: "6px 12px", borderRadius: 4,
+              background: "var(--accent-soft)", color: "var(--accent)",
+              fontSize: 11, fontWeight: 700, textDecoration: "none",
+              display: "inline-flex", alignItems: "center", gap: 4,
+              fontFamily: "inherit", whiteSpace: "nowrap",
+            }}>
+            📄 Open ↗
+          </a>
+        )}
+      </div>
+    </>
+  );
 }

@@ -119,6 +119,28 @@ function subtasksAsArray(subtasksObj) {
     });
 }
 
+// Find the Sherpa Doc Google Drive URL associated with a project.
+// Lookup order:
+//   1. project.links.sherpaId → /clients/{id}.docUrl   (set by the
+//      Attio deal-won webhook; see api/webhook-deal-won.js).
+//   2. case-insensitive name match between project.clientName and
+//      a /clients record.
+// Returns null if no record is linked or the matched record has no
+// docUrl. `clients` may arrive as an array or undefined.
+export function findSherpaDocUrl(project, clients) {
+  if (!project || !clients) return null;
+  const list = Array.isArray(clients) ? clients : Object.values(clients).filter(Boolean);
+  const sherpaId = project?.links?.sherpaId;
+  if (sherpaId) {
+    const byId = list.find(c => c?.id === sherpaId);
+    if (byId?.docUrl) return byId.docUrl;
+  }
+  const lcName = (project.clientName || "").trim().toLowerCase();
+  if (!lcName) return null;
+  const byName = list.find(c => (c?.name || "").trim().toLowerCase() === lcName);
+  return byName?.docUrl || null;
+}
+
 // Read a subtask's assignees as an array. New schema is
 // `assigneeIds: string[]`; legacy schema was `assigneeId: string`.
 // This helper transparently reads both so we don't need to migrate
@@ -1086,7 +1108,7 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   );
 });
 
-function ProjectDetail({ project, onBack, onDelete, editors }) {
+function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
@@ -1194,6 +1216,29 @@ function ProjectDetail({ project, onBack, onDelete, editors }) {
         <InlineTextArea value={project.description || ""}
           placeholder="What's being produced, key talking points, anything specific the client called out…"
           onSave={(v) => persistField("description", v)} />
+        {/* Sherpa doc — surfaced as an inline link directly under
+            the scope of work since that's where producers naturally
+            scan for "what does the client want, where's the brief".
+            Lookup priority: project.links.sherpaId (set by the
+            webhook), then case-insensitive name match on
+            project.clientName. Edits live in the Accounts tab's
+            expanded panel so this surface stays read-only. */}
+        {(() => {
+          const url = findSherpaDocUrl(project, clients);
+          if (!url) return null;
+          return (
+            <a href={url} target="_blank" rel="noopener noreferrer"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                marginTop: 10, padding: "6px 10px", borderRadius: 6,
+                background: "var(--accent-soft)", color: "var(--accent)",
+                fontSize: 12, fontWeight: 700, textDecoration: "none",
+                fontFamily: "inherit",
+              }}>
+              📄 Sherpa Doc ↗
+            </a>
+          );
+        })()}
       </FieldCard>
 
       <FieldCard label="Client Contact">
@@ -1338,7 +1383,7 @@ function ProjectDetail({ project, onBack, onDelete, editors }) {
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete, editors }) {
+function ProjectQuickView({ project, onClose, onDelete, editors, clients }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -1394,6 +1439,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors }) {
         <ProjectDetail
           project={project}
           editors={editors}
+          clients={clients}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -1402,7 +1448,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors }) {
   );
 }
 
-export function Projects({ projects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, route }) {
+export function Projects({ projects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route }) {
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   // Quick-view modal — opened when a producer clicks a bar on the
@@ -1664,7 +1710,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
       )}
 
       {subTab === "projects" && active && (
-        <ProjectDetail project={active} editors={editors} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+        <ProjectDetail project={active} editors={editors} clients={clients} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
       )}
 
       {subTab === "teamBoard" && !active && (
@@ -1690,6 +1736,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
               <ProjectQuickView
                 project={qv}
                 editors={editors}
+                clients={clients}
                 onClose={() => setQuickViewProjectId(null)}
                 onDelete={async () => {
                   await deleteProject(qv.id);

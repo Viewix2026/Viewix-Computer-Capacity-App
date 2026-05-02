@@ -61,11 +61,34 @@ function getAssigneeIds(st) {
 // Walk every project's subtasks, find the ones assigned to this editor,
 // flatten into a single list with parent metadata stamped on each row
 // for the "Client: Project" sub-line.
-function tasksForEditor(projects, editorId) {
+// Build a fast `clientName.lower → docUrl` lookup AND a
+// `client.id → docUrl` lookup so we can stamp each task's Sherpa
+// link in the same pass that flattens it. Falls back gracefully if
+// `clients` arrives as an object or undefined.
+function buildSherpaIndex(clients) {
+  const list = Array.isArray(clients) ? clients : Object.values(clients || {}).filter(Boolean);
+  const byName = new Map();
+  const byId = new Map();
+  for (const c of list) {
+    if (!c?.docUrl) continue;
+    const lc = (c.name || "").trim().toLowerCase();
+    if (lc) byName.set(lc, c.docUrl);
+    if (c.id) byId.set(c.id, c.docUrl);
+  }
+  return { byName, byId };
+}
+function sherpaUrlForProject(p, sherpaIdx) {
+  const sherpaId = p?.links?.sherpaId;
+  if (sherpaId && sherpaIdx.byId.has(sherpaId)) return sherpaIdx.byId.get(sherpaId);
+  const lcName = (p?.clientName || "").trim().toLowerCase();
+  return sherpaIdx.byName.get(lcName) || null;
+}
+function tasksForEditor(projects, editorId, sherpaIdx) {
   const out = [];
   if (!editorId || !Array.isArray(projects)) return out;
   for (const p of projects) {
     const subs = p?.subtasks ? Object.values(p.subtasks) : [];
+    const sherpaUrl = sherpaUrlForProject(p, sherpaIdx);
     for (const st of subs) {
       if (!st || !st.id) continue;
       if (!getAssigneeIds(st).includes(editorId)) continue;
@@ -80,6 +103,7 @@ function tasksForEditor(projects, editorId) {
         endTime: st.endTime || null,
         stage: st.stage || "preProduction",
         status: st.status || "stuck",
+        sherpaUrl,
       });
     }
   }
@@ -212,8 +236,31 @@ function TaskRow({
       transition: "all 0.15s",
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {task.parentName}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+            {task.parentName}
+          </div>
+          {/* Sherpa Doc link — appears next to the client/project line
+              when this task's parent project has a sherpa URL on file
+              (looked up in EditorDashboardViewix's sherpaIdx via
+              project.links.sherpaId or clientName match). Click stops
+              propagation so we don't accidentally open the project
+              modal at the same time. */}
+          {task.sherpaUrl && (
+            <a href={task.sherpaUrl} target="_blank" rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              title="Open the client's Sherpa doc in a new tab"
+              style={{
+                flexShrink: 0,
+                padding: "1px 6px", borderRadius: 4,
+                background: "var(--accent-soft)", color: "var(--accent)",
+                fontSize: 10, fontWeight: 700, textDecoration: "none",
+                display: "inline-flex", alignItems: "center", gap: 3,
+                fontFamily: "inherit",
+              }}>
+              📄 Sherpa
+            </a>
+          )}
         </div>
         <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {task.name}
@@ -275,7 +322,7 @@ function TaskRow({
 }
 
 // ─── Main component ───────────────────────────────────────────────
-export function EditorDashboardViewix({ projects = [], editors = [] }) {
+export function EditorDashboardViewix({ projects = [], editors = [], clients = [] }) {
   const [editorId, setEditorId] = useState(null);
   const [timers, setTimers] = useState({});
   const [timeLogs, setTimeLogs] = useState({});
@@ -292,7 +339,8 @@ export function EditorDashboardViewix({ projects = [], editors = [] }) {
   const today = isoToday();
 
   // All tasks for this editor, classified.
-  const allTasks = useMemo(() => tasksForEditor(projects, editorId), [projects, editorId]);
+  const sherpaIdx = useMemo(() => buildSherpaIndex(clients), [clients]);
+  const allTasks = useMemo(() => tasksForEditor(projects, editorId, sherpaIdx), [projects, editorId, sherpaIdx]);
   const { todayTasks, upcomingTasks, overdueTasks } = useMemo(
     () => classifyTasks(allTasks, today),
     [allTasks, today]
