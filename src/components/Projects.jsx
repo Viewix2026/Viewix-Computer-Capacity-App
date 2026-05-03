@@ -1150,10 +1150,14 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
   const dests = Array.isArray(project.destinations) ? project.destinations : [];
   const accountId = links.accountId || null;
   const navigate = (hash) => { window.location.hash = hash; };
-  // openSherpa was removed when the Sherpas tab dissolved — the
-  // sherpa doc is now opened via the external "Sherpa Doc ↗" chip
-  // rendered below (uses findSherpaDocUrl()). Don't add a navigate()
-  // back here unless a Sherpa-detail route is reintroduced.
+  // Sherpa pill: the Sherpas tab is gone, so the pill now opens the
+  // matching /clients record's Google Doc directly via findSherpaDocUrl().
+  // Disabled if no link is found (no /clients record matches this
+  // project's clientName + sherpaId).
+  const sherpaUrl = findSherpaDocUrl(project, clients);
+  const openSherpa = () => {
+    if (sherpaUrl) window.open(sherpaUrl, "_blank", "noopener,noreferrer");
+  };
   const openPreprod  = () => links.preprodId  && navigate(`preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`);
   const openRunsheet = () => links.runsheetId && navigate(`preproduction/runsheets/${links.runsheetId}`);
   const openDelivery = () => links.deliveryId && navigate(`projects/deliveries/${links.deliveryId}`);
@@ -1277,7 +1281,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
           Linked Records · click to open
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <ClickableStatusPill label="Sherpa"   done={!!links.sherpaId}   color="#8B5CF6" onClick={openSherpa}   disabled={!links.sherpaId}   />
+          <ClickableStatusPill label="Sherpa"   done={!!sherpaUrl}        color="#8B5CF6" onClick={openSherpa}   disabled={!sherpaUrl}        />
           <ClickableStatusPill label="Pre-Prod" done={!!links.preprodId}  color="#EC4899" onClick={openPreprod}  disabled={!links.preprodId}  />
           <ClickableStatusPill label="Runsheet" done={!!links.runsheetId} color="#06B6D4" onClick={openRunsheet} disabled={!links.runsheetId} />
           <ClickableStatusPill label="Delivery" done={!!links.deliveryId} color="#10B981" onClick={openDelivery} disabled={!links.deliveryId} />
