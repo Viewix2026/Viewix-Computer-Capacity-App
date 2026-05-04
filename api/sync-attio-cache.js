@@ -137,11 +137,82 @@ export default async function handler(req, res) {
       await fbPatch("/nurture/quotedAt", backfillBatch);
     }
 
+    // 5. Backfill empty clientName across projects + cascade to the
+    //    related records (delivery, account, preproduction). /accounts
+    //    is already the local mirror of Attio companies (each entry
+    //    has attioId + companyName, populated by webhook-deal-won when
+    //    each deal was first won), so we use it as the source of
+    //    truth here rather than making additional Attio company calls.
+    //    Idempotent — only patches records currently lacking the field.
+    const accountsMap = (await fbGet("/accounts")) || {};
+    const accountById = new Map();
+    const accountByAttioId = new Map();
+    for (const a of Object.values(accountsMap)) {
+      if (!a || !a.id) continue;
+      accountById.set(a.id, a);
+      if (a.attioId) accountByAttioId.set(a.attioId, a);
+    }
+    const projectsObj = (await fbGet("/projects")) || {};
+    const projects = Object.values(projectsObj).filter(p => p && p.id);
+    let projectsBackfilled = 0;
+    let deliveriesBackfilled = 0;
+    let accountsBackfilled = 0;
+    let preprodBackfilled = 0;
+    for (const p of projects) {
+      if (p.clientName) continue;
+      // Prefer the account record reachable via links.accountId;
+      // fall back to the Attio company id stamped on the project for
+      // older records that didn't capture an accountId at win-time.
+      const acctId = (p.links || {}).accountId;
+      let resolved = null;
+      if (acctId && accountById.has(acctId) && accountById.get(acctId).companyName) {
+        resolved = accountById.get(acctId).companyName;
+      } else if (p.attioCompanyId && accountByAttioId.has(p.attioCompanyId)) {
+        resolved = accountByAttioId.get(p.attioCompanyId).companyName;
+      }
+      if (!resolved) continue;
+      await fbPatch(`/projects/${p.id}`, { clientName: resolved, updatedAt: lastSyncedAt });
+      projectsBackfilled++;
+      // Cascade — same name lands on every related record that's still
+      // missing it. Only patches when the field is genuinely empty so
+      // we don't clobber a producer's manual override.
+      const delId = (p.links || {}).deliveryId;
+      if (delId) {
+        const del = await fbGet(`/deliveries/${delId}`);
+        if (del && !del.clientName) {
+          await fbPatch(`/deliveries/${delId}`, { clientName: resolved });
+          deliveriesBackfilled++;
+        }
+      }
+      if (acctId && accountById.has(acctId)) {
+        const a = accountById.get(acctId);
+        if (!a.companyName) {
+          await fbPatch(`/accounts/${a.id}`, { companyName: resolved });
+          accountsBackfilled++;
+        }
+      }
+      const preprodId = (p.links || {}).preprodId;
+      const preprodType = (p.links || {}).preprodType;
+      if (preprodId && preprodType) {
+        const pp = await fbGet(`/preproduction/${preprodType}/${preprodId}`);
+        if (pp && !pp.companyName) {
+          await fbPatch(`/preproduction/${preprodType}/${preprodId}`, { companyName: resolved });
+          preprodBackfilled++;
+        }
+      }
+    }
+
     return res.status(200).json({
       ok: true,
       trigger,
       dealsSynced: allDeals.length,
       quotedAtBackfilled: backfilled,
+      clientNameBackfill: {
+        projects: projectsBackfilled,
+        deliveries: deliveriesBackfilled,
+        accounts: accountsBackfilled,
+        preproduction: preprodBackfilled,
+      },
       lastSyncedAt,
     });
   } catch (e) {
