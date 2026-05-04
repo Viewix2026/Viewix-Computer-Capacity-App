@@ -6,7 +6,7 @@ import { fetchMondayUsers, fetchEditorTasks, fetchItemUpdates } from "../monday"
 import { Logo } from "./Logo";
 import { EditorDashboardViewix } from "./EditorDashboardViewix";
 
-export function EditorDashboard({ embedded, onLogout, projects = [], editors: viewixEditors = [], clients = [] }) {
+export function EditorDashboard({ embedded, onLogout, projects = [], editors: viewixEditors = [], clients = [], deliveries = [] }) {
   // Sub-tab between the original Monday.com-driven view and the new
   // Viewix Dashboard view (Firebase-backed, reads /editors + /projects
   // subtasks). Defaults to Viewix — that's where the Projects + Team
@@ -235,7 +235,7 @@ export function EditorDashboard({ embedded, onLogout, projects = [], editors: vi
     return (
       <div style={{ fontFamily: "'DM Sans',-apple-system,sans-serif", background: embedded ? "transparent" : "var(--bg)", color: "var(--fg)", minHeight: embedded ? "auto" : "100vh" }}>
         {subTabBar}
-        <EditorDashboardViewix projects={projects} editors={viewixEditors} clients={clients} />
+        <EditorDashboardViewix projects={projects} editors={viewixEditors} clients={clients} deliveries={deliveries} />
       </div>
     );
   }
