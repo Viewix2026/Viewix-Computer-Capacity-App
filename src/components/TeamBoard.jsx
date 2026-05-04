@@ -875,6 +875,7 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
           <div
             ref={scrollRef}
             onScroll={onScroll}
+            className="chunky-scroll"
             style={{
               flex: 1, minHeight: 0,
               overflow: "auto",
@@ -1180,6 +1181,7 @@ function PoolDrawer({ poolId, pool, editors, onOpenProject }) {
   return (
     <div
       ref={setNodeRef}
+      className="chunky-scroll"
       style={{
         flexShrink: 0,
         height: 180,

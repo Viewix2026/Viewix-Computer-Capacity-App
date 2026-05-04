@@ -221,6 +221,14 @@ input[type="number"]{-moz-appearance:textfield;}
 ::-webkit-scrollbar{width:6px;height:6px;}
 ::-webkit-scrollbar-track{background:var(--bg);}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+/* Chunky-scroll: opt-in class for scroll panels where grabbiness > minimalism.
+   Used on the Team Board because producers were missing the 6px target. */
+.chunky-scroll{scrollbar-width:auto;scrollbar-color:#2A3A52 var(--bg);}
+.chunky-scroll::-webkit-scrollbar{width:14px;height:14px;}
+.chunky-scroll::-webkit-scrollbar-track{background:var(--bg);}
+.chunky-scroll::-webkit-scrollbar-thumb{background:#2A3A52;border-radius:7px;border:3px solid var(--bg);}
+.chunky-scroll::-webkit-scrollbar-thumb:hover{background:#3D5273;}
+.chunky-scroll::-webkit-scrollbar-corner{background:var(--bg);}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
 @keyframes founders-ticker-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
 .founders-ticker-track{animation:founders-ticker-scroll 60s linear infinite;}

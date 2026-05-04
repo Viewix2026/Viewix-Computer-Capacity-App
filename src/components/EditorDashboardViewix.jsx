@@ -632,7 +632,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
         {/* Today */}
         <Section title="Today" count={todayTasks.length} colour="#10B981">
           {todayTasks.length === 0 ? (
-            <Empty text="Nothing scheduled for today. Take the win." />
+            <Empty text="Nothing scheduled today. Reach out to your Production Manager." />
           ) : todayTasks.map(t => (
             <TaskRow key={t.id} task={t}
               isRunning={isRunning(t.id)}
