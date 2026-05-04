@@ -1496,6 +1496,22 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
       if (typeof window !== "undefined") window.localStorage.setItem(FILTER_KEY, filter);
     } catch { /* private mode / disabled storage — ignore */ }
   }, [filter]);
+  // Sort preference for the Projects sub-tab. Persisted alongside `filter`
+  // so producers don't have to re-pick A–Z every visit. Default is alpha
+  // for first-time / cleared-storage visits.
+  const SORT_KEY = "viewix.projects.sort";
+  const VALID_SORTS = ["alpha", "newest", "oldest"];
+  const [sortBy, setSortBy] = useState(() => {
+    try {
+      const saved = typeof window !== "undefined" ? window.localStorage.getItem(SORT_KEY) : null;
+      return VALID_SORTS.includes(saved) ? saved : "alpha";
+    } catch { return "alpha"; }
+  });
+  useEffect(() => {
+    try {
+      if (typeof window !== "undefined") window.localStorage.setItem(SORT_KEY, sortBy);
+    } catch { /* private mode / disabled storage — ignore */ }
+  }, [sortBy]);
   const [search, setSearch] = useState("");
   // Bulk-action selection — Set of project ids checked via the row
   // checkbox or the header select-all. Clears when the filter or
@@ -1583,8 +1599,12 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
         return p._status !== "archived";  // "all"
       })
       .filter(p => !q || (p.projectName || "").toLowerCase().includes(q) || (p.clientName || "").toLowerCase().includes(q))
-      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-  }, [projects, filter, search]);
+      .sort((a, b) => {
+        if (sortBy === "newest") return (b.createdAt || "").localeCompare(a.createdAt || "");
+        if (sortBy === "oldest") return (a.createdAt || "").localeCompare(b.createdAt || "");
+        return (a.projectName || "").localeCompare(b.projectName || "", undefined, { sensitivity: "base" });
+      });
+  }, [projects, filter, search, sortBy]);
 
   const deleteProject = async (id) => {
     await fbSet(`/projects/${id}`, null);
@@ -1641,6 +1661,18 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
                 <button key={f.key} onClick={() => setFilter(f.key)}
                   style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: filter === f.key ? "var(--card)" : "transparent", color: filter === f.key ? "var(--fg)" : "var(--muted)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                   {f.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
+              {[
+                { key: "alpha",  label: "A–Z" },
+                { key: "newest", label: "Newest" },
+                { key: "oldest", label: "Oldest" },
+              ].map(s => (
+                <button key={s.key} onClick={() => setSortBy(s.key)}
+                  style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: sortBy === s.key ? "var(--card)" : "transparent", color: sortBy === s.key ? "var(--fg)" : "var(--muted)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                  {s.label}
                 </button>
               ))}
             </div>
