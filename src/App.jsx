@@ -212,9 +212,22 @@ export default function App(){
     onFB(()=>{
       if(cancelled)return;
       const markLoaded=()=>{clearTimeout(fallback);setLoading(false);setTimeout(()=>{skipWrite.current=false;},500);};
+      // Track which paths have had their initial fire delivered. The
+      // skipRead guard exists to swallow listener echoes from our own
+      // bulk-writes, NOT to drop initial data — which is exactly what
+      // happens if the very first fire for a path lands inside a
+      // skipRead window (e.g. PR #4's videoId migration triggers many
+      // /deliveries echoes that overlap the late-arriving /accounts and
+      // /sales initial fires). Realtime DB's `on('value')` doesn't
+      // re-deliver missed initials, so once dropped, the state stays
+      // empty until something else writes. Always letting the first
+      // fire through closes that gap; later fires keep the echo guard.
+      const firstFireSeen=new Set();
       const listen=(path,apply)=>{
         const off=fbListen(path,(data)=>{
-        if(skipRead.current)return;
+        const isInitial=!firstFireSeen.has(path);
+        if(isInitial)firstFireSeen.add(path);
+        if(!isInitial&&skipRead.current)return;
         try{
           apply(data);
         }catch(e){console.error("Firebase data parse error:",path,e);}
