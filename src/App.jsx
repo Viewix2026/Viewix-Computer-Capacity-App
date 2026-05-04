@@ -393,7 +393,7 @@ export default function App(){
       {(isFounder||role==="closer"||isLead)&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
       {isFounder&&<SideIcon icon="🌱" label="Nurture" active={tool==="nurture"} onClick={()=>setTool("nurture")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
-      {isFounder&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
+      {(isFounder||isLead)&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
@@ -625,10 +625,10 @@ export default function App(){
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
-    {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
+    {tool==="projects"&&(isFounder||isLead)&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
 
     {/* Legacy direct-to-Deliveries route (kept so old bookmarks still resolve). */}
-    {tool==="deliveries"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
+    {tool==="deliveries"&&(isFounder||isLead)&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
 
 
     {/* ═══ TRAINING ═══ */}
