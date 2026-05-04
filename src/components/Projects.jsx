@@ -503,34 +503,70 @@ function SubtaskStatusCell({ value, onChange }) {
 
 // Compact inline editor used inside the subtask row — same commit-on-blur
 // behaviour as InlineText but smaller padding/font + transparent background
-// so the row stays Monday-style dense.
-function SubtaskInline({ value, onSave, placeholder, type = "text", style }) {
+// so the row stays Monday-style dense. When `multiline` is true, renders a
+// textarea that auto-grows so long subtask names wrap instead of clipping.
+function SubtaskInline({ value, onSave, placeholder, type = "text", style, multiline = false }) {
   const [draft, setDraft] = useState(value || "");
   const [focused, setFocused] = useState(false);
+  const taRef = useRef(null);
   useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
+  // Auto-resize the textarea to fit its content. Reset to auto first so the
+  // height shrinks when text is deleted, not just when it grows.
+  useEffect(() => {
+    if (!multiline || !taRef.current) return;
+    const el = taRef.current;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [draft, multiline]);
   const commit = () => {
     if ((draft || "") === (value || "")) return;
     onSave(draft || "");
   };
+  const sharedStyle = {
+    width: "100%", padding: "5px 8px", borderRadius: 4,
+    border: "1px solid transparent", background: "transparent",
+    color: "var(--fg)", fontSize: 12, fontWeight: 500,
+    fontFamily: "inherit", outline: "none",
+    ...style,
+  };
+  const sharedHandlers = {
+    onClick: e => e.stopPropagation(),
+    onFocus: () => setFocused(true),
+    onBlur: () => { setFocused(false); commit(); },
+    placeholder,
+    onMouseEnter: e => e.currentTarget.style.borderColor = "var(--border)",
+    onMouseLeave: e => { if (!focused) e.currentTarget.style.borderColor = "transparent"; },
+  };
+  if (multiline) {
+    return (
+      <textarea
+        ref={taRef}
+        rows={1}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          // Enter commits (no newline). Shift+Enter inserts a newline.
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.target.blur(); }
+          if (e.key === "Escape") { setDraft(value || ""); e.target.blur(); }
+        }}
+        {...sharedHandlers}
+        style={{
+          ...sharedStyle,
+          resize: "none", overflow: "hidden",
+          whiteSpace: "pre-wrap", wordBreak: "break-word",
+          lineHeight: 1.35,
+        }}
+      />
+    );
+  }
   return (
     <input
       type={type}
       value={draft}
       onChange={e => setDraft(e.target.value)}
-      onClick={e => e.stopPropagation()}
-      onFocus={() => setFocused(true)}
-      onBlur={() => { setFocused(false); commit(); }}
       onKeyDown={e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setDraft(value || ""); e.target.blur(); } }}
-      placeholder={placeholder}
-      style={{
-        width: "100%", padding: "5px 8px", borderRadius: 4,
-        border: "1px solid transparent", background: "transparent",
-        color: "var(--fg)", fontSize: 12, fontWeight: 500,
-        fontFamily: "inherit", outline: "none",
-        ...style,
-      }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border)"}
-      onMouseLeave={e => { if (!focused) e.currentTarget.style.borderColor = "transparent"; }}
+      {...sharedHandlers}
+      style={sharedStyle}
     />
   );
 }
@@ -688,7 +724,7 @@ function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped })
     }}>
       <td style={{ ...tdStyle, padding: "4px 14px" }} />
       <td style={{ ...tdStyle, padding: "4px 14px 4px 48px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
           {/* Stage pill — replaces the previous purple/cyan/slate
               source-indicator square. The pill's colour communicates
               which production phase this subtask sits in (Pre
@@ -701,12 +737,18 @@ function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped })
             subtask={subtask}
             onChange={(s) => persist("stage", s)}
           />
-          <SubtaskInline
-            value={subtask.name || ""}
-            onSave={(v) => persist("name", v.trim() || "Untitled subtask")}
-            placeholder="Subtask name"
-            style={{ fontSize: 12, fontWeight: 600 }}
-          />
+          {/* flex:1 + minWidth:0 lets the name take all remaining width
+              and shrink without overflowing the row's siblings. The
+              multiline textarea then wraps long names instead of clipping. */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <SubtaskInline
+              value={subtask.name || ""}
+              onSave={(v) => persist("name", v.trim() || "Untitled subtask")}
+              placeholder="Subtask name"
+              multiline
+              style={{ fontSize: 12, fontWeight: 600 }}
+            />
+          </div>
           {/* Multi-assignee picker — supports multiple people on the
               same subtask (e.g. shoot crew). Writes to assigneeIds and
               keeps legacy assigneeId in sync as the first element so
