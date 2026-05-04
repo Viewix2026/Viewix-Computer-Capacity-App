@@ -13,12 +13,11 @@
 //     Slack webhook (SLACK_FOUNDERS_BRIEFING_WEBHOOK_URL). Updates
 //     the briefing record with sentToSlack: true + slackPostedAt.
 //
-// GET (with header `x-vercel-cron` set or query ?cron=1) runs the
-// weekly cadence: runs analysis + auto-posts to Slack. Wired in
-// vercel.json#crons. The cron secret check is intentionally light;
-// the endpoint is idempotent and writes to a private Firebase node.
+// GET with Vercel's `x-vercel-cron: 1` header runs the weekly cadence:
+// runs analysis + auto-posts to Slack. Manual runs use authenticated POST.
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -372,17 +371,15 @@ async function weeklyCron() {
 
 // ─── Dispatcher ────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
+  if (handleOptions(req, res, "POST, GET, OPTIONS")) return;
+  setCors(req, res, "POST, GET, OPTIONS");
 
   // GET = cron path. Vercel sets `x-vercel-cron: 1` on its scheduled
-  // invocations; we also accept ?cron=1 for manual triggering during
-  // testing without exposing the analysis to anonymous traffic.
+  // invocations. Manual triggering must go through the authenticated
+  // POST path below.
   if (req.method === "GET") {
-    const isCron = req.headers["x-vercel-cron"] === "1" || req.query?.cron === "1";
-    if (!isCron) return res.status(405).json({ error: "POST only (use ?cron=1 for cron)" });
+    const isCron = req.headers["x-vercel-cron"] === "1";
+    if (!isCron) return res.status(401).json({ error: "Cron header required" });
     try {
       const result = await weeklyCron();
       return res.status(200).json({ success: true, ...result });
@@ -393,6 +390,11 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  try {
+    await requireRole(req, ["founders"]);
+  } catch (e) {
+    return sendAuthError(res, e);
+  }
   const action = req.body?.action;
   if (!action) return res.status(400).json({ error: "Missing action" });
 

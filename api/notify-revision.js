@@ -17,8 +17,35 @@ function escapeSlack(s) {
     .replace(/([*_`~|])/g, "​$1");
 }
 
+const RATE_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT = 10;
+const attempts = new Map();
+
+function clientIp(req) {
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string") return xff.split(",")[0].trim();
+  return req.headers["x-real-ip"] || req.socket?.remoteAddress || "unknown";
+}
+
+function checkRate(ip) {
+  const now = Date.now();
+  const entry = attempts.get(ip) || { count: 0, windowStart: now };
+  if (now - entry.windowStart > RATE_WINDOW_MS) {
+    entry.count = 0;
+    entry.windowStart = now;
+  }
+  entry.count++;
+  attempts.set(ip, entry);
+  return entry.count <= RATE_LIMIT;
+}
+
+function clamp(s, max) {
+  return String(s == null ? "" : s).slice(0, max);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  if (!checkRate(clientIp(req))) return res.status(429).json({ error: "Too many notifications" });
 
   try {
     const { clientName, deliveryId, changes } = req.body || {};
@@ -26,15 +53,16 @@ export default async function handler(req, res) {
 
     if (!webhookUrl) return res.status(500).json({ error: "SLACK_REVISIONS_WEBHOOK_URL not configured" });
     if (!changes || !Array.isArray(changes) || changes.length === 0) return res.status(400).json({ error: "No changes provided" });
+    if (changes.length > 50) return res.status(400).json({ error: "Too many changes in one notification" });
 
     const lines = changes.map(c => {
-      const name = escapeSlack(c.videoName || "Video");
-      const oldV = escapeSlack(c.oldValue || "Not Started");
-      const newV = escapeSlack(c.newValue);
+      const name = escapeSlack(clamp(c.videoName || "Video", 120));
+      const oldV = escapeSlack(clamp(c.oldValue || "Not Started", 120));
+      const newV = escapeSlack(clamp(c.newValue, 120));
       return `• *${name}* — ${c.field === "revision1" ? "Round 1" : "Round 2"}: ${oldV} → ${newV}`;
     });
 
-    const message = `:pencil2: *Revision update from ${escapeSlack(clientName || "a client")}*\n${lines.join("\n")}`;
+    const message = `:pencil2: *Revision update from ${escapeSlack(clamp(clientName || "a client", 120))}*\n${lines.join("\n")}`;
 
     const slackResp = await fetch(webhookUrl, {
       method: "POST",

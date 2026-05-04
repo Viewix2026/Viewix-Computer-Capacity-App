@@ -37,7 +37,7 @@
       "schedule": "0 22 * * *"
     },
     {
-      "path": "/api/founders-advisor?cron=1",
+      "path": "/api/founders-advisor",
       "schedule": "0 22 * * 0"
     },
     {

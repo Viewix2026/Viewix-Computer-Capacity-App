@@ -1,11 +1,17 @@
 // Vercel Serverless Function: Attio API Proxy
 // Fetches all deals with pagination for monthly revenue tracking
+import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
+  if (handleOptions(req, res)) return;
+  setCors(req, res);
+  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+
+  try {
+    await requireRole(req, ["founders", "founder"]);
+  } catch (e) {
+    return sendAuthError(res, e);
+  }
 
   const ATTIO_KEY = process.env.ATTIO_API_KEY;
   const headers = { "Authorization": `Bearer ${ATTIO_KEY}`, "Content-Type": "application/json" };

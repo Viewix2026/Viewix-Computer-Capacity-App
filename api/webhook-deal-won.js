@@ -6,14 +6,10 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { identifyDeal, productLineLabel } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
+import { randomBytes } from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
-// Webhook shared secret. Prefer the env var so the value isn't
-// committed to source. Falls back to the historical hardcoded value
-// only while we transition — once ATTIO_WEBHOOK_SECRET is set in
-// Vercel + Zapier, delete the fallback. See LOOSE_ENDS in the bug-
-// sweep plan for the rotation procedure.
-const SECRET = process.env.ATTIO_WEBHOOK_SECRET || "viewix-webhook-2026";
+const SECRET = process.env.ATTIO_WEBHOOK_SECRET;
 
 // ─── Payload validation ─────────────────────────────────────────
 // Reject obviously-malformed Zapier payloads BEFORE we let them
@@ -40,11 +36,11 @@ function validatePayload(p) {
   return null;
 }
 
-// Generate a 6-char unguessable short id for share URLs (matches frontend utils.makeShortId)
-function makeShortId() {
+function makeShortId(length = 10) {
   const chars = "abcdefghijkmnpqrstuvwxyz23456789";
+  const bytes = randomBytes(length);
   let out = "";
-  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < length; i++) out += chars[bytes[i] % chars.length];
   return out;
 }
 
@@ -125,6 +121,7 @@ export default async function handler(req, res) {
     const firstName = body["First Name"] || body.firstName || "";
     const clientEmail = body["Client Email"] || body.clientEmail || body.email || "";
 
+    if (!SECRET) return res.status(500).json({ error: "ATTIO_WEBHOOK_SECRET not configured" });
     if (secret !== SECRET) return res.status(401).json({ error: "Invalid secret" });
     if (!companyName) return res.status(400).json({ error: "companyName is required" });
 

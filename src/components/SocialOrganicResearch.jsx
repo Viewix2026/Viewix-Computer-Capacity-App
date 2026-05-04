@@ -9,7 +9,7 @@
 // `synthesis` field on old projects is preserved but unused.
 
 import { useState, useEffect, useRef, memo } from "react";
-import { fbSet, fbSetAsync, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
+import { authFetch, fbSet, fbSetAsync, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
 import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
@@ -430,7 +430,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
     setScraping(true);
     setScrapeError(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "scrape", projectId: project.id, inputs: project.inputs }),
@@ -502,7 +502,7 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
     const poll = async () => {
       if (cancelled) return;
       try {
-        await fetch("/api/social-organic", {
+        await authFetch("/api/social-organic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "refreshScrapes", projectId: project.id }),
@@ -686,7 +686,7 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
     setPipelineError(null);
     setPipelineInfo(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "runPipeline", projectId: project.id, fast: fastClassify }),
@@ -713,7 +713,7 @@ function ActionBar({ project, scraping, onScrape, scrapeError }) {
     setClassifyError(null);
     setClassifyInfo(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "classify", projectId: project.id, fast: fastClassify }),
@@ -929,7 +929,7 @@ function PostCard({ post, projectId }) {
 
   const reclassify = async (newFormat) => {
     try {
-      await fetch("/api/social-organic", {
+      await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reclassify", projectId, postId: post.id, format: newFormat }),
@@ -1265,7 +1265,7 @@ function TranscriptSection({ project, addCompetitor, addKeyword }) {
     setExtracting(true);
     setError(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1449,7 +1449,7 @@ function CostEstimateBar({ handles, postsPerHandle }) {
       setLoading(true);
       setError(null);
       try {
-        const r = await fetch("/api/social-organic", {
+        const r = await authFetch("/api/social-organic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "estimate", handles, postsPerHandle }),
@@ -1673,7 +1673,7 @@ function VideoReviewStep({ project, onPatch }) {
     if (handles.length === 0) { setAppendError("Add at least one handle."); return; }
     setAppendBusy(true);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1698,7 +1698,7 @@ function VideoReviewStep({ project, onPatch }) {
     setAppendError(null);
     setAppendBusy(true);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2594,7 +2594,7 @@ function IdeaSelectionStep({ project, onPatch }) {
       // Set the processing flag client-side too so the spinner snaps
       // on immediately (don't wait for the server to write it).
       fbSet(`/preproduction/socialOrganic/${project.id}/formatIdeasProcessingAt`, new Date().toISOString());
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "generateFormatIdeas", projectId: project.id }),
@@ -2753,7 +2753,7 @@ function ScriptStep({ project, onPatch }) {
       // fall back to equal distribution (the "only 12 videos instead
       // of 28" bug). Inline override wins; server falls back to
       // /preproduction if override is missing.
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3051,7 +3051,7 @@ function RowFeedbackModal({ target, project, onClose }) {
     setWorking(true);
     setError(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3216,7 +3216,7 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
         new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/transcript`, transcript); setTimeout(res, 50); }),
         new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/producerNotes`, producerNotes); setTimeout(res, 50); }),
       ]);
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
@@ -3239,12 +3239,12 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
     //  - suggestCompetitors  → Stage B's competitor + keyword chips
     // Log failures so we can spot silent misses in Vercel logs — producer
     // still moves forward and can manually fill if auto-suggest drops.
-    fetch("/api/social-organic", {
+    authFetch("/api/social-organic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "suggestClientHandle", projectId: project.id }),
     }).catch(err => console.warn("suggestClientHandle fire-and-forget failed:", err));
-    fetch("/api/social-organic", {
+    authFetch("/api/social-organic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
@@ -3402,7 +3402,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
     if (handleSuggestion) return;
     if (suggestingHandle) return;
     setSuggestingHandle(true);
-    fetch("/api/social-organic", {
+    authFetch("/api/social-organic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "suggestClientHandle", projectId: project.id }),
@@ -3429,7 +3429,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
 
   const resuggest = () => {
     setSuggestingHandle(true);
-    fetch("/api/social-organic", {
+    authFetch("/api/social-organic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "suggestClientHandle", projectId: project.id }),
@@ -3450,7 +3450,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
     setErr(e => ({ ...e, a: null }));
     try {
       fbSet(`/preproduction/socialOrganic/${project.id}/research/clientHandle`, clientHandle);
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startClientScrape", projectId: project.id, handle: clientHandle }),
@@ -3516,7 +3516,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
   const runSuggest = async () => {
     setSuggesting(true);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "suggestCompetitors", projectId: project.id }),
@@ -3553,7 +3553,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
     setStarting(s => ({ ...s, b: true }));
     setErr(e => ({ ...e, b: null }));
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startCompetitorScrape", projectId: project.id }),
@@ -3821,7 +3821,7 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
     const poll = async () => {
       if (cancelled) return;
       try {
-        await fetch("/api/social-organic", {
+        await authFetch("/api/social-organic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "refreshScrapes", projectId }),
@@ -3844,7 +3844,7 @@ function ScrapeStatusPill({ scrape, label, projectId }) {
     if (!projectId) return;
     setRefreshing(true); setRefreshMsg(null); setRefreshResults(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "refreshScrapes", projectId }),
@@ -4000,7 +4000,7 @@ function ClientResearchStep({ project, onPatch }) {
       // Persist the new handle to /research so Tab 2 shows the corrected
       // value + so the prompt blocks that read clientHandle pick it up.
       fbSet(`/preproduction/socialOrganic/${project.id}/research/clientHandle`, `@${clean}`);
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startClientScrape", projectId: project.id, handle: clean }),
@@ -4046,7 +4046,7 @@ function ClientResearchStep({ project, onPatch }) {
     setBusy(s => ({ ...s, [key]: true }));
     setErr(e => ({ ...e, [key]: null }));
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "startProfileScrape", projectId: project.id, platform, handle: clean }),
@@ -4063,7 +4063,7 @@ function ClientResearchStep({ project, onPatch }) {
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 5000));
         try {
-          await fetch("/api/social-organic", {
+          await authFetch("/api/social-organic", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "refreshScrapes", projectId: project.id }),
@@ -4347,7 +4347,7 @@ function ScriptToolbar({ project, onRegenerate, onPatch }) {
     setPushing(true);
     setPushError(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "pushToRunsheet", projectId: project.id }),

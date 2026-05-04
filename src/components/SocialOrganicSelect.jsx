@@ -14,7 +14,7 @@
 // window — it's a counter for browsing, not an auth-critical number.
 
 import { useEffect, useState } from "react";
-import { fbSet, fbListenSafe } from "../firebase";
+import { authFetch, fbSet, fbListenSafe } from "../firebase";
 import {
   DndContext, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   closestCenter,
@@ -81,7 +81,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
     setSuggesting(true);
     setSuggestError(null);
     try {
-      const r = await fetch("/api/social-organic", {
+      const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "suggestFormats", projectId: project.id }),
@@ -272,7 +272,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
     // rather than them having to click Generate. Silent failures log
     // to console — the Idea Selection tab's own Generate button is
     // the retry path if anything dropped.
-    fetch("/api/social-organic", {
+    authFetch("/api/social-organic", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "generateFormatIdeas", projectId: project.id }),

@@ -157,12 +157,17 @@ export function slugify(s) {
     .slice(0, 60);
 }
 
-// 6-character alphanumeric ID, ~36^6 = 2.2 billion combinations.
-// Used as the un-guessable prefix in pretty URLs.
-export function makeShortId() {
+// Cryptographically-random public URL prefix.
+export function makeShortId(length = 10) {
   const chars = "abcdefghijkmnpqrstuvwxyz23456789"; // no 0/o/1/l for legibility
+  const bytes = new Uint8Array(length);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
   let out = "";
-  for (let i = 0; i < 6; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < length; i++) out += chars[bytes[i] % chars.length];
   return out;
 }
 

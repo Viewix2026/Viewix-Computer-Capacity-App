@@ -6,6 +6,7 @@
 
 import { buildSystemPrompt, buildRewritePrompt, PACKAGE_CONFIGS } from "./preproduction-prompt.js";
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
@@ -80,16 +81,21 @@ function parseJSON(raw) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
+  if (handleOptions(req, res)) return;
+  setCors(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
 
   const { action } = req.body || {};
+  if (action !== "notifyFeedback") {
+    try {
+      await requireRole(req, ["founders", "founder", "lead"]);
+    } catch (e) {
+      return sendAuthError(res, e);
+    }
+  }
 
   try {
     // ─── GENERATE: Full script generation from transcript ───

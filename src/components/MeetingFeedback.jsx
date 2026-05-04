@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { fbSet, fbListenSafe } from "../firebase";
+import { authFetch, fbSet, fbListenSafe } from "../firebase";
 
 const SALESPEOPLE = ["Brandon", "Jeremy"];
 
@@ -87,7 +87,7 @@ export function MeetingFeedback() {
     setAnalysing(true);
 
     try {
-      const resp = await fetch("/api/meeting-feedback", {
+      const resp = await authFetch("/api/meeting-feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -130,7 +130,7 @@ export function MeetingFeedback() {
     setAnalysing(true);
     fbSet(`/meetingFeedback/${item.id}/status`, "analysing");
     try {
-      const resp = await fetch("/api/meeting-feedback", {
+      const resp = await authFetch("/api/meeting-feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

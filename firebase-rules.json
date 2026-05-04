@@ -1,16 +1,33 @@
 {
   "rules": {
-    ".read": "auth != null && auth.token.role != null",
-    ".write": "auth != null && auth.token.role != null",
+    ".read": false,
+    ".write": false,
+
+    "inputs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "weekData": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "quotes": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "clientRateCards": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "clients": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "training": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "trainingSuggestions": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "todos": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "teamLunch": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "buyerJourney": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "turnaround": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "mondayEditors": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "projects": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "runsheets": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "formatLibrary": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "preproductionTemplates": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "meetingFeedback": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "foundersMetrics": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "foundersBriefings": { ".read": "auth != null && auth.token.role == 'founders'", ".write": "auth != null && auth.token.role == 'founders'" },
+    "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')" },
 
     "deliveries": {
-      // Public share links (/d/{shortId}/...) scan this collection to find
-      // the record whose `shortId` field matches. Allow listing to any
-      // authenticated user (including anonymous) so the public view
-      // can resolve shortIds. Individual deliveries are already readable
-      // per-record below; collection-level read only leaks the small
-      // amount of summary metadata already exposed per share URL.
       ".read": "auth != null",
+      ".write": "auth != null && auth.token.role != null",
       ".indexOn": ["shortId"],
       "$deliveryId": {
         ".read": "auth != null",
@@ -25,69 +42,64 @@
 
     "preproduction": {
       "metaAds": {
-        // Same pattern as /deliveries: public share links at /p/{shortId}
-        // need to scan by shortId. Index it and allow the list read.
         ".read": "auth != null",
+        ".write": "auth != null && auth.token.role != null",
         ".indexOn": ["shortId"],
         "$projectId": {
           ".read": "auth != null",
-          "clientFeedback": {
-            ".write": "auth != null"
-          }
+          "clientFeedback": { ".write": "auth != null" }
         }
       },
       "socialOrganic": {
-        // Mirror of metaAds — the Social Organic public view uses the
-        // same /p/{shortId} pattern and does a collection scan.
         ".read": "auth != null",
+        ".write": "auth != null && auth.token.role != null",
         ".indexOn": ["shortId"],
         "$projectId": {
           ".read": "auth != null",
           "preproductionDoc": {
-            "clientFeedback": {
-              ".write": "auth != null"
-            }
+            "clientFeedback": { ".write": "auth != null" }
           }
         }
       },
       "feedbackLog": {
+        ".read": "auth != null && auth.token.role != null",
         ".write": "auth != null"
+      },
+      "promptLearnings": {
+        ".read": "auth != null && auth.token.role != null",
+        ".write": "auth != null && auth.token.role != null"
       }
     },
 
     "accounts": {
-      ".read": "auth != null"
+      ".read": "auth != null",
+      ".write": "auth != null && auth.token.role != null"
     },
 
     "sales": {
-      // Public payment page at /s/{shortId} scans this collection by shortId
-      // (same pattern as /deliveries). The page itself never writes — writes
-      // happen server-side via the admin SDK (create-payment-intent creates
-      // no record; stripe-webhook marks `paid` after signature verification).
       ".read": "auth != null",
+      ".write": "auth != null && auth.token.role != null",
       ".indexOn": ["shortId"]
     },
 
     "saleThankYou": {
-      // Per-package thank-you page content (welcome video, next-steps copy,
-      // shared booking URL) rendered on /s/{shortId} after payment clears.
-      // Read-only from the public view; edits happen founder-side through
-      // the standard authenticated rules at the root.
-      ".read": "auth != null"
+      ".read": "auth != null",
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
     },
 
     "editors": {
-      // Team roster. Public thank-you page (/s/{shortId}) reads this to
-      // pull the producer's avatar / name / role off the roster record.
-      // Producer avatarUrl lives on the editor row in Capacity > Team
-      // Roster > Photo column, so there's one source of truth.
-      //
-      // Exposes phone/email of team members to anonymous users — narrow
-      // leak for a small team behind the already-public viewix.com.au
-      // presence. If this becomes a concern, mirror only the safe
-      // subset (name, role, avatarUrl) to a separate /editorsPublic
-      // path and narrow this rule back to authenticated.
-      ".read": "auth != null"
+      ".read": "auth != null",
+      ".write": "auth != null && auth.token.role != null"
+    },
+
+    "nurture": {
+      ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
+    },
+
+    "contactNotifications": {
+      ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
+      ".write": false
     },
 
     "foundersData": {

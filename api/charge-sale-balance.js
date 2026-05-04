@@ -7,26 +7,25 @@
 // creates a fresh PaymentIntent using that saved PaymentMethod, with
 // off_session=true + confirm=true so Stripe attempts immediate charge.
 //
-// Auth: endpoint is callable only by a signed-in founder. We rely on a
-// shared auth header (set in SALE_BALANCE_AUTH env) rather than full
-// Firebase auth token validation — shipping-first, hardening later.
-// Matches the pattern used by api/preproduction.js.
+// Auth: endpoint is callable only by a signed-in founder/founders user.
+// The client sends a Firebase ID token and the server verifies the role.
 
 import Stripe from "stripe";
 import { adminGet, adminPatch } from "./_fb-admin.js";
+import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 
 export default async function handler(req, res) {
+  if (handleOptions(req, res)) return;
+  setCors(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   const secret = process.env.STRIPE_SECRET_KEY;
   if (!secret) return res.status(500).json({ error: "STRIPE_SECRET_KEY not configured" });
 
-  const authSecret = process.env.SALE_BALANCE_AUTH;
-  if (authSecret) {
-    const provided = req.headers["x-viewix-auth"];
-    if (provided !== authSecret) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+  try {
+    await requireRole(req, ["founders", "founder"]);
+  } catch (e) {
+    return sendAuthError(res, e);
   }
 
   try {
@@ -132,6 +131,8 @@ export default async function handler(req, res) {
         packageKey: sale.packageKey || "",
         sliceIdx: String(idx),
       },
+    }, {
+      idempotencyKey: `charge-balance:${sale.id}:${idx}:${amountCents}`,
     });
 
     // Depending on PI status, respond accordingly. The webhook

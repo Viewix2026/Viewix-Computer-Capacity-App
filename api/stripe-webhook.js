@@ -106,10 +106,10 @@ export default async function handler(req, res) {
   //   STRIPE_WEBHOOK_SECRET_TEST  — test/sandbox destination
   //   STRIPE_WEBHOOK_SECRET_LIVE  — live destination
   const webhookSecrets = [
-    process.env.STRIPE_WEBHOOK_SECRET,
-    process.env.STRIPE_WEBHOOK_SECRET_TEST,
-    process.env.STRIPE_WEBHOOK_SECRET_LIVE,
-  ].filter(Boolean);
+    { mode: "any", value: process.env.STRIPE_WEBHOOK_SECRET },
+    { mode: "test", value: process.env.STRIPE_WEBHOOK_SECRET_TEST },
+    { mode: "live", value: process.env.STRIPE_WEBHOOK_SECRET_LIVE },
+  ].filter(s => s.value);
   if (!secret || webhookSecrets.length === 0) {
     return res.status(500).json({ error: "Stripe env vars not configured" });
   }
@@ -118,11 +118,13 @@ export default async function handler(req, res) {
   const sig = req.headers["stripe-signature"];
   let event;
   let lastErr;
+  let matchedMode = null;
   try {
     const raw = await readRawBody(req);
     for (const ws of webhookSecrets) {
       try {
-        event = stripe.webhooks.constructEvent(raw, sig, ws);
+        event = stripe.webhooks.constructEvent(raw, sig, ws.value);
+        matchedMode = ws.mode;
         break; // verified — stop trying
       } catch (e) {
         lastErr = e;
@@ -134,6 +136,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Webhook Error: ${e.message}` });
   }
 
+  if ((matchedMode === "live" && !event.livemode) || (matchedMode === "test" && event.livemode)) {
+    console.warn("Stripe webhook livemode mismatch rejected:", { id: event.id, type: event.type, matchedMode, livemode: event.livemode });
+    return res.status(400).json({ error: "Webhook mode mismatch" });
+  }
+
   // Freshness window — Stripe's signature is valid forever, but
   // we treat events older than 5 minutes as stale and refuse them.
   // Belt-and-braces against (a) someone replaying a captured event
@@ -141,7 +148,7 @@ export default async function handler(req, res) {
   // from rotating webhook destinations between test/live modes.
   // Stripe's own retry policy never produces events this old, so
   // this rejects no legitimate traffic.
-  const FRESHNESS_WINDOW_SECS = 5 * 60;
+  const FRESHNESS_WINDOW_SECS = 24 * 60 * 60;
   if (event.created && (Date.now() / 1000 - event.created) > FRESHNESS_WINDOW_SECS) {
     console.warn("Stale webhook event rejected:", { id: event.id, type: event.type, ageSecs: Math.round(Date.now() / 1000 - event.created) });
     return res.status(400).json({ error: "Stale event (older than 5 minutes)" });

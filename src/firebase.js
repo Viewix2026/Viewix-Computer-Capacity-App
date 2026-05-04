@@ -202,6 +202,22 @@ export async function signInAnonymouslyForPublic() {
   return auth.signInAnonymously();
 }
 
+export async function getAuthToken(forceRefresh = false) {
+  await new Promise(res => onFB(res));
+  const user = auth?.currentUser;
+  if (!user) throw new Error("Not signed in");
+  return user.getIdToken(forceRefresh);
+}
+
+export async function authFetch(url, options = {}) {
+  const token = await getAuthToken();
+  const headers = {
+    ...(options.headers || {}),
+    Authorization: `Bearer ${token}`,
+  };
+  return fetch(url, { ...options, headers });
+}
+
 export async function signOutUser() {
   if (!auth) return;
   await auth.signOut();

@@ -17,6 +17,7 @@
 
 import { lazy, Suspense, useEffect, useState } from "react";
 import { BTN } from "../config";
+import { authFetch } from "../firebase";
 
 const NurtureLapsed           = lazy(() => import("./NurtureLapsed").then(m => ({ default: m.NurtureLapsed })));
 const NurtureLeadReengagement = lazy(() => import("./NurtureLeadReengagement").then(m => ({ default: m.NurtureLeadReengagement })));
@@ -59,7 +60,7 @@ export function Nurture({ attioDeals, isFounder, nurtureTab, setNurtureTab, rout
   const triggerSync = async () => {
     setSyncing(true);
     try {
-      const r = await fetch("/api/sync-attio-cache?manual=1", { method: "POST" });
+      const r = await authFetch("/api/sync-attio-cache", { method: "POST" });
       const d = await r.json();
       console.log("Sync result:", d);
     } catch (e) {

@@ -5,7 +5,7 @@
 //
 // Expected payload (flexible — we try multiple field names):
 // {
-//   secret: "viewix-fathom-2026",   // REQUIRED — matches SECRET const below
+//   secret: process.env.FATHOM_WEBHOOK_SECRET,
 //   meetingName: "Discovery with Acme",
 //   transcript: "...",               // full meeting transcript
 //   invitees: [...],                 // optional: array of attendees
@@ -22,7 +22,7 @@ import { adminSet, getAdmin } from "./_fb-admin.js";
 import { runMeetingFeedbackAnalysis } from "./meeting-feedback.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
-const SECRET = "viewix-fathom-2026";
+const SECRET = process.env.FATHOM_WEBHOOK_SECRET;
 
 // Salespeople to detect from invitee list (order matters — longest first to avoid partial matches)
 const SALESPEOPLE = ["Brandon", "Jeremy"];
@@ -135,6 +135,7 @@ export default async function handler(req, res) {
     let { clientName, salesperson, meetingType } = body;
 
     // Secret check — prevents anyone from spamming the endpoint
+    if (!SECRET) return res.status(500).json({ error: "FATHOM_WEBHOOK_SECRET not configured" });
     if (secret !== SECRET) {
       return res.status(401).json({ error: "Invalid or missing secret" });
     }

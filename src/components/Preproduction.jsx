@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { fbSet, fbSetAsync, fbUpdate, fbListenSafe } from "../firebase";
+import { authFetch, fbSet, fbSetAsync, fbUpdate, fbListenSafe } from "../firebase";
 import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { FormatLibrary } from "./FormatLibrary";
@@ -242,7 +242,7 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
         body.googleDocUrl = url;
       }
 
-      const resp = await fetch("/api/preproduction", {
+      const resp = await authFetch("/api/preproduction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -275,7 +275,7 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
     setRewriting(true);
 
     try {
-      const resp = await fetch("/api/preproduction", {
+      const resp = await authFetch("/api/preproduction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -347,7 +347,7 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
     if (!sectionEdit || !sectionInstruction.trim() || !activeProject) return;
     setSectionRewriting(true);
     try {
-      const resp = await fetch("/api/preproduction", {
+      const resp = await authFetch("/api/preproduction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -382,7 +382,7 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
     const p = activeProject;
     setProcessing(true);
     try {
-      const resp = await fetch("/api/preproduction", {
+      const resp = await authFetch("/api/preproduction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

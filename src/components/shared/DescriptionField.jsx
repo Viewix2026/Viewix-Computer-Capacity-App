@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAudioRecorder } from "../../hooks/useAudioRecorder";
+import { authFetch } from "../../firebase";
 
 const inputSt = {
   padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)",
@@ -52,7 +53,7 @@ export function DescriptionField({ label, hint, value, onChange, rows = 3, requi
         const form = new FormData();
         form.append("file", blob, "audio.webm");
         form.append("model", "whisper-1");
-        const r = await fetch("/api/whisper", { method: "POST", body: form });
+        const r = await authFetch("/api/whisper", { method: "POST", body: form });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
         const text = (d.text || "").trim();

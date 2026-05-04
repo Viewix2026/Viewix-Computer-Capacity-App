@@ -3,7 +3,7 @@
 // Runs daily at 8am AEST (10pm UTC previous day)
 // Env vars needed: SLACK_WEBHOOK_URL
 
-import { adminGet, getAdmin } from "./_fb-admin.js";
+import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
 
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -15,7 +15,7 @@ const MANAGER_SLACK_IDS = {
 
 function daysSince(dateStr) {
   if (!dateStr) return Infinity;
-  const d = new Date(dateStr + "T00:00:00Z");
+  const d = new Date(dateStr + "T12:00:00Z");
   const now = new Date();
   return Math.floor((now - d) / (1000 * 60 * 60 * 24));
 }
@@ -27,6 +27,11 @@ function getLevel(days) {
 }
 
 export default async function handler(req, res) {
+  if (req.method !== "GET") return res.status(405).json({ error: "GET only" });
+  if (req.headers["x-vercel-cron"] !== "1") {
+    return res.status(401).json({ error: "Cron header required" });
+  }
+
   try {
     const webhookUrl = process.env.SLACK_WEBHOOK_URL;
     if (!webhookUrl) {
@@ -47,8 +52,13 @@ export default async function handler(req, res) {
     }
 
     // Read previous notification levels
-    const levelsRes = await fetch(`${FB_URL}/contactNotifications.json`);
-    const prevLevels = (await levelsRes.json()) || {};
+    let prevLevels;
+    if (!adminErr) {
+      prevLevels = (await adminGet("/contactNotifications")) || {};
+    } else {
+      const levelsRes = await fetch(`${FB_URL}/contactNotifications.json`);
+      prevLevels = (await levelsRes.json()) || {};
+    }
 
     const amberAlerts = [];
     const redAlerts = [];
@@ -88,11 +98,15 @@ export default async function handler(req, res) {
     }
 
     // Save updated levels back to Firebase
-    await fetch(`${FB_URL}/contactNotifications.json`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updatedLevels),
-    });
+    if (!adminErr) {
+      await adminSet("/contactNotifications", updatedLevels);
+    } else {
+      await fetch(`${FB_URL}/contactNotifications.json`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedLevels),
+      });
+    }
 
     // Build Slack message if there are alerts
     if (amberAlerts.length === 0 && redAlerts.length === 0) {

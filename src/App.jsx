@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
-import { initFB, onFB, fbSet, fbListen, onAuthReady, signOutUser } from "./firebase";
+import { initFB, onFB, fbSet, fbListen, onAuthReady, signOutUser, authFetch } from "./firebase";
 import { fetchMondayUsers, fetchActiveProjectCount, fetchInProgressParents } from "./monday";
 import {
   DEFAULT_MONDAY_EDITORS, CONTENT_CATEGORIES, CAT_COLORS,
@@ -199,7 +199,7 @@ export default function App(){
     if(!role)return;
     initFB();
     const fallback=setTimeout(()=>{setLoading(false);skipWrite.current=false;},3000);
-    let unsub=()=>{};
+    const unsubs=[];
     // `cancelled` guard: if role changes (logout → login-as-other-role)
     // before onFB resolves, the cleanup captures the initial noop unsub
     // and the real listener attached inside onFB leaks. Checking the
@@ -207,98 +207,57 @@ export default function App(){
     let cancelled=false;
     onFB(()=>{
       if(cancelled)return;
-      clearTimeout(fallback);
-      unsub=fbListen("/",(data)=>{
+      const markLoaded=()=>{clearTimeout(fallback);setLoading(false);setTimeout(()=>{skipWrite.current=false;},500);};
+      const listen=(path,apply)=>{
+        const off=fbListen(path,(data)=>{
         if(skipRead.current)return;
         try{
-          if(data){
-            if(data.inputs)setInputs(prev=>({...prev,...data.inputs}));
-            if(data.editors&&Array.isArray(data.editors))setEditors(data.editors);
-            if(data.weekData)setWeekData(data.weekData);
-            if(data.quotes){
-              const qArr=Object.values(data.quotes).filter(q=>q&&q.id&&q.items);
-              setQuotes(qArr);
-            }
-            if(data.clientRateCards){
-              const rcArr=Object.values(data.clientRateCards).filter(r=>r&&r.id);
-              setClientRateCards(rcArr);
-            }
-            if(data.clients){
-              const cArr=Object.values(data.clients).filter(c=>c&&c.id);
-              setClients(cArr);
-            }
-            if(data.deliveries){
-              const dArr=Object.values(data.deliveries).filter(d=>d&&d.id).map(d=>({...d,videos:Array.isArray(d.videos)?d.videos:[]}));
-              setDeliveries(dArr);
-            }
-            if(data.projects){
-              const pArr=Object.values(data.projects).filter(p=>p&&p.id);
-              setProjects(pArr);
-            } else {
-              setProjects([]);
-            }
-            if(data.buyerJourney){
-              setBuyerJourney(data.buyerJourney);
-            }
-            if(data.accounts){
-              setAccounts(data.accounts);
-            }
-            if(data.turnaround){
-              setTurnaround(data.turnaround);
-            }
-            if(data.mondayEditors&&Array.isArray(data.mondayEditors)){
-              setMondayEditorList(data.mondayEditors);
-            }
-            if(data.training&&Array.isArray(data.training)){
-              setTrainingData(data.training);
-            }
-            if(data.trainingSuggestions&&Array.isArray(data.trainingSuggestions)){
-              setTrainingSuggestions(data.trainingSuggestions);
-            }
-            if(data.todos){
-              const arr=Array.isArray(data.todos)?data.todos.filter(Boolean):Object.values(data.todos).filter(Boolean);
-              setTodos(arr);
-            }
-            if(data.foundersMetrics){setFoundersMetrics(data.foundersMetrics);}
-            if(data.teamLunch){
-              setTeamLunch(data.teamLunch);
-            }
-            if(data.foundersData){
-              setFoundersData(data.foundersData);
-            }
-            // Sales: handle the empty/missing case explicitly so deleting
-            // the last sale (or all of them) clears React state instead of
-            // leaving the previous list around. Same defensive pattern
-            // already used for projects above.
-            if(data.sales){
-              const sArr=Object.values(data.sales).filter(s=>s&&s.id);
-              setSales(sArr);
-            } else {
-              setSales([]);
-            }
-            if(data.salePricing){setSalePricing(data.salePricing);}
-            if(data.saleThankYou){setSaleThankYou(data.saleThankYou);}
-            if(data.attioCache&&data.attioCache.data){
-              setAttioDeals({data:data.attioCache.data,total:data.attioCache.total||data.attioCache.data.length,lastSyncedAt:data.attioCache.lastSyncedAt||null});
-            }
-          }
-        }catch(e){console.error("Firebase data parse error:",e);}
-        setLoading(false);
-        setTimeout(()=>{skipWrite.current=false;},500);
+          apply(data);
+        }catch(e){console.error("Firebase data parse error:",path,e);}
+        markLoaded();
+        },e=>{console.error("Firebase listener denied:",path,e);markLoaded();});
+        unsubs.push(off);
+      };
+      listen("/inputs",data=>{if(data)setInputs(prev=>({...prev,...data}));});
+      listen("/editors",data=>{if(data&&Array.isArray(data))setEditors(data);});
+      listen("/weekData",data=>{if(data)setWeekData(data);});
+      listen("/quotes",data=>{
+        if(data){
+          const qArr=Object.values(data).filter(q=>q&&q.id&&q.items);
+          setQuotes(qArr);
+        }
       });
+      listen("/clientRateCards",data=>{if(data)setClientRateCards(Object.values(data).filter(r=>r&&r.id));});
+      listen("/clients",data=>{if(data)setClients(Object.values(data).filter(c=>c&&c.id));});
+      listen("/deliveries",data=>{if(data)setDeliveries(Object.values(data).filter(d=>d&&d.id).map(d=>({...d,videos:Array.isArray(d.videos)?d.videos:[]})));});
+      listen("/projects",data=>{setProjects(data?Object.values(data).filter(p=>p&&p.id):[]);});
+      listen("/buyerJourney",data=>{if(data)setBuyerJourney(data);});
+      listen("/accounts",data=>{if(data)setAccounts(data);});
+      listen("/turnaround",data=>{if(data)setTurnaround(data);});
+      listen("/mondayEditors",data=>{if(data&&Array.isArray(data))setMondayEditorList(data);});
+      listen("/training",data=>{if(data&&Array.isArray(data))setTrainingData(data);});
+      listen("/trainingSuggestions",data=>{if(data&&Array.isArray(data))setTrainingSuggestions(data);});
+      listen("/todos",data=>{if(data)setTodos((Array.isArray(data)?data.filter(Boolean):Object.values(data).filter(Boolean)));});
+      listen("/foundersMetrics",data=>{if(data)setFoundersMetrics(data);});
+      listen("/teamLunch",data=>{if(data)setTeamLunch(data);});
+      if(isFounders)listen("/foundersData",data=>{if(data)setFoundersData(data);});
+      listen("/sales",data=>{setSales(data?Object.values(data).filter(s=>s&&s.id):[]);});
+      listen("/salePricing",data=>{if(data)setSalePricing(data);});
+      listen("/saleThankYou",data=>{if(data)setSaleThankYou(data);});
+      listen("/attioCache",data=>{if(data&&data.data)setAttioDeals({data:data.data,total:data.total||data.data.length,lastSyncedAt:data.lastSyncedAt||null});});
     });
-    return()=>{cancelled=true;clearTimeout(fallback);unsub();};
-  },[role]);
+    return()=>{cancelled=true;clearTimeout(fallback);unsubs.forEach(u=>u());};
+  },[role,isFounders]);
 
   const wt=useRef(null);
   const deletedPaths=useRef([]);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);/* Sales intentionally NOT written from the bulk-write loop. Sales
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);/* Sales intentionally NOT written from the bulk-write loop. Sales
    are append-only from the dashboard side: created via Sale.jsx's
    direct fbSetAsync at save-time, deleted via Sale.jsx's explicit
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,sales,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,isFounders,sales,salePricing,saleThankYou]);
 
   // Backfill shortId on existing deliveries (one-time per record). Also handles
   // dedup if two records ever generate the same hash.
@@ -606,7 +565,7 @@ export default function App(){
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await fetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
     {tool==="projects"&&isFounder&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}

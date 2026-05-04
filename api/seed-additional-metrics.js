@@ -15,6 +15,7 @@
 // Delete after confirming the dashboard fills in.
 
 import { getAdmin } from "./_fb-admin.js";
+import { requireRole, sendAuthError } from "./_requireAuth.js";
 
 const BACKFILL = {
   "2022-09": { "avgDealSizeProject": 7545, "avgDealSizeRetainer": 0, "ltvRetainer": 0, "ltvProject": 7545, "paybackPeriod": 0.0, "retainerRenewalRate": 0.0, "allClientChurnYoY": 0.0, "avgDaysBetweenRepeatDeals": 0, "netRevenueRetention": 0.0, "pctRevenueFromTopSource": 100.0 },
@@ -65,6 +66,11 @@ const BACKFILL = {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  try {
+    await requireRole(req, ["founders"]);
+  } catch (e) {
+    return sendAuthError(res, e);
+  }
 
   const { admin, db, err } = getAdmin();
   if (err) return res.status(500).json({ error: err });

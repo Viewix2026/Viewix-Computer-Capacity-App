@@ -11,7 +11,7 @@ import { useState, useMemo } from "react";
 import { BTN, QUOTE_SECTIONS, DEFAULT_RATE_CARDS, TH, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING } from "../config";
 import { fmtCur, fmtCurExact, saleShareUrl, newSale, computeGst, buildSchedule } from "../utils";
 import { scheduleForVideoType } from "../../api/_tiers";
-import { fbSetAsync } from "../firebase";
+import { authFetch, fbSetAsync } from "../firebase";
 import { QuoteCalc } from "./QuoteCalc";
 import { SalePricingEditor } from "./SalePricingEditor";
 
@@ -186,7 +186,7 @@ export function Sale({
     setChargeLoading(true);
     setChargeResult(null);
     try {
-      const r = await fetch("/api/charge-sale-balance", {
+      const r = await authFetch("/api/charge-sale-balance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ saleId: s.id, sliceIdx }),

@@ -7,10 +7,11 @@
 // Real-time stage transitions go through api/nurture-stage-webhook.js.
 //
 // Schedule: see vercel.json — runs nightly + can be POSTed manually
-// via the Nurture tab's "Refresh from Attio" button (?manual=1).
+// via the Nurture tab's "Refresh from Attio" button with founder auth.
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
+import { requireRole, sendAuthError } from "./_requireAuth.js";
 
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -45,8 +46,21 @@ function dealRecordId(deal) {
 }
 
 export default async function handler(req, res) {
+  if (req.method === "GET" && req.headers["x-vercel-cron"] !== "1") {
+    return res.status(401).json({ error: "Cron header required" });
+  }
+  if (req.method === "POST") {
+    try {
+      await requireRole(req, ["founders", "founder"]);
+    } catch (e) {
+      return sendAuthError(res, e);
+    }
+  } else if (req.method !== "GET") {
+    return res.status(405).json({ error: "GET cron or POST manual only" });
+  }
+
   // Allow GET (Vercel cron) and POST (manual trigger from Nurture tab)
-  const isManual = req.query?.manual === "1" || req.method === "POST";
+  const isManual = req.method === "POST";
   const trigger = isManual ? "manual" : "cron";
 
   const ATTIO_KEY = process.env.ATTIO_API_KEY;

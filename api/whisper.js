@@ -21,6 +21,8 @@ import { adminPatch, getAdmin } from "./_fb-admin.js";
 import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
+import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+
 const WHISPER_API = "https://api.openai.com/v1/audio/transcriptions";
 const WHISPER_MODEL = "whisper-1";
 const WHISPER_COST_PER_MINUTE = 0.006;  // USD, as of 2026
@@ -52,11 +54,15 @@ async function fbCostLog(path, data) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
+  if (handleOptions(req, res)) return;
+  setCors(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+
+  try {
+    await requireRole(req, ["founders", "founder", "lead"]);
+  } catch (e) {
+    return sendAuthError(res, e);
+  }
 
   const OPENAI_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_KEY) return res.status(500).json({ error: "OPENAI_API_KEY not configured" });

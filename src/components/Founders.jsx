@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { BTN, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING, DEFAULT_SALE_THANKYOU } from "../config";
 import { pct, fmtCur } from "../utils";
-import { fbSet } from "../firebase";
+import { authFetch, fbSet } from "../firebase";
 import { FoundersData } from "./FoundersData";
 import { FoundersLearnings } from "./FoundersLearnings";
 import { FoundersGoals } from "./FoundersGoals";
@@ -617,7 +617,7 @@ export function Founders({
   // ─── Attio sync: pulls all deals, auto-fills north-star metrics, caches in Firebase ───
   const syncAttio = () => {
     setAttioLoading(true);
-    fetch("/api/attio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "all_deals" }) })
+    authFetch("/api/attio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "all_deals" }) })
       .then(r => r.json())
       .then(data => {
         const lastSyncedAt = new Date().toISOString();

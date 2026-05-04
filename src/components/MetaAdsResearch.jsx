@@ -15,7 +15,7 @@
 // them natively.
 
 import { useState, useEffect, useRef } from "react";
-import { fbSet, fbUpdate, fbListenSafe } from "../firebase";
+import { authFetch, fbSet, fbUpdate, fbListenSafe } from "../firebase";
 import { CellRewriteModal, EditableField } from "./shared/CellRewriteModal";
 
 // Tab registry — edit this list + a switch arm below to add/rename
@@ -194,7 +194,7 @@ function BrandTruthStep({ project, onPatch }) {
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/producerNotes`, producerNotes);
       await new Promise(res => setTimeout(res, 150));
 
-      const r = await fetch("/api/meta-ads", {
+      const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
@@ -471,7 +471,7 @@ function ResearchStep({ project, onPatch }) {
     setSuggestError(null);
     setSuggesting(true);
     try {
-      const r = await fetch("/api/meta-ads", {
+      const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "suggestAdLibraryInputs", projectId: project.id }),
@@ -508,7 +508,7 @@ function ResearchStep({ project, onPatch }) {
     patchInputs({ country, dateRange: { from: dateFrom, to: dateTo } });
     setSubmitting(true);
     try {
-      const r = await fetch("/api/meta-ads", {
+      const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -548,7 +548,7 @@ function ResearchStep({ project, onPatch }) {
     }
     setSubmitting(true);
     try {
-      const r = await fetch("/api/meta-ads", {
+      const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "addManualAd", projectId: project.id, adUrl: trimmed, adId }),
@@ -1414,7 +1414,7 @@ function ScriptStep({ project, onPatch }) {
     setError(null);
     setGenerating(true);
     try {
-      const r = await fetch("/api/meta-ads", {
+      const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "scriptGenerate", projectId: project.id }),
@@ -1546,7 +1546,7 @@ function RewriteModal({ project, target, onClose, onDone }) {
     setError(null);
     setSubmitting(true);
     try {
-      const r = await fetch("/api/meta-ads", {
+      const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

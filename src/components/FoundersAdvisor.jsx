@@ -12,7 +12,7 @@
 // Claude to emit.
 
 import { useState, useEffect } from "react";
-import { fbListenSafe } from "../firebase";
+import { authFetch, fbListenSafe } from "../firebase";
 
 async function readJsonResponse(r) {
   const text = await r.text();
@@ -152,7 +152,7 @@ export function FoundersAdvisor() {
     setRunning(true);
     setError(null);
     try {
-      const r = await fetch("/api/founders-advisor", {
+      const r = await authFetch("/api/founders-advisor", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "runAnalysis" }),
@@ -173,7 +173,7 @@ export function FoundersAdvisor() {
     setPosting(true);
     setError(null);
     try {
-      const r = await fetch("/api/founders-advisor", {
+      const r = await authFetch("/api/founders-advisor", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "postToSlack", briefingId: selected.id }),

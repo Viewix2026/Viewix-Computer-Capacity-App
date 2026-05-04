@@ -8,8 +8,8 @@
 // by Vercel Deployment Protection). This endpoint stays as an
 // optimisation — when Apify CAN reach it, data lands faster.
 //
-// Secret is passed as a query param (?secret=...) so we can verify the
-// caller without Apify signing logic. Set APIFY_WEBHOOK_SECRET in Vercel.
+// Secret is passed as an Authorization bearer token so it does not land
+// in URL logs. Set APIFY_WEBHOOK_SECRET in Vercel.
 
 import { processApifyRun } from "./_apifyProcess.js";
 
@@ -27,7 +27,8 @@ export default async function handler(req, res) {
   if (!SECRET) return res.status(500).json({ error: "APIFY_WEBHOOK_SECRET not configured" });
   if (!APIFY_TOKEN) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
 
-  const providedSecret = req.query.secret;
+  const auth = req.headers.authorization || "";
+  const providedSecret = auth.match(/^Bearer\s+(.+)$/i)?.[1] || req.headers["x-apify-webhook-secret"];
   if (providedSecret !== SECRET) {
     return res.status(401).json({ error: "Invalid secret" });
   }

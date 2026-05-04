@@ -14,7 +14,7 @@
 import { adminGet, adminPatch, getAdmin } from "./_fb-admin.js";
 
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
-const SECRET = "viewix-webhook-2026"; // matches webhook-deal-won.js convention
+const SECRET = process.env.ATTIO_NURTURE_WEBHOOK_SECRET;
 
 async function fbGet(path) {
   const { err } = getAdmin();
@@ -38,6 +38,7 @@ export default async function handler(req, res) {
     const stage = body.stage || body.Stage || body.satge;
     const secret = body.secret || body.Secret;
     const companyName = body.companyName || body.company_name || body["Company Name"] || null;
+    if (!SECRET) return res.status(500).json({ error: "ATTIO_NURTURE_WEBHOOK_SECRET not configured" });
     if (secret !== SECRET) return res.status(401).json({ error: "Invalid secret" });
     if (!dealId) return res.status(400).json({ error: "dealId is required", receivedKeys: Object.keys(body) });
 

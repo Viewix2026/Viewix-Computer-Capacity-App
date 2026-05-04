@@ -4,16 +4,17 @@
 // Firebase security rules read `auth.token.role` to authorize reads/writes.
 
 import { getAdmin } from "./_fb-admin.js";
+import { handleOptions, setCors } from "./_requireAuth.js";
+import crypto from "crypto";
 
-// Password → role map (mirrors App.jsx login function exactly)
-const PW_TO_ROLE = {
-  "Sanpel": "founders",
-  "Push":   "founder",
-  "Close":  "closer",
-  "Letsgo": "editor",
-  "Lead":   "lead",
-  "Trial":  "trial",
-};
+const PASSWORD_ENVS = [
+  ["AUTH_PW_FOUNDERS", "founders"],
+  ["AUTH_PW_FOUNDER", "founder"],
+  ["AUTH_PW_CLOSER", "closer"],
+  ["AUTH_PW_EDITOR", "editor"],
+  ["AUTH_PW_LEAD", "lead"],
+  ["AUTH_PW_TRIAL", "trial"],
+];
 
 // Stable UID per role. Shared passwords share a Firebase user — matches the existing model.
 const ROLE_TO_UID = {
@@ -25,12 +26,51 @@ const ROLE_TO_UID = {
   trial:    "viewix-trial",
 };
 
+const RATE_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT = 10;
+const attempts = new Map();
+
+function clientIp(req) {
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string") return xff.split(",")[0].trim();
+  return req.headers["x-real-ip"] || req.socket?.remoteAddress || "unknown";
+}
+
+function checkRate(ip) {
+  const now = Date.now();
+  const entry = attempts.get(ip) || { count: 0, windowStart: now };
+  if (now - entry.windowStart > RATE_WINDOW_MS) {
+    entry.count = 0;
+    entry.windowStart = now;
+  }
+  entry.count++;
+  attempts.set(ip, entry);
+  return entry.count <= RATE_LIMIT;
+}
+
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a || ""));
+  const bb = Buffer.from(String(b || ""));
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+function roleForPassword(password) {
+  for (const [envName, role] of PASSWORD_ENVS) {
+    const expected = process.env[envName];
+    if (expected && safeEqual(password, expected)) return role;
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
+  if (handleOptions(req, res)) return;
+  setCors(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+
+  if (!checkRate(clientIp(req))) {
+    return res.status(429).json({ error: "Too many attempts. Wait a minute and try again." });
+  }
 
   const { admin, err } = getAdmin();
   if (err) return res.status(500).json({ error: err });
@@ -38,7 +78,7 @@ export default async function handler(req, res) {
   const { password } = req.body || {};
   if (!password) return res.status(400).json({ error: "Password required" });
 
-  const role = PW_TO_ROLE[password];
+  const role = roleForPassword(password);
   if (!role) return res.status(401).json({ error: "Invalid password" });
 
   const uid = ROLE_TO_UID[role];
