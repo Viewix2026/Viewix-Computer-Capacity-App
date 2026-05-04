@@ -15,8 +15,9 @@
 // Mounted by EditorDashboard.jsx via its sub-tab toggle.
 
 import { useState, useEffect, useRef, useMemo } from "react";
+import confetti from "canvas-confetti";
 import { fmtSecsShort, matchSherpaForName, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
-import { fbSet, fbListen, onFB } from "../firebase";
+import { fbSet, fbListen, fbUpdate, onFB } from "../firebase";
 
 // ─── Date helpers (local, in browser timezone) ─────────────────────
 function toISO(d) {
@@ -109,6 +110,13 @@ function tasksForEditor(projects, editorId, sherpaIdx) {
         stage: st.stage || "preProduction",
         status: st.status || "stuck",
         sherpaUrl,
+        // Cross-system fields the Finish modal needs: videoId routes the
+        // submit to the matching delivery video; frameioLink prefills any
+        // link the editor pasted earlier so they don't lose work; the
+        // delivery id lets us write the link + status without re-scanning.
+        videoId: st.videoId || null,
+        frameioLink: st.frameioLink || "",
+        deliveryId: (p.links || {}).deliveryId || null,
       });
     }
   }
@@ -224,10 +232,308 @@ function StatusPill({ status }) {
   );
 }
 
+// ─── Finish-flow animations ────────────────────────────────────────
+// Confetti for internal-review submit. Bursts from the top of the
+// viewport so it actually "falls from the top" as Jeremy specified —
+// canvas-confetti's default origin is mid-screen, so we override.
+function fireConfetti() {
+  confetti({
+    particleCount: 220,
+    spread: 100,
+    startVelocity: 35,
+    gravity: 1.0,
+    origin: { y: -0.05 },
+    ticks: 280,
+  });
+}
+// Fireworks for client-review submit. Multiple bursts over ~3 seconds,
+// alternating left and right halves of the viewport. Lifted from the
+// canvas-confetti README's fireworks recipe.
+function fireFireworks() {
+  const duration = 3000;
+  const end = Date.now() + duration;
+  const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 1000 };
+  const interval = setInterval(() => {
+    const remain = end - Date.now();
+    if (remain <= 0) { clearInterval(interval); return; }
+    const particleCount = Math.max(20, 50 * (remain / duration));
+    confetti({ ...defaults, particleCount, origin: { x: Math.random() * 0.4 + 0.05, y: Math.random() * 0.4 + 0.1 } });
+    confetti({ ...defaults, particleCount, origin: { x: Math.random() * 0.4 + 0.55, y: Math.random() * 0.4 + 0.1 } });
+  }, 250);
+}
+// Smaller, single burst for shoot-wrap finish — felt celebratory but
+// not over-the-top for a non-deliverable task.
+function fireSmallBurst() {
+  confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 }, startVelocity: 25, ticks: 180 });
+}
+
+// ─── Frame.io URL guard ────────────────────────────────────────────
+// Editors paste links from a fixed set of review tools. Anything
+// that's not a frame.io URL (or its short form f.io) is rejected
+// at the gate — we don't want a Drive / Vimeo / Slack URL silently
+// reaching the client view. Tolerant of trailing whitespace + missing
+// protocol so a quick paste still validates.
+function isFrameioLink(s) {
+  const trimmed = String(s || "").trim();
+  if (!trimmed) return false;
+  return /(^|\.|\/\/)frame\.io(\/|$)/i.test(trimmed) || /(^|\.|\/\/)f\.io(\/|$)/i.test(trimmed);
+}
+
+// ─── Finish modal ──────────────────────────────────────────────────
+// Two modes driven by task.stage:
+//  - shoot: confirmation with optional notes (notes append to the
+//    project's producerNotes field with editor name + date stamp).
+//  - everything else (treated as edit): Frame.io link input + Watch
+//    gate + radio between internal / client review. Submit propagates
+//    appropriately.
+function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmitted }) {
+  const isShoot = task.stage === "shoot";
+  const [link, setLink] = useState(task.frameioLink || "");
+  const [watched, setWatched] = useState(false);
+  const [reviewType, setReviewType] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const linkValid = isFrameioLink(link);
+  const canSubmit = isShoot
+    ? !submitting
+    : (linkValid && watched && reviewType && !submitting);
+
+  // ESC closes — same affordance as the project quick-view modal.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !submitting) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, submitting]);
+
+  const handleWatch = () => {
+    if (!linkValid) return;
+    // Normalise missing protocol so window.open doesn't open relative.
+    const url = /^https?:\/\//i.test(link.trim()) ? link.trim() : `https://${link.trim()}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+    setWatched(true);
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const now = new Date().toISOString();
+      if (isShoot) {
+        await fbUpdate(`/projects/${task.projectId}/subtasks/${task.id}`, {
+          status: "done",
+          updatedAt: now,
+        });
+        const trimmedNotes = notes.trim();
+        if (trimmedNotes) {
+          // Append to the project's producerNotes with a date + editor
+          // stamp so the producer can scan the bottom of the project
+          // and see who said what after a shoot day.
+          const project = (projects || []).find(p => p?.id === task.projectId);
+          const existing = (project?.producerNotes || "").trimEnd();
+          const today = now.slice(0, 10);
+          const stamped = `[${today} · ${editorName || "Editor"} · shoot wrap]\n${trimmedNotes}`;
+          const next = existing ? `${existing}\n\n${stamped}` : stamped;
+          await fbSet(`/projects/${task.projectId}/producerNotes`, next);
+        }
+        fireSmallBurst();
+      } else {
+        const linkOut = link.trim();
+        await fbUpdate(`/projects/${task.projectId}/subtasks/${task.id}`, {
+          frameioLink: linkOut,
+          status: "done",
+          updatedAt: now,
+        });
+        if (reviewType === "client") {
+          // Find the matching delivery video by canonical videoId so the
+          // link + Ready-for-Review status land on both internal and
+          // client views without name-matching. If we can't resolve it
+          // (e.g. pre-migration record without a videoId), the subtask
+          // still flips Done — propagation is best-effort.
+          const delId = task.deliveryId;
+          const delivery = delId ? (deliveries || []).find(d => d?.id === delId) : null;
+          if (delivery && task.videoId && Array.isArray(delivery.videos)) {
+            const idx = delivery.videos.findIndex(v => v && v.videoId === task.videoId);
+            if (idx >= 0) {
+              await fbUpdate(`/deliveries/${delId}/videos/${idx}`, {
+                link: linkOut,
+                viewixStatus: "Ready for Review",
+              });
+            }
+          }
+          fireFireworks();
+        } else {
+          fireConfetti();
+        }
+      }
+      onSubmitted?.();
+      onClose();
+    } catch (e) {
+      console.error("Finish submit failed:", e);
+      setError(e?.message || String(e));
+      setSubmitting(false);
+    }
+  };
+
+  // Backdrop blocks page interaction; the inner card stops propagation
+  // so clicks inside don't close.
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 100,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20,
+      }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 520, maxWidth: "100%",
+          background: "var(--card)", border: "1px solid var(--border)",
+          borderRadius: 12, padding: "24px 26px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+        }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)", marginBottom: 6 }}>
+          {isShoot ? "Wrap shoot" : "Finish edit"}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 18 }}>
+          {task.parentName} · <span style={{ fontWeight: 600 }}>{task.name}</span>
+        </div>
+
+        {isShoot ? (
+          <>
+            <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 10 }}>
+              Mark this shoot as complete?
+            </div>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 6 }}>
+              Notes (optional — appended to project notes)
+            </label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              rows={4}
+              placeholder="Anything the producer should know about today's shoot…"
+              style={{
+                width: "100%", padding: "10px 12px", borderRadius: 8,
+                border: "1px solid var(--border)", background: "var(--input-bg)",
+                color: "var(--fg)", fontSize: 13, fontFamily: "inherit",
+                outline: "none", resize: "vertical", marginBottom: 16,
+              }}/>
+          </>
+        ) : (
+          <>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 6 }}>
+              Frame.io review link
+            </label>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <input
+                type="url"
+                value={link}
+                onChange={e => { setLink(e.target.value); setWatched(false); }}
+                placeholder="https://app.frame.io/reviews/…"
+                style={{
+                  flex: 1, padding: "10px 12px", borderRadius: 8,
+                  border: `1px solid ${link && !linkValid ? "#EF4444" : "var(--border)"}`,
+                  background: "var(--input-bg)", color: "var(--fg)",
+                  fontSize: 13, fontFamily: "inherit", outline: "none",
+                }}/>
+              <button
+                onClick={handleWatch}
+                disabled={!linkValid}
+                title={linkValid ? "Open the review link to verify it before submitting" : "Paste a frame.io URL first"}
+                style={{
+                  padding: "8px 16px", borderRadius: 8, border: "none",
+                  background: !linkValid ? "var(--bg)" : (watched ? "#10B981" : "#0082FA"),
+                  color: !linkValid ? "var(--muted)" : "#fff",
+                  fontSize: 12, fontWeight: 700,
+                  cursor: linkValid ? "pointer" : "not-allowed",
+                  fontFamily: "inherit",
+                  // Glow while the editor still needs to click — fades
+                  // once they've watched. Keyframe-free to avoid a
+                  // global CSS injection; pulses via inline animation.
+                  boxShadow: (linkValid && !watched) ? "0 0 0 0 rgba(0,130,250,0.55)" : "none",
+                  animation: (linkValid && !watched) ? "viewix-watch-pulse 1.4s ease-in-out infinite" : "none",
+                  transition: "background 0.15s",
+                }}>
+                {watched ? "✓ Watched" : "Watch"}
+              </button>
+            </div>
+            {link && !linkValid && (
+              <div style={{ fontSize: 11, color: "#EF4444", marginTop: -10, marginBottom: 14 }}>
+                That doesn't look like a Frame.io URL. Use a frame.io or f.io link.
+              </div>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+              {[
+                { key: "internal", label: "Ready for internal review", hint: "Producer reviews first. No client-side changes." },
+                { key: "client",   label: "Ready for client review",   hint: "Link + status push to the delivery page (internal + client view)." },
+              ].map(opt => {
+                const active = reviewType === opt.key;
+                return (
+                  <label key={opt.key}
+                    style={{
+                      display: "flex", alignItems: "flex-start", gap: 10,
+                      padding: "10px 12px", borderRadius: 8,
+                      border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+                      background: active ? "rgba(0,130,250,0.08)" : "var(--bg)",
+                      cursor: "pointer",
+                    }}>
+                    <input
+                      type="radio"
+                      name="reviewType"
+                      value={opt.key}
+                      checked={active}
+                      onChange={() => setReviewType(opt.key)}
+                      style={{ marginTop: 3, accentColor: "var(--accent)", cursor: "pointer" }}/>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)" }}>{opt.label}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{opt.hint}</div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {error && (
+          <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 12 }}>
+            Couldn't submit: {error}. Try again.
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} disabled={submitting}
+            style={{
+              padding: "8px 16px", borderRadius: 8, border: "1px solid var(--border)",
+              background: "transparent", color: "var(--muted)",
+              fontSize: 12, fontWeight: 600, cursor: submitting ? "not-allowed" : "pointer",
+              fontFamily: "inherit",
+            }}>Cancel</button>
+          <button onClick={handleSubmit} disabled={!canSubmit}
+            style={{
+              padding: "8px 18px", borderRadius: 8, border: "none",
+              background: canSubmit ? "#10B981" : "var(--bg)",
+              color: canSubmit ? "#fff" : "var(--muted)",
+              fontSize: 12, fontWeight: 800, cursor: canSubmit ? "pointer" : "not-allowed",
+              fontFamily: "inherit",
+            }}>{submitting ? "Submitting…" : "Submit"}</button>
+        </div>
+      </div>
+      {/* Inline keyframes for the Watch button pulse. Kept local to
+          this modal so it doesn't leak into the global stylesheet. */}
+      <style>{`@keyframes viewix-watch-pulse{0%{box-shadow:0 0 0 0 rgba(0,130,250,0.55);}70%{box-shadow:0 0 0 10px rgba(0,130,250,0);}100%{box-shadow:0 0 0 0 rgba(0,130,250,0);}}`}</style>
+    </div>
+  );
+}
+
 // ─── Task row with timer ──────────────────────────────────────────
 function TaskRow({
   task, isRunning, elapsedSecs, loggedSecs,
-  onStart, onStop, onReset, onAdjust, dim,
+  onStart, onStop, onReset, onAdjust, onFinish, dim,
 }) {
   return (
     <div style={{
@@ -313,6 +619,32 @@ function TaskRow({
             style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             ± Time
           </button>
+          {/* Finish button — greyed out until the editor has logged any
+              time on this task (loggedSecs > 0). Click opens the Finish
+              modal: a confirmation for shoots, or a Frame.io review-link
+              flow for everything else. The Watch-button-then-Submit gate
+              and the animations live inside the modal. */}
+          {(() => {
+            const allowed = (loggedSecs || 0) > 0 || isRunning;
+            return (
+              <button
+                onClick={() => allowed && onFinish && onFinish(task.id)}
+                disabled={!allowed}
+                title={allowed ? "Finish this task" : "Start the timer first — Finish unlocks once you've logged time."}
+                style={{
+                  padding: "7px 14px", borderRadius: 8, border: "none",
+                  background: allowed ? "#10B981" : "var(--bg)",
+                  color: allowed ? "#fff" : "var(--muted)",
+                  fontSize: 12, fontWeight: 800,
+                  cursor: allowed ? "pointer" : "not-allowed",
+                  fontFamily: "inherit",
+                  border: allowed ? "none" : "1px solid var(--border)",
+                  transition: "background 0.15s, color 0.15s",
+                }}>
+                Finish
+              </button>
+            );
+          })()}
           {loggedSecs > 0 && (
             <button onClick={() => onReset(task.id)}
               title="Reset logged time for this task"
@@ -327,7 +659,7 @@ function TaskRow({
 }
 
 // ─── Main component ───────────────────────────────────────────────
-export function EditorDashboardViewix({ projects = [], editors = [], clients = [] }) {
+export function EditorDashboardViewix({ projects = [], editors = [], clients = [], deliveries = [] }) {
   const [editorId, setEditorId] = useState(null);
   const [timers, setTimers] = useState({});
   const [timeLogs, setTimeLogs] = useState({});
@@ -339,6 +671,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   const [adjustingTask, setAdjustingTask] = useState(null);
   const [adjustMins, setAdjustMins] = useState("");
   const [timerWarning, setTimerWarning] = useState(null);
+  // Finish modal — id of the task currently being wrapped. Null = closed.
+  const [finishingTaskId, setFinishingTaskId] = useState(null);
   const intervalRef = useRef(null);
   const justStoppedRef = useRef({});
   const today = isoToday();
@@ -642,6 +976,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
               onStop={stopTimer}
               onReset={resetTimer}
               onAdjust={(taskId) => { setAdjustingTask(taskId); setAdjustMins(""); }}
+              onFinish={(taskId) => setFinishingTaskId(taskId)}
             />
           ))}
         </Section>
@@ -668,6 +1003,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
                 onStart={startTimer} onStop={stopTimer}
                 onReset={resetTimer}
                 onAdjust={(taskId) => { setAdjustingTask(taskId); setAdjustMins(""); }}
+                onFinish={(taskId) => setFinishingTaskId(taskId)}
               />
             ))}
           </Section>
@@ -724,6 +1060,25 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
           </div>
         </Modal>
       )}
+
+      {/* Finish modal — confirmation for shoot tasks, Frame.io review
+          flow for everything else. Resolved against the latest task list
+          on render so a Firebase update during the modal's open window
+          doesn't leave it pinned to a stale row. */}
+      {finishingTaskId && (() => {
+        const ft = allTasks.find(x => x.id === finishingTaskId);
+        if (!ft) return null;
+        const editor = editors.find(e => e.id === editorId);
+        return (
+          <FinishModal
+            task={ft}
+            editorName={editor?.name || ""}
+            projects={projects}
+            deliveries={deliveries}
+            onClose={() => setFinishingTaskId(null)}
+          />
+        );
+      })()}
 
       {/* Adjust-time modal */}
       {adjustingTask && (
