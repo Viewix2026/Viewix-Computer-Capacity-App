@@ -497,6 +497,18 @@ export function newDelivery(clientName, projectName) {
   return { id: `del-${Date.now()}`, shortId: makeShortId(), clientName: clientName || "", projectName: projectName || "", logoUrl: "", videos: [], createdAt: new Date().toISOString() };
 }
 
+// Canonical cross-system video id. Travels with a video record across
+// pre-prod scriptTable rows, /deliveries/{id}.videos[], and project
+// subtasks (source: "video" / "revision"). Lets automations like the
+// "subtask waiting-on-client → delivery video Ready for Review" flow
+// resolve the right delivery video without name-matching, which broke
+// every time a producer renamed something. 10-char base36 random tail
+// avoids Date.now() collisions when several videos are created in the
+// same millisecond (e.g. on pre-prod approval batch-seeding).
+export function newVideoId() {
+  return `v-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export function newVideo() {
-  return { id: `v-${Date.now()}`, name: "", link: "", viewixStatus: "In Development", revision1: "", revision2: "", notes: "" };
+  return { id: `v-${Date.now()}`, videoId: newVideoId(), name: "", link: "", viewixStatus: "In Development", revision1: "", revision2: "", notes: "" };
 }
