@@ -364,27 +364,24 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
           status: "done",
           updatedAt: now,
         });
-        if (reviewType === "client") {
-          // Find the matching delivery video by canonical videoId so the
-          // link + Ready-for-Review status land on both internal and
-          // client views without name-matching. If we can't resolve it
-          // (e.g. pre-migration record without a videoId), the subtask
-          // still flips Done — propagation is best-effort.
-          const delId = task.deliveryId;
-          const delivery = delId ? (deliveries || []).find(d => d?.id === delId) : null;
-          if (delivery && task.videoId && Array.isArray(delivery.videos)) {
-            const idx = delivery.videos.findIndex(v => v && v.videoId === task.videoId);
-            if (idx >= 0) {
-              await fbUpdate(`/deliveries/${delId}/videos/${idx}`, {
-                link: linkOut,
-                viewixStatus: "Ready for Review",
-              });
-            }
+        // Always sync the Frame.io link onto the matching delivery
+        // video (resolved by canonical videoId) so the subtask view,
+        // the internal Deliveries tab, and the public client view all
+        // show the same URL. The Viewix status flip stays gated to
+        // "client review" — internal review just shares the link, it
+        // doesn't yet declare the video ready for client eyes.
+        const delId = task.deliveryId;
+        const delivery = delId ? (deliveries || []).find(d => d?.id === delId) : null;
+        if (delivery && task.videoId && Array.isArray(delivery.videos)) {
+          const idx = delivery.videos.findIndex(v => v && v.videoId === task.videoId);
+          if (idx >= 0) {
+            const patch = { link: linkOut };
+            if (reviewType === "client") patch.viewixStatus = "Ready for Review";
+            await fbUpdate(`/deliveries/${delId}/videos/${idx}`, patch);
           }
-          fireFireworks();
-        } else {
-          fireConfetti();
         }
+        if (reviewType === "client") fireFireworks();
+        else fireConfetti();
       }
       onSubmitted?.();
       onClose();

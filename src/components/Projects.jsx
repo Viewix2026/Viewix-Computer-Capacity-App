@@ -830,6 +830,46 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
               style={{ fontSize: 12, fontWeight: 600 }}
             />
           </div>
+          {/* Frame.io review-link chip — appears whenever the linked
+              delivery video (matched by canonical videoId) has a link,
+              or the subtask carries one of its own (editor's Finish
+              flow writes both). Click opens the review in a new tab.
+              Resolution prefers the delivery side because that's the
+              client-facing record producers manage in the Deliveries
+              tab; the subtask field is the editor-side mirror. */}
+          {(() => {
+            const fl = (() => {
+              if (subtask.videoId && project) {
+                const delId = (project.links || {}).deliveryId;
+                const del = delId && Array.isArray(deliveries)
+                  ? deliveries.find(d => d?.id === delId)
+                  : null;
+                const vid = del && Array.isArray(del.videos)
+                  ? del.videos.find(v => v && v.videoId === subtask.videoId)
+                  : null;
+                if (vid?.link) return vid.link;
+              }
+              return subtask.frameioLink || "";
+            })();
+            if (!fl) return null;
+            const url = /^https?:\/\//i.test(fl) ? fl : `https://${fl}`;
+            return (
+              <a href={url} target="_blank" rel="noopener noreferrer"
+                onClick={e => e.stopPropagation()}
+                title={`Open Frame.io review: ${fl}`}
+                style={{
+                  flexShrink: 0,
+                  padding: "3px 8px", borderRadius: 4,
+                  background: "rgba(0,130,250,0.14)", color: "#0082FA",
+                  fontSize: 10, fontWeight: 700, textDecoration: "none",
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  fontFamily: "inherit",
+                  border: "1px solid rgba(0,130,250,0.35)",
+                }}>
+                🎬 Watch
+              </a>
+            );
+          })()}
           {/* Multi-assignee picker — supports multiple people on the
               same subtask (e.g. shoot crew). Writes to assigneeIds and
               keeps legacy assigneeId in sync as the first element so
