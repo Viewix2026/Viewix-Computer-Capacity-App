@@ -4,7 +4,7 @@ import { Runsheets } from "./Runsheets";
 import { SocialOrganicResearch } from "./SocialOrganicResearch";
 import { FormatLibrary } from "./FormatLibrary";
 import { MetaAdsResearch } from "./MetaAdsResearch";
-import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
+import { logoBg, makeShortId, newVideoId, preproductionShareUrl } from "../utils";
 // tierColor() looks up bg/fg per packageTier from the canonical tier
 // list at api/_tiers.js. Adding a new tier doesn't need a code change
 // here — this fallback returns neutral grey for anything unknown.
@@ -703,8 +703,23 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 // Auto-create delivery when approved
                 if (newStatus === "approved" && p.scriptTable?.length > 0) {
                   const delId = `del-${Date.now()}`;
-                  const videos = p.scriptTable.map((row, i) => ({
+                  // Stamp a canonical videoId on every scriptTable row that
+                  // lacks one. Same id then lands on the matching delivery
+                  // video AND project subtask below, so cross-system
+                  // automations (e.g. subtask "Waiting on Client" -> delivery
+                  // video "Ready for Review") have a stable link without
+                  // name-matching.
+                  const rowsWithIds = p.scriptTable.map(row => ({
+                    ...row,
+                    videoId: row.videoId || newVideoId(),
+                  }));
+                  const idsChanged = rowsWithIds.some((r, i) => r.videoId !== p.scriptTable[i]?.videoId);
+                  if (idsChanged) {
+                    fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, rowsWithIds);
+                  }
+                  const videos = rowsWithIds.map((row, i) => ({
                     id: `vid-${Date.now()}-${i}`,
+                    videoId: row.videoId,
                     name: row.videoName || `Video ${i + 1}`,
                     link: "",
                     viewixStatus: "In Development",
@@ -738,7 +753,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                   if (linkedProject) {
                     const existingCount = Object.keys(linkedProject.subtasks || {}).length;
                     const now = new Date().toISOString();
-                    p.scriptTable.forEach((row, i) => {
+                    rowsWithIds.forEach((row, i) => {
                       const stId = `st-vid-${Date.now()}-${i}`;
                       // Name carries the producer's videoName from the
                       // approved script table — falls back to a positional
@@ -746,6 +761,10 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                       const videoName = (row.videoName || "").trim() || `Video ${i + 1}`;
                       fbSet(`/projects/${linkedProject.id}/subtasks/${stId}`, {
                         id: stId,
+                        // Same canonical id that just landed on the matching
+                        // delivery video — this is the cross-system link
+                        // that lets automations resolve subtask <-> video.
+                        videoId: row.videoId,
                         name: videoName,
                         status: "stuck",
                         // Default Edit — by the time scripts are
@@ -1031,7 +1050,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 </table>
               </div>
               <div style={{ marginTop: 12 }}>
-                <button onClick={() => { const num = (p.scriptTable?.length || 0) + 1; const newRow = { id: `video-${Date.now()}`, videoName: `Video ${num}`, motivatorType: "toward", audienceType: "problemAware", hook: "", explainThePain: "", results: "", theOffer: "", whyTheOffer: "", cta: "", metaAdHeadline: "", metaAdCopy: "" }; fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, [...(p.scriptTable || []), newRow]); fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString()); }} style={btnSecondary}>+ Add Video</button>
+                <button onClick={() => { const num = (p.scriptTable?.length || 0) + 1; const newRow = { id: `video-${Date.now()}`, videoId: newVideoId(), videoName: `Video ${num}`, motivatorType: "toward", audienceType: "problemAware", hook: "", explainThePain: "", results: "", theOffer: "", whyTheOffer: "", cta: "", metaAdHeadline: "", metaAdCopy: "" }; fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, [...(p.scriptTable || []), newRow]); fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString()); }} style={btnSecondary}>+ Add Video</button>
               </div>
             </div>
           )}

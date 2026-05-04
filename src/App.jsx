@@ -12,7 +12,7 @@ import {
   todayKey, tomorrowKey, getMonday, wKey, fmtD, fmtRange, fmtLabel,
   dayDates, addW, fmtSecs, fmtSecsShort, categorizeContent,
   doCalc, pct, fmtCur, sCol, gSC, dayVal, nextState,
-  newDelivery, newVideo, logoBg, makeShortId, deliveryShareUrl
+  newDelivery, newVideo, newVideoId, logoBg, makeShortId, deliveryShareUrl
 } from "./utils";
 import { Logo } from "./components/Logo";
 import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./components/UIComponents";
@@ -266,6 +266,50 @@ export default function App(){
   // Backfill shortId on existing deliveries (one-time per record). Also handles
   // dedup if two records ever generate the same hash.
   useEffect(()=>{if(!deliveries.length)return;const used=new Set();let changed=false;const next=deliveries.map(d=>{if(!d)return d;if(d.shortId&&!used.has(d.shortId)){used.add(d.shortId);return d;}let id=d.shortId||makeShortId();while(used.has(id))id=makeShortId();used.add(id);if(id!==d.shortId){changed=true;return{...d,shortId:id};}return d;});if(changed)setDeliveries(next);},[deliveries.length]);
+
+  // Backfill canonical videoId on delivery videos and the matching
+  // project subtask (source: "video"). The canonical id is what
+  // cross-system automations use to resolve subtask <-> video without
+  // name matching, which broke every time a producer renamed something.
+  // Idempotent — only stamps records currently lacking a videoId, so
+  // re-runs are safe. Pre-prod scriptTable backfill is intentionally
+  // out of scope: the pre-prod approval flow now stamps matching ids
+  // for new approvals, and #2's automation only needs the
+  // subtask <-> delivery linkage.
+  const videoIdBackfilled = useRef(false);
+  useEffect(() => {
+    if (videoIdBackfilled.current) return;
+    if (!projects.length || !deliveries.length) return;
+    videoIdBackfilled.current = true;
+    const delById = new Map(deliveries.map(d => [d.id, d]));
+    projects.forEach(p => {
+      const delId = (p?.links || {}).deliveryId;
+      if (!delId) return;
+      const del = delById.get(delId);
+      if (!del || !Array.isArray(del.videos)) return;
+      const subtasks = Object.values(p.subtasks || {}).filter(Boolean);
+      del.videos.forEach((vid, idx) => {
+        if (!vid) return;
+        let videoId = vid.videoId;
+        if (!videoId) {
+          videoId = newVideoId();
+          fbSet(`/deliveries/${delId}/videos/${idx}/videoId`, videoId);
+        }
+        // Find a video-source subtask in the same project with a
+        // matching name and no videoId yet, stamp the canonical id.
+        // Name matching is the legacy linkage we're upgrading away
+        // from — it's only relied on once, here, during backfill.
+        const target = subtasks.find(st =>
+          !st.videoId &&
+          (st.source === "video" || st.source === "revision") &&
+          (st.name || "").trim().toLowerCase() === (vid.name || "").trim().toLowerCase()
+        );
+        if (target) {
+          fbSet(`/projects/${p.id}/subtasks/${target.id}/videoId`, videoId);
+        }
+      });
+    });
+  }, [projects, deliveries]);
 
   // Backfill missing crew members (Jeremy/Steve/Vish) into the roster — one-time per workspace.
   useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"},{id:"ed-vish",name:"Vish"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);

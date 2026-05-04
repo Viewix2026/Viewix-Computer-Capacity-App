@@ -711,7 +711,7 @@ function MultiAssigneePicker({ value, editors, onChange }) {
   );
 }
 
-function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped }) {
+function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped }) {
   // useSortable wires this row into whatever <SortableContext> wraps
   // it (project details + the projects sub-tab list each have their
   // own). The drag handle in the leading cell carries the listeners
@@ -740,6 +740,27 @@ function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped })
       if (allDone && normaliseStatus(project.status) !== "done") {
         fbSet(`/projects/${projectId}/status`, "done");
         fbSet(`/projects/${projectId}/updatedAt`, new Date().toISOString());
+      }
+    }
+
+    // Cross-system flip: when a video subtask moves into "Waiting on
+    // Client", the matching delivery video's viewix status becomes
+    // "Ready for Review" so the client view updates without a
+    // producer needing to flip both records by hand. Only fires when
+    // the subtask carries a videoId (auto-seeded from pre-prod
+    // approval, or stamped by the videoId backfill in App.jsx) so we
+    // don't false-trigger on phase / manual subtasks. Limited to the
+    // inProgress -> waitingClient transition to match the producer
+    // intent the spec describes.
+    if (field === "status" && value === "waitingClient" && subtask.videoId && project) {
+      const oldStatus = normaliseSubtaskStatus(subtask.status);
+      const delId = (project.links || {}).deliveryId;
+      const delivery = delId ? (deliveries || []).find(d => d?.id === delId) : null;
+      if (oldStatus === "inProgress" && delivery && Array.isArray(delivery.videos)) {
+        const idx = delivery.videos.findIndex(v => v && v.videoId === subtask.videoId);
+        if (idx >= 0) {
+          fbSet(`/deliveries/${delId}/videos/${idx}/viewixStatus`, "Ready for Review");
+        }
       }
     }
   };
@@ -1070,7 +1091,7 @@ const dateCellStyle = {
   fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
 };
 
-function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
+function ProjectTable({ projects, deliveries, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
   // Header checkbox is tri-state: empty / checked (all) / indeterminate
   // (some). Browsers don't have a CSS-only indeterminate state — set
   // it on the DOM via ref.
@@ -1151,6 +1172,7 @@ function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleS
                           subtask={st}
                           project={p}
                           editors={editors}
+                          deliveries={deliveries}
                           striped={idx % 2 === 1}
                           onDelete={(stId) => fbSet(`/projects/${p.id}/subtasks/${stId}`, null)}
                         />
@@ -1242,7 +1264,7 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   );
 });
 
-function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
+function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries }) {
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
@@ -1492,6 +1514,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
                               subtask={st}
                               project={project}
                               editors={editors}
+                              deliveries={deliveries}
                               striped={idx % 2 === 1}
                               onDelete={(stId) => fbSet(`/projects/${project.id}/subtasks/${stId}`, null)}
                             />
@@ -1538,7 +1561,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete, editors, clients }) {
+function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -1595,6 +1618,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients }) {
           project={project}
           editors={editors}
           clients={clients}
+          deliveries={deliveries}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -1908,6 +1932,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
               )}
               <ProjectTable
                 projects={filtered}
+                deliveries={deliveries}
                 onOpen={(id) => setActiveProjectId(id)}
                 onStatusChange={(id, status) => {
                   // Write the status leaf directly so the change lands before
@@ -1929,7 +1954,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
       )}
 
       {subTab === "projects" && active && (
-        <ProjectDetail project={active} editors={editors} clients={clients} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
       )}
 
       {subTab === "teamBoard" && !active && (
@@ -1956,6 +1981,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
                 project={qv}
                 editors={editors}
                 clients={clients}
+                deliveries={deliveries}
                 onClose={() => setQuickViewProjectId(null)}
                 onDelete={async () => {
                   await deleteProject(qv.id);
