@@ -1642,9 +1642,25 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
       })
       .filter(p => !q || (p.projectName || "").toLowerCase().includes(q) || (p.clientName || "").toLowerCase().includes(q))
       .sort((a, b) => {
-        if (sortBy === "newest") return (b.createdAt || "").localeCompare(a.createdAt || "");
-        if (sortBy === "oldest") return (a.createdAt || "").localeCompare(b.createdAt || "");
-        return (a.projectName || "").localeCompare(b.projectName || "", undefined, { sensitivity: "base" });
+        // Newest / Oldest sort by the same date the row's start column
+        // displays — closeDate (Attio deal close) when present, falling
+        // back to createdAt for projects created directly in the UI.
+        // Sorting on createdAt alone made imported projects look random
+        // because their createdAt is the import timestamp, not the date
+        // the producer actually sees.
+        if (sortBy === "newest" || sortBy === "oldest") {
+          const da = a.closeDate || a.createdAt || "";
+          const db = b.closeDate || b.createdAt || "";
+          return sortBy === "newest" ? db.localeCompare(da) : da.localeCompare(db);
+        }
+        // A–Z matches the visible "Client: Project" row label. Client
+        // name is the bold leading part, so producers read alphabetical
+        // order from there; project name is the tiebreaker for clients
+        // with several projects. Both case-insensitive.
+        const ci = { sensitivity: "base" };
+        const byClient = (a.clientName || "").localeCompare(b.clientName || "", undefined, ci);
+        if (byClient !== 0) return byClient;
+        return (a.projectName || "").localeCompare(b.projectName || "", undefined, ci);
       });
   }, [projects, filter, search, sortBy]);
 
