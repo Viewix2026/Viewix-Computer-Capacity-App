@@ -19,6 +19,9 @@ import { fmtCur, fmtD, matchSherpaForName } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
+import { DndContext, PointerSensor, useSensor, useSensors, closestCenter } from "@dnd-kit/core";
+import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS as DndCSS } from "@dnd-kit/utilities";
 
 // Monday.com-style status values — matches the screenshot Jeremy shared.
 // Legacy records stored "active" / "onHold" — see normaliseStatus() below
@@ -122,6 +125,24 @@ function subtasksAsArray(subtasksObj) {
       // reloads, which makes "stable list" assumptions break.
       return (a.id || "").localeCompare(b.id || "");
     });
+}
+
+// Persist a drag-reorder of subtasks within a single project. We
+// rewrite every order value to the new index 0..n-1 (rather than only
+// the changed slice) because legacy records often have sparse / null
+// orders and a clean 0-based sequence is easier to reason about. Only
+// the writes that actually change anything are sent.
+function reorderSubtasks(projectId, subtasks, activeId, overId) {
+  if (!activeId || !overId || activeId === overId) return;
+  const oldIndex = subtasks.findIndex(s => s.id === activeId);
+  const newIndex = subtasks.findIndex(s => s.id === overId);
+  if (oldIndex < 0 || newIndex < 0) return;
+  const next = arrayMove(subtasks, oldIndex, newIndex);
+  next.forEach((st, idx) => {
+    if ((st.order ?? -1) !== idx) {
+      fbSet(`/projects/${projectId}/subtasks/${st.id}/order`, idx);
+    }
+  });
 }
 
 // Resolve a project's Sherpa Doc URL for the chip rendered in the
@@ -691,6 +712,15 @@ function MultiAssigneePicker({ value, editors, onChange }) {
 }
 
 function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped }) {
+  // useSortable wires this row into whatever <SortableContext> wraps
+  // it (project details + the projects sub-tab list each have their
+  // own). The drag handle in the leading cell carries the listeners
+  // so producers grab there, not on the whole row — clicking the row
+  // body opens the project, which would conflict with a row-wide drag.
+  const {
+    attributes: dragAttrs, listeners: dragListeners,
+    setNodeRef: setDragRef, transform, transition, isDragging,
+  } = useSortable({ id: subtask.id });
   const persist = (field, value) => {
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, new Date().toISOString());
@@ -718,11 +748,41 @@ function SubtaskRow({ projectId, subtask, project, editors, onDelete, striped })
   // mirrors the parent ProjectRow's TimelineCell so the visual lineage
   // is obvious.
   return (
-    <tr style={{
-      background: baseBg,
-      borderBottom: "1px solid var(--border)",
-    }}>
-      <td style={{ ...tdStyle, padding: "4px 14px" }} />
+    <tr
+      ref={setDragRef}
+      style={{
+        background: baseBg,
+        borderBottom: "1px solid var(--border)",
+        transform: DndCSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.5 : 1,
+        // Keep the dragged row above its neighbours so the dotted/striped
+        // siblings don't clip the lifted row's content during the slide.
+        position: isDragging ? "relative" : undefined,
+        zIndex: isDragging ? 2 : undefined,
+      }}>
+      <td style={{ ...tdStyle, padding: "4px 14px", width: 28 }}>
+        <span
+          {...dragAttrs}
+          {...dragListeners}
+          title="Drag to reorder"
+          aria-label="Drag to reorder"
+          style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 18, height: 18,
+            color: "var(--muted)", opacity: 0.55,
+            cursor: isDragging ? "grabbing" : "grab",
+            userSelect: "none",
+            fontSize: 12, lineHeight: 1, letterSpacing: -1,
+            transition: "opacity 0.12s, color 0.12s",
+            touchAction: "none",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--fg)"; }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = "0.55"; e.currentTarget.style.color = "var(--muted)"; }}>
+          {/* Six-dot grip — two columns of three dots, classic drag affordance. */}
+          ⋮⋮
+        </span>
+      </td>
       <td style={{ ...tdStyle, padding: "4px 14px 4px 48px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
           {/* Stage pill — replaces the previous purple/cyan/slate
@@ -1021,12 +1081,29 @@ function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleS
     if (headerCheckRef.current) headerCheckRef.current.indeterminate = someChecked;
   }, [someChecked]);
 
+  // One DndContext spans the whole table; each expanded project gets
+  // its own SortableContext below so dragging is scoped to siblings
+  // within the same project. Subtask ids are unique across all
+  // projects, so onDragEnd resolves the owning project by lookup.
+  const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const onSubtaskDragEnd = ({ active, over }) => {
+    if (!over || active.id === over.id) return;
+    const owning = projects.find(p =>
+      Object.values(p.subtasks || {}).some(s => s && s.id === active.id)
+    );
+    if (!owning) return;
+    const subs = subtasksAsArray(owning.subtasks);
+    if (!subs.some(s => s.id === over.id)) return; // dragged outside the project's group — ignore
+    reorderSubtasks(owning.id, subs, active.id, over.id);
+  };
+
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", position: "relative" }}>
       {/* Thin pink accent stripe on the left — matches the Monday-style
           "this is a project table" affordance in Jeremy's reference. */}
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "#EC4899" }} />
       <div style={{ overflowX: "auto" }}>
+        <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onSubtaskDragEnd}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: "var(--bg)" }}>
@@ -1065,17 +1142,21 @@ function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleS
                     subtaskCount={subtasks.length}
                     subtaskDoneCount={subtasks.filter(s => normaliseSubtaskStatus(s.status) === "done").length}
                   />
-                  {isExpanded && subtasks.map((st, idx) => (
-                    <SubtaskRow
-                      key={st.id}
-                      projectId={p.id}
-                      subtask={st}
-                      project={p}
-                      editors={editors}
-                      striped={idx % 2 === 1}
-                      onDelete={(stId) => fbSet(`/projects/${p.id}/subtasks/${stId}`, null)}
-                    />
-                  ))}
+                  {isExpanded && (
+                    <SortableContext items={subtasks.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                      {subtasks.map((st, idx) => (
+                        <SubtaskRow
+                          key={st.id}
+                          projectId={p.id}
+                          subtask={st}
+                          project={p}
+                          editors={editors}
+                          striped={idx % 2 === 1}
+                          onDelete={(stId) => fbSet(`/projects/${p.id}/subtasks/${stId}`, null)}
+                        />
+                      ))}
+                    </SortableContext>
+                  )}
                   {isExpanded && (
                     <AddSubtaskRow
                       projectId={p.id}
@@ -1087,6 +1168,7 @@ function ProjectTable({ projects, onOpen, onStatusChange, selectedIds, onToggleS
             })}
           </tbody>
         </table>
+        </DndContext>
       </div>
     </div>
   );
@@ -1165,6 +1247,11 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
+
+  // dnd-kit sensor for the subtasks list. 6px activation distance keeps
+  // a producer's casual click on the drag handle from being read as a
+  // tiny drag and bouncing the row 1px on mouse-up.
+  const subtaskDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   // Per-leaf fbUpdate. fbUpdate is merge-semantics so concurrent writes
   // from the webhook (e.g. attioCompanyId arriving late) don't get
@@ -1389,21 +1476,30 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients }) {
             ) : (
               <>
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <tbody>
-                      {subtasks.map((st, idx) => (
-                        <SubtaskRow
-                          key={st.id}
-                          projectId={project.id}
-                          subtask={st}
-                          project={project}
-                          editors={editors}
-                          striped={idx % 2 === 1}
-                          onDelete={(stId) => fbSet(`/projects/${project.id}/subtasks/${stId}`, null)}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
+                  <DndContext
+                    sensors={subtaskDragSensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={({ active, over }) => {
+                      if (over) reorderSubtasks(project.id, subtasks, active.id, over.id);
+                    }}>
+                    <SortableContext items={subtasks.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <tbody>
+                          {subtasks.map((st, idx) => (
+                            <SubtaskRow
+                              key={st.id}
+                              projectId={project.id}
+                              subtask={st}
+                              project={project}
+                              editors={editors}
+                              striped={idx % 2 === 1}
+                              onDelete={(stId) => fbSet(`/projects/${project.id}/subtasks/${stId}`, null)}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                    </SortableContext>
+                  </DndContext>
                 </div>
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
                   <button onClick={addManual}
