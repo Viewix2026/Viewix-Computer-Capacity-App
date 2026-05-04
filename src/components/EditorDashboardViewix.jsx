@@ -117,6 +117,25 @@ function tasksForEditor(projects, editorId, sherpaIdx) {
         videoId: st.videoId || null,
         frameioLink: st.frameioLink || "",
         deliveryId: (p.links || {}).deliveryId || null,
+        // Project metadata for the more-info dropdown — frozen subset
+        // so the editor view doesn't pull the full project payload but
+        // still has every brief / context field they need without
+        // jumping back to the Projects tab.
+        projectMeta: {
+          clientName:      p.clientName      || "",
+          projectName:     p.projectName     || "",
+          description:     p.description     || "",
+          targetAudience:  p.targetAudience  || "",
+          producerNotes:   p.producerNotes   || "",
+          videoType:       p.videoType       || "",
+          packageTier:     p.packageTier     || "",
+          numberOfVideos:  p.numberOfVideos  || null,
+          dealValue:       p.dealValue       || null,
+          dueDate:         p.dueDate         || null,
+          closeDate:       p.closeDate       || null,
+          destinations:    Array.isArray(p.destinations) ? p.destinations : [],
+          links:           p.links           || {},
+        },
       });
     }
   }
@@ -534,18 +553,47 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
 function TaskRow({
   task, isRunning, elapsedSecs, loggedSecs,
   onStart, onStop, onReset, onAdjust, onFinish, dim,
+  expanded, onToggleExpand,
 }) {
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 14,
-      padding: "14px 16px",
+      display: "flex", flexDirection: "column",
       background: "var(--bg)",
       border: `1px solid ${isRunning ? "rgba(16,185,129,0.45)" : "var(--border)"}`,
       borderRadius: 10,
       boxShadow: isRunning ? "0 0 14px rgba(16,185,129,0.22)" : "none",
       opacity: dim ? 0.7 : 1,
       transition: "all 0.15s",
+      overflow: "hidden",
     }}>
+    <div style={{
+      display: "flex", alignItems: "center", gap: 14,
+      padding: "14px 16px",
+    }}>
+      {/* Expand chevron — click reveals the project's brief / notes /
+          links below the row so editors don't need to bounce to the
+          Projects tab for context. Bigger hit-target than a bare glyph
+          to match the project list's expand toggle pattern. */}
+      <button
+        onClick={() => onToggleExpand && onToggleExpand(task.id)}
+        title={expanded ? "Hide project details" : "Show project details"}
+        style={{
+          width: 28, height: 28, padding: 0, borderRadius: 6,
+          border: "1px solid var(--border)",
+          background: expanded ? "var(--card)" : "transparent",
+          color: "var(--muted)",
+          cursor: "pointer",
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
+          transition: "background 0.12s, color 0.12s",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.color = "var(--fg)"; e.currentTarget.style.background = "var(--card)"; }}
+        onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)"; if (!expanded) e.currentTarget.style.background = "transparent"; }}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+          style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
+          <path d="M5 3l6 5-6 5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
           <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
@@ -655,6 +703,102 @@ function TaskRow({
         </div>
       )}
     </div>
+    {expanded && <TaskDetailsPanel task={task} />}
+    </div>
+  );
+}
+
+// ─── Task details panel ──────────────────────────────────────────
+// Read-only project context shown when a TaskRow is expanded. Pulls
+// from task.projectMeta (frozen at tasksForEditor time) so editors see
+// the brief / scope / notes / quick links without bouncing back to
+// Projects. Sparse projects render only the fields they actually have.
+function TaskDetailsPanel({ task }) {
+  const m = task.projectMeta || {};
+  const links = m.links || {};
+  const fmt = v => (v == null || v === "") ? "—" : v;
+  const hasAnyText = !!(m.description || m.targetAudience || m.producerNotes);
+  const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.dealValue || (m.destinations && m.destinations.length));
+  const hasAnyLink = !!(links.sherpaId || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
+  if (!hasAnyText && !hasAnyMeta && !hasAnyLink) {
+    return (
+      <div style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.015)", fontSize: 12, color: "var(--muted)" }}>
+        No extra project details on file.
+      </div>
+    );
+  }
+
+  // Hash-route navigation matches the rest of the app — preproduction
+  // / runsheets / deliveries / accounts each have their own hash route
+  // that App.jsx parses on mount.
+  const hash = (h) => `#${h}`;
+  const linkBtn = (label, href, color) => (
+    <a href={href}
+      style={{
+        padding: "5px 10px", borderRadius: 6,
+        border: `1px solid ${color}`,
+        background: "transparent", color,
+        fontSize: 11, fontWeight: 700, textDecoration: "none",
+        fontFamily: "inherit",
+      }}>{label}</a>
+  );
+  const Field = ({ label, value, mono = false, multiline = false }) => (
+    <div>
+      <div style={{ fontSize: 9, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
+      <div style={{
+        fontSize: 12, color: "var(--fg)",
+        fontFamily: mono ? "'JetBrains Mono',monospace" : "inherit",
+        whiteSpace: multiline ? "pre-wrap" : "normal",
+        wordBreak: multiline ? "break-word" : "normal",
+        lineHeight: 1.5,
+      }}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div style={{
+      padding: "14px 18px 16px",
+      borderTop: "1px solid var(--border)",
+      background: "rgba(255,255,255,0.02)",
+      display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 24px",
+    }}>
+      {m.description && (
+        <div style={{ gridColumn: "1 / -1" }}>
+          <Field label="Description" value={m.description} multiline />
+        </div>
+      )}
+      {m.targetAudience && <Field label="Target audience" value={m.targetAudience} multiline />}
+      {m.videoType && <Field label="Video type" value={fmt(m.videoType)} />}
+      {m.packageTier && <Field label="Package" value={fmt(m.packageTier)} />}
+      {m.numberOfVideos != null && <Field label="Number of videos" value={fmt(m.numberOfVideos)} mono />}
+      {m.dealValue != null && <Field label="Deal value" value={`$${Number(m.dealValue).toLocaleString("en-AU")}`} mono />}
+      {m.closeDate && <Field label="Close date" value={fmt(m.closeDate)} mono />}
+      {m.dueDate && <Field label="Due date" value={fmt(m.dueDate)} mono />}
+      {Array.isArray(m.destinations) && m.destinations.length > 0 && (
+        <div style={{ gridColumn: "1 / -1" }}>
+          <div style={{ fontSize: 9, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Destinations</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {m.destinations.map((d, i) => (
+              <span key={i} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)", border: "1px solid var(--border)" }}>{d}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {m.producerNotes && (
+        <div style={{ gridColumn: "1 / -1" }}>
+          <Field label="Producer notes" value={m.producerNotes} multiline />
+        </div>
+      )}
+      {hasAnyLink && (
+        <div style={{ gridColumn: "1 / -1", display: "flex", flexWrap: "wrap", gap: 6, paddingTop: 4, borderTop: "1px dashed var(--border)" }}>
+          {links.sherpaId   && linkBtn("Sherpa Doc", hash(`clients/${links.sherpaId}`), "#8B5CF6")}
+          {links.preprodId  && linkBtn("Pre-Prod",   hash(`preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`), "#EC4899")}
+          {links.runsheetId && linkBtn("Runsheet",   hash(`preproduction/runsheets/${links.runsheetId}`), "#06B6D4")}
+          {links.deliveryId && linkBtn("Delivery",   hash(`projects/deliveries/${links.deliveryId}`), "#10B981")}
+          {linkBtn("Open project", hash(`projects/${task.projectId}`), "#0082FA")}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -673,6 +817,10 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   const [timerWarning, setTimerWarning] = useState(null);
   // Finish modal — id of the task currently being wrapped. Null = closed.
   const [finishingTaskId, setFinishingTaskId] = useState(null);
+  // Per-row expanded state for the more-info dropdown. Single open at a
+  // time keeps the page short — clicking another row's chevron swaps.
+  const [expandedTaskId, setExpandedTaskId] = useState(null);
+  const toggleExpandTask = (id) => setExpandedTaskId(prev => prev === id ? null : id);
   const intervalRef = useRef(null);
   const justStoppedRef = useRef({});
   const today = isoToday();
@@ -977,6 +1125,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
               onReset={resetTimer}
               onAdjust={(taskId) => { setAdjustingTask(taskId); setAdjustMins(""); }}
               onFinish={(taskId) => setFinishingTaskId(taskId)}
+              expanded={expandedTaskId === t.id}
+              onToggleExpand={toggleExpandTask}
             />
           ))}
         </Section>
@@ -988,6 +1138,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
               <TaskRow key={t.id} task={t}
                 isRunning={false} elapsedSecs={0} loggedSecs={0}
                 onStart={() => {}} onStop={() => {}} onReset={() => {}} onAdjust={() => {}}
+                expanded={expandedTaskId === t.id}
+                onToggleExpand={toggleExpandTask}
                 dim
               />
             ))}
@@ -1004,6 +1156,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
                 onReset={resetTimer}
                 onAdjust={(taskId) => { setAdjustingTask(taskId); setAdjustMins(""); }}
                 onFinish={(taskId) => setFinishingTaskId(taskId)}
+                expanded={expandedTaskId === t.id}
+                onToggleExpand={toggleExpandTask}
               />
             ))}
           </Section>
