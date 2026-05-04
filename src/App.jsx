@@ -189,6 +189,10 @@ export default function App(){
     });
   },[]);
 
+  const isFounder=role==="founder"||role==="founders";
+  const isFounders=role==="founders";
+  const isLead=role==="lead";
+
   // Firebase data listeners — gated on auth being ready so the root listener
   // doesn't attach before the auth token is available (prevents listener lockout
   // once security rules are applied).
@@ -265,10 +269,6 @@ export default function App(){
 
   // Backfill missing crew members (Jeremy/Steve/Vish) into the roster — one-time per workspace.
   useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"},{id:"ed-vish",name:"Vish"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);
-
-  const isFounder=role==="founder"||role==="founders";
-  const isFounders=role==="founders";
-  const isLead=role==="lead";
 
   // Auto-update active projects from Monday.com
   useEffect(()=>{
