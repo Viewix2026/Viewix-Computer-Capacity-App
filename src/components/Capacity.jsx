@@ -23,7 +23,6 @@ export function Capacity({
   inputs, setInputs,
   editors, setEditors,
   curW, setCurW, weekData, setWeekData,
-  mondayEditorList,
   teamLunch, setTeamLunch,
   foundersData, setFoundersData,
   projects,
@@ -284,7 +283,7 @@ export function Capacity({
           </div>
         </>)}
 
-        {capTab === "timelogs" && <TimeLogsView allTimeLogs={allTimeLogs} mondayEditorList={mondayEditorList} timeLogDate={timeLogDate} setTimeLogDate={setTimeLogDate} timeLogLoading={timeLogLoading} />}
+        {capTab === "timelogs" && <TimeLogsView allTimeLogs={allTimeLogs} editors={editors} timeLogDate={timeLogDate} setTimeLogDate={setTimeLogDate} timeLogLoading={timeLogLoading} />}
 
         {capTab === "lunch" && (
           <div style={{ maxWidth: 700, margin: "0 auto" }}>
@@ -417,7 +416,7 @@ export function Capacity({
 
 // ─── Time logs sub-view ───
 // Self-contained so the data transforms only run when this tab is mounted.
-function TimeLogsView({ allTimeLogs, mondayEditorList, timeLogDate, setTimeLogDate, timeLogLoading }) {
+function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeLogLoading }) {
   const fmtHM = (secs) => {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
@@ -428,7 +427,7 @@ function TimeLogsView({ allTimeLogs, mondayEditorList, timeLogDate, setTimeLogDa
     return "0m";
   };
   const editorMap = {};
-  mondayEditorList.forEach(ed => { editorMap[ed.id] = ed.name; });
+  editors.forEach(ed => { editorMap[ed.id] = ed.name; });
 
   // Data for selected date
   const dateData = {};

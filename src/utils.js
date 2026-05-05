@@ -51,11 +51,9 @@ export function addW(d, n) {
 
 // ─── Editor daily target ───
 // Single source of truth for the editor's daily logged-hours target.
-// Drives the Today tile in both EditorDashboard (Monday view) and
-// EditorDashboardViewix (Viewix view) — label, percent fill, and
-// over-target colour flip. Used to be hardcoded `8h` / `8*3600` in
-// four places; pulled here so producer-driven changes only edit one
-// number.
+// Drives the Today tile in EditorDashboardViewix — label, percent
+// fill, and over-target colour flip. Pulled here so producer-driven
+// changes only edit one number.
 export const EDITOR_DAILY_TARGET_HOURS = 8;
 export const EDITOR_DAILY_TARGET_SECS = EDITOR_DAILY_TARGET_HOURS * 3600;
 

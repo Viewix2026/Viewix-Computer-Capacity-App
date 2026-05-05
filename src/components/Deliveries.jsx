@@ -1,11 +1,11 @@
-// Deliveries — founder-only tool for tracking video deliverables per project.
-// Imports projects from Monday.com, tracks per-video Viewix status + client
-// revision rounds, and generates shareable client review links.
+// Deliveries — founder-only tool for tracking video deliverables per
+// project. Tracks per-video Viewix status + client revision rounds, and
+// generates shareable client review links. Records are spawned by the
+// Attio deal-won webhook or created blank from this list.
 
 import { useState, useEffect } from "react";
 import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
-import { fetchInProgressParents } from "../monday";
 import { StatusSelect } from "./UIComponents";
 import { fbSet } from "../firebase";
 
@@ -23,10 +23,6 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
       setActiveDeliveryId(deepLinkDeliveryId);
     }
   }, [deepLinkDeliveryId, deliveries]);
-  const [importMode, setImportMode] = useState(false);
-  const [importProjects, setImportProjects] = useState([]);
-  const [importLoading, setImportLoading] = useState(false);
-
   const activeDelivery = deliveries.find(d => d.id === activeDeliveryId);
 
   // Account lookup for logos — trim + partial match handles e.g. "Woolcott St"
@@ -48,29 +44,10 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
   const getAcctLogoBg = (clientName) => findAcct(clientName)?.logoBg;
 
   // ─── Actions ───
-  const startImport = () => {
-    setImportMode(true);
-    setImportLoading(true);
-    fetchInProgressParents()
-      .then(items => { setImportProjects(items); setImportLoading(false); })
-      .catch(() => setImportLoading(false));
-  };
-  const importProject = (proj) => {
-    // Monday.com parent items are typically named "Client: Project Name"
-    const nameParts = proj.name.split(":");
-    const clientName = nameParts.length > 1 ? nameParts[0].trim() : proj.name;
-    const projectName = nameParts.length > 1 ? nameParts.slice(1).join(":").trim() : proj.name;
-    const videos = (proj.subitems || []).map(sub => ({ id: `v-${sub.id}`, name: sub.name, link: "", viewixStatus: "In Development", revision1: "", revision2: "", notes: "" }));
-    const d = { ...newDelivery(clientName, projectName), videos, mondayItemId: proj.id };
-    setDeliveries(p => [...p, d]);
-    setActiveDeliveryId(d.id);
-    setImportMode(false);
-  };
   const createBlank = () => {
     const d = newDelivery("New Client", "New Project");
     setDeliveries(p => [...p, d]);
     setActiveDeliveryId(d.id);
-    setImportMode(false);
   };
   // Producer-side edits go through two paths:
   //   1. Local state update (so the UI reflects the change instantly).
@@ -202,41 +179,16 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Deliveries</span>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={startImport} style={{ ...BTN, background: "var(--accent)", color: "white" }}>+ Import from Monday.com</button>
           <button onClick={createBlank} style={{ ...BTN, background: "#374151", color: "var(--fg)" }}>+ Blank Delivery</button>
         </div>
       </div>
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
 
-        {/* Import picker */}
-        {importMode && (
-          <div style={{ marginBottom: 24, background: "var(--card)", border: "1px solid var(--accent)", borderRadius: 12, padding: "20px 24px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)" }}>Select a project to import</div>
-              <button onClick={() => setImportMode(false)} style={{ ...BTN, background: "#374151", color: "#9CA3AF" }}>Cancel</button>
-            </div>
-            {importLoading ? (
-              <div style={{ textAlign: "center", padding: 30, color: "var(--muted)" }}>Loading projects from Monday.com...</div>
-            ) : importProjects.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 30, color: "var(--muted)" }}>No "In Progress" projects found</div>
-            ) : (
-              <div style={{ display: "grid", gap: 8, maxHeight: 400, overflowY: "auto" }}>
-                {importProjects.map(proj => (
-                  <div key={proj.id} onClick={() => importProject(proj)} style={{ padding: "12px 16px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", transition: "all 0.15s" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{proj.name}</div>
-                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{(proj.subitems || []).length} sub-task{(proj.subitems || []).length !== 1 ? "s" : ""}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {deliveries.length === 0 && !importMode ? (
+        {deliveries.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", borderRadius: 12, border: "1px solid var(--border)" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
             <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No deliveries yet</div>
-            <div style={{ fontSize: 13 }}>Import from Monday.com or create a blank delivery</div>
+            <div style={{ fontSize: 13 }}>Deliveries are created when a project is won. Use "+ Blank Delivery" if you need to add one manually.</div>
           </div>
         ) : (
           <div style={{ display: "grid", gap: 12 }}>

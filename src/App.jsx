@@ -1,8 +1,7 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
 import { initFB, onFB, fbSet, fbListen, onAuthReady, signOutUser, authFetch } from "./firebase";
-import { fetchMondayUsers, fetchActiveProjectCount, fetchInProgressParents } from "./monday";
 import {
-  DEFAULT_MONDAY_EDITORS, CONTENT_CATEGORIES, CAT_COLORS,
+  CONTENT_CATEGORIES, CAT_COLORS,
   VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS,
   DEFAULT_TRAINING, DK, DL, QT, DEF_EDS, DEF_IN,
   QUOTE_SECTIONS, OUTPUT_PRESETS, FILMING_DEFAULTS, EDITING_DEFAULTS,
@@ -138,7 +137,6 @@ export default function App(){
   // direct to Firebase from Projects.jsx to avoid the debounced bulk-write
   // clobbering webhook-created records that haven't hit local state yet.
   const[projects,setProjects]=useState([]);
-  const[mondayEditorList,setMondayEditorList]=useState(DEFAULT_MONDAY_EDITORS);
 
   // Buyer Journey state
   const[buyerJourney,setBuyerJourney]=useState({});
@@ -251,7 +249,6 @@ export default function App(){
       listen("/buyerJourney",data=>{if(data)setBuyerJourney(data);});
       listen("/accounts",data=>{if(data)setAccounts(data);});
       listen("/turnaround",data=>{if(data)setTurnaround(data);});
-      listen("/mondayEditors",data=>{if(data&&Array.isArray(data))setMondayEditorList(data);});
       listen("/training",data=>{if(data&&Array.isArray(data))setTrainingData(data);});
       listen("/trainingSuggestions",data=>{if(data&&Array.isArray(data))setTrainingSuggestions(data);});
       listen("/todos",data=>{if(data)setTodos((Array.isArray(data)?data.filter(Boolean):Object.values(data).filter(Boolean)));});
@@ -327,13 +324,13 @@ export default function App(){
   // Backfill missing crew members (Jeremy/Steve/Vish) into the roster — one-time per workspace.
   useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"},{id:"ed-vish",name:"Vish"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);
 
-  // Auto-update active projects from Monday.com
+  // Auto-update active projects from /projects (status === "inProgress").
+  // Replaces the old Monday board count — same semantics, Firebase source.
   useEffect(()=>{
     if(!isFounder||tool!=="capacity")return;
-    fetchActiveProjectCount().then(count=>{
-      if(count!=null)setInputs(p=>({...p,currentActiveProjects:count}));
-    }).catch(()=>{});
-  },[role,tool]);
+    const count=projects.filter(p=>p&&p.status==="inProgress").length;
+    setInputs(p=>({...p,currentActiveProjects:count}));
+  },[role,tool,projects]);
 
   const login=resolvedRole=>{if(resolvedRole)setRole(resolvedRole);};
   const logout=async()=>{try{await signOutUser();}catch{}setRole(null);};
@@ -432,7 +429,6 @@ export default function App(){
         inputs={inputs} setInputs={setInputs}
         editors={editors} setEditors={setEditors}
         curW={curW} setCurW={setCurW} weekData={weekData} setWeekData={setWeekData}
-        mondayEditorList={mondayEditorList}
         teamLunch={teamLunch} setTeamLunch={setTeamLunch}
         foundersData={foundersData} setFoundersData={setFoundersData}
         projects={projects}
@@ -631,7 +627,7 @@ export default function App(){
     {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={mondayEditorList} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
     {tool==="projects"&&(isFounder||isLead)&&(<Projects projects={projects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
