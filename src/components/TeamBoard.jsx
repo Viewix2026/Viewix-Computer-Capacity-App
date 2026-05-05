@@ -1211,7 +1211,7 @@ function PoolDrawer({ poolId, pool, editors, onOpenProject }) {
           fontSize: 11, fontWeight: 800, textTransform: "uppercase",
           letterSpacing: 0.6, color: "var(--muted)",
         }}>
-          Unassigned and Unscheduled · {pool.length}
+          Subtasks: Unassigned + Unscheduled date/time + Status = Scheduled · {pool.length}
         </span>
         <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
           Drag a card up to schedule it · drag a scheduled bar down to clear it
