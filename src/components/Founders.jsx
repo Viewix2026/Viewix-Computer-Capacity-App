@@ -511,11 +511,11 @@ function FoundersTrendGrid({ metrics }) {
   );
 }
 
-function MonthlyRevenueChart({ chronological, monthlyByKey, now, maxRev }) {
+function MonthlyRevenueChart({ chronological, monthlyByKey, now, maxRev, monthlyTarget }) {
   const [hovered, setHovered] = useState(null);
   return (
     <div style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 170, padding: "12px 4px 0" }}>
+      <div style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 4, height: 170, padding: "12px 4px 0" }}>
         {chronological.map(([key, m]) => {
           const h = Math.max((m.revenue / maxRev) * 130, 4);
           const isCurrent = key === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -574,6 +574,37 @@ function MonthlyRevenueChart({ chronological, monthlyByKey, now, maxRev }) {
             </div>
           );
         })}
+        {monthlyTarget > 0 && (
+          <div
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: 4,
+              right: 4,
+              bottom: (monthlyTarget / maxRev) * 130,
+              borderTop: "2px dotted #F59E0B",
+              pointerEvents: "none",
+              zIndex: 2,
+            }}
+          >
+            <span style={{
+              position: "absolute",
+              right: 0,
+              top: -14,
+              fontSize: 9,
+              fontWeight: 800,
+              color: "#F59E0B",
+              fontFamily: "'JetBrains Mono',monospace",
+              background: "var(--card)",
+              padding: "1px 4px",
+              borderRadius: 3,
+              letterSpacing: 0.3,
+              whiteSpace: "nowrap",
+            }}>
+              TARGET {fmtCur(monthlyTarget)}/mo
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -822,6 +853,8 @@ export function Founders({
               });
               const sorted = Object.entries(monthly).sort((a, b) => b[0].localeCompare(a[0]));
               const maxRev = Math.max(...sorted.map(([_, m]) => m.revenue), 1);
+              const monthlyTarget = (foundersData?.revenueTarget || 0) / 12;
+              const chartMax = Math.max(maxRev, monthlyTarget, 1);
 
               return (
                 <div>
@@ -844,7 +877,8 @@ export function Founders({
                       chronological={sorted.slice(0, 24).reverse()}
                       monthlyByKey={monthly}
                       now={now}
-                      maxRev={maxRev}
+                      maxRev={chartMax}
+                      monthlyTarget={monthlyTarget}
                     />
                   )}
 
