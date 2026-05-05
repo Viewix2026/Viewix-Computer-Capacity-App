@@ -1069,6 +1069,10 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
           />
         </div>
       </td>
+      {/* Empty cell to align with the parent table's new Lead column.
+          Account manager / project lead are project-level fields and
+          inherit from the parent — no per-subtask override. */}
+      <td style={{ ...tdStyle, width: 130, padding: "4px 12px" }} />
       <td style={{ ...tdStyle, width: 120, padding: "4px 8px" }}>
         <SubtaskInline
           value={subtask.startDate || ""} type="date" placeholder="—"
@@ -1113,7 +1117,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
   return (
     <tr style={{ background: "transparent", borderBottom: "1px solid var(--border)" }}>
       <td style={{ ...tdStyle, padding: "6px 14px" }} />
-      <td colSpan={5} style={{ ...tdStyle, padding: "6px 14px 10px 48px" }}>
+      <td colSpan={6} style={{ ...tdStyle, padding: "6px 14px 10px 48px" }}>
         <button onClick={add}
           style={{
             padding: "5px 12px", borderRadius: 4, border: "1px dashed var(--border)",
@@ -1130,7 +1134,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
   );
 }
 
-function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal }) {
+function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal, accountManager, projectLead }) {
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "";
   const namePart = project.projectName || "Untitled project";
@@ -1253,6 +1257,23 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
           })()}
         </div>
       </td>
+      {/* Lead column — account manager + project lead, both resolved
+          from the linked account by ProjectTable. Sits to the left of
+          the start date so producers scanning the table see ownership
+          at the same glance as the timeline. Renders "—" per slot when
+          the account doesn't have either filled in yet. */}
+      <td style={{ ...tdStyle, width: 130, textAlign: "left", padding: "8px 12px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, lineHeight: 1.25 }}>
+          <div title="Account manager" style={{ fontSize: 11, color: "var(--fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <span style={{ color: "var(--muted)", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 4 }}>AM</span>
+            {accountManager || <span style={{ color: "var(--muted)" }}>—</span>}
+          </div>
+          <div title="Project lead" style={{ fontSize: 11, color: "var(--fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <span style={{ color: "var(--muted)", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 4 }}>PL</span>
+            {projectLead || <span style={{ color: "var(--muted)" }}>—</span>}
+          </div>
+        </div>
+      </td>
       <td style={{ ...tdStyle, width: 120, textAlign: "center" }}>
         <span style={dateCellStyle}>{startDate ? fmtD(startDate) : "—"}</span>
       </td>
@@ -1325,6 +1346,7 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                 />
               </th>
               <th style={{ ...thStyle, textAlign: "left" }}>Project</th>
+              <th style={{ ...thStyle, textAlign: "left", paddingLeft: 12 }}>Lead</th>
               <th style={thStyle}>Start Date</th>
               <th style={thStyle}>Due date</th>
               <th style={thStyle}>Timeline</th>
@@ -1354,6 +1376,14 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                       // points straight at the entry, no scan needed.
                       const acctId = (p.links || {}).accountId;
                       return acctId ? (accounts || {})[acctId]?.goal || null : null;
+                    })()}
+                    accountManager={(() => {
+                      const acctId = (p.links || {}).accountId;
+                      return acctId ? ((accounts || {})[acctId]?.accountManager || "") : "";
+                    })()}
+                    projectLead={(() => {
+                      const acctId = (p.links || {}).accountId;
+                      return acctId ? ((accounts || {})[acctId]?.projectLead || "") : "";
                     })()}
                   />
                   {isExpanded && (

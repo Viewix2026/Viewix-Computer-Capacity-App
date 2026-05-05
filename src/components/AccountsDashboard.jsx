@@ -300,6 +300,16 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                         <select value={acct.projectLead || ""} onChange={e => updateAccount(acct.id, { projectLead: e.target.value })} style={{ ...selectSt, background: acct.projectLead ? "var(--accent-soft)" : "var(--bg)", color: acct.projectLead ? "var(--fg)" : "var(--muted)" }}>
                           <option value="">Assign</option>
                           {(editors||[]).map(e => <option key={e.id||e.name} value={e.name}>{e.name}</option>)}
+                          {/* Fallback: surface the stored projectLead even
+                              when it no longer matches a name in the
+                              current editor roster (e.g. someone left the
+                              team and was removed from /editors). Without
+                              this the dropdown rendered empty and made
+                              the data look "deleted" when it was still in
+                              /accounts/{id}.projectLead all along. */}
+                          {acct.projectLead && !((editors||[]).some(e => e.name === acct.projectLead)) && (
+                            <option value={acct.projectLead}>{acct.projectLead}</option>
+                          )}
                         </select>
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>

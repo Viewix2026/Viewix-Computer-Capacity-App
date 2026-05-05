@@ -139,6 +139,12 @@ function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
           closeDate:       p.closeDate       || null,
           destinations:    Array.isArray(p.destinations) ? p.destinations : [],
           links:           p.links           || {},
+          // Account manager + project lead — pulled from the linked
+          // /accounts entry by tasksForEditor so the editor sees who
+          // owns the account and who's running the project without
+          // bouncing to the Accounts tab they don't have access to.
+          accountManager:  (acctId && accounts && accounts[acctId]?.accountManager) || "",
+          projectLead:     (acctId && accounts && accounts[acctId]?.projectLead) || "",
         },
       });
     }
@@ -723,7 +729,7 @@ function TaskDetailsPanel({ task, onOpenProject }) {
   const links = m.links || {};
   const fmt = v => (v == null || v === "") ? "—" : v;
   const hasAnyText = !!(m.description || m.targetAudience || m.producerNotes);
-  const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.dealValue || (m.destinations && m.destinations.length));
+  const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.dealValue || m.accountManager || m.projectLead || (m.destinations && m.destinations.length));
   const hasAnyLink = !!(links.sherpaId || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
   if (!hasAnyText && !hasAnyMeta && !hasAnyLink) {
     return (
@@ -773,6 +779,8 @@ function TaskDetailsPanel({ task, onOpenProject }) {
         </div>
       )}
       {m.targetAudience && <Field label="Target audience" value={m.targetAudience} multiline />}
+      {m.accountManager && <Field label="Account manager" value={m.accountManager} />}
+      {m.projectLead && <Field label="Project lead" value={m.projectLead} />}
       {m.videoType && <Field label="Video type" value={fmt(m.videoType)} />}
       {m.packageTier && <Field label="Package" value={fmt(m.packageTier)} />}
       {m.numberOfVideos != null && <Field label="Number of videos" value={fmt(m.numberOfVideos)} mono />}
@@ -830,7 +838,7 @@ function TaskDetailsPanel({ task, onOpenProject }) {
 // here rather than letting them navigate away (and rather than
 // embedding the full editable ProjectDetail, which they shouldn't be
 // editing from this surface).
-function ProjectDetailsModal({ projectId, projects, deliveries, onClose }) {
+function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClose }) {
   // ESC closes — same affordance as the FinishModal.
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -932,6 +940,16 @@ function ProjectDetailsModal({ projectId, projects, deliveries, onClose }) {
         }}>
           {project.description && <Field label="Description" value={project.description} multiline span={2} />}
           {project.targetAudience && <Field label="Target audience" value={project.targetAudience} multiline span={2} />}
+          {(() => {
+            const acctId = (project.links || {}).accountId;
+            const acct = acctId && accounts ? accounts[acctId] : null;
+            return (
+              <>
+                {acct?.accountManager && <Field label="Account manager" value={acct.accountManager} />}
+                {acct?.projectLead && <Field label="Project lead" value={acct.projectLead} />}
+              </>
+            );
+          })()}
           {project.videoType && <Field label="Video type" value={fmt(project.videoType)} />}
           {project.packageTier && <Field label="Package" value={fmt(project.packageTier)} />}
           {project.numberOfVideos != null && <Field label="Number of videos" value={fmt(project.numberOfVideos)} mono />}
@@ -1451,6 +1469,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
           projectId={openProjectId}
           projects={projects}
           deliveries={deliveries}
+          accounts={accounts}
           onClose={() => setOpenProjectId(null)}
         />
       )}
