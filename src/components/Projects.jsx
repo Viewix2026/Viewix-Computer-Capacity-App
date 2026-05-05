@@ -1131,7 +1131,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
 
 function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount }) {
   const videoCount = project.numberOfVideos;
-  const clientPart = project.clientName || "—";
+  const clientPart = project.clientName || "";
   const namePart = project.projectName || "Untitled project";
   const startDate = project.closeDate || project.createdAt;
   const dueDate = project.dueDate;
@@ -1207,7 +1207,11 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
             </svg>
           </button>
           <span style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.3 }}>
-            <span style={{ fontWeight: 700 }}>{clientPart}:</span>{" "}
+            {/* Drop the leading "Client:" prefix entirely when there's
+                no client on file — used to render a stray "—:" sentinel
+                that looked like a glitch. Producers can still set the
+                client from the project detail panel. */}
+            {clientPart && (<><span style={{ fontWeight: 700 }}>{clientPart}:</span>{" "}</>)}
             <span style={{ fontWeight: 500 }}>{namePart}</span>
           </span>
           {/* Video count — bare-number monospace badge, labelled "vids"

@@ -224,7 +224,7 @@ input[type="number"]{-moz-appearance:textfield;}
    thumb adds a subtle ridge so it reads as a physical object even against
    the dark grid cells under the schedule. */
 .chunky-scroll{scrollbar-width:auto !important;scrollbar-color:#5A7AA0 rgba(255,255,255,0.05) !important;}
-.chunky-scroll::-webkit-scrollbar{width:18px !important;height:18px !important;}
+.chunky-scroll::-webkit-scrollbar{width:18px !important;height:14px !important;}
 .chunky-scroll::-webkit-scrollbar-track{background:rgba(255,255,255,0.05) !important;border-left:1px solid var(--border);border-top:1px solid var(--border);}
 .chunky-scroll::-webkit-scrollbar-thumb{background:#5A7AA0 !important;border-radius:9px !important;border:2px solid var(--bg) !important;min-height:48px !important;min-width:48px !important;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.08);}
 .chunky-scroll::-webkit-scrollbar-thumb:hover{background:#7E9DC2 !important;}

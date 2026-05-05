@@ -592,18 +592,24 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
     for (const st of flatSubtasks) {
       const ids = getAssigneeIds(st);
       const validIds = ids.filter(id => editorIds.has(id));
-      const isScheduled = !!st.startDate && validIds.length > 0;
-      if (isScheduled) {
+      const hasDates = !!st.startDate;
+      const hasAssignee = validIds.length > 0;
+      const onCalendar = hasDates && hasAssignee;
+      if (onCalendar) {
         // Render one bar per valid assignee in their respective rows.
         for (const aid of validIds) {
           if (!scheduled.has(aid)) scheduled.set(aid, []);
           scheduled.get(aid).push(st);
         }
-      } else if (st.status !== "done") {
-        // Skip done subtasks from the unassigned/unscheduled pool —
-        // they're complete, no producer action needed, no point
-        // cluttering the pile below the calendar. Scheduled done
-        // subtasks still render in their editor's row above.
+      } else if (st.status === "scheduled") {
+        // Pool only shows subtasks the producer has explicitly marked
+        // Scheduled — those are the ones actively waiting for a slot.
+        // "stuck" / "notStarted" / "inProgress" / "done" / etc. don't
+        // belong here so the pool stays focused on assignment work.
+        // Within the Scheduled pool we further require the subtask to
+        // be missing an assignee OR a start date — i.e. it's not yet
+        // landing on the calendar. Once both are set it'll move out
+        // of the pool into the editor's row above on the next render.
         pool.push(st);
       }
     }
@@ -1205,7 +1211,7 @@ function PoolDrawer({ poolId, pool, editors, onOpenProject }) {
           fontSize: 11, fontWeight: 800, textTransform: "uppercase",
           letterSpacing: 0.6, color: "var(--muted)",
         }}>
-          Unscheduled & Unassigned · {pool.length}
+          Unassigned and Unscheduled · {pool.length}
         </span>
         <span style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>
           Drag a card up to schedule it · drag a scheduled bar down to clear it
