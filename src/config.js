@@ -17,10 +17,17 @@ export const CONTENT_CATEGORIES = ["Meta Ad", "Social Media", "Corporate Video",
 export const CAT_COLORS = { "Meta Ad": "#8B5CF6", "Social Media": "#0082FA", "Corporate Video": "#F87700", "Other": "#5A6B85" };
 
 // ─── Deliveries ───
-export const VIEWIX_STATUSES = ["In Development", "Ready for Review", "Need Revisions", "Completed"];
-export const VIEWIX_STATUS_COLORS = { "In Development": "#F59E0B", "Ready for Review": "#0082FA", "Need Revisions": "#EF4444", "Completed": "#10B981" };
-export const CLIENT_REVISION_OPTIONS = ["", "Approved", "Need Revisions"];
-export const CLIENT_REVISION_COLORS = { "Approved": "#10B981", "Need Revisions": "#EF4444" };
+// Canonical strings live in api/_constants.js so the Vercel
+// serverless functions and this frontend bundle can't drift apart
+// (notify-revision.js once compared against "Needs Revisions" while
+// the dropdown wrote "Need Revisions"). Re-exported under the same
+// names existing imports already use.
+export {
+  VIEWIX_STATUSES,
+  VIEWIX_STATUS_COLORS,
+  CLIENT_REVISION_OPTIONS,
+  CLIENT_REVISION_COLORS,
+} from "../api/_constants.js";
 
 // ─── Training ───
 export const DEFAULT_TRAINING = [
