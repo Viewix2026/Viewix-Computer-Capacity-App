@@ -522,23 +522,53 @@ function SubtaskStatusCell({ value, onChange }) {
   );
 }
 
+// Stage prefix stripper — many subtask names redundantly start with the
+// stage they're already pinned to (e.g. "Edit - TB_TB_Google" next to a
+// blue EDIT pill). Strips the leading stage word + dash/colon for
+// display only; the stored value is unchanged so producer-typed names
+// round-trip cleanly. Matches the SUBTASK_STAGE_OPTIONS labels
+// case-insensitively, plus a pre-production hyphen tolerance.
+const STAGE_PREFIX_RE = /^(?:edit|shoot|pre[\s_-]?production|revisions|hold)\s*[-–:]\s*/i;
+function stripStagePrefix(name) {
+  return (name || "").replace(STAGE_PREFIX_RE, "");
+}
+
 // Compact inline editor used inside the subtask row — same commit-on-blur
 // behaviour as InlineText but smaller padding/font + transparent background
-// so the row stays Monday-style dense. When `multiline` is true, renders a
-// textarea that auto-grows so long subtask names wrap instead of clipping.
-function SubtaskInline({ value, onSave, placeholder, type = "text", style, multiline = false }) {
+// so the row stays Monday-style dense.
+//
+// Multiline mode (used for subtask names) splits into two states:
+//   - Resting: a 2-line clamped div with ellipsis. Hover shows the full
+//     name via title tooltip. Optional `displayTransform` rewrites the
+//     visible text (used to strip the redundant stage prefix).
+//   - Editing: a textarea that auto-grows so producers can see the
+//     entire name while typing.
+// This avoids the per-character wrap that happened when long unbreakable
+// tokens like "TB_TB_Google" were forced into a narrow flex column.
+function SubtaskInline({ value, onSave, placeholder, type = "text", style, multiline = false, displayTransform }) {
   const [draft, setDraft] = useState(value || "");
   const [focused, setFocused] = useState(false);
   const taRef = useRef(null);
   useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
-  // Auto-resize the textarea to fit its content. Reset to auto first so the
-  // height shrinks when text is deleted, not just when it grows.
+  // Auto-resize the textarea to fit its content while editing. Reset to
+  // auto first so the height shrinks when text is deleted, not just when
+  // it grows. Only runs in edit mode — resting state uses a clamped div.
   useEffect(() => {
-    if (!multiline || !taRef.current) return;
+    if (!multiline || !focused || !taRef.current) return;
     const el = taRef.current;
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
-  }, [draft, multiline]);
+  }, [draft, multiline, focused]);
+  // When transitioning into edit mode, pull focus into the textarea and
+  // park the caret at the end of the existing text — most natural place
+  // to start a tweak.
+  useEffect(() => {
+    if (!multiline || !focused || !taRef.current) return;
+    const el = taRef.current;
+    el.focus();
+    const len = el.value.length;
+    el.setSelectionRange(len, len);
+  }, [focused, multiline]);
   const commit = () => {
     if ((draft || "") === (value || "")) return;
     onSave(draft || "");
@@ -559,6 +589,38 @@ function SubtaskInline({ value, onSave, placeholder, type = "text", style, multi
     onMouseLeave: e => { if (!focused) e.currentTarget.style.borderColor = "transparent"; },
   };
   if (multiline) {
+    if (!focused) {
+      // Resting state: clamped, ellipsised display with full-text tooltip.
+      // Click anywhere on the cell flips into edit mode below.
+      const raw = draft || "";
+      const display = displayTransform ? displayTransform(raw) : raw;
+      return (
+        <div
+          onClick={(e) => { e.stopPropagation(); setFocused(true); }}
+          onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border)"}
+          onMouseLeave={e => e.currentTarget.style.borderColor = "transparent"}
+          title={raw || placeholder || ""}
+          style={{
+            ...sharedStyle,
+            cursor: "text",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+            // overflow-wrap:anywhere so unbreakable tokens like
+            // "TB_TB_Google" still wrap rather than push the row wider,
+            // but only when no whitespace is available to break on.
+            overflowWrap: "anywhere",
+            lineHeight: 1.35,
+            // Reserve one line of height so empty values don't collapse
+            // the row visually.
+            minHeight: "1.35em",
+            color: display ? "var(--fg)" : "var(--muted)",
+          }}>
+          {display || placeholder || ""}
+        </div>
+      );
+    }
     return (
       <textarea
         ref={taRef}
@@ -576,6 +638,7 @@ function SubtaskInline({ value, onSave, placeholder, type = "text", style, multi
           resize: "none", overflow: "hidden",
           whiteSpace: "pre-wrap", wordBreak: "break-word",
           lineHeight: 1.35,
+          border: "1px solid var(--border)",
         }}
       />
     );
@@ -901,15 +964,19 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
             subtask={subtask}
             onChange={(s) => persist("stage", s)}
           />
-          {/* flex:1 + minWidth:0 lets the name take all remaining width
-              and shrink without overflowing the row's siblings. The
-              multiline textarea then wraps long names instead of clipping. */}
-          <div style={{ flex: 1, minWidth: 0 }}>
+          {/* flex:1 + minWidth:80 lets the name take all remaining width
+              and shrink with the row, while keeping at least ~80px so the
+              cell never collapses to nothing when siblings (Frame.io
+              field, assignee picker, delete) crowd it on narrow viewports.
+              SubtaskInline's resting state clamps the visible text to two
+              lines with ellipsis; full name is in the hover tooltip. */}
+          <div style={{ flex: 1, minWidth: 80 }}>
             <SubtaskInline
               value={subtask.name || ""}
               onSave={(v) => persist("name", v.trim() || "Untitled subtask")}
               placeholder="Subtask name"
               multiline
+              displayTransform={stripStagePrefix}
               style={{ fontSize: 12, fontWeight: 600 }}
             />
           </div>
