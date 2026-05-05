@@ -13,6 +13,9 @@ export {
   VIEWIX_STATUS_COLORS,
   CLIENT_REVISION_OPTIONS,
   CLIENT_REVISION_COLORS,
+  CLIENT_GOAL_OPTIONS,
+  CLIENT_GOAL_LABELS,
+  CLIENT_GOAL_COLORS,
 } from "../api/_constants.js";
 
 // ─── Training ───

@@ -624,7 +624,7 @@ export default function App(){
     </>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
-    {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries}/>)}
+    {tool==="editors"&&(isFounder||role==="editor")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}

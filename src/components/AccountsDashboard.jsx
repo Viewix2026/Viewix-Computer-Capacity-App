@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { fbSet } from "../firebase";
-import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS } from "../config";
+import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS } from "../config";
 import { logoBg, matchSherpaForName } from "../utils";
+import { ClientGoalPill } from "./ClientGoalPill";
 
 // Alias kept so local references to DEFAULT_GAPS inside this file read
 // naturally — the canonical export in config.js is DEFAULT_MILESTONE_GAPS.
@@ -278,7 +279,15 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                             ▸
                           </button>
                           {acct.logoUrl && <img key={acct.logoUrl + (acct.logoBg || "")} src={acct.logoUrl} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 28, borderRadius: 4, objectFit: "contain", background: logoBg(acct.logoBg), padding: 3 }} />}
-                          {acct.companyName}
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            {acct.companyName}
+                            {/* Client-goal pill — set per account in the
+                                expanded detail panel below; shown here so
+                                the producer scanning the account list sees
+                                what the client is actually trying to
+                                achieve at a glance. */}
+                            <ClientGoalPill goal={acct.goal} />
+                          </span>
                         </div>
                       </td>
                       <td style={{ ...TD, position: "sticky", left: 160, zIndex: 5, background: "var(--card)", textAlign: "center" }}>
@@ -370,6 +379,23 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                                   </div>
                                 </div>
                               </div>
+                            </div>
+                            {/* Client business goal — drives the goal pill
+                                rendered next to the company name above and
+                                rolls through to project rows + editor task
+                                rows so everyone touching the work sees the
+                                client's intent at a glance. */}
+                            <div>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Client Goal</div>
+                              <select
+                                value={acct.goal || ""}
+                                onChange={e => updateAccount(acct.id, { goal: e.target.value })}
+                                style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", width: "100%", fontFamily: "inherit", boxSizing: "border-box" }}>
+                                <option value="">Not set</option>
+                                {CLIENT_GOAL_OPTIONS.map(g => (
+                                  <option key={g} value={g}>{CLIENT_GOAL_LABELS[g]}</option>
+                                ))}
+                              </select>
                             </div>
                             {/* Room for future details — Attio ID, notes, etc. */}
                             <div>
