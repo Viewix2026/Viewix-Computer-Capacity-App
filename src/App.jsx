@@ -393,7 +393,16 @@ export default function App(){
       {(isFounder||role==="closer"||isLead)&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
       {isFounder&&<SideIcon icon="🌱" label="Nurture" active={tool==="nurture"} onClick={()=>setTool("nurture")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
-      {(isFounder||isLead)&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>setTool("projects")}/>}
+      {(isFounder||isLead)&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>{
+        // Clear any leftover #projects/teamBoard or #projects/deliveries
+        // so the click lands on the default Projects sub-tab. Without
+        // this the Projects component's deep-link effect would replay
+        // the stale subTab from the hash and the producer would end up
+        // on whatever they last looked at, not Projects.
+        if(window.location.hash)history.replaceState(null,"",window.location.pathname+window.location.search);
+        setRoute({tool:null,subTab:null,recordId:null});
+        setTool("projects");
+      }}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||role==="editor")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
