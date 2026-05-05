@@ -215,12 +215,16 @@ input[type="number"]{-moz-appearance:textfield;}
 ::-webkit-scrollbar-track{background:var(--bg);}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
 /* Chunky-scroll: opt-in class for scroll panels where grabbiness > minimalism.
-   Used on the Team Board because producers were missing the 6px target. */
-.chunky-scroll{scrollbar-width:auto;scrollbar-color:#2A3A52 var(--bg);}
-.chunky-scroll::-webkit-scrollbar{width:14px;height:14px;}
-.chunky-scroll::-webkit-scrollbar-track{background:var(--bg);}
-.chunky-scroll::-webkit-scrollbar-thumb{background:#2A3A52;border-radius:7px;border:3px solid var(--bg);}
-.chunky-scroll::-webkit-scrollbar-thumb:hover{background:#3D5273;}
+   Used on the Team Board because producers were missing the 6px target. Bumped
+   to 18px with a higher-contrast thumb + a min thumb size so long scrolls don't
+   shrink the grip down to nothing, plus a bright accent on active-drag so
+   producers see they've grabbed it. */
+.chunky-scroll{scrollbar-width:auto;scrollbar-color:#4A6080 rgba(255,255,255,0.03);}
+.chunky-scroll::-webkit-scrollbar{width:18px;height:18px;}
+.chunky-scroll::-webkit-scrollbar-track{background:rgba(255,255,255,0.03);border-left:1px solid var(--border);border-top:1px solid var(--border);}
+.chunky-scroll::-webkit-scrollbar-thumb{background:#4A6080;border-radius:9px;border:2px solid var(--bg);min-height:48px;min-width:48px;}
+.chunky-scroll::-webkit-scrollbar-thumb:hover{background:#6A85AB;}
+.chunky-scroll::-webkit-scrollbar-thumb:active{background:var(--accent);}
 .chunky-scroll::-webkit-scrollbar-corner{background:var(--bg);}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
 @keyframes founders-ticker-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
