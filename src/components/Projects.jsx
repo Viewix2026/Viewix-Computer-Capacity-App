@@ -592,6 +592,89 @@ function SubtaskInline({ value, onSave, placeholder, type = "text", style, multi
   );
 }
 
+// Frame.io review-link cell — compact inline URL editor with a Watch
+// button. Resolved view value prefers the linked delivery video's link
+// (matched by canonical videoId) and falls back to the subtask's own
+// frameioLink, so the producer-managed delivery side stays canonical.
+// On save, the parent's onSave handler writes to BOTH sides so they
+// stay in sync going forward; clearing the field clears both. Soft
+// validation marks non-frame.io URLs in red but doesn't block saving —
+// producers/leads sometimes paste interim Drive / Vimeo links during
+// triage and we don't want to fight them at the cell.
+function FrameioLinkCell({ subtask, project, deliveries, onSave }) {
+  const resolved = (() => {
+    if (subtask?.videoId && project) {
+      const delId = (project.links || {}).deliveryId;
+      const del = delId && Array.isArray(deliveries)
+        ? deliveries.find(d => d?.id === delId)
+        : null;
+      const vid = del && Array.isArray(del.videos)
+        ? del.videos.find(v => v && v.videoId === subtask.videoId)
+        : null;
+      if (vid?.link) return vid.link;
+    }
+    return subtask?.frameioLink || "";
+  })();
+  const [draft, setDraft] = useState(resolved);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setDraft(resolved); }, [resolved, focused]);
+  const commit = () => {
+    if ((draft || "") === (resolved || "")) return;
+    onSave(draft || "");
+  };
+  const trimmedDraft = (draft || "").trim();
+  const looksLikeFrameio = !trimmedDraft || /(^|\.|\/\/)f(rame)?\.io(\/|$)/i.test(trimmedDraft);
+  const watchUrl = trimmedDraft
+    ? (/^https?:\/\//i.test(trimmedDraft) ? trimmedDraft : `https://${trimmedDraft}`)
+    : null;
+  const baseBorder = focused
+    ? (looksLikeFrameio ? "var(--accent)" : "#EF4444")
+    : "transparent";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+      <input
+        type="url"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onClick={e => e.stopPropagation()}
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); commit(); }}
+        onKeyDown={e => {
+          if (e.key === "Enter") e.target.blur();
+          if (e.key === "Escape") { setDraft(resolved); e.target.blur(); }
+        }}
+        placeholder="+ Frame.io link"
+        title="Paste a Frame.io review link. Saves to this subtask AND the matching delivery video (synced by videoId)."
+        style={{
+          width: 160, padding: "4px 8px", borderRadius: 4,
+          border: `1px solid ${baseBorder}`,
+          background: focused ? "var(--input-bg)" : "transparent",
+          color: "var(--fg)", fontSize: 11, fontFamily: "inherit",
+          outline: "none",
+          textOverflow: "ellipsis",
+        }}
+        onMouseEnter={e => { if (!focused) e.currentTarget.style.borderColor = "var(--border)"; }}
+        onMouseLeave={e => { if (!focused) e.currentTarget.style.borderColor = "transparent"; }}
+      />
+      {watchUrl && (
+        <a href={watchUrl} target="_blank" rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
+          title={`Open Frame.io review: ${trimmedDraft}`}
+          style={{
+            padding: "3px 8px", borderRadius: 4,
+            background: "rgba(0,130,250,0.14)", color: "#0082FA",
+            fontSize: 10, fontWeight: 700, textDecoration: "none",
+            display: "inline-flex", alignItems: "center", gap: 3,
+            fontFamily: "inherit",
+            border: "1px solid rgba(0,130,250,0.35)",
+          }}>
+          🎬
+        </a>
+      )}
+    </div>
+  );
+}
+
 // Subtask row — indented under its parent project. Same column layout
 // as ProjectRow so the timeline / status pills line up vertically.
 // `editors` is the roster from App.jsx (/editors node). `project` is
@@ -830,46 +913,33 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
               style={{ fontSize: 12, fontWeight: 600 }}
             />
           </div>
-          {/* Frame.io review-link chip — appears whenever the linked
-              delivery video (matched by canonical videoId) has a link,
-              or the subtask carries one of its own (editor's Finish
-              flow writes both). Click opens the review in a new tab.
-              Resolution prefers the delivery side because that's the
-              client-facing record producers manage in the Deliveries
-              tab; the subtask field is the editor-side mirror. */}
-          {(() => {
-            const fl = (() => {
+          {/* Frame.io review-link cell — inline editable URL field with
+              a Watch button next to it. Saves to subtask.frameioLink
+              AND propagates onto the matching delivery video (resolved
+              by canonical videoId) so the subtask, internal Deliveries
+              tab, and the public client view all carry the same URL.
+              Clearing the field clears both sides. */}
+          <FrameioLinkCell
+            subtask={subtask}
+            project={project}
+            deliveries={deliveries}
+            onSave={(next) => {
+              const trimmed = (next || "").trim();
+              persist("frameioLink", trimmed);
               if (subtask.videoId && project) {
                 const delId = (project.links || {}).deliveryId;
-                const del = delId && Array.isArray(deliveries)
+                const delivery = delId && Array.isArray(deliveries)
                   ? deliveries.find(d => d?.id === delId)
                   : null;
-                const vid = del && Array.isArray(del.videos)
-                  ? del.videos.find(v => v && v.videoId === subtask.videoId)
-                  : null;
-                if (vid?.link) return vid.link;
+                if (delivery && Array.isArray(delivery.videos)) {
+                  const idx = delivery.videos.findIndex(v => v && v.videoId === subtask.videoId);
+                  if (idx >= 0) {
+                    fbSet(`/deliveries/${delId}/videos/${idx}/link`, trimmed);
+                  }
+                }
               }
-              return subtask.frameioLink || "";
-            })();
-            if (!fl) return null;
-            const url = /^https?:\/\//i.test(fl) ? fl : `https://${fl}`;
-            return (
-              <a href={url} target="_blank" rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
-                title={`Open Frame.io review: ${fl}`}
-                style={{
-                  flexShrink: 0,
-                  padding: "3px 8px", borderRadius: 4,
-                  background: "rgba(0,130,250,0.14)", color: "#0082FA",
-                  fontSize: 10, fontWeight: 700, textDecoration: "none",
-                  display: "inline-flex", alignItems: "center", gap: 4,
-                  fontFamily: "inherit",
-                  border: "1px solid rgba(0,130,250,0.35)",
-                }}>
-                🎬 Watch
-              </a>
-            );
-          })()}
+            }}
+          />
           {/* Multi-assignee picker — supports multiple people on the
               same subtask (e.g. shoot crew). Writes to assigneeIds and
               keeps legacy assigneeId in sync as the first element so
