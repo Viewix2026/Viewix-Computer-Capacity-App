@@ -19,6 +19,7 @@ import { fmtCur, fmtD, matchSherpaForName } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
+import { ClientGoalPill } from "./ClientGoalPill";
 import { DndContext, PointerSensor, useSensor, useSensors, closestCenter } from "@dnd-kit/core";
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
@@ -1129,7 +1130,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
   );
 }
 
-function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount }) {
+function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal }) {
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "";
   const namePart = project.projectName || "Untitled project";
@@ -1214,6 +1215,10 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
             {clientPart && (<><span style={{ fontWeight: 700 }}>{clientPart}:</span>{" "}</>)}
             <span style={{ fontWeight: 500 }}>{namePart}</span>
           </span>
+          {/* Client-goal pill — resolved from the linked account by
+              the parent ProjectTable so this row doesn't need to know
+              about /accounts. Renders nothing when unset. */}
+          <ClientGoalPill goal={clientGoal} />
           {/* Video count — bare-number monospace badge, labelled "vids"
               so it can't be mistaken for the subtask badge sitting next
               to it. Both used to render as "4" / "4" when the counts
@@ -1272,7 +1277,7 @@ const dateCellStyle = {
   fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
 };
 
-function ProjectTable({ projects, deliveries, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
+function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
   // Header checkbox is tri-state: empty / checked (all) / indeterminate
   // (some). Browsers don't have a CSS-only indeterminate state — set
   // it on the DOM via ref.
@@ -1343,6 +1348,13 @@ function ProjectTable({ projects, deliveries, onOpen, onStatusChange, selectedId
                     onToggleExpand={onToggleExpand}
                     subtaskCount={subtasks.length}
                     subtaskDoneCount={subtasks.filter(s => normaliseSubtaskStatus(s.status) === "done").length}
+                    clientGoal={(() => {
+                      // Resolve from the linked account once per row.
+                      // /accounts arrives as a keyed object — accountId
+                      // points straight at the entry, no scan needed.
+                      const acctId = (p.links || {}).accountId;
+                      return acctId ? (accounts || {})[acctId]?.goal || null : null;
+                    })()}
                   />
                   {isExpanded && (
                     <SortableContext items={subtasks.map(s => s.id)} strategy={verticalListSortingStrategy}>
@@ -2133,6 +2145,7 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
               <ProjectTable
                 projects={filtered}
                 deliveries={deliveries}
+                accounts={accounts}
                 onOpen={(id) => setActiveProjectId(id)}
                 onStatusChange={(id, status) => {
                   // Write the status leaf directly so the change lands before

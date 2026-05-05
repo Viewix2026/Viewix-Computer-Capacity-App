@@ -14,6 +14,7 @@ import confetti from "canvas-confetti";
 import { fmtSecsShort, matchSherpaForName, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
 import { fbSet, fbListen, fbUpdate, onFB } from "../firebase";
 import { FrameioLinkCell } from "./Projects";
+import { ClientGoalPill } from "./ClientGoalPill";
 
 // ─── Date helpers (local, in browser timezone) ─────────────────────
 function toISO(d) {
@@ -85,12 +86,18 @@ function sherpaUrlForProject(p, sherpaIdx) {
   sherpaIdx.byName.set(lcName, url);
   return url;
 }
-function tasksForEditor(projects, editorId, sherpaIdx) {
+function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
   const out = [];
   if (!editorId || !Array.isArray(projects)) return out;
   for (const p of projects) {
     const subs = p?.subtasks ? Object.values(p.subtasks) : [];
     const sherpaUrl = sherpaUrlForProject(p, sherpaIdx);
+    // Resolve the client goal once per project — same value for every
+    // subtask in this project. Linked account is the source of truth;
+    // null when the project has no account link or the account hasn't
+    // had a goal set yet.
+    const acctId = (p?.links || {}).accountId;
+    const clientGoal = (acctId && accounts && accounts[acctId]?.goal) || null;
     for (const st of subs) {
       if (!st || !st.id) continue;
       if (!getAssigneeIds(st).includes(editorId)) continue;
@@ -106,6 +113,7 @@ function tasksForEditor(projects, editorId, sherpaIdx) {
         stage: st.stage || "preProduction",
         status: st.status || "stuck",
         sherpaUrl,
+        clientGoal,
         // Cross-system fields the Finish modal needs: videoId routes the
         // submit to the matching delivery video; frameioLink prefills any
         // link the editor pasted earlier so they don't lose work; the
@@ -613,6 +621,10 @@ function TaskRow({
               📄 Sherpa
             </a>
           )}
+          {/* Client-goal pill — same goal the producer sees on the
+              account + project rows. Renders nothing when unset, so
+              tasks for accounts without a goal stay visually clean. */}
+          <ClientGoalPill goal={task.clientGoal} />
         </div>
         <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {task.name}
@@ -1013,7 +1025,7 @@ function ProjectDetailsModal({ projectId, projects, deliveries, onClose }) {
 }
 
 // ─── Main component ───────────────────────────────────────────────
-export function EditorDashboardViewix({ projects = [], editors = [], clients = [], deliveries = [] }) {
+export function EditorDashboardViewix({ projects = [], editors = [], clients = [], deliveries = [], accounts = {} }) {
   const [editorId, setEditorId] = useState(null);
   const [timers, setTimers] = useState({});
   const [timeLogs, setTimeLogs] = useState({});
@@ -1041,7 +1053,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
 
   // All tasks for this editor, classified.
   const sherpaIdx = useMemo(() => buildSherpaIndex(clients), [clients]);
-  const allTasks = useMemo(() => tasksForEditor(projects, editorId, sherpaIdx), [projects, editorId, sherpaIdx]);
+  const allTasks = useMemo(() => tasksForEditor(projects, editorId, sherpaIdx, accounts), [projects, editorId, sherpaIdx, accounts]);
   const { todayTasks, upcomingTasks, overdueTasks } = useMemo(
     () => classifyTasks(allTasks, today),
     [allTasks, today]

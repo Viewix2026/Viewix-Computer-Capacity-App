@@ -47,3 +47,39 @@ export const VIEWIX_STATUS_COLORS = {
   [VIEWIX_STATUS_NEED_REVISIONS]:   "#EF4444",
   [VIEWIX_STATUS_COMPLETED]:        "#10B981",
 };
+
+// ─── Client business goal ──────────────────────────────────────
+// Set per /accounts/{id}.goal by the account manager. The value
+// rolls through to the linked project rows + the editor's task
+// rows so everyone touching the work sees, at a glance, what the
+// client is actually trying to achieve. Drives visual differentiation
+// only — no business logic forks on it.
+export const CLIENT_GOAL_LEADS          = "leads";
+export const CLIENT_GOAL_AWARENESS      = "awareness";
+export const CLIENT_GOAL_ENGAGEMENT     = "engagement";
+export const CLIENT_GOAL_BRAND_BUILDING = "brandBuilding";
+
+export const CLIENT_GOAL_OPTIONS = [
+  CLIENT_GOAL_LEADS,
+  CLIENT_GOAL_AWARENESS,
+  CLIENT_GOAL_ENGAGEMENT,
+  CLIENT_GOAL_BRAND_BUILDING,
+];
+
+export const CLIENT_GOAL_LABELS = {
+  [CLIENT_GOAL_LEADS]:          "Leads",
+  [CLIENT_GOAL_AWARENESS]:      "Awareness",
+  [CLIENT_GOAL_ENGAGEMENT]:     "Engagement",
+  [CLIENT_GOAL_BRAND_BUILDING]: "Brand Building",
+};
+
+// Palette picked for max distance from each other AND from existing
+// pill colours used elsewhere in the app (status / stage). Brand
+// Building gets purple — green was a candidate but reads as "Done"
+// in the status-pill space, which is the wrong association.
+export const CLIENT_GOAL_COLORS = {
+  [CLIENT_GOAL_LEADS]:          "#EF4444", // red
+  [CLIENT_GOAL_AWARENESS]:      "#0082FA", // blue
+  [CLIENT_GOAL_ENGAGEMENT]:     "#F97316", // orange
+  [CLIENT_GOAL_BRAND_BUILDING]: "#8B5CF6", // purple
+};
