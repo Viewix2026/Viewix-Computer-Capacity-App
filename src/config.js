@@ -215,17 +215,21 @@ input[type="number"]{-moz-appearance:textfield;}
 ::-webkit-scrollbar-track{background:var(--bg);}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
 /* Chunky-scroll: opt-in class for scroll panels where grabbiness > minimalism.
-   Used on the Team Board because producers were missing the 6px target. Bumped
-   to 18px with a higher-contrast thumb + a min thumb size so long scrolls don't
-   shrink the grip down to nothing, plus a bright accent on active-drag so
-   producers see they've grabbed it. */
-.chunky-scroll{scrollbar-width:auto;scrollbar-color:#4A6080 rgba(255,255,255,0.03);}
-.chunky-scroll::-webkit-scrollbar{width:18px;height:18px;}
-.chunky-scroll::-webkit-scrollbar-track{background:rgba(255,255,255,0.03);border-left:1px solid var(--border);border-top:1px solid var(--border);}
-.chunky-scroll::-webkit-scrollbar-thumb{background:#4A6080;border-radius:9px;border:2px solid var(--bg);min-height:48px;min-width:48px;}
-.chunky-scroll::-webkit-scrollbar-thumb:hover{background:#6A85AB;}
-.chunky-scroll::-webkit-scrollbar-thumb:active{background:var(--accent);}
-.chunky-scroll::-webkit-scrollbar-corner{background:var(--bg);}
+   Used on the Team Board because producers were missing the 6px target. The
+   !important flags defeat the global ::-webkit-scrollbar above (the global
+   rule and this scoped rule have the same specificity at the pseudo level
+   in some Chromium builds, and we want the chunky version to always win).
+   Min thumb size keeps the grip visible on long scrolls, the accent flash
+   on active-drag confirms a successful grab, and the inset shadow on the
+   thumb adds a subtle ridge so it reads as a physical object even against
+   the dark grid cells under the schedule. */
+.chunky-scroll{scrollbar-width:auto !important;scrollbar-color:#5A7AA0 rgba(255,255,255,0.05) !important;}
+.chunky-scroll::-webkit-scrollbar{width:18px !important;height:18px !important;}
+.chunky-scroll::-webkit-scrollbar-track{background:rgba(255,255,255,0.05) !important;border-left:1px solid var(--border);border-top:1px solid var(--border);}
+.chunky-scroll::-webkit-scrollbar-thumb{background:#5A7AA0 !important;border-radius:9px !important;border:2px solid var(--bg) !important;min-height:48px !important;min-width:48px !important;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.08);}
+.chunky-scroll::-webkit-scrollbar-thumb:hover{background:#7E9DC2 !important;}
+.chunky-scroll::-webkit-scrollbar-thumb:active{background:var(--accent) !important;}
+.chunky-scroll::-webkit-scrollbar-corner{background:var(--bg) !important;}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
 @keyframes founders-ticker-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
 .founders-ticker-track{animation:founders-ticker-scroll 60s linear infinite;}
