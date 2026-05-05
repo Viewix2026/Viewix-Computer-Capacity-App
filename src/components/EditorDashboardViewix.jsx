@@ -18,6 +18,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import confetti from "canvas-confetti";
 import { fmtSecsShort, matchSherpaForName, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
 import { fbSet, fbListen, fbUpdate, onFB } from "../firebase";
+import { FrameioLinkCell } from "./Projects";
 
 // ─── Date helpers (local, in browser timezone) ─────────────────────
 function toISO(d) {
@@ -550,7 +551,7 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
 function TaskRow({
   task, isRunning, elapsedSecs, loggedSecs,
   onStart, onStop, onReset, onAdjust, onFinish, dim,
-  expanded, onToggleExpand,
+  expanded, onToggleExpand, onOpenProject,
 }) {
   return (
     <div style={{
@@ -700,7 +701,7 @@ function TaskRow({
         </div>
       )}
     </div>
-    {expanded && <TaskDetailsPanel task={task} />}
+    {expanded && <TaskDetailsPanel task={task} onOpenProject={onOpenProject} />}
     </div>
   );
 }
@@ -710,7 +711,7 @@ function TaskRow({
 // from task.projectMeta (frozen at tasksForEditor time) so editors see
 // the brief / scope / notes / quick links without bouncing back to
 // Projects. Sparse projects render only the fields they actually have.
-function TaskDetailsPanel({ task }) {
+function TaskDetailsPanel({ task, onOpenProject }) {
   const m = task.projectMeta || {};
   const links = m.links || {};
   const fmt = v => (v == null || v === "") ? "—" : v;
@@ -792,9 +793,226 @@ function TaskDetailsPanel({ task }) {
           {links.preprodId  && linkBtn("Pre-Prod",   hash(`preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`), "#EC4899")}
           {links.runsheetId && linkBtn("Runsheet",   hash(`preproduction/runsheets/${links.runsheetId}`), "#06B6D4")}
           {links.deliveryId && linkBtn("Delivery",   hash(`projects/deliveries/${links.deliveryId}`), "#10B981")}
-          {linkBtn("Open project", hash(`projects/${task.projectId}`), "#0082FA")}
+          {/* Open project — pops a read-only project details modal so
+              editors get the wider context (status, full subtask list,
+              account / delivery / sherpa links) without leaving the
+              dashboard. Editors don't have access to the Projects tab
+              itself, so we render a scoped read-only view here rather
+              than navigating away. */}
+          <button
+            onClick={() => onOpenProject && onOpenProject(task.projectId)}
+            style={{
+              padding: "5px 10px", borderRadius: 6,
+              border: "1px solid #0082FA",
+              background: "transparent", color: "#0082FA",
+              fontSize: 11, fontWeight: 700, cursor: "pointer",
+              fontFamily: "inherit",
+            }}>Open project</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Project details modal ──────────────────────────────────────
+// Read-only view for editors who tap "Open project" inside a task's
+// more-info dropdown. Shows the same brief / scope / notes / metadata
+// the inline panel does, plus the full subtask list across all
+// assignees so the editor sees who else is working what. Editors
+// don't have access to the Projects tab so we render a scoped view
+// here rather than letting them navigate away (and rather than
+// embedding the full editable ProjectDetail, which they shouldn't be
+// editing from this surface).
+function ProjectDetailsModal({ projectId, projects, deliveries, onClose }) {
+  // ESC closes — same affordance as the FinishModal.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const project = (projects || []).find(p => p?.id === projectId);
+  if (!project) return null;
+
+  const subtasks = Object.values(project.subtasks || {})
+    .filter(Boolean)
+    .sort((a, b) => (a.order ?? 9999) - (b.order ?? 9999));
+  const links = project.links || {};
+  const fmt = v => (v == null || v === "") ? "—" : v;
+  const Field = ({ label, value, mono = false, multiline = false, span = 1 }) => (
+    <div style={{ gridColumn: span > 1 ? `span ${span}` : undefined }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
+      <div style={{
+        fontSize: 12, color: "var(--fg)",
+        fontFamily: mono ? "'JetBrains Mono',monospace" : "inherit",
+        whiteSpace: multiline ? "pre-wrap" : "normal",
+        wordBreak: multiline ? "break-word" : "normal",
+        lineHeight: 1.5,
+      }}>{value}</div>
+    </div>
+  );
+  const linkBtn = (label, href, color) => (
+    <a key={label} href={href}
+      style={{
+        padding: "5px 10px", borderRadius: 6,
+        border: `1px solid ${color}`,
+        background: "transparent", color,
+        fontSize: 11, fontWeight: 700, textDecoration: "none",
+        fontFamily: "inherit",
+      }}>{label}</a>
+  );
+  const StagePillSmall = ({ stage }) => {
+    const c = STAGE_COLOURS[stage] || STAGE_COLOURS.preProduction;
+    return (
+      <span style={{
+        display: "inline-flex", alignItems: "center",
+        padding: "2px 7px", borderRadius: 999,
+        background: c.bg, color: c.text,
+        fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.4,
+      }}>{c.label}</span>
+    );
+  };
+  const StatusPillSmall = ({ status }) => {
+    const c = STATUS_COLOURS[status] || STATUS_COLOURS.stuck;
+    return (
+      <span style={{
+        display: "inline-flex", alignItems: "center",
+        padding: "2px 7px", borderRadius: 999,
+        background: c.bg, color: c.text,
+        fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.4,
+      }}>{c.label}</span>
+    );
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 100,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20, overflowY: "auto",
+      }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 720, maxWidth: "100%", maxHeight: "90vh",
+          background: "var(--card)", border: "1px solid var(--border)",
+          borderRadius: 12, padding: "22px 26px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+          overflowY: "auto",
+        }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>{project.clientName || "—"}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "var(--fg)", lineHeight: 1.2 }}>
+              {project.projectName || "Untitled project"}
+            </div>
+          </div>
+          <button onClick={onClose} title="Close (Esc)" aria-label="Close"
+            style={{
+              width: 32, height: 32, padding: 0, borderRadius: 8,
+              border: "1px solid var(--border)", background: "var(--bg)",
+              color: "var(--fg)", fontSize: 16, fontWeight: 700, cursor: "pointer",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "inherit", flexShrink: 0,
+            }}>×</button>
+        </div>
+
+        <div style={{
+          display: "grid", gridTemplateColumns: "1fr 1fr",
+          gap: "14px 24px", marginBottom: 18,
+        }}>
+          {project.description && <Field label="Description" value={project.description} multiline span={2} />}
+          {project.targetAudience && <Field label="Target audience" value={project.targetAudience} multiline span={2} />}
+          {project.videoType && <Field label="Video type" value={fmt(project.videoType)} />}
+          {project.packageTier && <Field label="Package" value={fmt(project.packageTier)} />}
+          {project.numberOfVideos != null && <Field label="Number of videos" value={fmt(project.numberOfVideos)} mono />}
+          {project.dealValue != null && <Field label="Deal value" value={`$${Number(project.dealValue).toLocaleString("en-AU")}`} mono />}
+          {project.closeDate && <Field label="Close date" value={fmt(project.closeDate)} mono />}
+          {project.dueDate && <Field label="Due date" value={fmt(project.dueDate)} mono />}
+          {Array.isArray(project.destinations) && project.destinations.length > 0 && (
+            <div style={{ gridColumn: "span 2" }}>
+              <div style={{ fontSize: 9, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Destinations</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {project.destinations.map((d, i) => (
+                  <span key={i} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "var(--bg)", color: "var(--muted)", border: "1px solid var(--border)" }}>{d}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {project.producerNotes && <Field label="Producer notes" value={project.producerNotes} multiline span={2} />}
+        </div>
+
+        {/* Full subtask list across all assignees so the editor sees the
+            whole pipeline, not just their own row. Read-only — editing
+            stays in the Projects tab for users who have access. */}
+        {subtasks.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Subtasks ({subtasks.length})
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {subtasks.map(st => (
+                <div key={st.id} style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "8px 12px", borderRadius: 6,
+                  background: "var(--bg)", border: "1px solid var(--border)",
+                }}>
+                  <StagePillSmall stage={st.stage || "preProduction"} />
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {st.name || "Untitled subtask"}
+                  </div>
+                  {/* Editable Frame.io link per subtask — same dual-write
+                      sync the producer's subtask row uses (writes to both
+                      subtask.frameioLink and the matching delivery video
+                      via canonical videoId). Editors can paste / update /
+                      clear here even though they can't reach the Projects
+                      tab; everything else in this modal stays read-only. */}
+                  <FrameioLinkCell
+                    subtask={st}
+                    project={project}
+                    deliveries={deliveries}
+                    onSave={(next) => {
+                      const trimmed = (next || "").trim();
+                      fbSet(`/projects/${project.id}/subtasks/${st.id}/frameioLink`, trimmed);
+                      fbSet(`/projects/${project.id}/subtasks/${st.id}/updatedAt`, new Date().toISOString());
+                      if (st.videoId) {
+                        const delId = (project.links || {}).deliveryId;
+                        const delivery = delId && Array.isArray(deliveries)
+                          ? deliveries.find(d => d?.id === delId)
+                          : null;
+                        if (delivery && Array.isArray(delivery.videos)) {
+                          const idx = delivery.videos.findIndex(v => v && v.videoId === st.videoId);
+                          if (idx >= 0) {
+                            fbSet(`/deliveries/${delId}/videos/${idx}/link`, trimmed);
+                          }
+                        }
+                      }
+                    }}
+                  />
+                  {st.startDate && (
+                    <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+                      {st.startDate === st.endDate || !st.endDate ? st.startDate : `${st.startDate} → ${st.endDate}`}
+                    </span>
+                  )}
+                  <StatusPillSmall status={st.status || "stuck"} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Quick links — same hash routes the more-info dropdown uses. */}
+        {(links.sherpaId || links.preprodId || links.runsheetId || links.deliveryId) && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingTop: 12, borderTop: "1px dashed var(--border)" }}>
+            {links.sherpaId   && linkBtn("Sherpa Doc", `#clients/${links.sherpaId}`, "#8B5CF6")}
+            {links.preprodId  && linkBtn("Pre-Prod",   `#preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`, "#EC4899")}
+            {links.runsheetId && linkBtn("Runsheet",   `#preproduction/runsheets/${links.runsheetId}`, "#06B6D4")}
+            {links.deliveryId && linkBtn("Delivery",   `#projects/deliveries/${links.deliveryId}`, "#10B981")}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -818,6 +1036,10 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   // time keeps the page short — clicking another row's chevron swaps.
   const [expandedTaskId, setExpandedTaskId] = useState(null);
   const toggleExpandTask = (id) => setExpandedTaskId(prev => prev === id ? null : id);
+  // Project details modal — id of the project whose details are open.
+  // Editors don't have Projects-tab access, so the "Open project" link
+  // inside the more-info dropdown pops a scoped read-only modal here.
+  const [openProjectId, setOpenProjectId] = useState(null);
   const intervalRef = useRef(null);
   const justStoppedRef = useRef({});
   const today = isoToday();
@@ -1124,6 +1346,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
               onFinish={(taskId) => setFinishingTaskId(taskId)}
               expanded={expandedTaskId === t.id}
               onToggleExpand={toggleExpandTask}
+              onOpenProject={setOpenProjectId}
             />
           ))}
         </Section>
@@ -1137,6 +1360,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
                 onStart={() => {}} onStop={() => {}} onReset={() => {}} onAdjust={() => {}}
                 expanded={expandedTaskId === t.id}
                 onToggleExpand={toggleExpandTask}
+                onOpenProject={setOpenProjectId}
                 dim
               />
             ))}
@@ -1155,6 +1379,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
                 onFinish={(taskId) => setFinishingTaskId(taskId)}
                 expanded={expandedTaskId === t.id}
                 onToggleExpand={toggleExpandTask}
+                onOpenProject={setOpenProjectId}
               />
             ))}
           </Section>
@@ -1210,6 +1435,19 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
             <button onClick={confirmTimerSwitch} style={modalBtn("primary")}>Switch</button>
           </div>
         </Modal>
+      )}
+
+      {/* Project details modal — popped from a TaskRow's more-info
+          dropdown via the "Open project" button. Read-only context plus
+          inline-editable Frame.io links per subtask (same sync as the
+          producer's row). */}
+      {openProjectId && (
+        <ProjectDetailsModal
+          projectId={openProjectId}
+          projects={projects}
+          deliveries={deliveries}
+          onClose={() => setOpenProjectId(null)}
+        />
       )}
 
       {/* Finish modal — confirmation for shoot tasks, Frame.io review

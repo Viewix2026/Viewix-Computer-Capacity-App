@@ -601,7 +601,7 @@ function SubtaskInline({ value, onSave, placeholder, type = "text", style, multi
 // validation marks non-frame.io URLs in red but doesn't block saving —
 // producers/leads sometimes paste interim Drive / Vimeo links during
 // triage and we don't want to fight them at the cell.
-function FrameioLinkCell({ subtask, project, deliveries, onSave }) {
+export function FrameioLinkCell({ subtask, project, deliveries, onSave }) {
   const resolved = (() => {
     if (subtask?.videoId && project) {
       const delId = (project.links || {}).deliveryId;
@@ -1848,11 +1848,30 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
   // passes route here. We honour subTab + the record id once the matching
   // record exists in the local listener data. The Deliveries sub-tab opens
   // its own detail view via the deepLinkDeliveryId prop below.
+  //
+  // appliedRouteRef ensures we only auto-open a project once per unique
+  // route. Without it, the `projects` dep would re-fire this effect on
+  // every Firebase echo (Frame.io syncs, status flips, etc.) and force-
+  // re-open the project the user just clicked Back on — making the
+  // sub-tab nav appear to "keep disappearing" because the back action
+  // was getting stomped milliseconds later. Clearing the ref when the
+  // route loses its recordId lets a producer paste a fresh deep-link
+  // and have it apply correctly.
+  const appliedRouteRef = useRef(null);
   useEffect(() => {
-    if (!route || !route.subTab) return;
+    if (!route || !route.subTab) {
+      appliedRouteRef.current = null;
+      return;
+    }
     if (route.subTab !== subTab) setSubTab(route.subTab);
-    if (route.subTab === "projects" && route.recordId && projects.find(p => p.id === route.recordId)) {
-      setActiveProjectId(route.recordId);
+    if (route.subTab === "projects" && route.recordId) {
+      const key = `${route.subTab}:${route.recordId}`;
+      if (appliedRouteRef.current !== key && projects.find(p => p.id === route.recordId)) {
+        appliedRouteRef.current = key;
+        setActiveProjectId(route.recordId);
+      }
+    } else {
+      appliedRouteRef.current = null;
     }
   }, [route?.subTab, route?.recordId, projects]);   // eslint-disable-line react-hooks/exhaustive-deps
 
