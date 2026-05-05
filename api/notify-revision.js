@@ -3,7 +3,7 @@
 // Posts a single message to #revisions Slack channel
 // + auto-creates a "Revision Round N" subtask on the linked project
 //   for any video whose final settled state (after the 2-min client-
-//   side debounce) is "Needs Revisions". Idempotent per videoId+round.
+//   side debounce) is "Need Revisions". Idempotent per videoId+round.
 
 import { adminGet, adminSet } from "./_fb-admin.js";
 
@@ -98,8 +98,8 @@ async function maybeCreateRevisionSubtasks(deliveryId, changes) {
     const field = round === 1 ? "revision1" : "revision2";
     // Final-state check: the client may have flickered Needs ->
     // Approved within the 2-min window. Only create the subtask if
-    // the settled value really is "Needs Revisions".
-    if (video[field] !== "Needs Revisions") continue;
+    // the settled value really is "Need Revisions".
+    if (video[field] !== "Need Revisions") continue;
     // Idempotency: one subtask per (videoId, round). New round on the
     // same video is allowed (separate subtask) — this guards against
     // dupes from retried debounce flushes for the same round.
