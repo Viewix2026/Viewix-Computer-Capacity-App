@@ -599,7 +599,11 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
           if (!scheduled.has(aid)) scheduled.set(aid, []);
           scheduled.get(aid).push(st);
         }
-      } else {
+      } else if (st.status !== "done") {
+        // Skip done subtasks from the unassigned/unscheduled pool —
+        // they're complete, no producer action needed, no point
+        // cluttering the pile below the calendar. Scheduled done
+        // subtasks still render in their editor's row above.
         pool.push(st);
       }
     }
