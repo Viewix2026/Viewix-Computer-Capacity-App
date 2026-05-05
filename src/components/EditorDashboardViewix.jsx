@@ -1,18 +1,13 @@
-// EditorDashboardViewix — the Viewix Dashboard sub-tab inside the
-// Editors tab. Same UX shell as the Monday.com sub-tab (person picker
-// → today's tasks with timers, future this week, overdue, daily 8h
-// summary) but the data comes entirely from Firebase rather than the
-// Monday API:
+// EditorDashboardViewix — the Editors tab dashboard. Person picker →
+// today's tasks with timers, future this week, overdue, daily 8h
+// summary. All Firebase-backed:
 //
 //   - Editors picker  → /editors (the Viewix team roster)
 //   - Tasks per person → walk all /projects/{id}/subtasks where
 //     assigneeIds includes the picked editor's id, classified by date
-//   - Time tracking   → /timeLogs/{editorId}/{today}  (shared path
-//     with the Monday view; subtask ids never collide with Monday item
-//     ids so this just gives the producer a single daily total across
-//     both surfaces)
+//   - Time tracking   → /timeLogs/{editorId}/{today}
 //
-// Mounted by EditorDashboard.jsx via its sub-tab toggle.
+// Mounted by EditorDashboard.jsx as the only Editors dashboard view.
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import confetti from "canvas-confetti";
@@ -1052,9 +1047,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
     [allTasks, today]
   );
 
-  // Listen to Firebase /timeLogs for this editor + day. Mirrors the
-  // Monday view's listener so timers resume after page reload and the
-  // daily total is consistent across surfaces.
+  // Listen to Firebase /timeLogs for this editor + day so timers
+  // resume after page reload and the daily total stays consistent.
   useEffect(() => {
     if (!editorId) return;
     const path = `/timeLogs/${editorId}/${today}`;
@@ -1192,7 +1186,6 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       name: task?.name || "",
       parentName: task?.parentName || "",
       stage: task?.stage || "",
-      // Marker so future reporting can split Viewix vs Monday entries.
       source: "viewix",
     };
     fbSet(`/timeLogs/${editorId}/${today}/${taskId}`, logData);

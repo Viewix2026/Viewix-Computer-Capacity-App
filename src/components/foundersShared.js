@@ -99,7 +99,7 @@ export const FIELDS = [
   { key: "pctRevenueFromTopSource",   label: "% Revenue from Top Source",    unit: "%",     category: "risk",        tier: 3, cadence: "quarterly", def: "How concentrated is your acquisition mix? E.g. Referral at 36%." },
 
   // ── OPERATIONS ─────────────────────────────────────────────────────
-  { key: "activeProjects",            label: "Active Projects in Production",unit: "count", category: "operations",  tier: 3, cadence: "weekly",    def: "Pulled from Monday board 1884080816" },
+  { key: "activeProjects",            label: "Active Projects in Production",unit: "count", category: "operations",  tier: 3, cadence: "weekly",    def: "Auto-counted from /projects where status is In Progress." },
   { key: "teamCapacityUtilisation",   label: "Team Capacity Utilisation",    unit: "%",     category: "operations",  tier: 3, cadence: "weekly",    def: "From your Capacity Planner" },
   { key: "timeToFirstDelivery",       label: "Time to First Delivery",       unit: "days",  category: "operations",  tier: 3, cadence: "monthly",   def: "Deal close → first content delivered. Predicts retainer churn." },
   { key: "avgProjectGrossMargin",     label: "Avg Project Gross Margin",     unit: "%",     category: "operations",  tier: 3, cadence: "quarterly", def: "Revenue − direct cost ÷ revenue" },

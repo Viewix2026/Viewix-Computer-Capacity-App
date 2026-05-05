@@ -1,17 +1,3 @@
-// ─── Monday.com Editor Defaults ───
-export const DEFAULT_MONDAY_EDITORS = [
-  { id: "66265733", name: "Angus Roche" },
-  { id: "96885430", name: "Billy White" },
-  { id: "68480795", name: "David Esdaile" },
-  { id: "94902565", name: "Felipe Fuhr" },
-  { id: "97138079", name: "Jude Palmer Rowlands" },
-  { id: "100235454", name: "Luke Genovese-Kollar" },
-  { id: "97345986", name: "Matt Healey" },
-  { id: "85363605", name: "Mia Wolczak" },
-  { id: "90227304", name: "Vish Peiris" },
-  { id: "99188387", name: "Farah" },
-];
-
 // ─── Content Categories ───
 export const CONTENT_CATEGORIES = ["Meta Ad", "Social Media", "Corporate Video", "Other"];
 export const CAT_COLORS = { "Meta Ad": "#8B5CF6", "Social Media": "#0082FA", "Corporate Video": "#F87700", "Other": "#5A6B85" };
