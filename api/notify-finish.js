@@ -20,6 +20,8 @@
 // the blast radius if abused is "spam our own Slack channels". Rate
 // limited per-IP for the same reason as notify-revision.js.
 
+import { adminGet } from "./_fb-admin.js";
+
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT = 30; // editors finish many tasks a day; revisions had 10
 const attempts = new Map();
@@ -55,6 +57,27 @@ function escapeSlack(s) {
 
 function clamp(s, max) {
   return String(s == null ? "" : s).slice(0, max);
+}
+
+// Resolve a roster name to a Slack member ID via /editors. Producers
+// paste the Slack ID into the Team Roster's "Slack ID" column once
+// per editor; this read is the only place we use it. Any name with
+// no roster match — or no slackUserId set on the matched record —
+// falls back to plain bold text in the message. Failures
+// (firebase-admin not configured, network hiccup) also fall back
+// to plain text rather than blocking the notification.
+async function lookupSlackId(name) {
+  if (!name) return null;
+  try {
+    const editors = await adminGet("/editors");
+    if (!Array.isArray(editors)) return null;
+    const lc = name.trim().toLowerCase();
+    const match = editors.find(e => e && (e.name || "").trim().toLowerCase() === lc);
+    return match?.slackUserId || null;
+  } catch (e) {
+    console.warn("notify-finish: editor lookup failed:", e.message);
+    return null;
+  }
 }
 
 export default async function handler(req, res) {
@@ -104,9 +127,17 @@ export default async function handler(req, res) {
     const safeLead = escapeSlack(projectLead);
     const safeLink = escapeSlack(frameioLink);
 
+    // Resolve the project lead to a Slack <@USERID> mention via the
+    // /editors roster. If no Slack ID is on file (or any lookup
+    // failure), fall back to bold plaintext. The internal-review
+    // ping is the one that actually wants a notification, so we
+    // also @-mention the lead at the top of that message via "cc".
+    const leadSlackId = await lookupSlackId(projectLead);
+    const leadMention = leadSlackId ? `<@${leadSlackId}>` : (safeLead ? `*${safeLead}*` : "");
+
     const text = reviewType === "internal"
-      ? `:eyes: *Ready for internal review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: *${safeLead}*\n` : ""}• Frame.io: ${safeLink}`
-      : `:white_check_mark: *Ready for client review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n• Frame.io: ${safeLink}\n_Link added to the Deliveries tab and pushed to the client's delivery page._`;
+      ? `:eyes: *Ready for internal review*${leadSlackId ? ` — cc ${leadMention}` : ""}\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}• Frame.io: ${safeLink}`
+      : `:white_check_mark: *Ready for client review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}• Frame.io: ${safeLink}\n_Link added to the Deliveries tab and pushed to the client's delivery page._`;
 
     const slackResp = await fetch(webhookUrl, {
       method: "POST",
