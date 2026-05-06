@@ -409,6 +409,7 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
           const projectLead = task.projectMeta?.projectLead || "";
           const clientName  = task.projectMeta?.clientName  || project?.clientName || "";
           const projectName = task.projectMeta?.projectName || project?.projectName || "Untitled project";
+          const accountManager = task.projectMeta?.accountManager || "";
           await fetch("/api/notify-finish", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -419,6 +420,7 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
               videoName: task.name,
               editorName,
               projectLead,
+              accountManager,
               frameioLink: linkOut,
             }),
           });

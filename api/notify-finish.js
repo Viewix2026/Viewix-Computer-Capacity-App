@@ -91,8 +91,9 @@ export default async function handler(req, res) {
     const clientName  = clamp(body.clientName  || "", 120);
     const videoName   = clamp(body.videoName   || "Video", 200);
     const editorName  = clamp(body.editorName  || "Editor", 100);
-    const projectLead = clamp(body.projectLead || "", 100);
-    const frameioLink = clamp(body.frameioLink || "", 500);
+    const projectLead    = clamp(body.projectLead    || "", 100);
+    const accountManager = clamp(body.accountManager || "", 100);
+    const frameioLink    = clamp(body.frameioLink    || "", 500);
 
     if (reviewType !== "internal" && reviewType !== "client") {
       return res.status(400).json({ error: "reviewType must be 'internal' or 'client'" });
@@ -124,20 +125,33 @@ export default async function handler(req, res) {
       : `*${escapeSlack(projectName)}*`;
     const safeVideo = escapeSlack(videoName);
     const safeEditor = escapeSlack(editorName);
-    const safeLead = escapeSlack(projectLead);
-    const safeLink = escapeSlack(frameioLink);
+    const safeLead    = escapeSlack(projectLead);
+    const safeManager = escapeSlack(accountManager);
+    const safeLink    = escapeSlack(frameioLink);
 
-    // Resolve the project lead to a Slack <@USERID> mention via the
-    // /editors roster. If no Slack ID is on file (or any lookup
-    // failure), fall back to bold plaintext. The internal-review
-    // ping is the one that actually wants a notification, so we
-    // also @-mention the lead at the top of that message via "cc".
-    const leadSlackId = await lookupSlackId(projectLead);
-    const leadMention = leadSlackId ? `<@${leadSlackId}>` : (safeLead ? `*${safeLead}*` : "");
+    // Resolve project lead AND account manager to Slack <@USERID>
+    // mentions via the /editors roster. Both fall back to bold
+    // plaintext when no Slack ID is on file (or lookup fails) so
+    // a missing entry never blocks the message. Internal-review
+    // pings cc the lead in the headline; client-review pings cc
+    // BOTH the account manager and the lead so the producer-side
+    // owner gets the same client-eyes signal as the lead.
+    const [leadSlackId, managerSlackId] = await Promise.all([
+      lookupSlackId(projectLead),
+      lookupSlackId(accountManager),
+    ]);
+    const leadMention    = leadSlackId    ? `<@${leadSlackId}>`    : (safeLead    ? `*${safeLead}*`    : "");
+    const managerMention = managerSlackId ? `<@${managerSlackId}>` : (safeManager ? `*${safeManager}*` : "");
+
+    // "cc" line: just whichever of the two have proper Slack IDs.
+    // Plaintext fallbacks aren't useful in cc (no notification), so
+    // we omit them from the headline but still list them in the body.
+    const ccPings = [leadSlackId && leadMention, managerSlackId && managerMention].filter(Boolean).join(" ");
+    const ccLine  = ccPings ? ` — cc ${ccPings}` : "";
 
     const text = reviewType === "internal"
-      ? `:eyes: *Ready for internal review*${leadSlackId ? ` — cc ${leadMention}` : ""}\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}• Frame.io: ${safeLink}`
-      : `:white_check_mark: *Ready for client review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}• Frame.io: ${safeLink}\n_Link added to the Deliveries tab and pushed to the client's delivery page._`;
+      ? `:eyes: *Ready for internal review*${ccLine}\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}`
+      : `:white_check_mark: *Ready for client review*${ccLine}\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}\n_Link added to the Deliveries tab and pushed to the client's delivery page._`;
 
     const slackResp = await fetch(webhookUrl, {
       method: "POST",
