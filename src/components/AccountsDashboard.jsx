@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { fbSet } from "../firebase";
 import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS, CLIENT_GOAL_COLORS } from "../config";
 import { logoBg, matchSherpaForName } from "../utils";
@@ -112,6 +112,56 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
   const [syncing, setSyncing] = useState(false);
   const [filterManager, setFilterManager] = useState("all");
   const [expandedClientId, setExpandedClientId] = useState(null);
+
+  // Auto-heal stale projectLead values that haven't kept up with editor
+  // renames. /accounts/{id}.projectLead is stored as the editor's NAME
+  // string (not their id), so when an editor's display name is changed
+  // via the Capacity → Team Roster rename, every account that already
+  // had the old name stored is left orphaned — the dropdown's
+  // value-prop matches no <option>, so the legacy fallback below the
+  // <select> renders the bare old string ("Luke") next to siblings
+  // that have the new full name ("Luke Genovese-Kollar"). Mixed
+  // state, exactly the screenshot Jeremy shared.
+  //
+  // Heuristic: for each orphan, find editors whose first name token
+  // matches the stored value (case-insensitive). If exactly ONE
+  // editor matches, the migration is unambiguous — write the
+  // canonical full name back to the account. Two editors sharing a
+  // first name (e.g. two Lukes on the roster) leaves the row alone;
+  // a producer has to pick the correct one from the dropdown.
+  // No-op once everything's canonical, so it's safe to re-run on
+  // every editors / accounts change.
+  useEffect(() => {
+    if (!editors || !editors.length) return;
+    if (!accounts) return;
+    const editorNamesLC = new Set(editors.map(e => (e?.name || "").toLowerCase()).filter(Boolean));
+    const firstToken = (s) => String(s || "").toLowerCase().trim().split(/\s+/)[0];
+    const updates = [];
+    for (const [id, acct] of Object.entries(accounts)) {
+      const stale = String(acct?.projectLead || "").trim();
+      if (!stale) continue;
+      if (editorNamesLC.has(stale.toLowerCase())) continue; // already canonical
+      const staleFirst = firstToken(stale);
+      if (!staleFirst) continue;
+      const candidates = editors.filter(e => firstToken(e?.name) === staleFirst);
+      if (candidates.length === 1 && candidates[0]?.name) {
+        updates.push({ id, newName: candidates[0].name });
+      }
+    }
+    if (updates.length === 0) return;
+    setAccounts(prev => {
+      const next = { ...prev };
+      for (const { id, newName } of updates) {
+        if (next[id]) {
+          next[id] = { ...next[id], projectLead: newName };
+          // Per-leaf write so we don't race the wider /accounts
+          // bulk-write and silently overwrite other in-flight edits.
+          fbSet(`/accounts/${id}/projectLead`, newName);
+        }
+      }
+      return next;
+    });
+  }, [editors, accounts, setAccounts]);
 
   const gaps = { ...DEFAULT_GAPS, ...(turnaround || {}) };
   const offsets = computeOffsets(gaps);
