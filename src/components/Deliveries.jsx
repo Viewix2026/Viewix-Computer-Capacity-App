@@ -84,22 +84,61 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
   // ═══════════════════════════════════════════
   if (activeDelivery) {
     const d = activeDelivery;
-    const setD = (patch) => updateDelivery({ ...d, ...patch });
-    const addVideo = () => setD({ videos: [...d.videos, newVideo()] });
-    // Per-field write for every video-column edit. We write /deliveries/
-    // {id}/videos/{idx}/{field} directly instead of rewriting the whole
-    // delivery on every keystroke — means Firebase echoes back only the
-    // leaf change, so it can't clobber neighbouring in-flight keystrokes
-    // via the root listener.
-    const updateVideo = (vid, patch) => {
-      const videoIndex = d.videos.findIndex(v => v.id === vid);
-      if (videoIndex < 0) return;
-      setD({ videos: d.videos.map(v => v.id === vid ? { ...v, ...patch } : v) });
+    const dId = d.id;
+    // Every handler below uses the functional setDeliveries updater so
+    // it reads the LATEST state (not the closure-captured `d`). Without
+    // this, two quick edits in a row — paste a link on video A, then
+    // paste on video B before React re-renders — would have B's update
+    // read the previous d.videos and stamp B's change on top of the
+    // pre-A snapshot, reverting A. Same root cause behind the
+    // "Viewix status reverts when you flip several quickly" symptom.
+    // Each handler also writes the change directly to Firebase via
+    // leaf fbSet (instead of relying on the App.jsx bulk-write loop)
+    // so /deliveries doesn't depend on a races-prone catch-all rewrite.
+    const setD = (patch) => {
+      setDeliveries(p => p.map(del => del.id === dId ? { ...del, ...patch } : del));
       Object.entries(patch).forEach(([k, val]) => {
-        fbSet(`/deliveries/${d.id}/videos/${videoIndex}/${k}`, val == null ? "" : val);
+        fbSet(`/deliveries/${dId}/${k}`, val == null ? "" : val);
       });
     };
-    const removeVideo = (vid) => setD({ videos: d.videos.filter(v => v.id !== vid) });
+    const addVideo = () => {
+      const nv = newVideo();
+      setDeliveries(p => p.map(del => {
+        if (del.id !== dId) return del;
+        const next = { ...del, videos: [...(del.videos || []), nv] };
+        // Write the full videos array — it's the smallest cohesive
+        // unit we can stamp here without re-reading state again, and
+        // adds aren't a high-frequency operation so a brief race is
+        // unlikely. Idempotent: appending the same nv twice would
+        // produce duplicates, but addVideo isn't called by anyone
+        // else.
+        fbSet(`/deliveries/${dId}/videos`, next.videos);
+        return next;
+      }));
+    };
+    const updateVideo = (vid, patch) => {
+      setDeliveries(p => p.map(del => {
+        if (del.id !== dId) return del;
+        const idx = (del.videos || []).findIndex(v => v.id === vid);
+        if (idx < 0) return del;
+        // Write each patched field as a leaf path. Firebase echoes
+        // back only the leaf, so it can't clobber neighbouring
+        // in-flight keystrokes the root listener is delivering.
+        Object.entries(patch).forEach(([k, val]) => {
+          fbSet(`/deliveries/${dId}/videos/${idx}/${k}`, val == null ? "" : val);
+        });
+        const newVideos = del.videos.map(v => v.id === vid ? { ...v, ...patch } : v);
+        return { ...del, videos: newVideos };
+      }));
+    };
+    const removeVideo = (vid) => {
+      setDeliveries(p => p.map(del => {
+        if (del.id !== dId) return del;
+        const newVideos = (del.videos || []).filter(v => v.id !== vid);
+        fbSet(`/deliveries/${dId}/videos`, newVideos);
+        return { ...del, videos: newVideos };
+      }));
+    };
     const inputSt = { padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none", width: "100%" };
 
     return (
