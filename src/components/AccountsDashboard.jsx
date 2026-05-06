@@ -172,7 +172,12 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
             const existing = Object.values(next).find(a => a.attioId === c.id);
             if (!existing) {
               const id = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
-              next[id] = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: c.videoType || "", lastContact: "", milestones: {}, logoUrl: "" };
+              const created = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: c.videoType || "", lastContact: "", milestones: {}, logoUrl: "" };
+              next[id] = created;
+              // /accounts is no longer written by the App.jsx bulk-write
+              // loop (it raced server writes and clobbered just-set
+              // fields like goal), so push the new record directly.
+              fbSet(`/accounts/${id}`, created);
               // Create sherpas client
               if (setClients && c.name) {
                 const nameLC = c.name.toLowerCase();
@@ -182,7 +187,9 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                 });
               }
             } else if (c.videoType && !existing.partnershipType) {
-              next[existing.id] = { ...existing, partnershipType: c.videoType };
+              const updated = { ...existing, partnershipType: c.videoType };
+              next[existing.id] = updated;
+              fbSet(`/accounts/${existing.id}`, updated);
             }
           });
           return next;
