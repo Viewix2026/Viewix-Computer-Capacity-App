@@ -3,13 +3,19 @@ import { fbSet } from "../firebase";
 import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS, CLIENT_GOAL_COLORS } from "../config";
 import { logoBg, matchSherpaForName } from "../utils";
 import { ClientGoalPill } from "./ClientGoalPill";
+import { videoTypeToPartnership } from "../../api/_tiers.js";
 
 // Alias kept so local references to DEFAULT_GAPS inside this file read
 // naturally — the canonical export in config.js is DEFAULT_MILESTONE_GAPS.
 const DEFAULT_GAPS = DEFAULT_MILESTONE_GAPS;
 
+// Canonical partnership labels rendered as <option>s in the dropdown.
+// Must stay aligned with `_PARTNERSHIP_LABELS` in api/_tiers.js — the
+// webhook normaliser there returns one of these exact strings, so any
+// mismatch silently breaks Attio → Accounts auto-fill.
 const PARTNERSHIP_TYPES = [
-  "Live Action", "Standard - Meta Ads", "Premium - Meta Ads", "Deluxe - Meta Ads",
+  "Live Action",
+  "Starter - Meta Ads", "Standard - Meta Ads", "Premium - Meta Ads", "Deluxe - Meta Ads",
   "Starter Pack - Social Media", "Brand Builder - Social Media", "Market Leader - Social Media",
   "Market Dominator - Social Media", "90 Day Gameplan", "Animation"
 ];
@@ -199,10 +205,16 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
         setAccounts(prev => {
           const next = { ...prev };
           companies.forEach(c => {
+            // Normalise Attio's raw video_type to the canonical
+            // partnership label. videoTypeToPartnership() returns ""
+            // for unidentifiable strings, so unrecognised deal types
+            // leave the field unset rather than persisting a value
+            // the dropdown can't render.
+            const partnershipLabel = videoTypeToPartnership(c.videoType);
             const existing = Object.values(next).find(a => a.attioId === c.id);
             if (!existing) {
               const id = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
-              const created = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: c.videoType || "", lastContact: "", milestones: {}, logoUrl: "" };
+              const created = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: partnershipLabel, lastContact: "", milestones: {}, logoUrl: "" };
               next[id] = created;
               // /accounts is no longer written by the App.jsx bulk-write
               // loop (it raced server writes and clobbered just-set
@@ -216,8 +228,8 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                   return [...prev2, { id: `cl-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, name: c.name, projectLead: "", accountManager: "", docUrl: "" }];
                 });
               }
-            } else if (c.videoType && !existing.partnershipType) {
-              const updated = { ...existing, partnershipType: c.videoType };
+            } else if (partnershipLabel && !existing.partnershipType) {
+              const updated = { ...existing, partnershipType: partnershipLabel };
               next[existing.id] = updated;
               fbSet(`/accounts/${existing.id}`, updated);
             }
@@ -353,6 +365,17 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                         <select value={acct.partnershipType || ""} onChange={e => updateAccount(acct.id, { partnershipType: e.target.value })} style={{ ...selectSt, background: acct.partnershipType ? "rgba(248,119,0,0.12)" : "var(--bg)", color: acct.partnershipType ? "#F87700" : "var(--muted)", maxWidth: 120 }}>
                           <option value="">Select</option>
                           {PARTNERSHIP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                          {/* Fallback: surface a stored partnershipType
+                              even when it doesn't match any canonical
+                              option (e.g. legacy /accounts records
+                              written before the Attio→partnership
+                              normaliser landed, which still carry the
+                              raw Attio video_type string). Without
+                              this the select rendered blank and the
+                              data looked unset. */}
+                          {acct.partnershipType && !PARTNERSHIP_TYPES.includes(acct.partnershipType) && (
+                            <option value={acct.partnershipType}>{acct.partnershipType}</option>
+                          )}
                         </select>
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>
