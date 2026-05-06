@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import confetti from "canvas-confetti";
-import { fmtSecsShort, matchSherpaForName, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
+import { fmtSecsShort, matchSherpaForName, resolveAccountForProject, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
 import { fbSet, fbListen, fbUpdate, onFB } from "../firebase";
 import { FrameioLinkCell } from "./Projects";
 import { ClientGoalPill } from "./ClientGoalPill";
@@ -92,12 +92,13 @@ function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
   for (const p of projects) {
     const subs = p?.subtasks ? Object.values(p.subtasks) : [];
     const sherpaUrl = sherpaUrlForProject(p, sherpaIdx);
-    // Resolve the client goal once per project — same value for every
-    // subtask in this project. Linked account is the source of truth;
-    // null when the project has no account link or the account hasn't
-    // had a goal set yet.
-    const acctId = (p?.links || {}).accountId;
-    const clientGoal = (acctId && accounts && accounts[acctId]?.goal) || null;
+    // Resolve the linked /accounts entry once per project (same for
+    // every subtask in this project). Three-tier fallback in the
+    // helper means the AM / PL / goal show even when older projects
+    // never had links.accountId stamped — was the cause of "some
+    // projects show AM/PL, others don't" in the Projects sub-tab.
+    const acct = resolveAccountForProject(p, accounts);
+    const clientGoal = acct?.goal || null;
     for (const st of subs) {
       if (!st || !st.id) continue;
       if (!getAssigneeIds(st).includes(editorId)) continue;
@@ -143,8 +144,8 @@ function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
           // /accounts entry by tasksForEditor so the editor sees who
           // owns the account and who's running the project without
           // bouncing to the Accounts tab they don't have access to.
-          accountManager:  (acctId && accounts && accounts[acctId]?.accountManager) || "",
-          projectLead:     (acctId && accounts && accounts[acctId]?.projectLead) || "",
+          accountManager:  acct?.accountManager || "",
+          projectLead:     acct?.projectLead || "",
         },
       });
     }
@@ -941,8 +942,10 @@ function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClos
           {project.description && <Field label="Description" value={project.description} multiline span={2} />}
           {project.targetAudience && <Field label="Target audience" value={project.targetAudience} multiline span={2} />}
           {(() => {
-            const acctId = (project.links || {}).accountId;
-            const acct = acctId && accounts ? accounts[acctId] : null;
+            // Same three-tier resolver the row + tasksForEditor use,
+            // so the modal stays in sync even when the project's
+            // accountId link wasn't stamped at creation.
+            const acct = resolveAccountForProject(project, accounts);
             return (
               <>
                 {acct?.accountManager && <Field label="Account manager" value={acct.accountManager} />}
