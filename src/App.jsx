@@ -308,14 +308,22 @@ export default function App(){
       // page renders the Team Quote + Video of the Week for every
       // logged-in user, not just founders.
       listen("/teamHome",data=>{if(data)setTeamHome(data);});
-      if(isFounders)listen("/foundersData",data=>{if(data)setFoundersData(data);});
+      // /foundersData listener is gated on isFounder (both `founder`
+      // and `founders` roles) — same gate the rule uses post-fix.
+      // Was isFounders-only, which meant a `founder` user couldn't
+      // read foundersData and the teamHome migration never fired
+      // for them — Home page stayed empty (Jeremy's "headline +
+      // video missing" report). Writing /foundersData remains
+      // restricted to `founders` via both the bulk-write gate
+      // below and the rule itself.
+      if(isFounder)listen("/foundersData",data=>{if(data)setFoundersData(data);});
       // /sales listener moved to useSalesSync — see src/sync/.
       listen("/salePricing",data=>{if(data)setSalePricing(data);});
       listen("/saleThankYou",data=>{if(data)setSaleThankYou(data);});
       listen("/attioCache",data=>{if(data&&data.data)setAttioDeals({data:data.data,total:data.total||data.data.length,lastSyncedAt:data.lastSyncedAt||null});});
     });
     return()=>{cancelled=true;clearTimeout(fallback);unsubs.forEach(u=>u());};
-  },[role,isFounders]);
+  },[role,isFounder,isFounders]);
 
   const wt=useRef(null);
   // deletedPaths ref removed alongside the /accounts domain split.
@@ -405,9 +413,13 @@ export default function App(){
   // One-time migration: copy the public Home-page fields (teamQuote +
   // videoOfTheWeek) out of /foundersData into /teamHome where every
   // role can read them. Only runs when:
-  //   1. The current user has founders-tier access (isFounders) so
-  //      they can READ /foundersData (which is rule-locked to that
-  //      role) and WRITE /teamHome.
+  //   1. The current user has founder-tier access (isFounder — covers
+  //      both `founder` and `founders` now that the /foundersData
+  //      read rule allows both, and both can write /teamHome).
+  //      Was isFounders-only, which meant a `founder` user wouldn't
+  //      trigger the migration even though they could see and edit
+  //      teamHome — Home stayed empty until a `founders` user
+  //      logged in.
   //   2. /foundersData has at least one of the public fields.
   //   3. /teamHome doesn't already have a value for that field —
   //      we never overwrite teamHome edits. Existing /teamHome data
@@ -417,7 +429,7 @@ export default function App(){
   // on /foundersData are left in place (untouched) so a rollback
   // doesn't lose data.
   useEffect(()=>{
-    if(!isFounders)return;
+    if(!isFounder)return;
     const fdQuote=foundersData?.teamQuote;
     const fdVotw=foundersData?.videoOfTheWeek;
     const thQuote=teamHome?.teamQuote;
@@ -427,7 +439,7 @@ export default function App(){
     if(fdVotw && !thVotw) patch.videoOfTheWeek=fdVotw;
     if(Object.keys(patch).length===0) return;
     setTeamHome(prev=>({...(prev||{}),...patch}));
-  },[isFounders,foundersData?.teamQuote,foundersData?.videoOfTheWeek,teamHome?.teamQuote,teamHome?.videoOfTheWeek]);
+  },[isFounder,foundersData?.teamQuote,foundersData?.videoOfTheWeek,teamHome?.teamQuote,teamHome?.videoOfTheWeek]);
 
   // Auto-update active projects from /projects. Matches the count
   // shown above the Projects sub-tab list — anything whose status
