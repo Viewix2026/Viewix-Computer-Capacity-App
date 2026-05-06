@@ -25,6 +25,7 @@ import { Login } from "./components/Login";
 import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
 import { useSalesSync } from "./sync/useSalesSync";
+import { useProjectsSync } from "./sync/useProjectsSync";
 
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
@@ -149,10 +150,13 @@ export default function App(){
   const{deliveries,setDeliveries}=useDeliveriesSync();
 
   // Projects state — /projects/{id} records created by the Attio webhook
-  // (api/webhook-deal-won.js Section 4b). Listener-only: writes happen
-  // direct to Firebase from Projects.jsx to avoid the debounced bulk-write
-  // clobbering webhook-created records that haven't hit local state yet.
-  const[projects,setProjects]=useState([]);
+  // (api/webhook-deal-won.js Section 4b). Listener + recently-wrote-to
+  // guard now live in useProjectsSync (see src/sync/). Writes happen
+  // direct to Firebase from Projects.jsx (status, commissioned, subtasks,
+  // etc.) and from this file's videoId backfill below — App.jsx never
+  // wrote /projects from the bulk loop, so this extraction is purely
+  // listener relocation.
+  const{projects,setProjects}=useProjectsSync();
 
   // Buyer Journey state
   const[buyerJourney,setBuyerJourney]=useState({});
@@ -291,7 +295,7 @@ export default function App(){
       listen("/clientRateCards",data=>{if(data)setClientRateCards(Object.values(data).filter(r=>r&&r.id));});
       listen("/clients",data=>{if(data)setClients(Object.values(data).filter(c=>c&&c.id));});
       // /deliveries listener moved to useDeliveriesSync — see src/sync/.
-      listen("/projects",data=>{setProjects(data?Object.values(data).filter(p=>p&&p.id):[]);});
+      // /projects listener moved to useProjectsSync — see src/sync/.
       listen("/buyerJourney",data=>{if(data)setBuyerJourney(data);});
       // /accounts listener moved to useAccountsSync — see src/sync/.
       listen("/turnaround",data=>{if(data)setTurnaround(data);});
