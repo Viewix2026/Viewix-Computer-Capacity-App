@@ -110,15 +110,67 @@ function inferStage(subtask) {
   if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
   if (name.includes("revision")) return "revisions";  // before "shoot" since "reshoot" might match
   if (name.includes("shoot")) return "shoot";
+  // "Select Timeline" is the producer's hand-off into the edit phase
+  // (picking which take/timeline the editor cuts from), so it lives
+  // under the edit stage colour even though its label doesn't include
+  // "edit". Match before the generic "edit" rule below — neither rule
+  // overlaps but order is kept stable for clarity.
+  if (name.includes("select timeline")) return "edit";
   if (name.includes("edit")) return "edit";
   return "preProduction";
 }
 
 // Default subtasks every project gets seeded with on first expand.
-// Mirrors the four phases of the production lifecycle Jeremy walks
-// through with every client. Each default's name maps cleanly onto a
-// SUBTASK_STAGE_OPTIONS key via inferStage().
-const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", "Revisions", "Edit"];
+// Mirrors the production lifecycle Jeremy walks through with every
+// client. "Select Timeline" sits between Shoot and the edit phase —
+// it's the producer's call on which footage the editor cuts from,
+// and it auto-assigns to the project lead recorded on the linked
+// account so the lead lands directly in their queue without anyone
+// having to pick them manually each project. Each default's name
+// maps cleanly onto a SUBTASK_STAGE_OPTIONS key via inferStage().
+const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", "Select Timeline", "Revisions", "Edit"];
+
+// Resolve the editor whose name matches the project lead recorded on
+// the linked /accounts entry. Used to auto-assign "Select Timeline"
+// at seed time. Falls back to null when:
+//   - the project has no linked account (greenfield client)
+//   - the account has no projectLead recorded
+//   - the lead's name doesn't match any editor on the roster
+// In any of those cases the subtask just stays unassigned, same as
+// every other default — no exception path needed.
+function resolveProjectLeadId(project, accounts, editors) {
+  const acct = resolveAccountForProject(project, accounts);
+  const leadName = (acct?.projectLead || "").trim().toLowerCase();
+  if (!leadName) return null;
+  const ed = (editors || []).find(e => (e?.name || "").trim().toLowerCase() === leadName);
+  return ed?.id || null;
+}
+
+// Seed the phase-default subtasks onto a project that has none yet.
+// Shared by the row-expand lazy seed and the detail-view seed button
+// so both surfaces produce the same shape (and so adding/reordering
+// defaults is a one-line change). "Select Timeline" pre-assigns to
+// the resolved project lead; the rest stay unassigned so the producer
+// picks crew per project.
+function seedDefaultSubtasksFor(project, accounts, editors) {
+  if (!project?.id) return;
+  const leadId = resolveProjectLeadId(project, accounts, editors);
+  const now = new Date().toISOString();
+  DEFAULT_SUBTASKS.forEach((name, i) => {
+    const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const isSelectTimeline = name === "Select Timeline";
+    const assigneeIds = isSelectTimeline && leadId ? [leadId] : [];
+    fbSet(`/projects/${project.id}/subtasks/${stId}`, {
+      id: stId, name, status: "stuck",
+      stage: inferStage({ name }),
+      startDate: null, endDate: null, startTime: null, endTime: null,
+      assigneeIds,
+      assigneeId: assigneeIds[0] || null,
+      source: "default", order: i,
+      createdAt: now, updatedAt: now,
+    });
+  });
+}
 
 // Ordered list of subtask records out of the keyed Firebase object.
 // Falls back to insertion order when `order` is missing so legacy
@@ -1579,7 +1631,7 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   );
 });
 
-function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries }) {
+function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts }) {
   const { viewOnly, canEditKickoff } = useContext(ProjectsAccessContext);
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
@@ -1808,19 +1860,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
           migration pattern the row-expansion uses. */}
       {(() => {
         const subtasks = subtasksAsArray(project.subtasks);
-        const seedDefaults = () => {
-          const now = new Date().toISOString();
-          DEFAULT_SUBTASKS.forEach((name, i) => {
-            const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
-            fbSet(`/projects/${project.id}/subtasks/${stId}`, {
-              id: stId, name, status: "stuck",
-              stage: inferStage({ name }),
-              startDate: null, endDate: null, startTime: null, endTime: null,
-              assigneeIds: [], assigneeId: null, source: "default", order: i,
-              createdAt: now, updatedAt: now,
-            });
-          });
-        };
+        const seedDefaults = () => seedDefaultSubtasksFor(project, accounts, editors);
         const addManual = () => {
           const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           const now = new Date().toISOString();
@@ -1923,7 +1963,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries }) {
+function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -1981,6 +2021,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
           editors={editors}
           clients={clients}
           deliveries={deliveries}
+          accounts={accounts}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -2070,17 +2111,7 @@ export function Projects({ role, projects, deliveries, setDeliveries, accounts, 
       // tree clean for projects that nobody ever drills into.
       const project = projects.find(p => p.id === id);
       if (project && (!project.subtasks || Object.keys(project.subtasks).length === 0)) {
-        const now = new Date().toISOString();
-        DEFAULT_SUBTASKS.forEach((name, i) => {
-          const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
-          fbSet(`/projects/${id}/subtasks/${stId}`, {
-            id: stId, name, status: "stuck",
-            stage: inferStage({ name }),
-            startDate: null, endDate: null, startTime: null, endTime: null,
-            assigneeIds: [], assigneeId: null, source: "default", order: i,
-            createdAt: now, updatedAt: now,
-          });
-        });
+        seedDefaultSubtasksFor(project, accounts, editors);
       }
       return next;
     });
@@ -2384,7 +2415,7 @@ export function Projects({ role, projects, deliveries, setDeliveries, accounts, 
       )}
 
       {subTab === "projects" && active && (
-        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
       )}
 
       {subTab === "teamBoard" && !active && (
@@ -2412,6 +2443,7 @@ export function Projects({ role, projects, deliveries, setDeliveries, accounts, 
                 editors={editors}
                 clients={clients}
                 deliveries={deliveries}
+                accounts={accounts}
                 onClose={() => setQuickViewProjectId(null)}
                 onDelete={async () => {
                   await deleteProject(qv.id);
