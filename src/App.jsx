@@ -24,6 +24,7 @@ import { Home } from "./components/Home";
 import { Login } from "./components/Login";
 import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
+import { useSalesSync } from "./sync/useSalesSync";
 
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
@@ -98,7 +99,12 @@ export default function App(){
   // Sale (Payment Intake) state — records at /sales, defaults at /salePricing,
   // per-package thank-you content at /saleThankYou (booking link + welcome
   // video + next-steps copy shown to customer after payment clears).
-  const[sales,setSales]=useState([]);
+  // /sales owned by useSalesSync (see src/sync/) — listener +
+  // recentlyWroteTo guard live there. salePricing / saleThankYou
+  // remain bulk-write-driven for now (they're write-on-edit from
+  // the Founders → Pricing / Thank-You sub-tabs and have no server
+  // contention to worry about).
+  const{sales,setSales}=useSalesSync();
   const[salePricing,setSalePricing]=useState(null);
   const[saleThankYou,setSaleThankYou]=useState(null);
 
@@ -299,7 +305,7 @@ export default function App(){
       // logged-in user, not just founders.
       listen("/teamHome",data=>{if(data)setTeamHome(data);});
       if(isFounders)listen("/foundersData",data=>{if(data)setFoundersData(data);});
-      listen("/sales",data=>{setSales(data?Object.values(data).filter(s=>s&&s.id):[]);});
+      // /sales listener moved to useSalesSync — see src/sync/.
       listen("/salePricing",data=>{if(data)setSalePricing(data);});
       listen("/saleThankYou",data=>{if(data)setSaleThankYou(data);});
       listen("/attioCache",data=>{if(data&&data.data)setAttioDeals({data:data.data,total:data.total||data.data.length,lastSyncedAt:data.lastSyncedAt||null});});
@@ -341,7 +347,7 @@ export default function App(){
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,sales,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,salePricing,saleThankYou]);
 
   // shortId backfill moved into useDeliveriesSync — same logic, same trigger.
 
