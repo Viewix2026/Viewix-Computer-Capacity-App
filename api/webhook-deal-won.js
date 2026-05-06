@@ -375,6 +375,13 @@ export default async function handler(req, res) {
       attioCompanyId: companyId || null,
       attioDealId: null,              // Attio webhook doesn't expose the deal's own record_id yet
       status: "active",               // active | archived
+      // Whether this project is committed to a slot in the schedule.
+      // false = sits in the "Uncommissioned" section at the top of
+      // the Projects sub-tab so producers see new arrivals first;
+      // they flip it to true via the "Commission" button when it's
+      // ready to be scheduled. Existing projects without this field
+      // default to commissioned in the UI (see ProjectTable split).
+      commissioned: false,
       producerNotes: "",
       links,                          // { accountId, sherpaId, preprodId, preprodType, deliveryId, runsheetId }
       createdAt: new Date().toISOString(),

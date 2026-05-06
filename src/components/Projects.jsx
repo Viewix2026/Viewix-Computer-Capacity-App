@@ -1134,7 +1134,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
   );
 }
 
-function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal, accountManager, projectLead }) {
+function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal, accountManager, projectLead, onCommission }) {
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "";
   const namePart = project.projectName || "Untitled project";
@@ -1223,6 +1223,27 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
               the parent ProjectTable so this row doesn't need to know
               about /accounts. Renders nothing when unset. */}
           <ClientGoalPill goal={clientGoal} />
+          {/* Commission button — only renders when the project is
+              explicitly uncommissioned (commissioned === false). Click
+              flips it to true so the row moves out of the
+              Uncommissioned section into the Active section below.
+              Stops propagation so the click doesn't open the project
+              detail panel as well. */}
+          {project.commissioned === false && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onCommission && onCommission(project.id); }}
+              title="Commission this project — move it into the Active section"
+              style={{
+                flexShrink: 0,
+                padding: "3px 9px", borderRadius: 4,
+                background: "rgba(16,185,129,0.14)", color: "#10B981",
+                border: "1px solid rgba(16,185,129,0.4)",
+                fontSize: 10, fontWeight: 800, textTransform: "uppercase",
+                letterSpacing: 0.5, cursor: "pointer", fontFamily: "inherit",
+              }}>
+              Commission ↓
+            </button>
+          )}
           {/* Video count — bare-number monospace badge, labelled "vids"
               so it can't be mistaken for the subtask badge sitting next
               to it. Both used to render as "4" / "4" when the counts
@@ -1353,8 +1374,19 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
               <th style={thStyle}>Status</th>
             </tr>
           </thead>
-          <tbody>
-            {projects.map((p, i) => {
+          {/* Split rows into Uncommissioned + Active sections. Legacy
+              projects without the `commissioned` field treat as Active
+              so existing data isn't suddenly piled into the new top
+              section. New webhook-spawned projects land with
+              commissioned=false and sit at the top until the producer
+              clicks "Commission". The split honours the producer's
+              filter pill upstream — if filter=done/archived, both
+              sections stay empty for non-active rows so the table
+              just renders the items normally without sectioning. */}
+          {(() => {
+            const uncommissioned = projects.filter(p => p.commissioned === false);
+            const active = projects.filter(p => p.commissioned !== false);
+            const renderRow = (p, i) => {
               const subtasks = subtasksAsArray(p.subtasks);
               const isExpanded = expandedIds.has(p.id);
               return (
@@ -1370,6 +1402,12 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                     onToggleExpand={onToggleExpand}
                     subtaskCount={subtasks.length}
                     subtaskDoneCount={subtasks.filter(s => normaliseSubtaskStatus(s.status) === "done").length}
+                    onCommission={(id) => {
+                      // Mark commissioned + bump updatedAt for sort keys.
+                      // Same per-leaf write pattern as onStatusChange.
+                      fbSet(`/projects/${id}/commissioned`, true);
+                      fbSet(`/projects/${id}/updatedAt`, new Date().toISOString());
+                    }}
                     {...(() => {
                       // Resolve the linked /accounts entry once per row
                       // via the three-tier fallback (links.accountId →
@@ -1409,8 +1447,37 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                   )}
                 </Fragment>
               );
-            })}
-          </tbody>
+            };
+            const sectionHeader = (label, count, color) => (
+              <tr>
+                <td colSpan={7} style={{
+                  padding: "10px 16px", background: "var(--bg)",
+                  borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
+                }}>
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", gap: 8,
+                    fontSize: 10, fontWeight: 800, textTransform: "uppercase",
+                    letterSpacing: 0.7, color,
+                  }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: color }} />
+                    {label} <span style={{ fontFamily: "'JetBrains Mono',monospace", color: "var(--muted)", marginLeft: 4 }}>· {count}</span>
+                  </span>
+                </td>
+              </tr>
+            );
+            return (
+              <tbody>
+                {uncommissioned.length > 0 && (
+                  <>
+                    {sectionHeader("Uncommissioned", uncommissioned.length, "#EAB308")}
+                    {uncommissioned.map((p, i) => renderRow(p, i))}
+                  </>
+                )}
+                {(active.length > 0 && uncommissioned.length > 0) && sectionHeader("Active", active.length, "#10B981")}
+                {active.map((p, i) => renderRow(p, i))}
+              </tbody>
+            );
+          })()}
         </table>
         </DndContext>
       </div>
