@@ -105,6 +105,11 @@
     "foundersData": {
       ".read": "auth != null && auth.token.role == 'founders'",
       ".write": "auth != null && auth.token.role == 'founders'"
+    },
+
+    "teamHome": {
+      ".read": "auth != null && auth.token.role != null",
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
     }
   }
 }

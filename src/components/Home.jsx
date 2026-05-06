@@ -3,11 +3,30 @@
 // (embedded + a short note — editable from the Capacity tab), and Quick Links.
 // Editing lives in Capacity → Video of the Week / Team Lunch; Team Quote
 // is edited inline on Home by founders.
+//
+// Public team-home content lives at /teamHome (rule: read by any auth
+// user, write by founder/founders). Used to live at /foundersData,
+// which only role=founders could read — leads / editors / closers /
+// trial all saw the empty state for both fields. We fall back to
+// foundersData during the migration window so founder users with
+// legacy data still see their headline + video while the App's
+// migration effect copies it across to /teamHome.
 
 import { VideoEmbed } from "./shared/VideoEmbed";
 
-export function Home({ foundersData, setFoundersData, teamLunch, isFounder, isFounders }) {
-  const votw = foundersData.videoOfTheWeek || null;
+export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, teamLunch, isFounder, isFounders }) {
+  const th = teamHome || {};
+  const fd = foundersData || {};
+  const teamQuote = th.teamQuote || fd.teamQuote || "";
+  const votw = th.videoOfTheWeek || fd.videoOfTheWeek || null;
+  // Edits go to /teamHome (publicly-readable) regardless of where the
+  // value was originally read from. setFoundersData is kept as a prop
+  // for compatibility with the legacy edit path during rollout but
+  // isn't called from this component any more.
+  void setFoundersData;
+  const updateTeamQuote = (next) => {
+    if (typeof setTeamHome === "function") setTeamHome(p => ({ ...(p || {}), teamQuote: next }));
+  };
 
   return (
     <>
@@ -18,14 +37,14 @@ export function Home({ foundersData, setFoundersData, teamLunch, isFounder, isFo
 
         {/* Team Quote */}
         <div style={{ marginBottom: 20, padding: "28px 32px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, textAlign: "center" }}>
-          {isFounders ? (
+          {isFounder ? (
             <div>
-              <textarea value={foundersData.teamQuote || ""} onChange={e => setFoundersData(p => ({ ...p, teamQuote: e.target.value }))} placeholder="Add an inspiring quote or message for the team..." rows={2} style={{ width: "100%", textAlign: "center", fontSize: 18, fontWeight: 600, fontStyle: "italic", color: "var(--fg)", background: "transparent", border: "none", borderBottom: "1px dashed #3A4558", outline: "none", resize: "none", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.6 }} />
+              <textarea value={teamQuote} onChange={e => updateTeamQuote(e.target.value)} placeholder="Add an inspiring quote or message for the team..." rows={2} style={{ width: "100%", textAlign: "center", fontSize: 18, fontWeight: 600, fontStyle: "italic", color: "var(--fg)", background: "transparent", border: "none", borderBottom: "1px dashed #3A4558", outline: "none", resize: "none", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.6 }} />
               <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 8 }}>Only founders can edit this</div>
             </div>
           ) : (
-            foundersData.teamQuote ? (
-              <div style={{ fontSize: 18, fontWeight: 600, fontStyle: "italic", color: "var(--fg)", lineHeight: 1.6 }}>"{foundersData.teamQuote}"</div>
+            teamQuote ? (
+              <div style={{ fontSize: 18, fontWeight: 600, fontStyle: "italic", color: "var(--fg)", lineHeight: 1.6 }}>"{teamQuote}"</div>
             ) : (
               <div style={{ fontSize: 14, color: "var(--muted)", fontStyle: "italic" }}>Welcome to Viewix Tools</div>
             )

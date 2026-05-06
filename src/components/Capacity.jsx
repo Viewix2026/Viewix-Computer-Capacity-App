@@ -24,10 +24,26 @@ export function Capacity({
   editors, setEditors,
   curW, setCurW, weekData, setWeekData,
   teamLunch, setTeamLunch,
+  teamHome, setTeamHome,
   foundersData, setFoundersData,
   projects,
   isFounder,
 }) {
+  // Public Home content (Video of the Week + Team Quote) lives at
+  // /teamHome so non-founders can read it. Capacity edits the
+  // VideoOfTheWeek block via setTeamHome rather than setFoundersData
+  // — but we still read from foundersData as a fallback so legacy
+  // data (set before this migration) appears in the editor until
+  // App.jsx's migration effect copies it across.
+  const votwSource = (teamHome && teamHome.videoOfTheWeek) || foundersData?.videoOfTheWeek || null;
+  const updateVotw = (patch) => {
+    if (typeof setTeamHome !== "function") return;
+    setTeamHome(p => ({ ...(p || {}), videoOfTheWeek: { ...(p?.videoOfTheWeek || votwSource || {}), ...patch } }));
+  };
+  const clearVotw = () => {
+    if (typeof setTeamHome !== "function") return;
+    setTeamHome(p => ({ ...(p || {}), videoOfTheWeek: null }));
+  };
   // ─── Local UI state ───
   const [jumpOpen, setJumpOpen] = useState(false);
   const [jumpDate, setJumpDate] = useState("");
@@ -333,25 +349,18 @@ export function Capacity({
               <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Video URL</label>
               <input
                 type="url"
-                value={foundersData.videoOfTheWeek?.videoUrl || ""}
-                onChange={e => setFoundersData(p => ({
-                  ...p,
-                  videoOfTheWeek: {
-                    ...(p.videoOfTheWeek || {}),
-                    videoUrl: e.target.value,
-                    updatedAt: new Date().toISOString(),
-                  },
-                }))}
+                value={votwSource?.videoUrl || ""}
+                onChange={e => updateVotw({ videoUrl: e.target.value, updatedAt: new Date().toISOString() })}
                 placeholder="https://youtube.com/watch?v=... or frame.io/... or instagram.com/reel/..."
                 style={{ width: "100%", padding: "10px 14px", fontSize: 13, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", fontFamily: "'JetBrains Mono',monospace", boxSizing: "border-box" }}
               />
 
               {/* Preview — live re-renders as producer types so they can
                   confirm the embed works before walking away. */}
-              {foundersData.videoOfTheWeek?.videoUrl && (
+              {votwSource?.videoUrl && (
                 <div style={{ marginTop: 14, padding: 12, background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Preview</div>
-                  <VideoEmbed url={foundersData.videoOfTheWeek.videoUrl} />
+                  <VideoEmbed url={votwSource.videoUrl} />
                 </div>
               )}
 
@@ -360,15 +369,8 @@ export function Capacity({
                 <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Who made it</label>
                 <input
                   type="text"
-                  value={foundersData.videoOfTheWeek?.creator || ""}
-                  onChange={e => setFoundersData(p => ({
-                    ...p,
-                    videoOfTheWeek: {
-                      ...(p.videoOfTheWeek || {}),
-                      creator: e.target.value,
-                      updatedAt: new Date().toISOString(),
-                    },
-                  }))}
+                  value={votwSource?.creator || ""}
+                  onChange={e => updateVotw({ creator: e.target.value, updatedAt: new Date().toISOString() })}
                   placeholder="e.g. Vish + Steve"
                   style={{ width: "100%", padding: "10px 14px", fontSize: 13, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
                 />
@@ -378,15 +380,8 @@ export function Capacity({
               <div style={{ marginTop: 14 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>Note about the video</label>
                 <textarea
-                  value={foundersData.videoOfTheWeek?.note || ""}
-                  onChange={e => setFoundersData(p => ({
-                    ...p,
-                    videoOfTheWeek: {
-                      ...(p.videoOfTheWeek || {}),
-                      note: e.target.value,
-                      updatedAt: new Date().toISOString(),
-                    },
-                  }))}
+                  value={votwSource?.note || ""}
+                  onChange={e => updateVotw({ note: e.target.value, updatedAt: new Date().toISOString() })}
                   placeholder="What's great about this one? Client, project, technique, whatever."
                   rows={3}
                   style={{ width: "100%", padding: "12px 14px", fontSize: 13, fontWeight: 500, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", resize: "vertical", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.5, boxSizing: "border-box" }}
@@ -396,11 +391,11 @@ export function Capacity({
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
                 <div style={{ fontSize: 10, color: "var(--muted)" }}>
                   Saves automatically.
-                  {foundersData.videoOfTheWeek?.updatedAt && ` Last updated ${new Date(foundersData.videoOfTheWeek.updatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`}
+                  {votwSource?.updatedAt && ` Last updated ${new Date(votwSource.updatedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`}
                 </div>
-                {foundersData.videoOfTheWeek?.videoUrl && (
+                {votwSource?.videoUrl && (
                   <button
-                    onClick={() => { if (window.confirm("Clear the current Video of the Week?")) setFoundersData(p => ({ ...p, videoOfTheWeek: null })); }}
+                    onClick={() => { if (window.confirm("Clear the current Video of the Week?")) clearVotw(); }}
                     style={{ background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--muted)", fontSize: 11, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Clear
