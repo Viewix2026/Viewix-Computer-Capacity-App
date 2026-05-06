@@ -422,7 +422,7 @@ export default function App(){
       <SideIcon icon="🏠" label="Home" active={tool==="home"} onClick={()=>setTool("home")}/>
       {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
-      {(isFounder||role==="closer"||isLead)&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
+      {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
       {isFounder&&<SideIcon icon="🌱" label="Nurture" active={tool==="nurture"} onClick={()=>setTool("nurture")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {(isFounder||isLead)&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>{
@@ -473,7 +473,7 @@ export default function App(){
 
 
     {/* ═══ SALE (Payment Intake + Quotes) ═══ */}
-    {(tool==="sale"||tool==="quoting")&&(isFounder||role==="closer"||isLead)&&(
+    {(tool==="sale"||tool==="quoting")&&(isFounder||role==="closer")&&(
       <Sale
         sales={sales} setSales={setSales}
         salePricing={salePricing} setSalePricing={setSalePricing}
