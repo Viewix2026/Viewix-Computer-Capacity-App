@@ -23,6 +23,7 @@ import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { Home } from "./components/Home";
 import { Login } from "./components/Login";
 import { useAccountsSync } from "./sync/useAccountsSync";
+import { useDeliveriesSync } from "./sync/useDeliveriesSync";
 
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
@@ -130,8 +131,16 @@ export default function App(){
   const[clientEditName,setClientEditName]=useState("");
   const[clientEditDoc,setClientEditDoc]=useState("");
 
-  // Deliveries state
-  const[deliveries,setDeliveries]=useState([]);
+  // Deliveries state — owned by useDeliveriesSync (see src/sync/).
+  // Listener + object-to-array transform + shortId backfill +
+  // recently-wrote-to guard all live in the hook. Same pattern as
+  // useAccountsSync from PR #51. /deliveries was already excluded
+  // from the bulk-write loop after the "pasting a link reverted
+  // the previous video's link" race; this PR finishes the job by
+  // pulling /deliveries out of the bulk-write deps array too, so
+  // an unrelated state change doesn't re-run the loop just because
+  // deliveries last updated.
+  const{deliveries,setDeliveries}=useDeliveriesSync();
 
   // Projects state — /projects/{id} records created by the Attio webhook
   // (api/webhook-deal-won.js Section 4b). Listener-only: writes happen
@@ -275,7 +284,7 @@ export default function App(){
       });
       listen("/clientRateCards",data=>{if(data)setClientRateCards(Object.values(data).filter(r=>r&&r.id));});
       listen("/clients",data=>{if(data)setClients(Object.values(data).filter(c=>c&&c.id));});
-      listen("/deliveries",data=>{if(data)setDeliveries(Object.values(data).filter(d=>d&&d.id).map(d=>({...d,videos:Array.isArray(d.videos)?d.videos:[]})));});
+      // /deliveries listener moved to useDeliveriesSync — see src/sync/.
       listen("/projects",data=>{setProjects(data?Object.values(data).filter(p=>p&&p.id):[]);});
       listen("/buyerJourney",data=>{if(data)setBuyerJourney(data);});
       // /accounts listener moved to useAccountsSync — see src/sync/.
@@ -332,11 +341,9 @@ export default function App(){
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,sales,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,sales,salePricing,saleThankYou]);
 
-  // Backfill shortId on existing deliveries (one-time per record). Also handles
-  // dedup if two records ever generate the same hash.
-  useEffect(()=>{if(!deliveries.length)return;const used=new Set();let changed=false;const next=deliveries.map(d=>{if(!d)return d;if(d.shortId&&!used.has(d.shortId)){used.add(d.shortId);return d;}let id=d.shortId||makeShortId();while(used.has(id))id=makeShortId();used.add(id);if(id!==d.shortId){changed=true;return{...d,shortId:id};}return d;});if(changed)setDeliveries(next);},[deliveries.length]);
+  // shortId backfill moved into useDeliveriesSync — same logic, same trigger.
 
   // Backfill canonical videoId on delivery videos and the matching
   // project subtask (source: "video"). The canonical id is what
