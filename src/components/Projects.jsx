@@ -110,29 +110,33 @@ function inferStage(subtask) {
   if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
   if (name.includes("revision")) return "revisions";  // before "shoot" since "reshoot" might match
   if (name.includes("shoot")) return "shoot";
-  // "Select Timeline" is the producer's hand-off into the edit phase
-  // (picking which take/timeline the editor cuts from), so it lives
-  // under the edit stage colour even though its label doesn't include
-  // "edit". Match before the generic "edit" rule below — neither rule
-  // overlaps but order is kept stable for clarity.
-  if (name.includes("select timeline")) return "edit";
+  // "Selects timeline + kick off video" is the producer's hand-off
+  // into the edit phase (picking which take/timeline the editor cuts
+  // from + recording the kick-off video the editor uses as their
+  // brief). Lives under the edit stage colour even though the label
+  // doesn't include "edit". Match before the generic "edit" rule
+  // below — substring "timeline" is enough, and is unique among the
+  // defaults so it can't false-match anything.
+  if (name.includes("timeline")) return "edit";
   if (name.includes("edit")) return "edit";
   return "preProduction";
 }
 
 // Default subtasks every project gets seeded with on first expand.
 // Mirrors the production lifecycle Jeremy walks through with every
-// client. "Select Timeline" sits between Shoot and the edit phase —
-// it's the producer's call on which footage the editor cuts from,
-// and it auto-assigns to the project lead recorded on the linked
+// client. "Selects timeline + kick off video" sits between Shoot and
+// the edit phase — it's the producer's call on which footage the
+// editor cuts from plus the kick-off video recorded as the editor's
+// brief. Auto-assigns to the project lead recorded on the linked
 // account so the lead lands directly in their queue without anyone
 // having to pick them manually each project. Each default's name
 // maps cleanly onto a SUBTASK_STAGE_OPTIONS key via inferStage().
-const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", "Select Timeline", "Revisions", "Edit"];
+const SELECTS_TIMELINE_SUBTASK = "Selects timeline + kick off video";
+const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", SELECTS_TIMELINE_SUBTASK, "Revisions", "Edit"];
 
 // Resolve the editor whose name matches the project lead recorded on
-// the linked /accounts entry. Used to auto-assign "Select Timeline"
-// at seed time. Falls back to null when:
+// the linked /accounts entry. Used to auto-assign the lead-owned
+// default subtask at seed time. Falls back to null when:
 //   - the project has no linked account (greenfield client)
 //   - the account has no projectLead recorded
 //   - the lead's name doesn't match any editor on the roster
@@ -149,17 +153,17 @@ function resolveProjectLeadId(project, accounts, editors) {
 // Seed the phase-default subtasks onto a project that has none yet.
 // Shared by the row-expand lazy seed and the detail-view seed button
 // so both surfaces produce the same shape (and so adding/reordering
-// defaults is a one-line change). "Select Timeline" pre-assigns to
-// the resolved project lead; the rest stay unassigned so the producer
-// picks crew per project.
+// defaults is a one-line change). The "Selects timeline + kick off
+// video" subtask pre-assigns to the resolved project lead; the rest
+// stay unassigned so the producer picks crew per project.
 function seedDefaultSubtasksFor(project, accounts, editors) {
   if (!project?.id) return;
   const leadId = resolveProjectLeadId(project, accounts, editors);
   const now = new Date().toISOString();
   DEFAULT_SUBTASKS.forEach((name, i) => {
     const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
-    const isSelectTimeline = name === "Select Timeline";
-    const assigneeIds = isSelectTimeline && leadId ? [leadId] : [];
+    const isLeadOwned = name === SELECTS_TIMELINE_SUBTASK;
+    const assigneeIds = isLeadOwned && leadId ? [leadId] : [];
     fbSet(`/projects/${project.id}/subtasks/${stId}`, {
       id: stId, name, status: "stuck",
       stage: inferStage({ name }),
