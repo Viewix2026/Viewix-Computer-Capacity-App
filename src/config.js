@@ -181,25 +181,40 @@ export {
 //
 // DEFAULT_MILESTONE_GAPS is the fallback when /turnaround has no entry
 // for a given key — typically the first-load bootstrap.
+// Each entry has a `type`:
+//   "date"   — a single date input. Producers fill manually (signing
+//              is the most recent signed-deal date for the client;
+//              goLive / finalLive are video posting dates).
+//   "status" — a single dropdown with custom options on `statuses`.
+//              Used for milestone work that doesn't have a single
+//              date — Boosting Strategy / Many Chat are workflow
+//              checkpoints, not scheduled events.
+//
+// The previous schema's date+status pair on every milestone was
+// over-fitted to the original Pre-Prod / Shoot / Posting / Review
+// flow. Real producer activity splits cleanly into "happens on a
+// date" vs "is in this state right now".
+//
+// Older accounts in Firebase carry milestone records with both
+// `date` and `status` plus the legacy keys (preProductionMeeting,
+// shoot, etc.); we don't delete that data, we just stop rendering
+// the old keys. BuyerJourney still references some of them
+// internally for stage-to-key mapping; that path is unaffected.
 export const MILESTONE_DEFS = [
-  { key: "signing",                   label: "Signing" },
-  { key: "preProductionMeeting",      label: "Pre Prod Meeting" },
-  { key: "preProductionPresentation", label: "Pre Prod Presentation" },
-  { key: "shoot",                     label: "Shoot" },
-  { key: "posting",                   label: "Posting" },
-  { key: "resultsReview",             label: "Results Review" },
-  { key: "partnershipReview",         label: "Partnership Review" },
-  { key: "growthStrategy",            label: "Growth Strategy" },
+  { key: "signing",          label: "Signing",          type: "date" },
+  { key: "goLive",           label: "Go Live",          type: "date" },
+  { key: "finalLive",        label: "Final Live",       type: "date" },
+  { key: "boostingStrategy", label: "Boosting Strategy", type: "status",
+    statuses: ["Not started", "Scheduled", "Done"] },
+  { key: "manyChat",         label: "Many Chat",         type: "status",
+    statuses: ["Not started", "Scheduled", "Done"] },
 ];
-export const DEFAULT_MILESTONE_GAPS = {
-  preProductionMeeting: 3,
-  preProductionPresentation: 7,
-  shoot: 7,
-  posting: 14,
-  resultsReview: 28,
-  partnershipReview: 28,
-  growthStrategy: 28,
-};
+
+// Auto-cascade gaps from Signing date → other milestones is no
+// longer used (Go Live / Final Live are manually entered when the
+// videos actually post). Kept as an empty object so any code that
+// still imports it doesn't crash.
+export const DEFAULT_MILESTONE_GAPS = {};
 
 // ─── Shared Styles ───
 export const TH = { padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.06em", textTransform: "uppercase", borderBottom: "2px solid var(--border)", background: "var(--card)" };
