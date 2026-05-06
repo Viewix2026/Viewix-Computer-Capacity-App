@@ -125,14 +125,12 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
     setAccounts(prev => {
       const acct = prev[id] || {};
       const milestones = { ...(acct.milestones || {}) };
-      MILESTONE_DEFS.forEach(m => {
-        const existing = milestones[m.key] || {};
-        milestones[m.key] = {
-          ...existing,
-          date: addDays(dateStr, offsets[m.key]),
-          status: existing.status || "Scheduled"
-        };
-      });
+      // Signing is the anchor only — Go Live and Final Live are
+      // manually entered when those events happen, not auto-computed
+      // from a fixed gap. Leave the other milestones alone so we
+      // don't bulk-overwrite producer entries on every signing edit.
+      const existing = milestones.signing || {};
+      milestones.signing = { ...existing, date: dateStr };
       const updated = { ...acct, milestones };
       fbSet(`/accounts/${id}`, updated);
       return { ...prev, [id]: updated };
@@ -333,20 +331,51 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                       </td>
                       {MILESTONE_DEFS.map(m => {
                         const ms = acct.milestones?.[m.key] || {};
-                        const sc = STATUS_COLORS[ms.status] || { bg: "var(--bg)", color: "var(--muted)" };
+                        const isDate = m.type === "date";
+                        const isStatus = m.type === "status";
                         const isSigningCol = m.key === "signing";
+                        // Status colour palette — pulls from the global
+                        // STATUS_COLORS for the canonical "Scheduled" /
+                        // "Done" / etc. labels, falling back to neutral
+                        // when the milestone uses a value we don't have
+                        // a colour for. Specific overrides for the new
+                        // workflow status set ("Not started" reads as
+                        // muted, "Done" reads as accent green).
+                        const statusColour = (val) => {
+                          if (val === "Done") return { bg: "rgba(16,185,129,0.12)", color: "#10B981" };
+                          if (val === "Scheduled") return STATUS_COLORS["Scheduled"] || { bg: "var(--bg)", color: "var(--muted)" };
+                          if (val === "Not started") return { bg: "var(--bg)", color: "var(--muted)" };
+                          return STATUS_COLORS[val] || { bg: "var(--bg)", color: "var(--muted)" };
+                        };
                         return (
                           <td key={m.key} style={{ ...TD, textAlign: "center", padding: "4px 6px" }}>
-                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                              <input type="date" value={ms.date || ""} onChange={e => {
-                                if (isSigningCol) { setSigningDate(acct.id, e.target.value); }
-                                else { updateMilestone(acct.id, m.key, { date: e.target.value }); }
-                              }} style={{ ...inputSt, fontSize: 11, padding: "3px 4px", textAlign: "center", width: "100%" }} />
-                              <select value={ms.status || ""} onChange={e => updateMilestone(acct.id, m.key, { status: e.target.value })} style={{ ...selectSt, background: sc.bg, color: sc.color, fontSize: 10, textTransform: "uppercase" }}>
-                                <option value="">Set Status</option>
-                                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-                              </select>
-                            </div>
+                            {isDate && (
+                              <input
+                                type="date"
+                                value={ms.date || ""}
+                                onChange={e => {
+                                  // Signing still flows through the
+                                  // dedicated handler so any side-effects
+                                  // (other milestone bootstraps, Sherpa
+                                  // sync, etc.) keep firing centrally.
+                                  if (isSigningCol) setSigningDate(acct.id, e.target.value);
+                                  else updateMilestone(acct.id, m.key, { date: e.target.value });
+                                }}
+                                style={{ ...inputSt, fontSize: 11, padding: "3px 4px", textAlign: "center", width: "100%" }}
+                              />
+                            )}
+                            {isStatus && (() => {
+                              const sc = statusColour(ms.status);
+                              return (
+                                <select
+                                  value={ms.status || ""}
+                                  onChange={e => updateMilestone(acct.id, m.key, { status: e.target.value })}
+                                  style={{ ...selectSt, background: sc.bg, color: sc.color, fontSize: 10, textTransform: "uppercase" }}>
+                                  <option value="">Set Status</option>
+                                  {(m.statuses || []).map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                              );
+                            })()}
                           </td>
                         );
                       })}
