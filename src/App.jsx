@@ -22,6 +22,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { Home } from "./components/Home";
 import { Login } from "./components/Login";
+import { useAccountsSync } from "./sync/useAccountsSync";
 
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
@@ -141,8 +142,15 @@ export default function App(){
   // Buyer Journey state
   const[buyerJourney,setBuyerJourney]=useState({});
 
-  // Accounts state
-  const[accounts,setAccounts]=useState({});
+  // Accounts state — owned by useAccountsSync (see src/sync/).
+  // Listener + delete + recently-wrote-to guard live in the hook;
+  // App.jsx threads the returned values down as props the same way
+  // the local state used to. /accounts is also no longer in the
+  // bulk-write effect's deps below, so account edits don't trigger
+  // unrelated path writes (was a quiet coupling — accounts itself
+  // wasn't written by the bulk loop, but a setAccounts call would
+  // re-run the whole loop and replay every other path).
+  const{accounts,setAccounts,deleteAccount}=useAccountsSync();
   const[turnaround,setTurnaround]=useState({});
 
   // Training state
@@ -270,7 +278,7 @@ export default function App(){
       listen("/deliveries",data=>{if(data)setDeliveries(Object.values(data).filter(d=>d&&d.id).map(d=>({...d,videos:Array.isArray(d.videos)?d.videos:[]})));});
       listen("/projects",data=>{setProjects(data?Object.values(data).filter(p=>p&&p.id):[]);});
       listen("/buyerJourney",data=>{if(data)setBuyerJourney(data);});
-      listen("/accounts",data=>{if(data)setAccounts(data);});
+      // /accounts listener moved to useAccountsSync — see src/sync/.
       listen("/turnaround",data=>{if(data)setTurnaround(data);});
       listen("/training",data=>{if(data&&Array.isArray(data))setTrainingData(data);});
       listen("/trainingSuggestions",data=>{if(data&&Array.isArray(data))setTrainingSuggestions(data);});
@@ -291,7 +299,13 @@ export default function App(){
   },[role,isFounders]);
 
   const wt=useRef(null);
-  const deletedPaths=useRef([]);
+  // deletedPaths ref removed alongside the /accounts domain split.
+  // Was a workaround for accounts deletion: AccountsDashboard pushed
+  // "/accounts/{id}" into here, then the bulk-write effect flushed
+  // those by fbSet(p, null). With useAccountsSync owning delete via
+  // a direct fbSet, no other surface needs the deferred-flush
+  // mechanism — every other delete path in the codebase already
+  // does its own direct write at click time.
   useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
    Same reasoning as /accounts and /sales above: Deliveries.jsx writes
    leaf paths directly per edit (videos[i].link, status, revision1,
@@ -318,7 +332,7 @@ export default function App(){
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,isFounder,isFounders,sales,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,sales,salePricing,saleThankYou]);
 
   // Backfill shortId on existing deliveries (one-time per record). Also handles
   // dedup if two records ever generate the same hash.
@@ -714,7 +728,7 @@ export default function App(){
     {tool==="editors"&&(isFounder||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} onDeletePath={p=>deletedPaths.current.push(p)} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
     {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}

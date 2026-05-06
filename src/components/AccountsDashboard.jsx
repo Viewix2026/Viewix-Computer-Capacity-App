@@ -101,7 +101,7 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAttio, editors, clients, setClients, onDeletePath, highlightId }) {
+export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnaround, onSyncAttio, editors, clients, setClients, highlightId }) {
   // Buyer Journey + Turnaround sub-tabs have moved to the Founders tab
   // (founders > buyerJourney). This component is now Clients-only; the
   // tab state is retained as a no-op to minimise downstream churn in
@@ -238,8 +238,22 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
 
   const removeClient = (id) => {
     if (!window.confirm("Remove this client from accounts?")) return;
-    if(onDeletePath)onDeletePath("/accounts/"+id);
-    setAccounts(prev => { const next = { ...prev }; delete next[id]; return next; });
+    // Direct delete via the useAccountsSync hook. Used to push the
+    // path into App.jsx's deletedPaths ref and rely on the bulk-
+    // write debounce to flush it later — that coupling meant a
+    // delete only persisted if some OTHER state change triggered
+    // the bulk effect after, which was fine in practice but fragile
+    // and exactly the kind of indirection this refactor is killing.
+    if (typeof deleteAccount === "function") {
+      deleteAccount(id);
+    } else {
+      // Fallback for any caller that hasn't been migrated to pass
+      // deleteAccount yet — keeps the old optimistic-state behaviour
+      // and writes directly here. App.jsx always passes the prop
+      // post-refactor, so this branch shouldn't run in practice.
+      setAccounts(prev => { const next = { ...prev }; delete next[id]; return next; });
+      fbSet(`/accounts/${id}`, null);
+    }
   };
 
   const logContact = (id) => {
