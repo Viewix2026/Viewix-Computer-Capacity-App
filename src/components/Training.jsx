@@ -1,7 +1,15 @@
 // Training — module library with per-role visibility + Meeting Feedback sub-tab.
-// Closers see only "Sales Training" categories. Trial users see "trial"-named
-// categories. Everyone else sees everything. Founders + closers also get the
-// Meeting Feedback sub-tab for Claude-powered sales call analysis.
+//
+// Visibility rules:
+//   closer            → only "sales"-named categories
+//   editor / trial    → everything EXCEPT "sales"-named categories
+//                       (so editors don't see Sales Training, and trial
+//                       users see Editor Onboarding + any custom
+//                       "Trial …" category you've added)
+//   founder / founders / lead → everything
+//
+// Founders + closers also get the Meeting Feedback sub-tab for
+// Claude-powered sales call analysis.
 
 import { useState } from "react";
 import { BTN, NB } from "../config";
@@ -188,10 +196,10 @@ export function Training({
   // ═══════════════════════════════════════════
   // LIST VIEW
   // ═══════════════════════════════════════════
-  const visibleTraining = role === "trial"
-    ? trainingData.filter(c => (c.name || "").toLowerCase().includes("trial"))
-    : role === "closer"
+  const visibleTraining = role === "closer"
     ? trainingData.filter(c => (c.name || "").toLowerCase().includes("sales"))
+    : (role === "editor" || role === "trial")
+    ? trainingData.filter(c => !(c.name || "").toLowerCase().includes("sales"))
     : trainingData;
   const canSeeMeetingFeedback = isFounder || role === "closer";
 
