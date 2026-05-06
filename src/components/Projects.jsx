@@ -31,7 +31,7 @@ import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
 import { ClientGoalPill } from "./ClientGoalPill";
-import { DndContext, PointerSensor, useSensor, useSensors, closestCenter } from "@dnd-kit/core";
+import { DndContext, PointerSensor, useSensor, useSensors, closestCenter, useDroppable } from "@dnd-kit/core";
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 
@@ -1210,8 +1210,19 @@ function AddSubtaskRow({ projectId, nextOrder }) {
   );
 }
 
-function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal, accountManager, projectLead, onCommission }) {
+function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal, accountManager, projectLead }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
+  // Drag-to-commission: each project row is sortable via the table's
+  // shared DndContext. The drag handle (six-dot grip in the leading
+  // cell) carries the listeners so clicking the row body still opens
+  // the project. ProjectTable's onDragEnd inspects active vs over
+  // project commissioned states and flips the dragged project to
+  // match the target's section. View-only roles get no handle (drag
+  // is a write — same gating as the bulk-action checkbox).
+  const {
+    attributes: dragAttrs, listeners: dragListeners,
+    setNodeRef: setDragRef, transform, transition, isDragging,
+  } = useSortable({ id: project.id });
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "";
   const namePart = project.projectName || "Untitled project";
@@ -1225,23 +1236,62 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
                : "transparent";
   return (
     <tr
+      ref={setDragRef}
       onClick={() => onOpen(project.id)}
       style={{
         cursor: "pointer",
         background: baseBg,
         borderBottom: "1px solid var(--border)",
+        // dnd-kit drives the row's transform during drag; the row
+        // floats up at half opacity so the producer can see the
+        // section header it's about to drop into. zIndex bumps so
+        // the dragged row paints on top of any overlapping siblings.
+        transform: DndCSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.5 : 1,
+        position: isDragging ? "relative" : undefined,
+        zIndex: isDragging ? 2 : undefined,
       }}
-      onMouseEnter={e => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
-      onMouseLeave={e => e.currentTarget.style.background = baseBg}>
+      onMouseEnter={e => { if (!isDragging) e.currentTarget.style.background = "rgba(99,102,241,0.06)"; }}
+      onMouseLeave={e => { if (!isDragging) e.currentTarget.style.background = baseBg; }}>
       <td style={tdStyle} onClick={e => e.stopPropagation()}>
+        {/* Drag handle + bulk-action checkbox sit side-by-side for
+            non-viewOnly roles. The handle carries the dnd-kit
+            listeners so dragging works while clicks elsewhere on the
+            row keep opening the project detail. View-only renders an
+            empty cell (no handle, no checkbox) — both are writes. */}
         {!viewOnly && (
-          <input
-            type="checkbox"
-            checked={!!selected}
-            onChange={() => onToggleSelect(project.id)}
-            title="Select for bulk actions"
-            style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
-          />
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span
+              {...dragAttrs}
+              {...dragListeners}
+              title="Drag to move between Uncommissioned and Active"
+              aria-label="Drag to move between sections"
+              style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 18, height: 18,
+                color: "var(--muted)", opacity: 0.55,
+                cursor: isDragging ? "grabbing" : "grab",
+                userSelect: "none",
+                fontSize: 12, lineHeight: 1, letterSpacing: -1,
+                transition: "opacity 0.12s, color 0.12s",
+                // touchAction:none lets pointer-down on the handle
+                // start a drag instead of scrolling the table on
+                // touch devices.
+                touchAction: "none",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--fg)"; }}
+              onMouseLeave={e => { e.currentTarget.style.opacity = "0.55"; e.currentTarget.style.color = "var(--muted)"; }}>
+              ⋮⋮
+            </span>
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={() => onToggleSelect(project.id)}
+              title="Select for bulk actions"
+              style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
+            />
+          </span>
         )}
       </td>
       <td style={{ ...tdStyle, minWidth: 320 }}>
@@ -1302,27 +1352,10 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
               the parent ProjectTable so this row doesn't need to know
               about /accounts. Renders nothing when unset. */}
           <ClientGoalPill goal={clientGoal} />
-          {/* Commission button — only renders when the project is
-              explicitly uncommissioned (commissioned === false). Click
-              flips it to true so the row moves out of the
-              Uncommissioned section into the Active section below.
-              Stops propagation so the click doesn't open the project
-              detail panel as well. */}
-          {project.commissioned === false && !viewOnly && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onCommission && onCommission(project.id); }}
-              title="Commission this project — move it into the Active section"
-              style={{
-                flexShrink: 0,
-                padding: "3px 9px", borderRadius: 4,
-                background: "rgba(16,185,129,0.14)", color: "#10B981",
-                border: "1px solid rgba(16,185,129,0.4)",
-                fontSize: 10, fontWeight: 800, textTransform: "uppercase",
-                letterSpacing: 0.5, cursor: "pointer", fontFamily: "inherit",
-              }}>
-              Commission ↓
-            </button>
-          )}
+          {/* Commission button removed — producers now drag the row
+              between the Uncommissioned and Active section headers
+              using the leading-cell handle. See ProjectTable's
+              onDragEnd for the cross-section flip logic. */}
           {/* Video count — bare-number monospace badge, labelled "vids"
               so it can't be mistaken for the subtask badge sitting next
               to it. Both used to render as "4" / "4" when the counts
@@ -1410,13 +1443,43 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
     if (headerCheckRef.current) headerCheckRef.current.indeterminate = someChecked;
   }, [someChecked]);
 
-  // One DndContext spans the whole table; each expanded project gets
-  // its own SortableContext below so dragging is scoped to siblings
-  // within the same project. Subtask ids are unique across all
-  // projects, so onDragEnd resolves the owning project by lookup.
+  // One DndContext spans the whole table. Two kinds of draggables
+  // share it: PROJECT rows (handle in the leading cell) and SUBTASK
+  // rows (their own handle). Project ids and subtask ids never
+  // collide (project ids are "proj-…", subtask ids are "st-…") so
+  // onDragEnd routes by id-prefix lookup against the projects array
+  // — if the active id matches a project, treat it as a project
+  // drag; otherwise it's a subtask drag and the legacy handler runs.
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const onSubtaskDragEnd = ({ active, over }) => {
+  const onDragEnd = ({ active, over }) => {
     if (!over || active.id === over.id) return;
+    // PROJECT drag — flips the dragged project's commissioned flag
+    // to match the target's section. Targets can be either:
+    //   (a) another project row → match that row's commissioned
+    //       state (most common case)
+    //   (b) a section header → match the header's intended state
+    //       (necessary when the destination section is empty, since
+    //       there'd be no row to drop onto otherwise)
+    // Same-section drops are a no-op (the list is sorted by the
+    // producer's chosen sort, so manual reorder wouldn't persist).
+    const draggedProject = projects.find(p => p.id === active.id);
+    if (draggedProject) {
+      let targetCommissioned;
+      if (over.id === "section-uncommissioned") targetCommissioned = false;
+      else if (over.id === "section-active")     targetCommissioned = true;
+      else {
+        const target = projects.find(p => p.id === over.id);
+        if (!target) return;
+        targetCommissioned = target.commissioned !== false;
+      }
+      const draggedCommissioned = draggedProject.commissioned !== false;
+      if (draggedCommissioned === targetCommissioned) return;
+      fbSet(`/projects/${draggedProject.id}/commissioned`, targetCommissioned);
+      fbSet(`/projects/${draggedProject.id}/updatedAt`, new Date().toISOString());
+      return;
+    }
+    // SUBTASK drag — existing reorder behaviour. Resolve the owning
+    // project by lookup since subtask ids are global.
     const owning = projects.find(p =>
       Object.values(p.subtasks || {}).some(s => s && s.id === active.id)
     );
@@ -1432,7 +1495,7 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
           "this is a project table" affordance in Jeremy's reference. */}
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "#EC4899" }} />
       <div style={{ overflowX: "auto" }}>
-        <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onSubtaskDragEnd}>
+        <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: "var(--bg)" }}>
@@ -1484,12 +1547,6 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                     onToggleExpand={onToggleExpand}
                     subtaskCount={subtasks.length}
                     subtaskDoneCount={subtasks.filter(s => normaliseSubtaskStatus(s.status) === "done").length}
-                    onCommission={(id) => {
-                      // Mark commissioned + bump updatedAt for sort keys.
-                      // Same per-leaf write pattern as onStatusChange.
-                      fbSet(`/projects/${id}/commissioned`, true);
-                      fbSet(`/projects/${id}/updatedAt`, new Date().toISOString());
-                    }}
                     {...(() => {
                       // Resolve the linked /accounts entry once per row
                       // via the three-tier fallback (links.accountId →
@@ -1530,33 +1587,66 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                 </Fragment>
               );
             };
-            const sectionHeader = (label, count, color) => (
-              <tr>
-                <td colSpan={7} style={{
-                  padding: "10px 16px", background: "var(--bg)",
-                  borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
-                }}>
-                  <span style={{
-                    display: "inline-flex", alignItems: "center", gap: 8,
-                    fontSize: 10, fontWeight: 800, textTransform: "uppercase",
-                    letterSpacing: 0.7, color,
+            // Droppable section header. Carries a useDroppable id so
+            // dropping a project onto the header itself (instead of
+            // onto a sibling row) still routes to a section flip in
+            // onDragEnd. Critical for the empty-section case — when
+            // Active has zero rows there's nothing to drop ON, so the
+            // header bar has to act as the target. `isOver` lights up
+            // the bar with a soft accent wash so producers see where
+            // the row will land before they release.
+            const SectionHeader = ({ label, count, color, dropId }) => {
+              const { setNodeRef, isOver } = useDroppable({ id: dropId });
+              return (
+                <tr>
+                  <td ref={setNodeRef} colSpan={7} style={{
+                    padding: "10px 16px",
+                    background: isOver ? "rgba(99,102,241,0.18)" : "var(--bg)",
+                    borderTop: "1px solid var(--border)",
+                    borderBottom: isOver ? "2px solid var(--accent)" : "1px solid var(--border)",
+                    transition: "background 0.12s, border-color 0.12s",
                   }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: color }} />
-                    {label} <span style={{ fontFamily: "'JetBrains Mono',monospace", color: "var(--muted)", marginLeft: 4 }}>· {count}</span>
-                  </span>
-                </td>
-              </tr>
-            );
+                    <span style={{
+                      display: "inline-flex", alignItems: "center", gap: 8,
+                      fontSize: 10, fontWeight: 800, textTransform: "uppercase",
+                      letterSpacing: 0.7, color,
+                    }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color }} />
+                      {label} <span style={{ fontFamily: "'JetBrains Mono',monospace", color: "var(--muted)", marginLeft: 4 }}>· {count}</span>
+                    </span>
+                  </td>
+                </tr>
+              );
+            };
+            // Single SortableContext spans every project across both
+            // sections so dnd-kit treats them as one orderable list.
+            // The order in `items` is what dnd-kit uses for collision
+            // resolution — uncommissioned first matches the visual
+            // top-to-bottom order so dropping next to a section
+            // header lands the row in the right group. Subtasks live
+            // in their own per-project SortableContext below — both
+            // share the parent DndContext but operate on independent
+            // id sets.
+            const allProjectIds = [...uncommissioned, ...active].map(p => p.id);
             return (
               <tbody>
-                {uncommissioned.length > 0 && (
-                  <>
-                    {sectionHeader("Uncommissioned", uncommissioned.length, "#EAB308")}
-                    {uncommissioned.map((p, i) => renderRow(p, i))}
-                  </>
-                )}
-                {(active.length > 0 && uncommissioned.length > 0) && sectionHeader("Active", active.length, "#10B981")}
-                {active.map((p, i) => renderRow(p, i))}
+                <SortableContext items={allProjectIds} strategy={verticalListSortingStrategy}>
+                  {/* Always render BOTH section headers when at least
+                      one project exists in either section. This gives
+                      producers a drop target even when one section is
+                      empty (e.g. all projects currently uncommissioned
+                      → Active header still shows · 0 and accepts a
+                      drop to commission). When everything's empty the
+                      table just shows the empty-state below. */}
+                  {(uncommissioned.length > 0 || active.length > 0) && (
+                    <SectionHeader label="Uncommissioned" count={uncommissioned.length} color="#EAB308" dropId="section-uncommissioned" />
+                  )}
+                  {uncommissioned.map((p, i) => renderRow(p, i))}
+                  {(uncommissioned.length > 0 || active.length > 0) && (
+                    <SectionHeader label="Active" count={active.length} color="#10B981" dropId="section-active" />
+                  )}
+                  {active.map((p, i) => renderRow(p, i))}
+                </SortableContext>
               </tbody>
             );
           })()}
@@ -1716,37 +1806,12 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
         {/* Seven-status taxonomy — coloured dropdown to fit without overflow */}
         <div style={{ minWidth: 200, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
           <StatusCell value={status} onChange={(s) => { setStatus(s); persistField("status", s); }} />
-          {/* Commissioned toggle — flips the project between the
-              Uncommissioned section (top of Projects sub-tab) and
-              the Active section. New webhook-spawned projects land
-              uncommissioned by default; producers commission them
-              when ready to slot into the schedule. Manual toggle
-              here covers the "I want to send this back to triage"
-              case + lets us test the section visually for legacy
-              projects that never had the field. */}
-          {viewOnly ? null : project.commissioned === false ? (
-            <button onClick={() => persistField("commissioned", true)}
-              title="Move this project into the Active section"
-              style={{
-                padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(16,185,129,0.5)",
-                background: "rgba(16,185,129,0.14)", color: "#10B981",
-                fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5,
-                cursor: "pointer", fontFamily: "inherit",
-              }}>
-              ✓ Commission ↓
-            </button>
-          ) : (
-            <button onClick={() => persistField("commissioned", false)}
-              title="Move this project back to the Uncommissioned section at the top"
-              style={{
-                padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(234,179,8,0.5)",
-                background: "rgba(234,179,8,0.14)", color: "#EAB308",
-                fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5,
-                cursor: "pointer", fontFamily: "inherit",
-              }}>
-              ↑ Move to Uncommissioned
-            </button>
-          )}
+          {/* Commission / Move-to-Uncommissioned buttons removed —
+              producers flip a project between sections by dragging
+              its row across the section headers in the Projects
+              sub-tab table. See ProjectTable's onDragEnd. The
+              `commissioned` field still drives section grouping;
+              there's just no button for it any more. */}
         </div>
       </div>
 
