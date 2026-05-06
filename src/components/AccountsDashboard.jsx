@@ -426,14 +426,26 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                               </span>
                             )}
                             {!isBlankedForMeta && isStatus && (() => {
-                              const sc = statusColour(ms.status);
+                              // Default to "Not started" for any status
+                              // milestone that hasn't been touched yet.
+                              // The old empty-string "Set Status"
+                              // placeholder doubled as a value the
+                              // dropdown could fall back to and a
+                              // call-to-action label, which made
+                              // unchecked rows look the same as rows
+                              // a producer hadn't gotten to. "Not
+                              // started" is one of the canonical status
+                              // options anyway, so collapsing the empty
+                              // state into it makes the table read more
+                              // like a status board.
+                              const displayStatus = ms.status || "Not started";
+                              const sc = statusColour(displayStatus);
                               return (
                                 <span style={ringStyle || undefined}>
                                   <select
-                                    value={ms.status || ""}
+                                    value={displayStatus}
                                     onChange={e => updateMilestone(acct.id, m.key, { status: e.target.value })}
                                     style={{ ...selectSt, background: sc.bg, color: sc.color, fontSize: 10, textTransform: "uppercase" }}>
-                                    <option value="">Set Status</option>
                                     {(m.statuses || []).map(s => <option key={s} value={s}>{s}</option>)}
                                   </select>
                                 </span>
