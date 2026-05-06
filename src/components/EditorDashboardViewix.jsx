@@ -122,6 +122,10 @@ function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
         videoId: st.videoId || null,
         frameioLink: st.frameioLink || "",
         deliveryId: (p.links || {}).deliveryId || null,
+        // Kick-off recording surfaced via a pill on the task row. Set
+        // by leads / founders in the project detail panel; null when
+        // not configured.
+        kickoffVideoUrl: p.kickoffVideoUrl || "",
         // Project metadata for the more-info dropdown — frozen subset
         // so the editor view doesn't pull the full project payload but
         // still has every brief / context field they need without
@@ -295,6 +299,81 @@ function fireFireworks() {
 // not over-the-top for a non-deliverable task.
 function fireSmallBurst() {
   confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 }, startVelocity: 25, ticks: 180 });
+}
+
+// ─── Kick-off video helpers ───────────────────────────────────────
+// Extract the 11-char YouTube video id from any of the common URL
+// shapes: youtu.be/VID, youtube.com/watch?v=VID, /embed/VID,
+// /shorts/VID, /live/VID. Returns null when no id is found, so the
+// pill / modal render conditionally on a real url.
+function parseYoutubeId(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  // youtu.be short link
+  const m1 = s.match(/youtu\.be\/([\w-]{11})/);
+  if (m1) return m1[1];
+  // ?v= query param
+  const m2 = s.match(/[?&]v=([\w-]{11})/);
+  if (m2) return m2[1];
+  // /embed/, /shorts/, /live/
+  const m3 = s.match(/youtube\.com\/(?:embed|shorts|live)\/([\w-]{11})/);
+  if (m3) return m3[1];
+  return null;
+}
+
+// Modal that embeds a YouTube player and autoplays. Click outside
+// or press Esc to close. Used by the Kick-off Video pill on the
+// editor TaskRow.
+function KickoffVideoModal({ youtubeId, projectName, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if (!youtubeId) return null;
+  // autoplay=1 + mute=0 so the editor sees + hears it the moment
+  // it loads. rel=0 hides the related-videos overlay at the end.
+  const src = `https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0&modestbranding=1`;
+  return (
+    <div onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 100,
+        background: "rgba(0,0,0,0.85)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{
+          width: 960, maxWidth: "100%",
+          background: "var(--card)", border: "1px solid var(--border)",
+          borderRadius: 12, padding: "16px 18px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.8)",
+        }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "var(--fg)" }}>
+            🎬 Kick-off video {projectName ? <span style={{ color: "var(--muted)", fontWeight: 600 }}> · {projectName}</span> : null}
+          </div>
+          <button onClick={onClose} title="Close (Esc)"
+            style={{
+              width: 32, height: 32, padding: 0, borderRadius: 8,
+              border: "1px solid var(--border)", background: "var(--bg)",
+              color: "var(--fg)", fontSize: 16, fontWeight: 700, cursor: "pointer",
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "inherit", flexShrink: 0,
+            }}>×</button>
+        </div>
+        <div style={{ position: "relative", paddingTop: "56.25%", borderRadius: 8, overflow: "hidden", background: "#000" }}>
+          <iframe
+            src={src}
+            title="Kick-off video"
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Frame.io URL guard ────────────────────────────────────────────
@@ -596,8 +675,9 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
 function TaskRow({
   task, isRunning, elapsedSecs, loggedSecs,
   onStart, onStop, onReset, onAdjust, onFinish, dim,
-  expanded, onToggleExpand, onOpenProject,
+  expanded, onToggleExpand, onOpenProject, onOpenKickoff,
 }) {
+  const kickoffYtId = parseYoutubeId(task.kickoffVideoUrl);
   return (
     <div style={{
       display: "flex", flexDirection: "column",
@@ -667,7 +747,34 @@ function TaskRow({
               account + project rows. Renders nothing when unset, so
               tasks for accounts without a goal stay visually clean. */}
           <ClientGoalPill goal={task.clientGoal} />
+          {/* Kick-off Video pill — set by leads / founders in the
+              project detail. Only renders when the URL parses to a
+              valid YouTube id; clicking pops the inline player.
+              Glows + pulses to catch the editor's eye on the first
+              task they see for a fresh project. */}
+          {kickoffYtId && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpenKickoff && onOpenKickoff(task.id); }}
+              title="Watch the kick-off video"
+              style={{
+                flexShrink: 0,
+                padding: "1px 8px", borderRadius: 4,
+                background: "rgba(239,68,68,0.16)",
+                color: "#EF4444",
+                border: "1px solid rgba(239,68,68,0.5)",
+                fontSize: 10, fontWeight: 800, textTransform: "uppercase",
+                letterSpacing: 0.5, cursor: "pointer",
+                fontFamily: "inherit",
+                display: "inline-flex", alignItems: "center", gap: 3,
+                animation: "viewix-kickoff-glow 2.2s ease-in-out infinite",
+              }}>
+              🎬 Kick-off Video
+            </button>
+          )}
         </div>
+        {/* Inline keyframes for the pill glow. Local to TaskRow so the
+            global stylesheet stays clean. */}
+        <style>{`@keyframes viewix-kickoff-glow{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.4);}50%{box-shadow:0 0 0 6px rgba(239,68,68,0);}}`}</style>
         <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {task.name}
         </div>
@@ -1103,6 +1210,10 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   // Editors don't have Projects-tab access, so the "Open project" link
   // inside the more-info dropdown pops a scoped read-only modal here.
   const [openProjectId, setOpenProjectId] = useState(null);
+  // Kick-off video modal — task id whose kick-off video is being
+  // played. Stored as task id (not video id) so the modal can also
+  // surface the parent project name in its header.
+  const [kickoffTaskId, setKickoffTaskId] = useState(null);
   const intervalRef = useRef(null);
   const justStoppedRef = useRef({});
   const today = isoToday();
@@ -1408,6 +1519,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
               expanded={expandedTaskId === t.id}
               onToggleExpand={toggleExpandTask}
               onOpenProject={setOpenProjectId}
+              onOpenKickoff={setKickoffTaskId}
             />
           ))}
         </Section>
@@ -1422,6 +1534,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
                 expanded={expandedTaskId === t.id}
                 onToggleExpand={toggleExpandTask}
                 onOpenProject={setOpenProjectId}
+              onOpenKickoff={setKickoffTaskId}
                 dim
               />
             ))}
@@ -1441,6 +1554,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
                 expanded={expandedTaskId === t.id}
                 onToggleExpand={toggleExpandTask}
                 onOpenProject={setOpenProjectId}
+              onOpenKickoff={setKickoffTaskId}
               />
             ))}
           </Section>
@@ -1511,6 +1625,24 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
           onClose={() => setOpenProjectId(null)}
         />
       )}
+
+      {/* Kick-off video modal — popped by the glowing pill on a task
+          row. Resolved against the latest task list on render so a
+          Firebase update during the modal's open window doesn't leave
+          it pinned to a stale URL. */}
+      {kickoffTaskId && (() => {
+        const kt = allTasks.find(x => x.id === kickoffTaskId);
+        if (!kt) return null;
+        const ytId = parseYoutubeId(kt.kickoffVideoUrl);
+        if (!ytId) { setKickoffTaskId(null); return null; }
+        return (
+          <KickoffVideoModal
+            youtubeId={ytId}
+            projectName={kt.parentName}
+            onClose={() => setKickoffTaskId(null)}
+          />
+        );
+      })()}
 
       {/* Finish modal — confirmation for shoot tasks, Frame.io review
           flow for everything else. Resolved against the latest task list

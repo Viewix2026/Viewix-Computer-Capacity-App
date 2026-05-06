@@ -1628,8 +1628,39 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
           />
         </div>
         {/* Seven-status taxonomy — coloured dropdown to fit without overflow */}
-        <div style={{ minWidth: 200 }}>
+        <div style={{ minWidth: 200, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
           <StatusCell value={status} onChange={(s) => { setStatus(s); persistField("status", s); }} />
+          {/* Commissioned toggle — flips the project between the
+              Uncommissioned section (top of Projects sub-tab) and
+              the Active section. New webhook-spawned projects land
+              uncommissioned by default; producers commission them
+              when ready to slot into the schedule. Manual toggle
+              here covers the "I want to send this back to triage"
+              case + lets us test the section visually for legacy
+              projects that never had the field. */}
+          {project.commissioned === false ? (
+            <button onClick={() => persistField("commissioned", true)}
+              title="Move this project into the Active section"
+              style={{
+                padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(16,185,129,0.5)",
+                background: "rgba(16,185,129,0.14)", color: "#10B981",
+                fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5,
+                cursor: "pointer", fontFamily: "inherit",
+              }}>
+              ✓ Commission ↓
+            </button>
+          ) : (
+            <button onClick={() => persistField("commissioned", false)}
+              title="Move this project back to the Uncommissioned section at the top"
+              style={{
+                padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(234,179,8,0.5)",
+                background: "rgba(234,179,8,0.14)", color: "#EAB308",
+                fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5,
+                cursor: "pointer", fontFamily: "inherit",
+              }}>
+              ↑ Move to Uncommissioned
+            </button>
+          )}
         </div>
       </div>
 
@@ -1667,6 +1698,12 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 
       <FieldCard label="Destinations" hint="Press Enter to add. Click a chip to remove.">
         <DestinationsEditor value={dests} onChange={(next) => persistField("destinations", next)} />
+      </FieldCard>
+
+      <FieldCard label="Kick-off Video" hint="YouTube URL of the project kick-off recording. Editors see a glowing pill on each video subtask that opens the video inline.">
+        <InlineText value={project.kickoffVideoUrl || ""}
+          placeholder="https://www.youtube.com/watch?v=..."
+          onSave={(v) => persistField("kickoffVideoUrl", v.trim())} />
       </FieldCard>
 
       <FieldCard label="Scope of Work">
