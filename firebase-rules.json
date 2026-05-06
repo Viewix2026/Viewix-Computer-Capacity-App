@@ -103,7 +103,7 @@
     },
 
     "foundersData": {
-      ".read": "auth != null && auth.token.role == 'founders'",
+      ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
       ".write": "auth != null && auth.token.role == 'founders'"
     },
 
