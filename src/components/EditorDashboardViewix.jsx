@@ -393,6 +393,39 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
         }
         if (reviewType === "client") fireFireworks();
         else fireConfetti();
+        // Slack notification — internal review pings the project-lead
+        // channel; client review pings the video-deliveries channel.
+        // Best-effort: any failure here is swallowed so a Slack hiccup
+        // doesn't block the editor's flow (the link + status writes
+        // already landed above). The endpoint itself returns 200 even
+        // on Slack errors so this fetch rarely throws.
+        try {
+          const project = (projects || []).find(p => p?.id === task.projectId);
+          const acctId = (project?.links || {}).accountId;
+          const acct = acctId && deliveries /* deliveries prop comes alongside accounts in the editor view */ ? null : null;
+          // Note: accounts isn't a prop on FinishModal yet — read AM/PL
+          // from the task's projectMeta which was already pre-resolved
+          // by tasksForEditor when the editor opened the dashboard.
+          const projectLead = task.projectMeta?.projectLead || "";
+          const clientName  = task.projectMeta?.clientName  || project?.clientName || "";
+          const projectName = task.projectMeta?.projectName || project?.projectName || "Untitled project";
+          await fetch("/api/notify-finish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reviewType,
+              projectName,
+              clientName,
+              videoName: task.name,
+              editorName,
+              projectLead,
+              frameioLink: linkOut,
+            }),
+          });
+        } catch (slackErr) {
+          // Logged for the producer-side console; doesn't surface to UI.
+          console.warn("Slack notify-finish failed (non-blocking):", slackErr);
+        }
       }
       onSubmitted?.();
       onClose();
