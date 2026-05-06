@@ -67,7 +67,32 @@ export function onFB(cb) {
   else fbCbs.push(cb);
 }
 
+// Per-path "recently wrote locally" stamps. Every write through this
+// module records the millisecond timestamp against the path's top-level
+// prefix (e.g. "/deliveries/X/videos/0/link" -> "/deliveries"). The
+// App.jsx listener wrapper consults `recentlyWroteTo(prefix)` to decide
+// whether to apply or suppress an incoming listener fire.
+//
+// Why: Firebase's onValue listens at a subtree root and re-delivers the
+// FULL subtree whenever ANY leaf changes. If you fast-type a leaf and
+// Firebase fires the listener with a snapshot it captured between two
+// of your writes (or from a concurrent server-side write that arrived
+// at the same time), the listener's `setDeliveries(arrayFromFirebase)`
+// will clobber your just-typed value. The bulk-write `skipRead` guard
+// only covered the App.jsx debounce window; per-path stamps cover EVERY
+// recent local write regardless of timing.
+const recentWrites = new Map(); // path-prefix -> Date.now() ms
+const stampWrite = (p) => {
+  const m = String(p || "").match(/^(\/[^/]+)/);
+  if (m) recentWrites.set(m[1], Date.now());
+};
+export function recentlyWroteTo(pathPrefix, withinMs = 1500) {
+  const t = recentWrites.get(pathPrefix);
+  return !!t && Date.now() - t < withinMs;
+}
+
 export function fbSet(p, v) {
+  stampWrite(p);
   if (db) db.ref(p).set(v).catch(e => console.error("Firebase set failed", p, e));
 }
 
@@ -75,6 +100,7 @@ export function fbSet(p, v) {
 // (e.g. surface to the user). fbSet stays fire-and-forget for the common
 // case of "write this and carry on" where a .catch log is sufficient.
 export function fbSetAsync(p, v) {
+  stampWrite(p);
   if (!db) return Promise.reject(new Error("Firebase not initialised"));
   return db.ref(p).set(v);
 }
@@ -83,6 +109,7 @@ export function fbSetAsync(p, v) {
 // replacing it. Use this when you want to update part of an object without
 // wiping sibling keys (e.g. updating .tab without losing .visitedTabs).
 export function fbUpdate(p, v) {
+  stampWrite(p);
   if (db) db.ref(p).update(v).catch(e => console.error("Firebase update failed", p, e));
 }
 

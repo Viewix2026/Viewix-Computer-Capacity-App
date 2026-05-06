@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
-import { initFB, onFB, fbSet, fbListen, onAuthReady, signOutUser, authFetch } from "./firebase";
+import { initFB, onFB, fbSet, fbListen, recentlyWroteTo, onAuthReady, signOutUser, authFetch } from "./firebase";
 import {
   CONTENT_CATEGORIES, CAT_COLORS,
   VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS,
@@ -221,11 +221,26 @@ export default function App(){
       // empty until something else writes. Always letting the first
       // fire through closes that gap; later fires keep the echo guard.
       const firstFireSeen=new Set();
+      // Per-path "recently wrote locally" guard, layered on top of the
+      // bulk-write skipRead. firebase.js stamps every fbSet/fbUpdate's
+      // top-level path prefix; this listener checks recentlyWroteTo
+      // and skips applying if any leaf under the same prefix was
+      // written in the last ~1.5s. Without this, fast typing on
+      // /deliveries leaves had Firebase's listener fire with a
+      // subtree snapshot captured between two of your writes, then
+      // setDeliveries replaced the whole array with stale data — your
+      // field appeared briefly then reverted to the previous value.
+      // skipRead only covered the App.jsx debounce window; this
+      // catches the gap between rapid leaf writes too. First-fire
+      // exemption stays so initial load isn't blocked.
       const listen=(path,apply)=>{
         const off=fbListen(path,(data)=>{
         const isInitial=!firstFireSeen.has(path);
         if(isInitial)firstFireSeen.add(path);
-        if(!isInitial&&skipRead.current)return;
+        if(!isInitial){
+          if(skipRead.current)return;
+          if(recentlyWroteTo(path))return;
+        }
         try{
           apply(data);
         }catch(e){console.error("Firebase data parse error:",path,e);}
