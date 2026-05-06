@@ -13,7 +13,18 @@
 // to Firebase via fbSet to avoid the App.jsx debounced bulk-write clobbering
 // webhook-created records that haven't hit local state yet.
 
-import { useState, useMemo, useEffect, useRef, memo, Fragment } from "react";
+import { useState, useMemo, useEffect, useRef, memo, createContext, useContext, Fragment } from "react";
+
+// View-only context — Lead role gets read-only access to the Projects
+// tab (PR #N). Every editable surface inside this file reads from
+// this context to decide whether to render a control or a static
+// display. Founders / Founders-admin / Closer don't pass `viewOnly`
+// (or pass false), so they keep full edit access.
+//
+// canEditKickoff carves out the one exception: the kick-off video
+// URL on the Project Detail panel stays editable for leads, since
+// that's the one field they own per spec.
+const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true });
 import { BTN } from "../config";
 import { fmtCur, fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
@@ -859,6 +870,7 @@ function MultiAssigneePicker({ value, editors, onChange }) {
 }
 
 function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped }) {
+  const { viewOnly } = useContext(ProjectsAccessContext);
   // useSortable wires this row into whatever <SortableContext> wraps
   // it (project details + the projects sub-tab list each have their
   // own). The drag handle in the leading cell carries the listeners
@@ -869,6 +881,10 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
     setNodeRef: setDragRef, transform, transition, isDragging,
   } = useSortable({ id: subtask.id });
   const persist = (field, value) => {
+    // View-only role can't write any subtask field. Bail early so any
+    // stray inline-input save attempt is a no-op rather than racing
+    // the server with a write that'd be rejected by rules anyway.
+    if (viewOnly) return;
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, new Date().toISOString());
 
@@ -930,26 +946,28 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
         zIndex: isDragging ? 2 : undefined,
       }}>
       <td style={{ ...tdStyle, padding: "4px 14px", width: 28 }}>
-        <span
-          {...dragAttrs}
-          {...dragListeners}
-          title="Drag to reorder"
-          aria-label="Drag to reorder"
-          style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 18, height: 18,
-            color: "var(--muted)", opacity: 0.55,
-            cursor: isDragging ? "grabbing" : "grab",
-            userSelect: "none",
-            fontSize: 12, lineHeight: 1, letterSpacing: -1,
-            transition: "opacity 0.12s, color 0.12s",
-            touchAction: "none",
-          }}
-          onMouseEnter={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--fg)"; }}
-          onMouseLeave={e => { e.currentTarget.style.opacity = "0.55"; e.currentTarget.style.color = "var(--muted)"; }}>
-          {/* Six-dot grip — two columns of three dots, classic drag affordance. */}
-          ⋮⋮
-        </span>
+        {!viewOnly && (
+          <span
+            {...dragAttrs}
+            {...dragListeners}
+            title="Drag to reorder"
+            aria-label="Drag to reorder"
+            style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 18, height: 18,
+              color: "var(--muted)", opacity: 0.55,
+              cursor: isDragging ? "grabbing" : "grab",
+              userSelect: "none",
+              fontSize: 12, lineHeight: 1, letterSpacing: -1,
+              transition: "opacity 0.12s, color 0.12s",
+              touchAction: "none",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--fg)"; }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = "0.55"; e.currentTarget.style.color = "var(--muted)"; }}>
+            {/* Six-dot grip — two columns of three dots, classic drag affordance. */}
+            ⋮⋮
+          </span>
+        )}
       </td>
       <td style={{ ...tdStyle, padding: "4px 14px 4px 48px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -1025,7 +1043,8 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
           {/* Delete subtask — visible by default in red so producers
               don't have to hover-hunt for the × like the previous
               implementation required. Hover deepens the background to
-              confirm the hit. */}
+              confirm the hit. Hidden in view-only mode. */}
+          {!viewOnly && (
           <button
             onClick={() => { if (window.confirm(`Delete subtask "${subtask.name}"?`)) onDelete(subtask.id); }}
             title="Delete subtask"
@@ -1052,6 +1071,7 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
               e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)";
             }}
           >×</button>
+          )}
         </div>
         {/* Time row — start/end times sit under the name on the same column */}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, marginLeft: 18 }}>
@@ -1135,6 +1155,7 @@ function AddSubtaskRow({ projectId, nextOrder }) {
 }
 
 function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal, accountManager, projectLead, onCommission }) {
+  const { viewOnly } = useContext(ProjectsAccessContext);
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "";
   const namePart = project.projectName || "Untitled project";
@@ -1157,13 +1178,15 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
       onMouseEnter={e => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
       onMouseLeave={e => e.currentTarget.style.background = baseBg}>
       <td style={tdStyle} onClick={e => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          checked={!!selected}
-          onChange={() => onToggleSelect(project.id)}
-          title="Select for bulk actions"
-          style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
-        />
+        {!viewOnly && (
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={() => onToggleSelect(project.id)}
+            title="Select for bulk actions"
+            style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
+          />
+        )}
       </td>
       <td style={{ ...tdStyle, minWidth: 320 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1229,7 +1252,7 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
               Uncommissioned section into the Active section below.
               Stops propagation so the click doesn't open the project
               detail panel as well. */}
-          {project.commissioned === false && (
+          {project.commissioned === false && !viewOnly && (
             <button
               onClick={(e) => { e.stopPropagation(); onCommission && onCommission(project.id); }}
               title="Commission this project — move it into the Active section"
@@ -1320,6 +1343,7 @@ const dateCellStyle = {
 };
 
 function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
+  const { viewOnly } = useContext(ProjectsAccessContext);
   // Header checkbox is tri-state: empty / checked (all) / indeterminate
   // (some). Browsers don't have a CSS-only indeterminate state — set
   // it on the DOM via ref.
@@ -1357,14 +1381,16 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
           <thead>
             <tr style={{ background: "var(--bg)" }}>
               <th style={thStyle}>
-                <input
-                  ref={headerCheckRef}
-                  type="checkbox"
-                  checked={allChecked}
-                  onChange={() => onToggleSelectAll(allChecked)}
-                  title={allChecked ? "Deselect all" : "Select all"}
-                  style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
-                />
+                {!viewOnly && (
+                  <input
+                    ref={headerCheckRef}
+                    type="checkbox"
+                    checked={allChecked}
+                    onChange={() => onToggleSelectAll(allChecked)}
+                    title={allChecked ? "Deselect all" : "Select all"}
+                    style={{ cursor: "pointer", accentColor: "var(--accent)", width: 16, height: 16 }}
+                  />
+                )}
               </th>
               <th style={{ ...thStyle, textAlign: "left" }}>Project</th>
               <th style={{ ...thStyle, textAlign: "left", paddingLeft: 12 }}>Lead</th>
@@ -1439,7 +1465,7 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                       ))}
                     </SortableContext>
                   )}
-                  {isExpanded && (
+                  {isExpanded && !viewOnly && (
                     <AddSubtaskRow
                       projectId={p.id}
                       nextOrder={subtasks.length > 0 ? Math.max(...subtasks.map(s => s.order ?? 0)) + 1 : 0}
@@ -1554,6 +1580,7 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
 });
 
 function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries }) {
+  const { viewOnly, canEditKickoff } = useContext(ProjectsAccessContext);
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
@@ -1567,7 +1594,10 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
   // Per-leaf fbUpdate. fbUpdate is merge-semantics so concurrent writes
   // from the webhook (e.g. attioCompanyId arriving late) don't get
   // clobbered by a render-time spread of the old project object.
+  // View-only role: persist no-ops on every field EXCEPT kickoffVideoUrl
+  // (kickoff is the one field leads can edit per spec).
   const persistField = async (path, value) => {
+    if (viewOnly && !(path === "kickoffVideoUrl" && canEditKickoff)) return;
     setSaveState("saving");
     try {
       await fbUpdate(`/projects/${project.id}`, {
@@ -1638,7 +1668,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
               here covers the "I want to send this back to triage"
               case + lets us test the section visually for legacy
               projects that never had the field. */}
-          {project.commissioned === false ? (
+          {viewOnly ? null : project.commissioned === false ? (
             <button onClick={() => persistField("commissioned", true)}
               title="Move this project into the Active section"
               style={{
@@ -1810,16 +1840,18 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
             {subtasks.length === 0 ? (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px" }}>
                 <span style={{ fontSize: 12, color: "var(--muted)" }}>No subtasks yet.</span>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={seedDefaults}
-                    style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 11, padding: "5px 10px" }}>
-                    Seed default phases
-                  </button>
-                  <button onClick={addManual}
-                    style={{ ...BTN, background: "var(--accent)", color: "#fff", border: "none", fontSize: 11, padding: "5px 10px" }}>
-                    + Add subtask
-                  </button>
-                </div>
+                {!viewOnly && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={seedDefaults}
+                      style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)", fontSize: 11, padding: "5px 10px" }}>
+                      Seed default phases
+                    </button>
+                    <button onClick={addManual}
+                      style={{ ...BTN, background: "var(--accent)", color: "#fff", border: "none", fontSize: 11, padding: "5px 10px" }}>
+                      + Add subtask
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <>
@@ -1850,16 +1882,18 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                     </SortableContext>
                   </DndContext>
                 </div>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-                  <button onClick={addManual}
-                    style={{ padding: "5px 12px", borderRadius: 4, border: "1px dashed var(--border)",
-                      background: "transparent", color: "var(--muted)",
-                      fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
-                    onMouseEnter={e => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.borderColor = "var(--accent)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
-                    + Add subtask
-                  </button>
-                </div>
+                {!viewOnly && (
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                    <button onClick={addManual}
+                      style={{ padding: "5px 12px", borderRadius: 4, border: "1px dashed var(--border)",
+                        background: "transparent", color: "var(--muted)",
+                        fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                      onMouseEnter={e => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.borderColor = "var(--accent)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)"; e.currentTarget.style.borderColor = "var(--border)"; }}>
+                      + Add subtask
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </FieldCard>
@@ -1872,12 +1906,14 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
           onSave={(v) => persistField("producerNotes", v)} />
       </FieldCard>
 
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button onClick={() => { if (confirm(`Delete project "${project.projectName}"? This only removes it from the Projects tab — linked records (delivery / preprod / sherpa / account) are kept.`)) onDelete(); }}
-          style={{ ...BTN, background: "transparent", color: "#EF4444", border: "1px solid #EF4444" }}>
-          Delete project
-        </button>
-      </div>
+      {!viewOnly && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={() => { if (confirm(`Delete project "${project.projectName}"? This only removes it from the Projects tab — linked records (delivery / preprod / sherpa / account) are kept.`)) onDelete(); }}
+            style={{ ...BTN, background: "transparent", color: "#EF4444", border: "1px solid #EF4444" }}>
+            Delete project
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1953,7 +1989,14 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
   );
 }
 
-export function Projects({ projects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route }) {
+export function Projects({ role, projects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route }) {
+  // Lead role gets read-only access to the Projects tab — they can
+  // see every record (rows, subtasks, project detail panel) but
+  // can't edit, delete, archive, drag, or add. ONE carve-out:
+  // kick-off video URL stays editable in the project detail panel
+  // because that's a lead-owned field per spec.
+  const viewOnly = role === "lead";
+  const canEditKickoff = role === "lead" || role === "founder" || role === "founders";
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   // Quick-view modal — opened when a producer clicks a bar on the
@@ -2158,10 +2201,19 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
   };
 
   return (
-    <>
+    <ProjectsAccessContext.Provider value={{ viewOnly, canEditKickoff }}>
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Projects</span>
+          {viewOnly && (
+            <span style={{
+              padding: "2px 8px", borderRadius: 4,
+              background: "rgba(234,179,8,0.15)", color: "#EAB308",
+              fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5,
+            }} title="Read-only access — your role can view but not edit. Kick-off Video on the Project Detail panel is the one field you can update.">
+              View only
+            </span>
+          )}
           {!active && (
             <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3, marginLeft: 12 }}>
               <button onClick={() => setSubTab("projects")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "projects" ? "var(--card)" : "transparent", color: subTab === "projects" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Projects</button>
@@ -2219,6 +2271,11 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
             </div>
           ) : (
             <>
+              {/* Bulk-action bar — hidden in view-only mode (lead role)
+                  since the actions it offers (set-status / archive /
+                  delete) are all writes the role can't perform. */}
+              {!viewOnly && (
+              <>
               {/* Bulk-action bar — appears whenever any rows are
                   selected. Sticky at the top of the table area so it
                   follows the producer down a long list. */}
@@ -2274,6 +2331,8 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
                     Clear
                   </button>
                 </div>
+              )}
+              </>
               )}
               <ProjectTable
                 projects={filtered}
@@ -2347,6 +2406,6 @@ export function Projects({ projects, deliveries, setDeliveries, accounts, editor
           deepLinkDeliveryId={route?.subTab === "deliveries" ? route?.recordId : null}
         />
       )}
-    </>
+    </ProjectsAccessContext.Provider>
   );
 }
