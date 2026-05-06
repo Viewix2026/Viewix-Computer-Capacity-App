@@ -42,6 +42,12 @@ export function Sale({
   const [chargingSale, setChargingSale] = useState(null);
   const [chargeLoading, setChargeLoading] = useState(false);
   const [chargeResult, setChargeResult] = useState(null);
+  // Reconcile-from-Stripe — founder-only escape hatch when a webhook
+  // didn't fire and the dashboard's slice statuses are out of sync
+  // with what Stripe actually shows. Local state per-sale: id of the
+  // sale currently reconciling, plus the last result payload.
+  const [reconcilingSaleId, setReconcilingSaleId] = useState(null);
+  const [reconcileResult, setReconcileResult] = useState(null);
 
   const pricing = salePricing || DEFAULT_SALE_PRICING;
 
@@ -206,6 +212,35 @@ export function Sale({
     }
   };
 
+  // Reconcile-from-Stripe — founder-only escape hatch when a webhook
+  // didn't fire (signature reject, missing env var, livemode mismatch,
+  // network glitch). Calls the server endpoint which lists the sale's
+  // subscription invoices + tagged payment intents from Stripe and
+  // marks any matching slices paid. Idempotent — safe to re-run.
+  const reconcileFromStripe = async (s) => {
+    setReconcilingSaleId(s.id);
+    setReconcileResult(null);
+    try {
+      const r = await authFetch("/api/reconcile-sale-payments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saleId: s.id }),
+      });
+      const d = await r.json();
+      if (r.ok && d.ok) {
+        const paidNow = (d.sale?.schedule || []).filter(x => x.status === "paid").length;
+        const total = (d.sale?.schedule || []).length;
+        setReconcileResult({ saleId: s.id, kind: "success", message: `Reconciled ${paidNow}/${total} slices paid. Row will refresh in a moment.` });
+      } else {
+        setReconcileResult({ saleId: s.id, kind: "error", message: d.error || `Unexpected response (${r.status}).` });
+      }
+    } catch (e) {
+      setReconcileResult({ saleId: s.id, kind: "error", message: e.message });
+    } finally {
+      setReconcilingSaleId(null);
+    }
+  };
+
   return (<>
     {/* Top header: title + subtab switch */}
     <div style={{padding:"12px 28px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--card)"}}>
@@ -348,6 +383,21 @@ export function Sale({
                   {showChargeBalance && (
                     <button onClick={()=>{setChargingSale(s);setChargeResult(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Charge Balance</button>
                   )}
+                  {/* Reconcile from Stripe — founder-only. Visible whenever
+                      the sale is not fully paid yet so a producer can pull
+                      truth from Stripe directly (subscription invoices +
+                      tagged payment intents) and mark any slices paid that
+                      a missed webhook left behind. Idempotent — safe to
+                      re-run. */}
+                  {isFounders && status.label !== "PAID" && (
+                    <button
+                      onClick={()=>reconcileFromStripe(s)}
+                      disabled={reconcilingSaleId===s.id}
+                      title="Pull payment status from Stripe (use when a webhook didn't fire)"
+                      style={{...BTN,background:"var(--bg)",color:"#0082FA",border:"1px solid #0082FA",cursor:reconcilingSaleId===s.id?"wait":"pointer",opacity:reconcilingSaleId===s.id?0.7:1}}>
+                      {reconcilingSaleId===s.id ? "Reconciling…" : "Reconcile"}
+                    </button>
+                  )}
                   <button onClick={()=>copyLink(s)} style={{...BTN,background:copyFlash===s.id?"#10B981":"var(--bg)",color:copyFlash===s.id?"white":"var(--accent)",border:"1px solid var(--border)"}}>{copyFlash===s.id?"Copied!":"Copy Link"}</button>
                   <a href={url} target="_blank" rel="noopener noreferrer" style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)",textDecoration:"none",display:"inline-flex",alignItems:"center"}}>Preview ↗</a>
                   {confirmDelete===s.id?(
@@ -360,6 +410,17 @@ export function Sale({
                   )}
                 </div>
               </div>
+              {reconcileResult && reconcileResult.saleId === s.id && (
+                <div style={{
+                  marginTop: 10, padding: "8px 12px", borderRadius: 6,
+                  fontSize: 11, fontWeight: 600,
+                  background: reconcileResult.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)",
+                  color: reconcileResult.kind === "success" ? "#10B981" : "#EF4444",
+                  border: `1px solid ${reconcileResult.kind === "success" ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`,
+                }}>
+                  {reconcileResult.message}
+                </div>
+              )}
             </div>);
           })}
         </div>
