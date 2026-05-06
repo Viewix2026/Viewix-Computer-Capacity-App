@@ -15,7 +15,7 @@
 
 import { useState, useMemo, useEffect, useRef, memo, Fragment } from "react";
 import { BTN } from "../config";
-import { fmtCur, fmtD, matchSherpaForName } from "../utils";
+import { fmtCur, fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
@@ -1370,20 +1370,19 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
                     onToggleExpand={onToggleExpand}
                     subtaskCount={subtasks.length}
                     subtaskDoneCount={subtasks.filter(s => normaliseSubtaskStatus(s.status) === "done").length}
-                    clientGoal={(() => {
-                      // Resolve from the linked account once per row.
-                      // /accounts arrives as a keyed object — accountId
-                      // points straight at the entry, no scan needed.
-                      const acctId = (p.links || {}).accountId;
-                      return acctId ? (accounts || {})[acctId]?.goal || null : null;
-                    })()}
-                    accountManager={(() => {
-                      const acctId = (p.links || {}).accountId;
-                      return acctId ? ((accounts || {})[acctId]?.accountManager || "") : "";
-                    })()}
-                    projectLead={(() => {
-                      const acctId = (p.links || {}).accountId;
-                      return acctId ? ((accounts || {})[acctId]?.projectLead || "") : "";
+                    {...(() => {
+                      // Resolve the linked /accounts entry once per row
+                      // via the three-tier fallback (links.accountId →
+                      // attioCompanyId → clientName). Single helper call
+                      // shared with the editor view's tasksForEditor so
+                      // both surfaces show the same AM/PL/goal even
+                      // when the project's accountId was never stamped.
+                      const acct = resolveAccountForProject(p, accounts);
+                      return {
+                        clientGoal:     acct?.goal || null,
+                        accountManager: acct?.accountManager || "",
+                        projectLead:    acct?.projectLead || "",
+                      };
                     })()}
                   />
                   {isExpanded && (

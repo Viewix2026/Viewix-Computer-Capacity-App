@@ -510,3 +510,41 @@ export function newVideoId() {
 export function newVideo() {
   return { id: `v-${Date.now()}`, videoId: newVideoId(), name: "", link: "", viewixStatus: "In Development", revision1: "", revision2: "", notes: "" };
 }
+
+// Resolve the /accounts entry that owns a given project. Used by the
+// Projects row's Lead column, the editor's task more-info dropdown,
+// and the client-goal pill across both views — all of which need
+// account-side fields (accountManager / projectLead / goal) without
+// requiring every project to have a perfectly-set links.accountId.
+//
+// Three-tier resolution:
+//   1. project.links.accountId → /accounts/{id}   (set by the
+//      Attio webhook when a deal flips Won — most reliable).
+//   2. project.attioCompanyId  → match account.attioId   (catches
+//      projects whose accountId was never stamped, but the canonical
+//      Attio id was).
+//   3. project.clientName      → match account.companyName (case-
+//      insensitive, trimmed)   (catches manually-created accounts not
+//      yet linked to Attio, and older project records).
+//
+// Returns null when nothing matches — callers render an empty / "—"
+// state. /accounts arrives as a keyed object, so direct-id lookup is
+// O(1); the fallback scans iterate /accounts which is fine at Viewix
+// scale (tens of accounts).
+export function resolveAccountForProject(project, accounts) {
+  if (!project || !accounts) return null;
+  const links = project.links || {};
+  if (links.accountId && accounts[links.accountId]) return accounts[links.accountId];
+  if (project.attioCompanyId) {
+    for (const a of Object.values(accounts)) {
+      if (a && a.attioId === project.attioCompanyId) return a;
+    }
+  }
+  const wantName = (project.clientName || "").trim().toLowerCase();
+  if (wantName) {
+    for (const a of Object.values(accounts)) {
+      if (a && (a.companyName || "").trim().toLowerCase() === wantName) return a;
+    }
+  }
+  return null;
+}
