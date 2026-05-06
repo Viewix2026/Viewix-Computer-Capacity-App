@@ -2257,6 +2257,31 @@ export function Projects({ role, projects, deliveries, setDeliveries, accounts, 
 
       {subTab === "projects" && !active && (
         <div style={{ padding: "16px 28px 60px" }}>
+          {/* Live count of active parent projects — projects whose
+              status normalises to anything except done / archived,
+              regardless of which filter pill is currently selected.
+              Sits above the list so producers see capacity at a glance.
+              Other tabs (Capacity Planner Dashboard) read from the same
+              /projects state so the number stays consistent across the
+              app. */}
+          {(() => {
+            const activeCount = (projects || []).filter(p => {
+              const s = normaliseStatus(p?.status);
+              return s !== "done" && s !== "archived";
+            }).length;
+            return (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 12,
+                marginBottom: 14, padding: "10px 14px",
+                borderRadius: 8, border: "1px solid var(--border)",
+                background: "var(--bg)",
+              }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>Active projects</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: "var(--accent)", fontFamily: "'JetBrains Mono',monospace" }}>{activeCount}</span>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>not Done · not Archived</span>
+              </div>
+            );
+          })()}
           {filtered.length === 0 ? (
             <div style={{ textAlign: "center", padding: 60, color: "var(--muted)", background: "var(--card)", borderRadius: 12, border: "1px solid var(--border)" }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>📁</div>

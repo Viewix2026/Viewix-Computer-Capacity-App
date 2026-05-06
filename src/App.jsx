@@ -359,11 +359,23 @@ export default function App(){
   // Backfill missing crew members (Jeremy/Steve/Vish) into the roster — one-time per workspace.
   useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"},{id:"ed-vish",name:"Vish"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);
 
-  // Auto-update active projects from /projects (status === "inProgress").
-  // Replaces the old Monday board count — same semantics, Firebase source.
+  // Auto-update active projects from /projects. Matches the count
+  // shown above the Projects sub-tab list — anything whose status
+  // doesn't normalise to "done" or "archived" is considered active.
+  // Was previously "inProgress" only, which underreported because
+  // notStarted / scheduled / waitingClient / stuck / onHold etc.
+  // are all still active workload from a capacity perspective.
+  // Same Firebase source replaced the Monday board count when we
+  // removed the Monday integration.
   useEffect(()=>{
     if(!isFounder||tool!=="capacity")return;
-    const count=projects.filter(p=>p&&p.status==="inProgress").length;
+    const count=projects.filter(p=>{
+      if(!p)return false;
+      const s=String(p.status||"").toLowerCase();
+      // Mirrors normaliseStatus in Projects.jsx — legacy "active" is
+      // treated as in-progress for the count.
+      return s!=="done" && s!=="archived";
+    }).length;
     setInputs(p=>({...p,currentActiveProjects:count}));
   },[role,tool,projects]);
 

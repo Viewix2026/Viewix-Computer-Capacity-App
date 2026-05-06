@@ -2,10 +2,10 @@
 //
 // Visibility rules:
 //   closer            → only "sales"-named categories
-//   editor / trial    → everything EXCEPT "sales"-named categories
-//                       (so editors don't see Sales Training, and trial
-//                       users see Editor Onboarding + any custom
-//                       "Trial …" category you've added)
+//   editor            → everything EXCEPT "sales"-named categories
+//   trial             → ONLY the "Editor Onboarding" category (the
+//                       11-module starter pack). Anything else is
+//                       gated behind the editor or higher role.
 //   founder / founders / lead → everything
 //
 // Founders + closers also get the Meeting Feedback sub-tab for
@@ -198,7 +198,9 @@ export function Training({
   // ═══════════════════════════════════════════
   const visibleTraining = role === "closer"
     ? trainingData.filter(c => (c.name || "").toLowerCase().includes("sales"))
-    : (role === "editor" || role === "trial")
+    : role === "trial"
+    ? trainingData.filter(c => (c.name || "").toLowerCase() === "editor onboarding")
+    : role === "editor"
     ? trainingData.filter(c => !(c.name || "").toLowerCase().includes("sales"))
     : trainingData;
   const canSeeMeetingFeedback = isFounder || role === "closer";
