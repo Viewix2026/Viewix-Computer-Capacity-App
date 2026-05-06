@@ -265,7 +265,19 @@ export default function App(){
 
   const wt=useRef(null);
   const deletedPaths=useRef([]);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);Object.entries(accounts).forEach(([k,v])=>{if(v&&v.id)fbSet("/accounts/"+k,v);});fbSet("/turnaround",turnaround);/* Sales intentionally NOT written from the bulk-write loop. Sales
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
+   Reason: AccountsDashboard's updateAccount / updateMilestone /
+   setSigningDate already fbSet directly at click time, AND
+   accounts are written by server endpoints too (webhook-deal-won
+   on every Won deal, sync-attio-cache for backfills). A bulk-write
+   here would race those writes — local state could be a few ms
+   behind a concurrent server write, and the bulk-write would
+   clobber the fresh data. Symptom we hit: setting a goal on an
+   account would disappear seconds later because a stale-state
+   bulk-write replayed the pre-goal record. doSync (the Sync from
+   Attio button) also fbSets directly now so it doesn't rely on
+   this loop. Same reasoning applies to Sales below. */
+   /* Sales intentionally NOT written from the bulk-write loop. Sales
    are append-only from the dashboard side: created via Sale.jsx's
    direct fbSetAsync at save-time, deleted via Sale.jsx's explicit
    fbSetAsync(null), updated only by the server (Stripe webhook
