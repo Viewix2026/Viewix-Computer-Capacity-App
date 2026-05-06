@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { fbSet } from "../firebase";
+import { fbSet, fbUpdate } from "../firebase";
 import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS, CLIENT_GOAL_COLORS } from "../config";
 import { logoBg, matchSherpaForName } from "../utils";
 import { ClientGoalPill } from "./ClientGoalPill";
@@ -192,8 +192,17 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
         if (patch.projectLead !== undefined) sherpaSync.projectLead = patch.projectLead;
         syncToSherpas(acct.companyName, sherpaSync);
       }
-      // Write immediately to Firebase to prevent skipRead race condition
-      fbSet(`/accounts/${id}`, acct);
+      // Leaf-merge write: only the keys in `patch` go to Firebase.
+      // Was a full-object fbSet which silently clobbered concurrent
+      // writes — auto-heal projectLead leaf writes, milestone edits
+      // happening at the same time, server-side webhook patches
+      // (api/webhook-deal-won fbPatch / fbSet on existing companies),
+      // sync-attio-cache backfills, etc. Symptom Jeremy hit: change
+      // a goal to "awareness" → setting persisted in local state
+      // briefly but the next write to /accounts/{id} (or a webhook
+      // fire on the same record) replayed the full object captured
+      // before the goal change and reverted the field.
+      fbUpdate(`/accounts/${id}`, patch);
       return { ...prev, [id]: acct };
     });
   };
@@ -204,7 +213,10 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
       const milestones = { ...(acct.milestones || {}) };
       milestones[milestoneKey] = { ...(milestones[milestoneKey] || {}), ...patch };
       const updated = { ...acct, milestones };
-      fbSet(`/accounts/${id}`, updated);
+      // Leaf-merge at the milestone level — same race-avoidance
+      // reasoning as updateAccount above. Only the keys in `patch`
+      // (date / status) for this single milestone go to Firebase.
+      fbUpdate(`/accounts/${id}/milestones/${milestoneKey}`, patch);
       return { ...prev, [id]: updated };
     });
   };
@@ -220,7 +232,9 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
       const existing = milestones.signing || {};
       milestones.signing = { ...existing, date: dateStr };
       const updated = { ...acct, milestones };
-      fbSet(`/accounts/${id}`, updated);
+      // Leaf-merge: only signing.date, leaves status + every other
+      // milestone alone.
+      fbUpdate(`/accounts/${id}/milestones/signing`, { date: dateStr });
       return { ...prev, [id]: updated };
     });
   };
