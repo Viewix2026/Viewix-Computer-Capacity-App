@@ -265,7 +265,15 @@ export default function App(){
 
   const wt=useRef(null);
   const deletedPaths=useRef([]);
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});deliveries.forEach(d=>{if(d&&d.id)fbSet("/deliveries/"+d.id,d);});fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
+   Same reasoning as /accounts and /sales above: Deliveries.jsx writes
+   leaf paths directly per edit (videos[i].link, status, revision1,
+   etc.), and server endpoints write leaves too (notify-revision).
+   A bulk-write here would replay state that's even a few ms behind
+   any of those writes and clobber the fresh data. Symptom we hit:
+   pasting a link on one video reverted the previous video's link;
+   flipping Viewix status quickly across rows occasionally reverted
+   one of them. */fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
    Reason: AccountsDashboard's updateAccount / updateMilestone /
    setSigningDate already fbSet directly at click time, AND
    accounts are written by server endpoints too (webhook-deal-won
