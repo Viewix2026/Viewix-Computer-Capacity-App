@@ -204,6 +204,12 @@ export default async function handler(req, res) {
         id: delId,
         shortId: makeShortId(),
         clientName: companyName,
+        // Pull the deal name across to the delivery so the Deliveries
+        // tab shows the actual project (e.g. "Acme Q3 Brand Reel")
+        // instead of the "Untitled project" placeholder. Same source
+        // the project record itself uses for its projectName, so the
+        // two records stay in sync from the moment the deal is Won.
+        projectName: (dealName || "").trim() || "Untitled project",
         logoUrl: "",
         notes: "",
         videos: [],

@@ -147,31 +147,63 @@ export default async function handler(req, res) {
     const accountsMap = (await fbGet("/accounts")) || {};
     const accountById = new Map();
     const accountByAttioId = new Map();
+    const accountsByNameLength = []; // sorted longest-first for prefix match
     for (const a of Object.values(accountsMap)) {
       if (!a || !a.id) continue;
       accountById.set(a.id, a);
       if (a.attioId) accountByAttioId.set(a.attioId, a);
+      if (a.companyName) accountsByNameLength.push(a);
     }
+    // Longest companyName first so e.g. "Jamieson Group" wins over a
+    // hypothetical "Jamieson" account when projectName starts with the
+    // longer one. Avoids false-matches on similar-name accounts.
+    accountsByNameLength.sort((a, b) => (b.companyName || "").length - (a.companyName || "").length);
     const projectsObj = (await fbGet("/projects")) || {};
     const projects = Object.values(projectsObj).filter(p => p && p.id);
     let projectsBackfilled = 0;
     let deliveriesBackfilled = 0;
     let accountsBackfilled = 0;
     let preprodBackfilled = 0;
+    let projectsAccountLinked = 0;
     for (const p of projects) {
       if (p.clientName) continue;
       // Prefer the account record reachable via links.accountId;
       // fall back to the Attio company id stamped on the project for
-      // older records that didn't capture an accountId at win-time.
+      // older records that didn't capture an accountId at win-time;
+      // last-resort: scan accounts and check if the projectName starts
+      // with any account's companyName (case-insensitive). This catches
+      // legacy records like "Holahealth Social Retainer Package month 2"
+      // where the client name is embedded in the project name but no
+      // accountId / attioCompanyId link was ever stored. When this
+      // path matches, ALSO write links.accountId so the row inherits
+      // the account's manager / project lead going forward.
       const acctId = (p.links || {}).accountId;
       let resolved = null;
+      let linkAccountId = null;
       if (acctId && accountById.has(acctId) && accountById.get(acctId).companyName) {
         resolved = accountById.get(acctId).companyName;
       } else if (p.attioCompanyId && accountByAttioId.has(p.attioCompanyId)) {
-        resolved = accountByAttioId.get(p.attioCompanyId).companyName;
+        const matched = accountByAttioId.get(p.attioCompanyId);
+        resolved = matched.companyName;
+        if (!acctId) linkAccountId = matched.id;
+      } else if (p.projectName) {
+        const lcName = p.projectName.toLowerCase();
+        for (const a of accountsByNameLength) {
+          const lcCompany = a.companyName.toLowerCase();
+          if (lcName.startsWith(lcCompany)) {
+            resolved = a.companyName;
+            if (!acctId) linkAccountId = a.id;
+            break;
+          }
+        }
       }
       if (!resolved) continue;
-      await fbPatch(`/projects/${p.id}`, { clientName: resolved, updatedAt: lastSyncedAt });
+      const projectPatch = { clientName: resolved, updatedAt: lastSyncedAt };
+      if (linkAccountId) {
+        projectPatch.links = { ...(p.links || {}), accountId: linkAccountId };
+        projectsAccountLinked++;
+      }
+      await fbPatch(`/projects/${p.id}`, projectPatch);
       projectsBackfilled++;
       // Cascade — same name lands on every related record that's still
       // missing it. Only patches when the field is genuinely empty so
@@ -209,6 +241,7 @@ export default async function handler(req, res) {
       quotedAtBackfilled: backfilled,
       clientNameBackfill: {
         projects: projectsBackfilled,
+        projectsAccountLinked,
         deliveries: deliveriesBackfilled,
         accounts: accountsBackfilled,
         preproduction: preprodBackfilled,
