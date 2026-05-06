@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { fbSet } from "../firebase";
-import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS } from "../config";
+import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS, CLIENT_GOAL_COLORS } from "../config";
 import { logoBg, matchSherpaForName } from "../utils";
 import { ClientGoalPill } from "./ClientGoalPill";
 
@@ -13,6 +13,38 @@ const PARTNERSHIP_TYPES = [
   "Starter Pack - Social Media", "Brand Builder - Social Media", "Market Leader - Social Media",
   "Market Dominator - Social Media", "90 Day Gameplan", "Animation"
 ];
+
+// Meta Ads partnerships don't get Final Live / Boosting Strategy /
+// Many Chat — those columns are organic-funnel concerns, not paid-
+// media concerns. We blank the cells (render an em-dash in muted
+// grey) so producers can see at a glance that the columns
+// intentionally don't apply to that row, vs. "we forgot to fill it
+// in". Matches by substring rather than literal so all three Meta
+// Ads tiers (Standard / Premium / Deluxe) share the rule.
+const isMetaAdsAccount = (acct) =>
+  String(acct?.partnershipType || "").includes("Meta Ads");
+
+const META_ADS_BLANKED_KEYS = new Set(["finalLive", "boostingStrategy", "manyChat"]);
+
+// Goal-driven highlight rings on the milestone columns. Tells
+// producers at a glance which tool a client should be using based
+// on what they're trying to achieve:
+//   - leads      → Many Chat (red)         · comment-trigger DM funnel
+//   - awareness  → Boosting Strategy (blue) · paid distribution to extend reach
+//   - engagement → Many Chat (orange)       · DM-driven engagement signals
+// Brand Building intentionally has no rule (Jeremy's call) — it's
+// a goal where neither tool is a forced "should be using". The
+// colours are pulled from CLIENT_GOAL_COLORS so the ring on the
+// dropdown matches the goal pill in the company name cell.
+const GOAL_RING_RULES = {
+  leads:      { milestoneKey: "manyChat",         color: CLIENT_GOAL_COLORS.leads      },
+  awareness:  { milestoneKey: "boostingStrategy", color: CLIENT_GOAL_COLORS.awareness  },
+  engagement: { milestoneKey: "manyChat",         color: CLIENT_GOAL_COLORS.engagement },
+};
+const ringColorFor = (acct, milestoneKey) => {
+  const rule = GOAL_RING_RULES[acct?.goal];
+  return rule && rule.milestoneKey === milestoneKey ? rule.color : null;
+};
 
 const ACCOUNT_MANAGERS = ["Jeremy", "Steve", "Vish"];
 const MANAGER_COLORS = {
@@ -334,6 +366,19 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                         const isDate = m.type === "date";
                         const isStatus = m.type === "status";
                         const isSigningCol = m.key === "signing";
+                        // Meta Ads tiers don't get Final Live / Boosting
+                        // Strategy / Many Chat — paid-media partnerships
+                        // run an entirely different workflow. Render a
+                        // muted em-dash so producers see "this cell
+                        // doesn't apply" instead of "this cell is blank
+                        // because we forgot to fill it in".
+                        const isBlankedForMeta = isMetaAdsAccount(acct) && META_ADS_BLANKED_KEYS.has(m.key);
+                        // Goal-driven ring around the dropdown / input.
+                        // null → no ring. See GOAL_RING_RULES at module
+                        // top. Skipped on Meta-blanked cells so the ring
+                        // doesn't paint around an em-dash that isn't
+                        // even editable.
+                        const ringColor = isBlankedForMeta ? null : ringColorFor(acct, m.key);
                         // Status colour palette — pulls from the global
                         // STATUS_COLORS for the canonical "Scheduled" /
                         // "Done" / etc. labels, falling back to neutral
@@ -347,33 +392,51 @@ export function AccountsDashboard({ accounts, setAccounts, turnaround, onSyncAtt
                           if (val === "Not started") return { bg: "var(--bg)", color: "var(--muted)" };
                           return STATUS_COLORS[val] || { bg: "var(--bg)", color: "var(--muted)" };
                         };
+                        // Wrapping span carries the ring so both the
+                        // date input and the status select get the same
+                        // treatment without re-stating the box-shadow on
+                        // each branch. inline-block + a small padding
+                        // gap lets the shadow paint cleanly without
+                        // clipping at the cell edge.
+                        const ringStyle = ringColor
+                          ? { boxShadow: `0 0 0 2px ${ringColor}`, borderRadius: 4, display: "inline-block" }
+                          : null;
                         return (
                           <td key={m.key} style={{ ...TD, textAlign: "center", padding: "4px 6px" }}>
-                            {isDate && (
-                              <input
-                                type="date"
-                                value={ms.date || ""}
-                                onChange={e => {
-                                  // Signing still flows through the
-                                  // dedicated handler so any side-effects
-                                  // (other milestone bootstraps, Sherpa
-                                  // sync, etc.) keep firing centrally.
-                                  if (isSigningCol) setSigningDate(acct.id, e.target.value);
-                                  else updateMilestone(acct.id, m.key, { date: e.target.value });
-                                }}
-                                style={{ ...inputSt, fontSize: 11, padding: "3px 4px", textAlign: "center", width: "100%" }}
-                              />
+                            {isBlankedForMeta && (
+                              <span style={{ color: "var(--muted)", fontSize: 12, opacity: 0.6 }} title="Not applicable for Meta Ads partnerships">
+                                —
+                              </span>
                             )}
-                            {isStatus && (() => {
+                            {!isBlankedForMeta && isDate && (
+                              <span style={ringStyle || undefined}>
+                                <input
+                                  type="date"
+                                  value={ms.date || ""}
+                                  onChange={e => {
+                                    // Signing still flows through the
+                                    // dedicated handler so any side-effects
+                                    // (other milestone bootstraps, Sherpa
+                                    // sync, etc.) keep firing centrally.
+                                    if (isSigningCol) setSigningDate(acct.id, e.target.value);
+                                    else updateMilestone(acct.id, m.key, { date: e.target.value });
+                                  }}
+                                  style={{ ...inputSt, fontSize: 11, padding: "3px 4px", textAlign: "center", width: "100%" }}
+                                />
+                              </span>
+                            )}
+                            {!isBlankedForMeta && isStatus && (() => {
                               const sc = statusColour(ms.status);
                               return (
-                                <select
-                                  value={ms.status || ""}
-                                  onChange={e => updateMilestone(acct.id, m.key, { status: e.target.value })}
-                                  style={{ ...selectSt, background: sc.bg, color: sc.color, fontSize: 10, textTransform: "uppercase" }}>
-                                  <option value="">Set Status</option>
-                                  {(m.statuses || []).map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
+                                <span style={ringStyle || undefined}>
+                                  <select
+                                    value={ms.status || ""}
+                                    onChange={e => updateMilestone(acct.id, m.key, { status: e.target.value })}
+                                    style={{ ...selectSt, background: sc.bg, color: sc.color, fontSize: 10, textTransform: "uppercase" }}>
+                                    <option value="">Set Status</option>
+                                    {(m.statuses || []).map(s => <option key={s} value={s}>{s}</option>)}
+                                  </select>
+                                </span>
                               );
                             })()}
                           </td>
