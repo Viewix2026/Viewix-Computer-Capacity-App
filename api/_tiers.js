@@ -233,6 +233,58 @@ export function normaliseTier(raw, type) {
   return productLine === type ? tier : null;
 }
 
+// ─── videoTypeToPartnership(rawAttioString) ────────────────────────
+// Maps an Attio `video_type` string into the canonical partnership
+// label the Accounts dashboard's dropdown renders. Without this the
+// raw Attio string (e.g. "Brand Builder - Social Media Premium")
+// gets stored on /accounts/{id}.partnershipType, but the dashboard's
+// <select> only has options like "Brand Builder - Social Media" —
+// so the value-prop matches nothing, and the dropdown renders blank
+// even though the data was set correctly.
+//
+// Returns "" when the string can't be identified — caller decides
+// what to do (today: keep "" so the field reads as unset rather
+// than persisting an unmapped raw string).
+//
+// Mapping is intentional, not derived: Social Media Premium and
+// Social Media Organic deals BOTH collapse onto the same "X -
+// Social Media" labels in the dashboard because the producer-
+// facing distinction at this level is the tier (Brand Builder /
+// Market Leader / etc.), not whether it's the paid or organic
+// retainer (`productLine` already lives on /projects records for
+// anything that needs to branch on it).
+const _PARTNERSHIP_LABELS = {
+  metaAds: {
+    starter:  "Starter - Meta Ads",
+    standard: "Standard - Meta Ads",
+    premium:  "Premium - Meta Ads",
+    deluxe:   "Deluxe - Meta Ads",
+  },
+  socialPremium: {
+    starter:         "Starter Pack - Social Media",
+    brandBuilder:    "Brand Builder - Social Media",
+    marketLeader:    "Market Leader - Social Media",
+    marketDominator: "Market Dominator - Social Media",
+  },
+  socialOrganic: {
+    starter:         "Starter Pack - Social Media",
+    brandBuilder:    "Brand Builder - Social Media",
+    marketLeader:    "Market Leader - Social Media",
+    marketDominator: "Market Dominator - Social Media",
+  },
+  oneOff: {
+    liveAction:  "Live Action",
+    ninetyDayGp: "90 Day Gameplan",
+    animation:   "Animation",
+  },
+};
+export function videoTypeToPartnership(rawAttioString) {
+  if (!rawAttioString) return "";
+  const { productLine, tier } = identifyDeal(rawAttioString);
+  if (!productLine || !tier) return "";
+  return _PARTNERSHIP_LABELS[productLine]?.[tier] || "";
+}
+
 // ─── tierLabel(key, type) ──────────────────────────────────────────
 // Display name lookup. Pass `type` to disambiguate the tier keys that
 // appear in multiple lists (e.g. "starter" exists in every list).

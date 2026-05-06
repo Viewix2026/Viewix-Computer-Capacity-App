@@ -4,7 +4,7 @@
 // Writes to Firebase via admin SDK (falls back to REST if service account not configured)
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
-import { identifyDeal, productLineLabel } from "./_tiers.js";
+import { identifyDeal, productLineLabel, videoTypeToPartnership } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 import { randomBytes } from "crypto";
 
@@ -158,6 +158,16 @@ export default async function handler(req, res) {
       milestones[key] = { date: addDays(signingDate, gap), status: "TBC" };
     }
 
+    // Map Attio's raw `videoType` to the canonical partnership label
+    // the Accounts dashboard's <select> can render. Without this the
+    // raw Attio string (e.g. "Brand Builder - Social Media Premium")
+    // got stored but didn't match any <option> in the dropdown — so
+    // the field looked unfilled even though the data was there.
+    // videoTypeToPartnership() returns "" when the Attio string can't
+    // be identified, so unrecognised deal types still leave the field
+    // unset rather than poisoning /accounts with a phantom value.
+    const partnershipLabel = videoTypeToPartnership(videoType);
+
     if (isNew) {
       acctId = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
       const newAccount = {
@@ -166,7 +176,7 @@ export default async function handler(req, res) {
         attioId: companyId || "",
         accountManager: "",
         projectLead: "",
-        partnershipType: videoType || "",
+        partnershipType: partnershipLabel,
         lastContact: now,
         milestones: milestones,
       };
@@ -176,7 +186,7 @@ export default async function handler(req, res) {
       // Update existing: fill partnership if empty, update milestones if no signing date set
       const existing = accounts[acctId];
       const patch = {};
-      if (videoType && !existing.partnershipType) patch.partnershipType = videoType;
+      if (partnershipLabel && !existing.partnershipType) patch.partnershipType = partnershipLabel;
       if (!existing.milestones || !existing.milestones.signing || !existing.milestones.signing.date) {
         patch.milestones = milestones;
       }
