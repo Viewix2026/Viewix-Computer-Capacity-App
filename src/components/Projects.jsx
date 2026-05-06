@@ -1223,6 +1223,25 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
     attributes: dragAttrs, listeners: dragListeners,
     setNodeRef: setDragRef, transform, transition, isDragging,
   } = useSortable({ id: project.id });
+  // Suppress click-after-drag: short drags (just past dnd-kit's 6px
+  // activation distance) can still fire a synthetic click on the
+  // <tr> after pointerup, which would call onOpen() and replace the
+  // list with the project detail panel right after the producer
+  // intended to drop. Track a brief "just dragged" window via a ref
+  // so the row's onClick swallows the next click that follows a
+  // drag. Refs (not state) so the suppression itself doesn't
+  // re-render the row mid-flight.
+  const wasDraggingRef = useRef(false);
+  useEffect(() => {
+    if (isDragging) {
+      wasDraggingRef.current = true;
+      return;
+    }
+    if (wasDraggingRef.current) {
+      const t = setTimeout(() => { wasDraggingRef.current = false; }, 200);
+      return () => clearTimeout(t);
+    }
+  }, [isDragging]);
   const videoCount = project.numberOfVideos;
   const clientPart = project.clientName || "";
   const namePart = project.projectName || "Untitled project";
@@ -1237,7 +1256,16 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
   return (
     <tr
       ref={setDragRef}
-      onClick={() => onOpen(project.id)}
+      onClick={() => {
+        // Swallow the click that browsers fire on pointerup when a
+        // drag was short enough that the cursor didn't cross the
+        // browser's click-cancellation threshold. Without this, a
+        // drag-to-commission would also open the project detail
+        // panel — the row "disappeared" from the list view from
+        // Jeremy's perspective.
+        if (wasDraggingRef.current) return;
+        onOpen(project.id);
+      }}
       style={{
         cursor: "pointer",
         background: baseBg,
@@ -1431,7 +1459,7 @@ const dateCellStyle = {
   fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
 };
 
-function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
+function ProjectTable({ projects, allProjects, setProjects, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
   // Header checkbox is tri-state: empty / checked (all) / indeterminate
   // (some). Browsers don't have a CSS-only indeterminate state — set
@@ -1462,20 +1490,47 @@ function ProjectTable({ projects, deliveries, accounts, onOpen, onStatusChange, 
     //       there'd be no row to drop onto otherwise)
     // Same-section drops are a no-op (the list is sorted by the
     // producer's chosen sort, so manual reorder wouldn't persist).
-    const draggedProject = projects.find(p => p.id === active.id);
+    // The `projects` prop here is the FILTERED list (status pill +
+    // search applied). Resolve against the unfiltered roster so a
+    // project on a different filter view (e.g. drag from Active to
+    // Done while filter=Active) still resolves cleanly. Falls back
+    // to the filtered list if the unfiltered one isn't available.
+    const lookupSource = allProjects && allProjects.length ? allProjects : projects;
+    const draggedProject = lookupSource.find(p => p.id === active.id);
     if (draggedProject) {
       let targetCommissioned;
       if (over.id === "section-uncommissioned") targetCommissioned = false;
       else if (over.id === "section-active")     targetCommissioned = true;
       else {
-        const target = projects.find(p => p.id === over.id);
+        const target = lookupSource.find(p => p.id === over.id);
         if (!target) return;
         targetCommissioned = target.commissioned !== false;
       }
       const draggedCommissioned = draggedProject.commissioned !== false;
       if (draggedCommissioned === targetCommissioned) return;
+      // OPTIMISTIC LOCAL UPDATE — update React state synchronously
+      // so the row visibly moves into the destination section the
+      // moment the producer releases the drag. Without this the
+      // listener wrapper's recentlyWroteTo guard suppresses the
+      // listener fire that comes back with our own write (within
+      // the 1.5s stamp window), and the row gets stuck visibly in
+      // its original section until something else writes /projects.
+      // Symptom we hit: drag Uncommissioned → Active, row "bounces
+      // back" to Uncommissioned because the local state never
+      // caught up to Firebase.
+      const ts = new Date().toISOString();
+      if (typeof setProjects === "function") {
+        setProjects(prev => prev.map(p =>
+          p && p.id === draggedProject.id
+            ? { ...p, commissioned: targetCommissioned, updatedAt: ts }
+            : p
+        ));
+      }
+      // Persist to Firebase after the local update so the listener
+      // echo (suppressed by the recently-wrote guard) can't race
+      // ahead of our optimistic state with a stale snapshot.
       fbSet(`/projects/${draggedProject.id}/commissioned`, targetCommissioned);
-      fbSet(`/projects/${draggedProject.id}/updatedAt`, new Date().toISOString());
+      fbSet(`/projects/${draggedProject.id}/updatedAt`, ts);
       return;
     }
     // SUBTASK drag — existing reorder behaviour. Resolve the owning
@@ -2099,7 +2154,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
   );
 }
 
-export function Projects({ role, projects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route }) {
+export function Projects({ role, projects, setProjects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route }) {
   // Lead role gets read-only access to the Projects tab — they can
   // see every record (rows, subtasks, project detail panel) but
   // can't edit, delete, archive, drag, or add. ONE carve-out:
@@ -2461,6 +2516,8 @@ export function Projects({ role, projects, deliveries, setDeliveries, accounts, 
               )}
               <ProjectTable
                 projects={filtered}
+                allProjects={projects}
+                setProjects={setProjects}
                 deliveries={deliveries}
                 accounts={accounts}
                 onOpen={(id) => setActiveProjectId(id)}
@@ -2468,8 +2525,19 @@ export function Projects({ role, projects, deliveries, setDeliveries, accounts, 
                   // Write the status leaf directly so the change lands before
                   // any listener race — same pattern as the Deliveries
                   // per-field write fix. Also bump updatedAt for sort keys.
+                  // Optimistic local update mirrors the drag pattern in
+                  // ProjectTable.onDragEnd: without this, recentlyWroteTo
+                  // suppresses the listener echo of our own write and the
+                  // status pill stays visibly stale until another /projects
+                  // write happens to wake the listener up.
+                  const ts = new Date().toISOString();
+                  if (typeof setProjects === "function") {
+                    setProjects(prev => prev.map(p =>
+                      p && p.id === id ? { ...p, status, updatedAt: ts } : p
+                    ));
+                  }
                   fbSet(`/projects/${id}/status`, status);
-                  fbSet(`/projects/${id}/updatedAt`, new Date().toISOString());
+                  fbSet(`/projects/${id}/updatedAt`, ts);
                 }}
                 selectedIds={selectedIds}
                 onToggleSelect={toggleSelect}
