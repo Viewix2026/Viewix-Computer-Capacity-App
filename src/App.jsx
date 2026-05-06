@@ -160,6 +160,14 @@ export default function App(){
 
   // Home state
   const[teamLunch,setTeamLunch]=useState(null);
+  // Public team-home content (the Team Quote shown as the headline at
+  // the top of the Home page + the Video of the Week embed below it).
+  // Lives at /teamHome rather than /foundersData so non-founders roles
+  // (lead, editor, closer, trial) can READ it — the Home page is shown
+  // to everyone and the rules on /foundersData lock it to role=founders.
+  // Editing is still gated to founder/founders via Firebase rules + the
+  // bulk-write isFounder check below.
+  const[teamHome,setTeamHome]=useState({});
 
   // Founders state
   const[foundersData,setFoundersData]=useState({});
@@ -269,6 +277,10 @@ export default function App(){
       listen("/todos",data=>{if(data)setTodos((Array.isArray(data)?data.filter(Boolean):Object.values(data).filter(Boolean)));});
       listen("/foundersMetrics",data=>{if(data)setFoundersMetrics(data);});
       listen("/teamLunch",data=>{if(data)setTeamLunch(data);});
+      // /teamHome is publicly readable (auth+any role) so the Home
+      // page renders the Team Quote + Video of the Week for every
+      // logged-in user, not just founders.
+      listen("/teamHome",data=>{if(data)setTeamHome(data);});
       if(isFounders)listen("/foundersData",data=>{if(data)setFoundersData(data);});
       listen("/sales",data=>{setSales(data?Object.values(data).filter(s=>s&&s.id):[]);});
       listen("/salePricing",data=>{if(data)setSalePricing(data);});
@@ -288,7 +300,7 @@ export default function App(){
    any of those writes and clobber the fresh data. Symptom we hit:
    pasting a link on one video reverted the previous video's link;
    flipping Viewix status quickly across rows occasionally reverted
-   one of them. */fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
+   one of them. */fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounder)fbSet("/teamHome",teamHome);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
    Reason: AccountsDashboard's updateAccount / updateMilestone /
    setSigningDate already fbSet directly at click time, AND
    accounts are written by server endpoints too (webhook-deal-won
@@ -306,7 +318,7 @@ export default function App(){
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,isFounders,sales,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);deletedPaths.current.forEach(p=>fbSet(p,null));deletedPaths.current=[];}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,deliveries,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,accounts,turnaround,foundersMetrics,isFounder,isFounders,sales,salePricing,saleThankYou]);
 
   // Backfill shortId on existing deliveries (one-time per record). Also handles
   // dedup if two records ever generate the same hash.
@@ -358,6 +370,33 @@ export default function App(){
 
   // Backfill missing crew members (Jeremy/Steve/Vish) into the roster — one-time per workspace.
   useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"},{id:"ed-vish",name:"Vish"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);
+
+  // One-time migration: copy the public Home-page fields (teamQuote +
+  // videoOfTheWeek) out of /foundersData into /teamHome where every
+  // role can read them. Only runs when:
+  //   1. The current user has founders-tier access (isFounders) so
+  //      they can READ /foundersData (which is rule-locked to that
+  //      role) and WRITE /teamHome.
+  //   2. /foundersData has at least one of the public fields.
+  //   3. /teamHome doesn't already have a value for that field —
+  //      we never overwrite teamHome edits. Existing /teamHome data
+  //      always wins.
+  // Once /teamHome carries the values, every role's Home page picks
+  // them up via the unconditional listener above. The legacy fields
+  // on /foundersData are left in place (untouched) so a rollback
+  // doesn't lose data.
+  useEffect(()=>{
+    if(!isFounders)return;
+    const fdQuote=foundersData?.teamQuote;
+    const fdVotw=foundersData?.videoOfTheWeek;
+    const thQuote=teamHome?.teamQuote;
+    const thVotw=teamHome?.videoOfTheWeek;
+    const patch={};
+    if(fdQuote && !thQuote) patch.teamQuote=fdQuote;
+    if(fdVotw && !thVotw) patch.videoOfTheWeek=fdVotw;
+    if(Object.keys(patch).length===0) return;
+    setTeamHome(prev=>({...(prev||{}),...patch}));
+  },[isFounders,foundersData?.teamQuote,foundersData?.videoOfTheWeek,teamHome?.teamQuote,teamHome?.videoOfTheWeek]);
 
   // Auto-update active projects from /projects. Matches the count
   // shown above the Projects sub-tab list — anything whose status
@@ -477,6 +516,7 @@ export default function App(){
         editors={editors} setEditors={setEditors}
         curW={curW} setCurW={setCurW} weekData={weekData} setWeekData={setWeekData}
         teamLunch={teamLunch} setTeamLunch={setTeamLunch}
+        teamHome={teamHome} setTeamHome={setTeamHome}
         foundersData={foundersData} setFoundersData={setFoundersData}
         projects={projects}
         isFounder={isFounder}
@@ -696,7 +736,7 @@ export default function App(){
 
 
     {/* ═══ HOME ═══ */}
-    {tool==="home"&&(<Home foundersData={foundersData} setFoundersData={setFoundersData} teamLunch={teamLunch} isFounder={isFounder} isFounders={isFounders}/>)}
+    {tool==="home"&&(<Home teamHome={teamHome} setTeamHome={setTeamHome} foundersData={foundersData} setFoundersData={setFoundersData} teamLunch={teamLunch} isFounder={isFounder} isFounders={isFounders}/>)}
 
     {/* ═══ FOUNDERS ═══ */}
     {tool==="founders"&&isFounders&&(
