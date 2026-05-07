@@ -530,7 +530,7 @@ export default function App(){
         setTool("projects");
       }}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
-      {(isFounder||role==="editor"||role==="trial")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
+      {(isFounder||isLead||role==="editor"||role==="trial")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
       {(isFounder||role==="closer")&&<SideIcon icon="📚" label="Resources" active={tool==="resources"} onClick={()=>setTool("resources")}/>}
       <div style={{flex:1}}/>
@@ -754,7 +754,7 @@ export default function App(){
     </>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
-    {tool==="editors"&&(isFounder||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts}/>)}
+    {tool==="editors"&&(isFounder||isLead||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
