@@ -156,15 +156,21 @@ function resolveProjectLeadId(project, accounts, editors) {
 // defaults is a one-line change). The "Selects timeline + kick off
 // video" subtask pre-assigns to the resolved project lead; the rest
 // stay unassigned so the producer picks crew per project.
-function seedDefaultSubtasksFor(project, accounts, editors) {
+function seedDefaultSubtasksFor(project, accounts, editors, setProjects) {
   if (!project?.id) return;
   const leadId = resolveProjectLeadId(project, accounts, editors);
   const now = new Date().toISOString();
+  // Build the full set of records first so we can patch local
+  // state in one go AND write each leaf to Firebase. Without the
+  // optimistic local update the recentlyWroteTo("/projects") guard
+  // suppresses every listener echo from the seeded leaves and the
+  // expanded row stays empty until reload.
+  const seeded = {};
   DEFAULT_SUBTASKS.forEach((name, i) => {
     const stId = `st-default-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
     const isLeadOwned = name === SELECTS_TIMELINE_SUBTASK;
     const assigneeIds = isLeadOwned && leadId ? [leadId] : [];
-    fbSet(`/projects/${project.id}/subtasks/${stId}`, {
+    const rec = {
       id: stId, name, status: "stuck",
       stage: inferStage({ name }),
       startDate: null, endDate: null, startTime: null, endTime: null,
@@ -172,8 +178,17 @@ function seedDefaultSubtasksFor(project, accounts, editors) {
       assigneeId: assigneeIds[0] || null,
       source: "default", order: i,
       createdAt: now, updatedAt: now,
-    });
+    };
+    seeded[stId] = rec;
+    fbSet(`/projects/${project.id}/subtasks/${stId}`, rec);
   });
+  if (typeof setProjects === "function") {
+    setProjects(prev => prev.map(p =>
+      p && p.id === project.id
+        ? { ...p, subtasks: { ...(p.subtasks || {}), ...seeded }, updatedAt: now }
+        : p
+    ));
+  }
 }
 
 // Ordered list of subtask records out of the keyed Firebase object.
@@ -1200,11 +1215,11 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
 
 // "+ Add subtask" footer row, anchored to the bottom of the expanded
 // subtask group. Click → push a new subtask record under the project.
-function AddSubtaskRow({ projectId, nextOrder }) {
+function AddSubtaskRow({ projectId, nextOrder, setProjects }) {
   const add = () => {
     const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
-    fbSet(`/projects/${projectId}/subtasks/${id}`, {
+    const rec = {
       id, name: "New subtask", status: "stuck",
       // Manual subtasks default to the Edit stage — most ad-hoc rows
       // producers add by hand are tracking edit/post work; rename in
@@ -1213,7 +1228,20 @@ function AddSubtaskRow({ projectId, nextOrder }) {
       startDate: null, endDate: null, startTime: null, endTime: null,
       assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
       createdAt: now, updatedAt: now,
-    });
+    };
+    // Optimistic local update — without it the new row didn't appear
+    // until reload (recentlyWroteTo("/projects") suppressed the
+    // listener echo of the fbSet below). Producer clicked "+ Add
+    // subtask" and nothing visibly happened; the record was actually
+    // in Firebase, just not in App.jsx's `projects` state.
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p =>
+        p && p.id === projectId
+          ? { ...p, subtasks: { ...(p.subtasks || {}), [id]: rec }, updatedAt: now }
+          : p
+      ));
+    }
+    fbSet(`/projects/${projectId}/subtasks/${id}`, rec);
   };
   return (
     <tr style={{ background: "transparent", borderBottom: "1px solid var(--border)" }}>
@@ -1654,7 +1682,22 @@ function ProjectTable({ projects, allProjects, setProjects, deliveries, accounts
                           deliveries={deliveries}
                           striped={idx % 2 === 1}
                           setProjects={setProjects}
-                          onDelete={(stId) => fbSet(`/projects/${p.id}/subtasks/${stId}`, null)}
+                          onDelete={(stId) => {
+                            // Optimistic local delete — same reason
+                            // the inline + add paths above do it.
+                            // Without this the row stayed visible
+                            // until reload even though Firebase had
+                            // already nulled the leaf.
+                            if (typeof setProjects === "function") {
+                              setProjects(prev => prev.map(pp => {
+                                if (!pp || pp.id !== p.id) return pp;
+                                const subs = { ...(pp.subtasks || {}) };
+                                delete subs[stId];
+                                return { ...pp, subtasks: subs, updatedAt: new Date().toISOString() };
+                              }));
+                            }
+                            fbSet(`/projects/${p.id}/subtasks/${stId}`, null);
+                          }}
                         />
                       ))}
                     </SortableContext>
@@ -1663,6 +1706,7 @@ function ProjectTable({ projects, allProjects, setProjects, deliveries, accounts
                     <AddSubtaskRow
                       projectId={p.id}
                       nextOrder={subtasks.length > 0 ? Math.max(...subtasks.map(s => s.order ?? 0)) + 1 : 0}
+                      setProjects={setProjects}
                     />
                   )}
                 </Fragment>
@@ -2024,20 +2068,34 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
           migration pattern the row-expansion uses. */}
       {(() => {
         const subtasks = subtasksAsArray(project.subtasks);
-        const seedDefaults = () => seedDefaultSubtasksFor(project, accounts, editors);
+        // Pass setProjects through so the seed helper can do its
+        // optimistic local update — without it, the seeded subtasks
+        // wouldn't appear in the detail view's Subtasks card until
+        // reload (recentlyWroteTo guard suppressed every per-leaf
+        // listener echo).
+        const seedDefaults = () => seedDefaultSubtasksFor(project, accounts, editors, setProjects);
         const addManual = () => {
           const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           const now = new Date().toISOString();
           const nextOrder = subtasks.length > 0
             ? Math.max(...subtasks.map(s => s.order ?? 0)) + 1
             : 0;
-          fbSet(`/projects/${project.id}/subtasks/${id}`, {
+          const rec = {
             id, name: "New subtask", status: "stuck",
             stage: "edit",
             startDate: null, endDate: null, startTime: null, endTime: null,
             assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
             createdAt: now, updatedAt: now,
-          });
+          };
+          // Optimistic local update — same as AddSubtaskRow's add.
+          if (typeof setProjects === "function") {
+            setProjects(prev => prev.map(p =>
+              p && p.id === project.id
+                ? { ...p, subtasks: { ...(p.subtasks || {}), [id]: rec }, updatedAt: now }
+                : p
+            ));
+          }
+          fbSet(`/projects/${project.id}/subtasks/${id}`, rec);
         };
         return (
           <FieldCard label="Subtasks" hint="Stage = production phase. Status = how the work's going.">
@@ -2079,7 +2137,22 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                               deliveries={deliveries}
                               striped={idx % 2 === 1}
                               setProjects={setProjects}
-                              onDelete={(stId) => fbSet(`/projects/${project.id}/subtasks/${stId}`, null)}
+                              onDelete={(stId) => {
+                                // Optimistic local delete — same as the
+                                // ProjectTable's onDelete above. Without
+                                // this the row stayed visible until
+                                // reload despite the leaf being nulled
+                                // in Firebase.
+                                if (typeof setProjects === "function") {
+                                  setProjects(prev => prev.map(pp => {
+                                    if (!pp || pp.id !== project.id) return pp;
+                                    const subs = { ...(pp.subtasks || {}) };
+                                    delete subs[stId];
+                                    return { ...pp, subtasks: subs, updatedAt: new Date().toISOString() };
+                                  }));
+                                }
+                                fbSet(`/projects/${project.id}/subtasks/${stId}`, null);
+                              }}
                             />
                           ))}
                         </tbody>
@@ -2277,7 +2350,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
       // tree clean for projects that nobody ever drills into.
       const project = projects.find(p => p.id === id);
       if (project && (!project.subtasks || Object.keys(project.subtasks).length === 0)) {
-        seedDefaultSubtasksFor(project, accounts, editors);
+        seedDefaultSubtasksFor(project, accounts, editors, setProjects);
       }
       return next;
     });
