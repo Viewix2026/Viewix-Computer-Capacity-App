@@ -521,7 +521,7 @@ function DropCell({
 
 // ─── Main board ────────────────────────────────────────────────────
 
-export function TeamBoard({ projects = [], editors = [], setEditors, weekData = {}, onOpenProject }) {
+export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, onOpenProject }) {
   // The board starts on the Monday of the current week so the producer
   // sees the full current week (including past days they may have
   // already worked) without scrolling left. From there, we render N
@@ -709,12 +709,34 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
     const path = `/projects/${subtask.projectId}/subtasks/${subtask.id}`;
     const now = new Date().toISOString();
 
+    // Optimistic local-state patch for a single subtask leaf. Mirrors
+    // the pattern used in Projects.jsx for inline edits / status pill
+    // changes (PRs #49 / #59 / #60): without this, every fbSet below
+    // hits Firebase fine but the App.jsx listener wrapper suppresses
+    // the listener echo for ~1.5s via recentlyWroteTo("/projects"),
+    // so the local `projects` array never advances and the dragged
+    // GanttBar visibly "snaps back" until reload — which is exactly
+    // the symptom Jeremy reported as "drag and drop has stopped
+    // working" on the Team Board.
+    const patchSubtaskLocal = (patch) => {
+      if (typeof setProjects !== "function") return;
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== subtask.projectId) return p;
+        const subs = { ...(p.subtasks || {}) };
+        const cur = subs[subtask.id] || {};
+        subs[subtask.id] = { ...cur, ...patch, updatedAt: now };
+        return { ...p, subtasks: subs, updatedAt: now };
+      }));
+    };
+
     // Helper: write a new assignee list back to Firebase, keeping the
     // legacy `assigneeId` field in sync as the first entry so any code
     // that still reads it gets a sensible value. Pass null/empty to
-    // unassign entirely.
+    // unassign entirely. Patches local state in the same call so the
+    // Gantt bar moves immediately, not on the next listener fire.
     const writeAssignees = (nextIds) => {
       const cleaned = (nextIds || []).filter(Boolean);
+      patchSubtaskLocal({ assigneeIds: cleaned, assigneeId: cleaned[0] || null });
       fbSet(`${path}/assigneeIds`, cleaned);
       fbSet(`${path}/assigneeId`, cleaned[0] || null);
     };
@@ -753,6 +775,7 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
         }
       }
 
+      patchSubtaskLocal({ startDate: newStart, endDate: newEnd });
       fbSet(`${path}/startDate`, newStart);
       fbSet(`${path}/endDate`, newEnd);
       fbSet(`${path}/updatedAt`, now);
@@ -765,6 +788,7 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
       // intact so the producer can drop the card back into a date cell
       // later without re-picking everyone — pool cards still show all
       // assignees in their footer.
+      patchSubtaskLocal({ startDate: null, endDate: null });
       fbSet(`${path}/startDate`, null);
       fbSet(`${path}/endDate`, null);
       fbSet(`${path}/updatedAt`, now);
@@ -784,6 +808,7 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
       const delta = daysBetween(oldStart, newDate);
       newEnd = addDays(oldEnd, delta);
     }
+    patchSubtaskLocal({ startDate: newDate, endDate: newEnd });
     fbSet(`${path}/startDate`, newDate);
     fbSet(`${path}/endDate`, newEnd);
 

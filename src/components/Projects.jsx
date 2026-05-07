@@ -2674,6 +2674,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
         <>
           <TeamBoard
             projects={projects}
+            setProjects={setProjects}
             editors={editors}
             setEditors={setEditors}
             weekData={weekData}
