@@ -22,6 +22,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { Home } from "./components/Home";
 import { Login } from "./components/Login";
+import { Analytics } from "./components/Analytics";
 import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
 import { useSalesSync } from "./sync/useSalesSync";
@@ -529,6 +530,7 @@ export default function App(){
         setRoute({tool:null,subTab:null,recordId:null});
         setTool("projects");
       }}/>}
+      {(isFounder||isLead)&&<SideIcon icon="📈" label="Analytics" active={tool==="analytics"} onClick={()=>setTool("analytics")}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||isLead||role==="editor"||role==="trial")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
@@ -735,6 +737,7 @@ export default function App(){
     </>)}
 
     {/* ═══ PREPRODUCTION ═══ */}
+    {tool==="analytics"&&(isFounder||isLead)&&(<Analytics/>)}
     {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder} dealProjects={projects} route={route.tool==="preproduction"?route:null}/>)}
 
     {/* ═══ NURTURE — sequence hub (Lapsed Proposals + 5 stub sub-tabs) ═══ */}
