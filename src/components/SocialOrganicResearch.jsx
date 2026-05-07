@@ -3661,15 +3661,37 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
               const tagChip = tag === "inspiration"
                 ? { bg: "rgba(168,85,247,0.15)", fg: "#A855F7", label: "INSPIRATION" }
                 : { bg: "rgba(34,197,94,0.15)", fg: "#22C55E", label: "DIRECT" };
-              // Verify status: true = Apify confirmed the IG profile exists,
-              // false = Apify couldn't find it (typo / dead handle / etc.),
-              // null = still verifying (AI suggestions get a verify run
-              //                          fired immediately after they land).
+              // Verify status: true = Apify confirmed the profile is a
+              // plausible competitor (exists, public, followers >= 200,
+              // has posts). false = either the handle didn't resolve OR
+              // it resolved to a likely-wrong account (private / dead /
+              // tiny). null = still verifying.
               // Manual-add chips skip verification (producer is authoritative).
-              const verifyTitle = c.verified === true ? "Verified — IG profile exists"
-                                : c.verified === false ? "Could not find this handle on Instagram. Click ↗ to check / edit."
-                                : c.source === "ai" ? "Verifying handle…"
-                                : null;
+              const vm = c.verifyMeta || {};
+              const verifyTitle = (() => {
+                if (c.verified === true) {
+                  if (vm.followers != null) {
+                    return `Verified · ${vm.followers.toLocaleString()} followers · ${vm.posts || 0} posts${vm.fullName ? ` · ${vm.fullName}` : ""}`;
+                  }
+                  return "Verified — IG profile exists";
+                }
+                if (c.verified === false) {
+                  switch (vm.reason) {
+                    case "low_followers":
+                      return `Probably wrong handle — only ${vm.followers || 0} followers. Click ↗ to check on Instagram.`;
+                    case "no_posts":
+                      return "Profile exists but has 0 posts. Likely wrong handle. Click ↗ to verify.";
+                    case "account_private":
+                      return "Profile is private — can't research against it. Click ↗ to check / edit.";
+                    case "profile_not_found":
+                      return "Couldn't find this handle on Instagram. Click ↗ to check / edit.";
+                    default:
+                      return "Could not verify this handle. Click ↗ to check / edit.";
+                  }
+                }
+                if (c.source === "ai") return "Verifying handle…";
+                return null;
+              })();
               return (
                 <span key={c.handle} title={reason ? `${reason}${verifyTitle ? ` · ${verifyTitle}` : ""}` : (verifyTitle || "")}
                   style={{ padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--bg)", border: `1px solid ${tagChip.fg}33`, color: "var(--fg)", display: "inline-flex", alignItems: "center", gap: 6 }}>

@@ -260,17 +260,43 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
   } else if (purpose === "verifyCompetitors") {
     // Bulk handle verification for AI-suggested competitors. The Apify
     // run was kicked off by handleSuggestCompetitors with a list of
-    // usernames; whatever profiles it returned, those handles exist.
-    // Anything missing from the response is presumed not to exist.
+    // usernames; the response carries the IG profile shape — username,
+    // followersCount, postsCount, isPrivate, fullName, biography.
     //
-    // Only AI-suggested entries get their `verified` flag flipped —
-    // manual-add competitors are authoritative (the producer typed
-    // them in, they don't need our second-guessing).
-    const found = new Set(
-      items
-        .map(i => (i.username || i.ownerUsername || "").toLowerCase())
-        .filter(Boolean)
-    );
+    // The old version flipped `verified` to true if Apify returned the
+    // username at all. That under-checks: if Claude hallucinates an
+    // @handle that happens to match someone's personal account with 20
+    // followers and zero posts, that account exists, so verified=true,
+    // and the producer follows the link to a dead end. (Exactly the bug
+    // Jeremy hit on the offshoring-company example.)
+    //
+    // Tighter check — verified=true only if all of:
+    //   - profile exists
+    //   - followers >= MIN_FOLLOWERS_FOR_VERIFIED (treat anything
+    //     below as "almost certainly not a real competitor")
+    //   - postsCount > 0 (no posts = dead account / nothing to research)
+    //   - not private (a private account is impossible to research
+    //     against, even if it's the right brand)
+    // Profiles that exist but flunk these signals get verified=false +
+    // a `verifyMeta` blob the UI can surface so the producer sees
+    // "Account exists but only 17 followers, 0 posts — likely wrong
+    // handle" instead of just a green checkmark.
+    //
+    // Only AI-suggested entries are touched. Manual-add chips are
+    // authoritative — the producer typed them in, they don't need our
+    // second-guessing.
+    const MIN_FOLLOWERS_FOR_VERIFIED = 200;
+    const profileByUsername = new Map();
+    for (const item of items) {
+      const u = (item.username || item.ownerUsername || "").toLowerCase();
+      if (!u) continue;
+      profileByUsername.set(u, {
+        followers: Number(item.followersCount ?? 0) || 0,
+        posts: Number(item.postsCount ?? 0) || 0,
+        isPrivate: !!item.isPrivate,
+        fullName: item.fullName || "",
+      });
+    }
     const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
     const competitors = Array.isArray(project?.research?.competitors)
       ? project.research.competitors : [];
@@ -278,7 +304,24 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
       const updated = competitors.map(c => {
         if (c.source !== "ai") return c;
         const h = (c.handle || "").replace(/^@/, "").toLowerCase();
-        return { ...c, verified: found.has(h) };
+        const profile = profileByUsername.get(h);
+        if (!profile) {
+          return { ...c, verified: false, verifyMeta: { reason: "profile_not_found" } };
+        }
+        const passes = profile.followers >= MIN_FOLLOWERS_FOR_VERIFIED
+          && profile.posts > 0
+          && !profile.isPrivate;
+        const verifyMeta = {
+          followers: profile.followers,
+          posts: profile.posts,
+          isPrivate: profile.isPrivate,
+          fullName: profile.fullName,
+          reason: passes ? "ok"
+            : profile.isPrivate ? "account_private"
+            : profile.posts === 0 ? "no_posts"
+            : "low_followers",
+        };
+        return { ...c, verified: passes, verifyMeta };
       });
       await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, updated);
     }

@@ -2307,8 +2307,19 @@ Return TWO kinds of competitor in a single mixed list:
   - tag: "direct" — accounts in the same category / same audience as the client. Real competitors the client would benchmark against. Aim for ~4 of these.
   - tag: "inspiration" — accounts OUTSIDE the client's industry that market in a similar way: similar audience, similar tone, similar format / content style. Producers borrow stylistic ideas from these. Think "if our client is a B2B SaaS, an inspiration brand could be a DTC food brand with sharp creative". Aim for ~4 of these.
 
-Avoid generic industry-giant handles unless they genuinely overlap.
-Avoid handles you're not confident about — better to return fewer than to hallucinate.
+CRITICAL — handle accuracy:
+  - Only return @handles you have HIGH confidence are the brand's actual official Instagram. If you can't recall the official handle, DO NOT GUESS — omit that brand from the list entirely.
+  - Do not invent handles by smushing the brand name into a username (e.g. don't turn "Acme Co." into "@acmeco" if you haven't seen that handle exist). Most made-up handles map to unrelated personal accounts with 20 followers.
+  - If you genuinely don't know any high-confidence handles for this niche, return fewer than the targets above — even an empty list is better than fabricated handles that send producers to random personal accounts.
+
+CRITICAL — keyword / hashtag format:
+  Keywords are used as Instagram hashtags downstream. Real Instagram hashtags are SINGLE TOKENS — no spaces, no punctuation, all lowercase. Examples of valid keywords:
+    "menssuiting", "pilates", "finejewellery", "smallbusiness", "b2bmarketing"
+  Examples of INVALID keywords (do not return these):
+    "men's suiting"  (apostrophe + space)
+    "small business marketing tips"  (multi-word, full sentence)
+    "Fine Jewellery"  (capitals + space)
+  If a concept is naturally multi-word, compress it to one lowercase token. Reject any concept that doesn't compress cleanly.
 
 LIMIT: up to 8 competitors total (~4 direct + ~4 inspiration), up to 8 keywords.
 
@@ -2318,7 +2329,7 @@ STRUCTURE:
     {"handle": "@example", "tag": "direct", "reason": "one short sentence"},
     {"handle": "@otherbrand", "tag": "inspiration", "reason": "why this brand's marketing is worth studying"}
   ],
-  "keywords": ["keyword one", "hashtag-friendly phrase"]
+  "keywords": ["menssuiting", "pilates"]
 }`;
 
   const userMessage = `CLIENT: ${project.companyName}
@@ -2373,7 +2384,21 @@ Suggest competitor handles and keywords now.`;
     })
     .filter(Boolean)
     .slice(0, 8);
-  const keywords = (parsed.keywords || []).map(k => (k || "").toString().trim().replace(/^#/, "")).filter(Boolean).slice(0, 8);
+  // Hashtag-shape normalisation. Claude will sometimes still ignore
+  // the prompt and emit multi-word phrases (e.g. "small business
+  // marketing"). Real Instagram hashtags are single tokens, so:
+  //   - strip leading #
+  //   - lowercase, drop any non-alphanumeric character (including
+  //     spaces, apostrophes, hyphens, em-dashes, dots)
+  //   - drop the entry entirely if what remains is empty or starts
+  //     with a digit (IG hashtags can't be all-numeric)
+  // Producers can still type their own multi-token "keyword" via
+  // the manual input field — that's just a research tag, not pushed
+  // to Apify as a hashtag — so this only constrains the AI output.
+  const keywords = (parsed.keywords || [])
+    .map(k => (k || "").toString().trim().toLowerCase().replace(/^#+/, "").replace(/[^a-z0-9]/g, ""))
+    .filter(k => k.length >= 2 && !/^\d+$/.test(k))
+    .slice(0, 8);
 
   await fbPatch(`/preproduction/socialOrganic/${projectId}/research`, {
     aiSuggestedAt: new Date().toISOString(),
