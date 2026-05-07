@@ -24,7 +24,7 @@ import { useState, useMemo, useEffect, useRef, memo, createContext, useContext, 
 // canEditKickoff carves out the one exception: the kick-off video
 // URL on the Project Detail panel stays editable for leads, since
 // that's the one field they own per spec.
-const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true });
+const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null });
 import { BTN } from "../config";
 import { fmtCur, fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
@@ -1850,8 +1850,127 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   );
 });
 
+// Append-only comment thread under Producer Notes. Each Save creates
+// a new entry tagged with the author's role + timestamp. Stored at
+// /projects/{id}/producerCommentsThread as an object keyed by entry id
+// (object, not array, so two simultaneous saves can't collide on
+// index — same Firebase pattern subtasks use).
+//
+// Optimistic local update mirrors PR #59 / #60: setProjects patches
+// the new entry in before the fbSet fires, so the comment appears
+// immediately and the recentlyWroteTo("/projects") guard doesn't
+// strand the producer waiting for a listener fire.
+function ProducerCommentsCard({ project, viewerRole, setProjects }) {
+  const thread = project?.producerCommentsThread || {};
+  const entries = Object.values(thread)
+    .filter(Boolean)
+    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const post = () => {
+    const text = draft.trim();
+    if (!text) return;
+    setSaving(true);
+    const id = `cm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date().toISOString();
+    const authorRole = viewerRole === "founder" || viewerRole === "founders"
+      ? "Founder"
+      : viewerRole === "lead" ? "Lead"
+      : "Producer";
+    const entry = { id, text, authorRole, createdAt: now };
+    if (typeof setProjects === "function" && project?.id) {
+      setProjects(prev => prev.map(p =>
+        p && p.id === project.id
+          ? { ...p, producerCommentsThread: { ...(p.producerCommentsThread || {}), [id]: entry }, updatedAt: now }
+          : p
+      ));
+    }
+    fbSet(`/projects/${project.id}/producerCommentsThread/${id}`, entry);
+    fbSet(`/projects/${project.id}/updatedAt`, now);
+    setDraft("");
+    // Brief saving flash so the producer sees feedback even on a
+    // fast Firebase round-trip.
+    setTimeout(() => setSaving(false), 350);
+  };
+
+  return (
+    <FieldCard label="Comments" hint="Append-only thread for ongoing notes between founder + lead. Each Save adds a stamped entry; entries can't be edited or deleted.">
+      {entries.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic", padding: "4px 0 8px" }}>
+          No comments yet.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          {entries.map(e => (
+            <div key={e.id} style={{
+              padding: "10px 12px",
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{
+                  fontSize: 9, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase",
+                  padding: "2px 6px", borderRadius: 3,
+                  background: e.authorRole === "Founder" ? "rgba(0,130,250,0.15)" : "rgba(139,92,246,0.15)",
+                  color: e.authorRole === "Founder" ? "#0082FA" : "#8B5CF6",
+                }}>
+                  {e.authorRole}
+                </span>
+                <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+                  {e.createdAt ? new Date(e.createdAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}
+                </span>
+              </div>
+              <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                {e.text}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="Add a comment to the thread…"
+        rows={3}
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          fontSize: 13,
+          color: "var(--fg)",
+          background: "var(--input-bg)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          outline: "none",
+          resize: "vertical",
+          fontFamily: "'DM Sans',sans-serif",
+          lineHeight: 1.5,
+          boxSizing: "border-box",
+        }}
+      />
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+        <button
+          onClick={post}
+          disabled={!draft.trim() || saving}
+          style={{
+            ...BTN,
+            background: draft.trim() ? "var(--accent)" : "var(--bg)",
+            color: draft.trim() ? "#fff" : "var(--muted)",
+            border: "none",
+            padding: "7px 16px",
+            opacity: (!draft.trim() || saving) ? 0.6 : 1,
+            cursor: (!draft.trim() || saving) ? "not-allowed" : "pointer",
+          }}>
+          {saving ? "Saved" : "Save Comment"}
+        </button>
+      </div>
+    </FieldCard>
+  );
+}
+
 function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects }) {
-  const { viewOnly, canEditKickoff } = useContext(ProjectsAccessContext);
+  const { viewOnly, canEditKickoff, canEditProducerNotes, role: viewerRole } = useContext(ProjectsAccessContext);
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
@@ -1868,7 +1987,14 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
   // View-only role: persist no-ops on every field EXCEPT kickoffVideoUrl
   // (kickoff is the one field leads can edit per spec).
   const persistField = async (path, value) => {
-    if (viewOnly && !(path === "kickoffVideoUrl" && canEditKickoff)) return;
+    // Lead is viewOnly with two carve-outs: kickoffVideoUrl and
+    // producerNotes. The free-form Producer Notes textarea below
+    // is the brief the editor reads; leads need to keep it current.
+    // The comment thread under it has its own dedicated handler
+    // (`postProducerComment`) — both bypass viewOnly the same way.
+    if (viewOnly
+      && !(path === "kickoffVideoUrl" && canEditKickoff)
+      && !(path === "producerNotes" && canEditProducerNotes)) return;
     setSaveState("saving");
     const ts = new Date().toISOString();
     // Optimistic local update — the recentlyWroteTo("/projects")
@@ -2184,6 +2310,22 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
           onSave={(v) => persistField("producerNotes", v)} />
       </FieldCard>
 
+      {/* Producer Comments thread — append-only chronological log
+          below the free-form Producer Notes scratchpad above. The
+          notes field is the canonical brief the editor reads at the
+          top; this thread is for back-and-forth between the founder
+          / project lead while the work's running. Leads can post
+          here despite being viewOnly elsewhere — they're authoring
+          briefs, not editing project metadata, so the carve-out
+          matches the producer-notes one above. */}
+      {canEditProducerNotes && (
+        <ProducerCommentsCard
+          project={project}
+          viewerRole={viewerRole}
+          setProjects={setProjects}
+        />
+      )}
+
       {!viewOnly && (
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button onClick={() => { if (confirm(`Delete project "${project.projectName}"? This only removes it from the Projects tab — linked records (delivery / preprod / sherpa / account) are kept.`)) onDelete(); }}
@@ -2277,6 +2419,11 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   // because that's a lead-owned field per spec.
   const viewOnly = role === "lead";
   const canEditKickoff = role === "lead" || role === "founder" || role === "founders";
+  // Producer Notes carve-out — leads need to keep the field current
+  // so the editor working off the project has the latest brief. Same
+  // shape as kickoff: lead is otherwise viewOnly, this one field
+  // (and its appended comment thread below) bypasses the gate.
+  const canEditProducerNotes = role === "lead" || role === "founder" || role === "founders";
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   // Quick-view modal — opened when a producer clicks a bar on the
@@ -2471,7 +2618,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   };
 
   return (
-    <ProjectsAccessContext.Provider value={{ viewOnly, canEditKickoff }}>
+    <ProjectsAccessContext.Provider value={{ viewOnly, canEditKickoff, canEditProducerNotes, role }}>
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Projects</span>
