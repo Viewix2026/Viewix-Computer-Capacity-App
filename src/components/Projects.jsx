@@ -925,7 +925,7 @@ function MultiAssigneePicker({ value, editors, onChange }) {
   );
 }
 
-function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped }) {
+function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
   // useSortable wires this row into whatever <SortableContext> wraps
   // it (project details + the projects sub-tab list each have their
@@ -941,8 +941,26 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
     // stray inline-input save attempt is a no-op rather than racing
     // the server with a write that'd be rejected by rules anyway.
     if (viewOnly) return;
+    // Optimistic local update — same pattern PR #49 applied to the
+    // row-level status pill + drag-to-commission. Without this the
+    // listener-echo guard (recentlyWroteTo("/projects")) suppresses
+    // the listener fire that comes back with our own write, the
+    // /projects state in App.jsx never updates, the row's `subtask`
+    // prop stays stale, and the input visibly snaps back to its old
+    // value until the page is reloaded. Producer types in a field,
+    // value disappears, refreshes, value reappears — exactly Jeremy's
+    // report.
+    const ts = new Date().toISOString();
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== projectId) return p;
+        const subs = { ...(p.subtasks || {}) };
+        subs[subtask.id] = { ...(subs[subtask.id] || {}), [field]: value, updatedAt: ts };
+        return { ...p, subtasks: subs, updatedAt: ts };
+      }));
+    }
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
-    fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, new Date().toISOString());
+    fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, ts);
 
     // Rollup: when a subtask flips to Done, check whether every sibling
     // is now Done too — if so, mark the project Done. We compute against
@@ -957,8 +975,15 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
         s.id === subtask.id ? true : normaliseSubtaskStatus(s.status) === "done"
       );
       if (allDone && normaliseStatus(project.status) !== "done") {
+        // Optimistic state for the project-status rollup too, same
+        // reasoning as the subtask field write above.
+        if (typeof setProjects === "function") {
+          setProjects(prev => prev.map(p =>
+            p && p.id === projectId ? { ...p, status: "done", updatedAt: ts } : p
+          ));
+        }
         fbSet(`/projects/${projectId}/status`, "done");
-        fbSet(`/projects/${projectId}/updatedAt`, new Date().toISOString());
+        fbSet(`/projects/${projectId}/updatedAt`, ts);
       }
     }
 
@@ -1628,6 +1653,7 @@ function ProjectTable({ projects, allProjects, setProjects, deliveries, accounts
                           editors={editors}
                           deliveries={deliveries}
                           striped={idx % 2 === 1}
+                          setProjects={setProjects}
                           onDelete={(stId) => fbSet(`/projects/${p.id}/subtasks/${stId}`, null)}
                         />
                       ))}
@@ -1780,7 +1806,7 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
   );
 });
 
-function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts }) {
+function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects }) {
   const { viewOnly, canEditKickoff } = useContext(ProjectsAccessContext);
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
@@ -1800,10 +1826,24 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
   const persistField = async (path, value) => {
     if (viewOnly && !(path === "kickoffVideoUrl" && canEditKickoff)) return;
     setSaveState("saving");
+    const ts = new Date().toISOString();
+    // Optimistic local update — the recentlyWroteTo("/projects")
+    // listener-echo guard suppresses the listener fire that comes
+    // back with our own write, and Firebase doesn't refire on
+    // unchanged data, so without this update App.jsx's `projects`
+    // state stays at the pre-edit value. Symptom: producer types
+    // into a field, value disappears, only reappears on reload.
+    // Same pattern PR #49 applied to the row-level status pill +
+    // drag-to-commission.
+    if (typeof setProjects === "function" && project?.id) {
+      setProjects(prev => prev.map(p =>
+        p && p.id === project.id ? { ...p, [path]: value, updatedAt: ts } : p
+      ));
+    }
     try {
       await fbUpdate(`/projects/${project.id}`, {
         [path]: value,
-        updatedAt: new Date().toISOString(),
+        updatedAt: ts,
       });
       setSaveState("saved");
       setTimeout(() => setSaveState("idle"), 1200);
@@ -2038,6 +2078,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                               editors={editors}
                               deliveries={deliveries}
                               striped={idx % 2 === 1}
+                              setProjects={setProjects}
                               onDelete={(stId) => fbSet(`/projects/${project.id}/subtasks/${stId}`, null)}
                             />
                           ))}
@@ -2087,7 +2128,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts }) {
+function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts, setProjects }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -2146,6 +2187,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
           clients={clients}
           deliveries={deliveries}
           accounts={accounts}
+          setProjects={setProjects}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -2552,7 +2594,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
       )}
 
       {subTab === "projects" && active && (
-        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} setProjects={setProjects} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
       )}
 
       {subTab === "teamBoard" && !active && (
@@ -2581,6 +2623,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
                 clients={clients}
                 deliveries={deliveries}
                 accounts={accounts}
+                setProjects={setProjects}
                 onClose={() => setQuickViewProjectId(null)}
                 onDelete={async () => {
                   await deleteProject(qv.id);
