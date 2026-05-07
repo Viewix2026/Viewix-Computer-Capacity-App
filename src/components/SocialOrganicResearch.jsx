@@ -3385,14 +3385,70 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
   const [err, setErr] = useState({ a: null, b: null });
   const [suggestingHandle, setSuggestingHandle] = useState(false);
   const handleSuggestion = research.handleSuggestion || null;
+  // On-blur verification of the client handle. Producer types or
+  // pastes a handle, tabs away, the field hits the IG profile API
+  // and shows ✓ / ⚠ with follower count / posts / private /
+  // fullName so they can spot a wrong handle BEFORE clicking
+  // Approve & Start Scrape (which would otherwise fire Apify
+  // against an unrelated personal account).
+  const [handleVerifyState, setHandleVerifyState] = useState({ status: "idle", result: null, handle: "" });
+  const verifyAbortRef = useRef(null);
+  const verifyHandleNow = async (raw) => {
+    const cleaned = String(raw || "").trim().replace(/^@+/, "").toLowerCase();
+    if (!cleaned) return;
+    if (handleVerifyState.handle === cleaned && handleVerifyState.status === "done") return;
+    // Abort any in-flight verify for a previous edit so a fast
+    // type / blur / type / blur sequence ends up showing the LATEST
+    // handle's result, not the first one's.
+    if (verifyAbortRef.current) {
+      try { verifyAbortRef.current.abort(); } catch { /* noop */ }
+    }
+    const ctrl = new AbortController();
+    verifyAbortRef.current = ctrl;
+    setHandleVerifyState({ status: "verifying", result: null, handle: cleaned });
+    try {
+      const r = await authFetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "verifyClientHandle", handle: cleaned }),
+        signal: ctrl.signal,
+      });
+      if (ctrl.signal.aborted) return;
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error(d.error || "Verify failed");
+      setHandleVerifyState({ status: "done", result: { verified: !!d.verified, verifyMeta: d.verifyMeta || {} }, handle: cleaned });
+    } catch (e) {
+      if (ctrl.signal.aborted) return;
+      // Network / verifier failure — show neutral state, don't block
+      // the producer. They can still hit Approve & Start Scrape.
+      setHandleVerifyState({ status: "done", result: { verified: false, verifyMeta: { reason: "verifier_unavailable" } }, handle: cleaned });
+    }
+  };
 
   // Keep local handle in sync when the background suggestClientHandle
-  // call lands after Tab 2 is open.
+  // call lands after Tab 2 is open. Also fire the IG profile check
+  // here so the AI-suggested handle gets a ✓ / ⚠ chip without the
+  // producer having to focus + blur the field manually — Claude's
+  // suggestions need verification just as much as a typed handle.
   useEffect(() => {
     if (research.clientHandle && research.clientHandle !== clientHandle) {
       setClientHandle(research.clientHandle);
+      verifyHandleNow(research.clientHandle);
     }
   }, [research.clientHandle]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // First-mount verify: if Stage A opens with a pre-existing handle
+  // (saved on the project, pulled from the linked account, etc.) and
+  // we haven't verified it yet this session, kick off a check now.
+  // Producer doesn't have to interact with the field to see the
+  // ✓ / ⚠ signal.
+  const didMountVerifyRef = useRef(false);
+  useEffect(() => {
+    if (didMountVerifyRef.current) return;
+    if (!clientHandle) return;
+    didMountVerifyRef.current = true;
+    verifyHandleNow(clientHandle);
+  }, [clientHandle]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fallback: if we arrive at Tab 2 with no handle and no prior suggestion
   // attempt, run one now. Covers producers who opened Tab 2 before the
@@ -3585,10 +3641,49 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
           <input type="text" value={clientHandle} onChange={e => setClientHandle(e.target.value)}
             disabled={stageADone}
             placeholder={suggestingHandle ? "Claude is finding the handle…" : "@client_handle"}
+            // Verify on blur — fires the IG profile check whenever the
+            // producer leaves the field after edit. No fire on every
+            // keystroke, no surprise calls during typing.
+            onBlur={() => verifyHandleNow(clientHandle)}
             style={{ ...inputSt, maxWidth: 280, fontSize: 13, opacity: stageADone ? 0.6 : 1 }} />
           {!stageADone && !clientHandle && suggestingHandle && (
             <span style={{ fontSize: 11, color: "var(--accent)", fontStyle: "italic" }}>Finding handle…</span>
           )}
+          {/* Verify chip — ✓ green when followers≥200 + posts>0 + public,
+              ⚠ amber with the specific reason otherwise (low followers /
+              no posts / private / not found). Producer sees the signal
+              before clicking Approve & Start Scrape. */}
+          {!stageADone && handleVerifyState.handle && handleVerifyState.handle === clientHandle.replace(/^@+/, "").toLowerCase() && (() => {
+            if (handleVerifyState.status === "verifying") {
+              return <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>Verifying handle…</span>;
+            }
+            const r = handleVerifyState.result;
+            if (!r) return null;
+            const vm = r.verifyMeta || {};
+            if (r.verified) {
+              return (
+                <span title={`Verified · ${vm.followers != null ? vm.followers.toLocaleString() : "?"} followers · ${vm.posts || 0} posts${vm.fullName ? ` · ${vm.fullName}` : ""}`}
+                  style={{ fontSize: 11, color: "#22C55E", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  ✓ Verified
+                  {vm.followers != null && (
+                    <span style={{ color: "var(--muted)", fontWeight: 500 }}>· {vm.followers.toLocaleString()} followers</span>
+                  )}
+                </span>
+              );
+            }
+            const msg = vm.reason === "low_followers" ? `Only ${vm.followers || 0} followers — likely wrong handle`
+              : vm.reason === "no_posts" ? "Profile exists but has 0 posts — likely wrong handle"
+              : vm.reason === "account_private" ? "Account is private — can't research it"
+              : vm.reason === "profile_not_found" ? "Couldn't find this handle on Instagram"
+              : vm.reason === "verifier_unavailable" ? "Couldn't reach Instagram verifier"
+              : "Couldn't verify this handle";
+            return (
+              <span title={msg}
+                style={{ fontSize: 11, color: "#F59E0B", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                ⚠ {msg}
+              </span>
+            );
+          })()}
           {!stageADone && !suggestingHandle && (
             <button onClick={resuggest} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 11 }}
               title="Ask Claude to re-guess the handle">
