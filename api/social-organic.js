@@ -230,6 +230,83 @@ function computeHandleStatsAndScore(posts) {
   return stats;
 }
 
+// Synchronous IG profile verification used by handleSuggestCompetitors
+// and the Stage-A client-handle on-blur check. Hits the same profile
+// actor the async webhook path uses (apify~instagram-profile-scraper),
+// but via run-sync so the caller gets the dataset back inside the
+// request and can filter / fail-fast on bad handles before the producer
+// ever sees them.
+//
+// Returns one record per resolved handle:
+//   { handle, verified, verifyMeta: { followers, posts, isPrivate, fullName, reason } }
+// Handles Apify couldn't find come back as { handle, verified: false,
+// verifyMeta: { reason: "profile_not_found" } } so the caller can report
+// each input handle's outcome 1:1.
+//
+// Verification thresholds match _apifyProcess.js's verifyCompetitors —
+// keep them in sync if the rule changes.
+const MIN_FOLLOWERS_FOR_VERIFIED = 200;
+async function apifyVerifyHandlesSync({ handles, token }) {
+  const usernames = (handles || [])
+    .map(h => String(h || "").replace(/^@/, "").trim().toLowerCase())
+    .filter(Boolean);
+  if (usernames.length === 0) return [];
+  const url = `https://api.apify.com/v2/acts/${APIFY_IG_PROFILE_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`;
+  let items = [];
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usernames, resultsLimit: usernames.length }),
+    });
+    if (!resp.ok) {
+      // Don't throw — verification is a guard, not a hard requirement.
+      // Return empty so the caller can degrade gracefully (e.g. flag
+      // every handle as unverified rather than block the whole flow).
+      console.warn(`[apifyVerifyHandlesSync] Apify ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
+      return usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } }));
+    }
+    const json = await resp.json();
+    items = Array.isArray(json) ? json : [];
+  } catch (e) {
+    console.warn(`[apifyVerifyHandlesSync] fetch failed:`, e.message);
+    return usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } }));
+  }
+  const profileByUsername = new Map();
+  for (const item of items) {
+    const u = (item.username || item.ownerUsername || "").toLowerCase();
+    if (!u) continue;
+    profileByUsername.set(u, {
+      followers: Number(item.followersCount ?? 0) || 0,
+      posts: Number(item.postsCount ?? 0) || 0,
+      isPrivate: !!item.isPrivate,
+      fullName: item.fullName || "",
+    });
+  }
+  return usernames.map(u => {
+    const profile = profileByUsername.get(u);
+    if (!profile) return { handle: `@${u}`, verified: false, verifyMeta: { reason: "profile_not_found" } };
+    const passes = profile.followers >= MIN_FOLLOWERS_FOR_VERIFIED
+      && profile.posts > 0
+      && !profile.isPrivate;
+    const reason = passes ? "ok"
+      : profile.isPrivate ? "account_private"
+      : profile.posts === 0 ? "no_posts"
+      : "low_followers";
+    return {
+      handle: `@${u}`,
+      verified: passes,
+      verifyMeta: {
+        followers: profile.followers,
+        posts: profile.posts,
+        isPrivate: profile.isPrivate,
+        fullName: profile.fullName,
+        reason,
+      },
+    };
+  });
+}
+
 // Call Apify synchronously (up to 5 min) and return the dataset items directly.
 // Docs: POST /v2/acts/:actorId/run-sync-get-dataset-items?token=...
 async function apifyScrape({ handles, postsPerHandle, from, to, token }) {
@@ -2080,6 +2157,33 @@ async function handleAppendCompetitorScrape(req, res) {
   return res.status(200).json({ success: true, runIds, handles: scrapeHandles.length });
 }
 
+// Verify a single Instagram handle against the IG profile API and
+// return signals (followers / posts / private / fullName / reason).
+// Stage A's client-handle input calls this on blur so the producer
+// gets immediate feedback ("✓ 12.4k followers" or "⚠ only 17
+// followers — likely wrong handle") before clicking Approve.
+//
+// Body: { handle: "@something" }   (no projectId required)
+// Returns: { handle, verified, verifyMeta }
+async function handleVerifyClientHandle(req, res) {
+  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+  if (!APIFY_TOKEN) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
+  const { handle } = req.body || {};
+  const cleaned = String(handle || "").trim().replace(/^@+/, "");
+  if (!cleaned) return res.status(400).json({ error: "Missing handle" });
+  // Reuse the same synchronous verifier the suggestCompetitors flow
+  // uses — same threshold, same shape, single source of truth.
+  const [result] = await apifyVerifyHandlesSync({ handles: [cleaned], token: APIFY_TOKEN });
+  if (!result) {
+    return res.status(200).json({
+      handle: `@${cleaned}`,
+      verified: false,
+      verifyMeta: { reason: "verifier_unavailable" },
+    });
+  }
+  return res.status(200).json(result);
+}
+
 // Ask Claude to guess the client's Instagram handle from the transcript +
 // brand truth + Sherpa. Fires on Brand Truth approval (Tab 1 → Tab 2) so
 // Stage A opens pre-filled. Producer can still edit before approving.
@@ -2352,12 +2456,11 @@ Suggest competitor handles and keywords now.`;
     return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 400) });
   }
 
-  // Normalise into the canonical shape the rest of the pipeline reads:
-  //   { handle: "@xxx", tag: "direct"|"inspiration", reason, source: "ai",
-  //     verified: null }   — verified is filled by a future async Apify
-  //                          handle-search step; null = "not verified yet,
-  //                          producer should eyeball the IG profile".
-  const normalisedCompetitors = (parsed.competitors || [])
+  // Normalise Claude's output into the canonical record shape.
+  // Note: `verified: null` here is a placeholder that the synchronous
+  // verification step below either flips to true (and keeps the chip)
+  // or causes the chip to be dropped entirely.
+  const claudeCompetitors = (parsed.competitors || [])
     .map(c => {
       if (typeof c === "string") return { handle: c.startsWith("@") ? c : `@${c.replace(/^@+/, "")}`, tag: "direct", reason: "", source: "ai", verified: null };
       const h = (c.handle || c.username || "").trim();
@@ -2373,6 +2476,47 @@ Suggest competitor handles and keywords now.`;
     })
     .filter(Boolean)
     .slice(0, 8);
+
+  // SYNCHRONOUS HANDLE VERIFICATION
+  // ===============================
+  // Old behaviour: return Claude's suggestions immediately, fire an
+  // async Apify run-by-webhook to verify them ~5-10s later. Producers
+  // saw fake handles flicker through as ✓ chips before they got
+  // downgraded — and many never got removed at all because the chip
+  // was already in their face the moment the API responded.
+  //
+  // New behaviour: wait for the IG profile verifier to come back
+  // synchronously, then filter the AI suggestions to ONLY those that
+  // pass the followers >= 200 / posts > 0 / not-private check before
+  // returning. The producer never sees a fabricated chip.
+  //
+  // Worst-case wait is ~10-15s for ~8 handles (vercel.json gives
+  // social-organic.js a 300s ceiling, plenty of headroom). If Apify
+  // is unreachable we degrade to "verified: false" for every entry
+  // and STILL filter them out — better to return zero suggestions
+  // than to ship suggestions that look ✓ but might be wrong.
+  const APIFY_TOKEN_FOR_VERIFY = process.env.APIFY_API_TOKEN;
+  let normalisedCompetitors = claudeCompetitors;
+  if (APIFY_TOKEN_FOR_VERIFY && claudeCompetitors.length > 0) {
+    const handlesToVerify = claudeCompetitors.map(c => c.handle);
+    const verifyResults = await apifyVerifyHandlesSync({
+      handles: handlesToVerify,
+      token: APIFY_TOKEN_FOR_VERIFY,
+    });
+    const verifyByHandle = new Map(
+      verifyResults.map(r => [r.handle.toLowerCase(), r])
+    );
+    normalisedCompetitors = claudeCompetitors
+      .map(c => {
+        const v = verifyByHandle.get(c.handle.toLowerCase());
+        if (!v) return { ...c, verified: false, verifyMeta: { reason: "verifier_unavailable" } };
+        return { ...c, verified: v.verified, verifyMeta: v.verifyMeta };
+      })
+      // Drop everything that failed verification — by design (per
+      // user spec). Producers can still manually + Add a chip for
+      // anything legitimate the threshold rejected.
+      .filter(c => c.verified === true);
+  }
   const keywords = (parsed.keywords || []).map(k => (k || "").toString().trim().replace(/^#/, "")).filter(Boolean).slice(0, 8);
 
   await fbPatch(`/preproduction/socialOrganic/${projectId}/research`, {
@@ -2380,29 +2524,10 @@ Suggest competitor handles and keywords now.`;
     aiSuggestions: { competitors: normalisedCompetitors, keywords },
   });
 
-  // Async handle verification — fire one Apify Instagram profile-scrape
-  // run that takes ALL the AI-suggested usernames at once, no await.
-  // The webhook callback (api/_apifyProcess.js, purpose: "verifyCompetitors")
-  // matches results back to research.competitors[] and patches each
-  // entry's `verified` flag (true if Apify found the profile, false
-  // otherwise). Manual-add entries (source !== "ai") are skipped — the
-  // producer typed them in, so they're authoritative.
-  //
-  // Failures are non-fatal — the chip stays in `verified: null` (which
-  // the UI surfaces as a yellow ?), and the producer's manual ↗ link
-  // path still works as a fallback.
-  const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
-  if (APIFY_TOKEN && normalisedCompetitors.length > 0) {
-    const handles = normalisedCompetitors.map(c => c.handle.replace(/^@/, ""));
-    startApifyRun({
-      actorId: APIFY_IG_PROFILE_ACTOR,
-      input: { usernames: handles, resultsLimit: handles.length },
-      token: APIFY_TOKEN,
-      projectId,
-      purpose: "verifyCompetitors",
-      extraSidecar: { suggestedHandles: handles },
-    }).catch(err => console.warn("[verifyCompetitors] start failed:", err.message));
-  }
+  // No async verification step here any more — apifyVerifyHandlesSync
+  // above already filtered out anything that didn't pass the
+  // followers / posts / private checks before we wrote to Firebase.
+  // Producer sees only chips that are real-and-researchable.
 
   return res.status(200).json({ success: true, competitors: normalisedCompetitors, keywords });
 }
@@ -2945,6 +3070,8 @@ export default async function handler(req, res) {
         return await handleStartProfileScrape(req, res);
       case "suggestClientHandle":
         return await handleSuggestClientHandle(req, res);
+      case "verifyClientHandle":
+        return await handleVerifyClientHandle(req, res);
       case "suggestFormats":
         return await handleSuggestFormats(req, res);
       case "pushToRunsheet":
