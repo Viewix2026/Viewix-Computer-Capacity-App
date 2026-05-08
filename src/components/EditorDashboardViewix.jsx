@@ -308,39 +308,64 @@ function fireSmallBurst() {
   confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 }, startVelocity: 25, ticks: 180 });
 }
 
-// ─── Kick-off video helpers ───────────────────────────────────────
-// Extract the 11-char YouTube video id from any of the common URL
-// shapes: youtu.be/VID, youtube.com/watch?v=VID, /embed/VID,
-// /shorts/VID, /live/VID. Returns null when no id is found, so the
-// pill / modal render conditionally on a real url.
-function parseYoutubeId(raw) {
+// ─── Kick Off helpers ──────────────────────────────────────────────
+// The Kick Off field (Projects → Kick Off) accepts either a YouTube
+// URL (project lead records a quick Loom-style video brief) or a
+// Google Doc URL (written brief). Editors see one pill on each task
+// row that opens the right embed for whichever shape was saved.
+//
+// parseKickoffMedia returns one of:
+//   { kind: "youtube",   id: "<11-char video id>" }
+//   { kind: "googleDoc", id: "<doc id>" }
+//   null   — empty / unparseable URL → pill doesn't render
+function parseKickoffMedia(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
-  // youtu.be short link
-  const m1 = s.match(/youtu\.be\/([\w-]{11})/);
-  if (m1) return m1[1];
-  // ?v= query param
-  const m2 = s.match(/[?&]v=([\w-]{11})/);
-  if (m2) return m2[1];
-  // /embed/, /shorts/, /live/
-  const m3 = s.match(/youtube\.com\/(?:embed|shorts|live)\/([\w-]{11})/);
-  if (m3) return m3[1];
+  if (!s) return null;
+  // YouTube: youtu.be/VID, ?v=VID, /embed/VID, /shorts/VID, /live/VID
+  const yt1 = s.match(/youtu\.be\/([\w-]{11})/);
+  if (yt1) return { kind: "youtube", id: yt1[1] };
+  const yt2 = s.match(/[?&]v=([\w-]{11})/);
+  if (yt2) return { kind: "youtube", id: yt2[1] };
+  const yt3 = s.match(/youtube\.com\/(?:embed|shorts|live)\/([\w-]{11})/);
+  if (yt3) return { kind: "youtube", id: yt3[1] };
+  // Google Doc: docs.google.com/document/d/{ID}/...
+  const gd = s.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/);
+  if (gd) return { kind: "googleDoc", id: gd[1] };
   return null;
 }
 
-// Modal that embeds a YouTube player and autoplays. Click outside
-// or press Esc to close. Used by the Kick-off Video pill on the
-// editor TaskRow.
-function KickoffVideoModal({ youtubeId, projectName, onClose }) {
+// Legacy shim — the pill / modal lookups elsewhere still reference
+// this name in some commit history. Returns just the YouTube id when
+// applicable so existing callers keep working without a wider sweep.
+function parseYoutubeId(raw) {
+  const m = parseKickoffMedia(raw);
+  return m && m.kind === "youtube" ? m.id : null;
+}
+
+// Modal that embeds either a YouTube player (autoplay) or a Google
+// Doc preview, picked by `media.kind`. Click outside / press Esc to
+// close. Used by the Kick Off pill on the editor TaskRow.
+function KickoffMediaModal({ media, projectName, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  if (!youtubeId) return null;
-  // autoplay=1 + mute=0 so the editor sees + hears it the moment
-  // it loads. rel=0 hides the related-videos overlay at the end.
-  const src = `https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0&modestbranding=1`;
+  if (!media) return null;
+  // YouTube: autoplay=1 + rel=0 hides related-videos overlay at end.
+  // Google Docs: /preview is the iframe-friendly URL — strips Google's
+  // own chrome + skips the X-Frame-Options block on /edit. The doc
+  // owner's sharing must be at least "Anyone with the link can view"
+  // for this to load — the producer is responsible for that, same as
+  // Sherpa Doc links.
+  const src = media.kind === "youtube"
+    ? `https://www.youtube.com/embed/${media.id}?autoplay=1&rel=0&modestbranding=1`
+    : `https://docs.google.com/document/d/${media.id}/preview`;
+  const headerLabel = media.kind === "googleDoc"
+    ? "📄 Kick Off"
+    : "🎬 Kick Off";
+  const iframeTitle = media.kind === "googleDoc" ? "Kick-off doc" : "Kick-off video";
   return (
     <div onClick={onClose}
       style={{
@@ -358,7 +383,7 @@ function KickoffVideoModal({ youtubeId, projectName, onClose }) {
         }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: "var(--fg)" }}>
-            🎬 Kick-off video {projectName ? <span style={{ color: "var(--muted)", fontWeight: 600 }}> · {projectName}</span> : null}
+            {headerLabel} {projectName ? <span style={{ color: "var(--muted)", fontWeight: 600 }}> · {projectName}</span> : null}
           </div>
           <button onClick={onClose} title="Close (Esc)"
             style={{
@@ -369,10 +394,19 @@ function KickoffVideoModal({ youtubeId, projectName, onClose }) {
               fontFamily: "inherit", flexShrink: 0,
             }}>×</button>
         </div>
-        <div style={{ position: "relative", paddingTop: "56.25%", borderRadius: 8, overflow: "hidden", background: "#000" }}>
+        {/* Aspect-ratio wrapper. Video stays 16:9; doc gets a tall
+            container so the producer can scroll the brief without
+            squinting. Google Docs preview iframes scroll internally. */}
+        <div style={{
+          position: "relative",
+          paddingTop: media.kind === "googleDoc" ? "min(72vh, 900px)" : "56.25%",
+          height: media.kind === "googleDoc" ? "min(72vh, 900px)" : undefined,
+          borderRadius: 8, overflow: "hidden",
+          background: media.kind === "googleDoc" ? "var(--bg)" : "#000",
+        }}>
           <iframe
             src={src}
-            title="Kick-off video"
+            title={iframeTitle}
             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
@@ -684,7 +718,7 @@ function TaskRow({
   onStart, onStop, onReset, onAdjust, onFinish, dim,
   expanded, onToggleExpand, onOpenProject, onOpenKickoff,
 }) {
-  const kickoffYtId = parseYoutubeId(task.kickoffVideoUrl);
+  const kickoffMedia = parseKickoffMedia(task.kickoffVideoUrl);
   return (
     <div style={{
       display: "flex", flexDirection: "column",
@@ -754,15 +788,15 @@ function TaskRow({
               account + project rows. Renders nothing when unset, so
               tasks for accounts without a goal stay visually clean. */}
           <ClientGoalPill goal={task.clientGoal} />
-          {/* Kick-off Video pill — set by leads / founders in the
-              project detail. Only renders when the URL parses to a
-              valid YouTube id; clicking pops the inline player.
-              Glows + pulses to catch the editor's eye on the first
-              task they see for a fresh project. */}
-          {kickoffYtId && (
+          {/* Kick Off pill — set by leads / founders in the project
+              detail. Renders for either a YouTube video URL (🎬) or
+              a Google Doc URL (📄); clicking pops the inline player /
+              doc preview. Glows + pulses to catch the editor's eye
+              on the first task they see for a fresh project. */}
+          {kickoffMedia && (
             <button
               onClick={(e) => { e.stopPropagation(); onOpenKickoff && onOpenKickoff(task.id); }}
-              title="Watch the kick-off video"
+              title={kickoffMedia.kind === "googleDoc" ? "Read the kick-off brief" : "Watch the kick-off video"}
               style={{
                 flexShrink: 0,
                 padding: "1px 8px", borderRadius: 4,
@@ -775,7 +809,7 @@ function TaskRow({
                 display: "inline-flex", alignItems: "center", gap: 3,
                 animation: "viewix-kickoff-glow 2.2s ease-in-out infinite",
               }}>
-              🎬 Kick-off Video
+              {kickoffMedia.kind === "googleDoc" ? "📄" : "🎬"} Kick Off
             </button>
           )}
         </div>
@@ -1684,18 +1718,19 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
         />
       )}
 
-      {/* Kick-off video modal — popped by the glowing pill on a task
-          row. Resolved against the latest task list on render so a
-          Firebase update during the modal's open window doesn't leave
-          it pinned to a stale URL. */}
+      {/* Kick Off modal — popped by the glowing pill on a task row.
+          Resolved against the latest task list on render so a
+          Firebase update during the modal's open window doesn't
+          leave it pinned to a stale URL. Handles both YouTube
+          videos and Google Doc briefs via parseKickoffMedia. */}
       {kickoffTaskId && (() => {
         const kt = allTasks.find(x => x.id === kickoffTaskId);
         if (!kt) return null;
-        const ytId = parseYoutubeId(kt.kickoffVideoUrl);
-        if (!ytId) { setKickoffTaskId(null); return null; }
+        const media = parseKickoffMedia(kt.kickoffVideoUrl);
+        if (!media) { setKickoffTaskId(null); return null; }
         return (
-          <KickoffVideoModal
-            youtubeId={ytId}
+          <KickoffMediaModal
+            media={media}
             projectName={kt.parentName}
             onClose={() => setKickoffTaskId(null)}
           />
