@@ -2116,7 +2116,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
         <DestinationsEditor value={dests} onChange={(next) => persistField("destinations", next)} />
       </FieldCard>
 
-      <FieldCard label="Kick-off Video" hint="YouTube URL of the project kick-off recording. Editors see a glowing pill on each video subtask that opens the video inline.">
+      <FieldCard label="Kick Off" hint="YouTube URL of the kick-off recording, OR a Google Doc URL with a written brief. Editors see a glowing pill on each video subtask that opens the right one inline (🎬 for video, 📄 for doc). For Google Docs, set sharing to at least 'Anyone with the link can view' so the embed loads.">
         <InlineText value={project.kickoffVideoUrl || ""}
           placeholder="https://www.youtube.com/watch?v=..."
           onSave={(v) => persistField("kickoffVideoUrl", v.trim())} />
