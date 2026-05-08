@@ -136,6 +136,13 @@ function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
           description:     p.description     || "",
           targetAudience:  p.targetAudience  || "",
           producerNotes:   p.producerNotes   || "",
+          // Comment thread written by founders / leads from the
+          // Producer Notes card on the project detail panel. Editor
+          // needs this to follow the brief evolution (PR #65 added
+          // it as an append-only chronological log; before this
+          // edit the editor view only saw the legacy free-form
+          // producerNotes field above it).
+          producerCommentsThread: p.producerCommentsThread || null,
           videoType:       p.videoType       || "",
           packageTier:     p.packageTier     || "",
           numberOfVideos:  p.numberOfVideos  || null,
@@ -871,7 +878,18 @@ function TaskDetailsPanel({ task, onOpenProject }) {
   const m = task.projectMeta || {};
   const links = m.links || {};
   const fmt = v => (v == null || v === "") ? "—" : v;
-  const hasAnyText = !!(m.description || m.targetAudience || m.producerNotes);
+  // Producer comment thread — stored as an object keyed by entry id
+  // (see PR #65). Sorted oldest-first so the editor can read the
+  // brief evolution as a conversation. Empty object / null collapses
+  // to no entries; the rendering below short-circuits.
+  const threadEntries = (() => {
+    const t = m.producerCommentsThread;
+    if (!t || typeof t !== "object") return [];
+    return Object.values(t)
+      .filter(Boolean)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  })();
+  const hasAnyText = !!(m.description || m.targetAudience || m.producerNotes || threadEntries.length);
   const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.dealValue || m.accountManager || m.projectLead || (m.destinations && m.destinations.length));
   const hasAnyLink = !!(links.sherpaId || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
   if (!hasAnyText && !hasAnyMeta && !hasAnyLink) {
@@ -943,6 +961,46 @@ function TaskDetailsPanel({ task, onOpenProject }) {
       {m.producerNotes && (
         <div style={{ gridColumn: "1 / -1" }}>
           <Field label="Producer notes" value={m.producerNotes} multiline />
+        </div>
+      )}
+      {/* Producer comments thread — append-only chronological log
+          founders / leads write from the project detail panel. Read-
+          only here (editors don't post into the thread; they
+          communicate via Finish-modal notes). Each entry is shown
+          with the author chip + timestamp so the editor sees the
+          provenance + reading order. */}
+      {threadEntries.length > 0 && (
+        <div style={{ gridColumn: "1 / -1" }}>
+          <div style={{ fontSize: 9, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+            Producer comments
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {threadEntries.map(e => (
+              <div key={e.id || e.createdAt} style={{
+                padding: "8px 10px",
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                  <span style={{
+                    fontSize: 8, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase",
+                    padding: "1px 5px", borderRadius: 3,
+                    background: e.authorRole === "Founder" ? "rgba(0,130,250,0.15)" : "rgba(139,92,246,0.15)",
+                    color: e.authorRole === "Founder" ? "#0082FA" : "#8B5CF6",
+                  }}>
+                    {e.authorRole || "Producer"}
+                  </span>
+                  <span style={{ fontSize: 9, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+                    {e.createdAt ? new Date(e.createdAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {e.text || ""}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       {hasAnyLink && (
