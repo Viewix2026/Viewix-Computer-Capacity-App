@@ -929,7 +929,13 @@ function TaskDetailsPanel({ task, onOpenProject }) {
   // value still lives on /projects/{id}.dealValue for downstream
   // founders / sale views, just not rendered here.
   const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.accountManager || m.projectLead || (m.destinations && m.destinations.length));
-  const hasAnyLink = !!(links.sherpaId || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
+  // Sherpa Doc is gated on the resolved task.sherpaUrl (the actual
+  // Google Doc URL), not links.sherpaId. The old gate used the id
+  // and built a dead hash route (#clients/{id}) — clicking it
+  // navigated to a non-existent route and the screen went blank,
+  // exactly the bug Jeremy hit. Render path below uses the URL
+  // directly with target="_blank".
+  const hasAnyLink = !!(task.sherpaUrl || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
   if (!hasAnyText && !hasAnyMeta && !hasAnyLink) {
     return (
       <div style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.015)", fontSize: 12, color: "var(--muted)" }}>
@@ -1045,7 +1051,21 @@ function TaskDetailsPanel({ task, onOpenProject }) {
       )}
       {hasAnyLink && (
         <div style={{ gridColumn: "1 / -1", display: "flex", flexWrap: "wrap", gap: 6, paddingTop: 4, borderTop: "1px dashed var(--border)" }}>
-          {links.sherpaId   && linkBtn("Sherpa Doc", hash(`clients/${links.sherpaId}`), "#8B5CF6")}
+          {/* Sherpa Doc — external Google Doc URL. Opens in a new
+              tab via target="_blank" rather than the dead
+              #clients/{id} hash route the old code built. */}
+          {task.sherpaUrl && (
+            <a href={task.sherpaUrl}
+              target="_blank" rel="noopener noreferrer"
+              title="Open the client's Sherpa doc in a new tab"
+              style={{
+                padding: "5px 10px", borderRadius: 6,
+                border: "1px solid #8B5CF6",
+                background: "transparent", color: "#8B5CF6",
+                fontSize: 11, fontWeight: 700, textDecoration: "none",
+                fontFamily: "inherit",
+              }}>Sherpa Doc</a>
+          )}
           {links.preprodId  && linkBtn("Pre-Prod",   hash(`preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`), "#EC4899")}
           {links.runsheetId && linkBtn("Runsheet",   hash(`preproduction/runsheets/${links.runsheetId}`), "#06B6D4")}
           {links.deliveryId && linkBtn("Delivery",   hash(`projects/deliveries/${links.deliveryId}`), "#10B981")}
