@@ -29,6 +29,9 @@
     },
     "api/sync-attio-cache.js": {
       "maxDuration": 300
+    },
+    "api/roll-overdue-edits.js": {
+      "maxDuration": 60
     }
   },
   "crons": [
@@ -43,6 +46,10 @@
     {
       "path": "/api/sync-attio-cache",
       "schedule": "0 19 * * *"
+    },
+    {
+      "path": "/api/roll-overdue-edits",
+      "schedule": "0 20 * * *"
     }
   ],
   "rewrites": [
