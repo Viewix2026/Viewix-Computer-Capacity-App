@@ -16,16 +16,23 @@
 //   - stage === "edit"
 //   - status NOT "done" and NOT "archived"
 //   - endDate exists AND is BEFORE today's date (Sydney)
-//   - has at least one assignee on /editors with a defaultDays config
+//   - has at least one assignee on /editors
 //
 // Roll logic:
 //   - find the EARLIEST next working day across all assignees,
-//     starting from today (inclusive). "Working day" = the editor's
-//     defaultDays[dayKey] is true.
+//     starting from today (inclusive). Availability is read from
+//     /weekData (the Capacity → Weekly Schedule grid) first —
+//     more granular than the team roster's defaultDays because it
+//     captures one-off PTO, shoot days, swap days, etc. Falls
+//     back to defaultDays only when no weekData entry exists for
+//     the editor that week.
+//   - "Working day" for an EDIT subtask = dayVal(cell) === "in".
+//     "shoot" cells don't count — the editor's on a shoot, not
+//     in the edit suite.
 //   - Patch /projects/{id}/subtasks/{stId} with the new endDate +
-//     bumped updatedAt. Tracks autoRolledCount + autoRolledLast on
-//     the subtask so the producer can see how many times it's been
-//     rolled before they intervene.
+//     bumped updatedAt. Tracks autoRolledCount + autoRolledLast
+//     so the producer can see how many times it's been rolled
+//     before they intervene.
 //
 // Idempotent — if the cron runs twice in a day, the second run is
 // a no-op since endDate is already >= today after the first.
@@ -38,8 +45,8 @@ import { getAdmin, adminGet, adminPatch } from "./_fb-admin.js";
 // Day keys match the schema used everywhere else in the codebase
 // (see config.js DEF_EDS — { mon, tue, wed, thu, fri }). The
 // JS Date.getDay() index is 0=Sun..6=Sat, so we map to keys via
-// this array. Sat / Sun aren't in the editor schema (no editor
-// works weekends by default) — those days get skipped.
+// this array. Sat / Sun aren't in the editor schema — those days
+// always read as "off" since no key matches.
 const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
 // Compute today's date string in Sydney time (YYYY-MM-DD). The
@@ -47,30 +54,77 @@ const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 // cron's "today" needs to match. Sydney is UTC+10/+11; we convert
 // via the Intl API to dodge DST math by hand.
 function todaySydney() {
-  // en-CA gives YYYY-MM-DD natively; pinning to Australia/Sydney
-  // gives the correct local date even when this Vercel function
-  // is running on UTC infra.
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Sydney" }).format(new Date());
 }
 
+// Format a Date as YYYY-MM-DD via en-CA (no leading-zero faff).
+function fmtDate(d) {
+  return new Intl.DateTimeFormat("en-CA").format(d);
+}
+
+// Mirror src/utils.js getMonday — JS-Date in, JS-Date out, time
+// snapped to 00:00 local. Sunday rolls back to the prior week's
+// Monday (matches the rest of the codebase's "weeks start Monday"
+// convention). Used to derive the wKey for weekData lookups.
+function getMonday(d) {
+  const x = new Date(d);
+  const day = x.getDay();
+  x.setDate(x.getDate() - day + (day === 0 ? -6 : 1));
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+// Mirror src/utils.js dayVal — collapses the {true | "in" |
+// "shoot" | false | undefined | null} cell value down to one of
+// "in" / "shoot" / "off". For Edit-stage rolling we treat "shoot"
+// as "off" (the editor's on a shoot, not in the edit suite, so
+// they can't pick up an edit task that day).
+function dayVal(v) {
+  if (v === true || v === "in") return "in";
+  if (v === "shoot") return "shoot";
+  return "off";
+}
+
+// Resolve "is editor X in the edit suite on date D" using the
+// same precedence the Capacity dashboard renders:
+//   1. weekData[wkKey].editors → find the entry for this editor
+//      → check `days[dayKey]`. If the week record exists, it's
+//      authoritative.
+//   2. Fall back to editor.defaultDays[dayKey].
+// "In" only — `dayVal === "in"`. "shoot" doesn't count for an
+// edit subtask; the editor's busy elsewhere.
+function isEditorInOnDate(editor, date, weekDataByKey) {
+  if (!editor) return false;
+  const dayKey = DAY_KEYS[date.getDay()];
+  if (!dayKey || dayKey === "sat" || dayKey === "sun") return false;
+  const wkKey = fmtDate(getMonday(date));
+  const weekRec = weekDataByKey?.[wkKey];
+  // weekData[wk].editors is stored as an ARRAY of editor objects
+  // each with their own `days` cell map (NOT a map keyed by id —
+  // see Capacity.jsx line 104, ".editors || scheduleEditors.map").
+  // Find by id; fall back to defaultDays if not represented in
+  // this week (the dashboard does the same fallback).
+  if (weekRec?.editors && Array.isArray(weekRec.editors)) {
+    const wkEditor = weekRec.editors.find(e => e?.id === editor.id);
+    if (wkEditor && wkEditor.days) {
+      return dayVal(wkEditor.days[dayKey]) === "in";
+    }
+  }
+  // Default-roster fallback. defaultDays only stores `true` for
+  // working days; absence is "off".
+  return editor.defaultDays?.[dayKey] === true;
+}
+
 // Walk forward from `fromDate` (YYYY-MM-DD, inclusive) up to a
-// safety cap of 21 days. Returns the first date the editor's
-// defaultDays says they're in. Null if no match within the cap
-// (shouldn't happen for a real editor — Sat/Sun fail but Mon-Fri
-// at minimum is one of them, and editor records always have at
-// least one true day).
-function nextWorkingDayFor(editor, fromDate) {
-  if (!editor?.defaultDays) return null;
-  // Parse as local date; offset doesn't matter as we only output
-  // YYYY-MM-DD strings, never timestamps.
+// safety cap of 21 days. Returns the first date isEditorInOnDate
+// returns true for. Null if no match within the cap.
+function nextWorkingDayFor(editor, fromDate, weekDataByKey) {
   const start = new Date(`${fromDate}T00:00:00`);
   for (let i = 0; i <= 21; i++) {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
-    const dayKey = DAY_KEYS[d.getDay()];
-    if (editor.defaultDays[dayKey]) {
-      // Format as YYYY-MM-DD via en-CA (no leading-zero faff).
-      return new Intl.DateTimeFormat("en-CA").format(d);
+    if (isEditorInOnDate(editor, d, weekDataByKey)) {
+      return fmtDate(d);
     }
   }
   return null;
@@ -94,6 +148,14 @@ export default async function handler(req, res) {
   for (const e of editorList) {
     if (e?.id) editorById.set(e.id, e);
   }
+
+  // /weekData is the per-week schedule the Capacity → Weekly
+  // Schedule grid edits. Keyed by wKey (Monday YYYY-MM-DD), each
+  // value is { editors: [...] } where each editor entry has a
+  // `days` map. Authoritative source of "is X in the edit suite
+  // this week" — preferred over defaultDays per the dashboard's
+  // own precedence (see Capacity.jsx line 104).
+  const weekData = (await adminGet("/weekData")) || {};
 
   const projects = (await adminGet("/projects")) || {};
   const rolled = [];
@@ -125,7 +187,7 @@ export default async function handler(req, res) {
         const editor = editorById.get(aid);
         if (!editor) continue;
         matchedAnyEditor = true;
-        const next = nextWorkingDayFor(editor, today);
+        const next = nextWorkingDayFor(editor, today, weekData);
         if (next && (!bestNext || next < bestNext)) bestNext = next;
       }
       if (!matchedAnyEditor) { skipped.noEditorMatch++; continue; }
