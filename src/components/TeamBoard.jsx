@@ -827,8 +827,22 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       const stripped = currentIds.filter(id => id !== sourceAssigneeId);
       nextIds = stripped.includes(newAssignee) ? stripped : [...stripped, newAssignee];
     } else if (!sourceAssigneeId) {
-      // From the pool: just add target if not already present.
-      nextIds = currentIds.includes(newAssignee) ? currentIds : [...currentIds, newAssignee];
+      // From the pool — transfer to target, don't append.
+      //   - target IS already in assigneeIds → reschedule with same
+      //     crew, no assignee change. Common for multi-assignee
+      //     shoots that got unscheduled and dragged back to one of
+      //     the crew's row.
+      //   - target is NOT in assigneeIds → REPLACE with just
+      //     [target]. Single-assignee transfer flow: producer drops
+      //     to pool, drags to a new editor = ownership moves to
+      //     that editor. The bug Jeremy hit was the old "append"
+      //     behaviour leaving both original AND new owner
+      //     assigned — append-not-replace silently doubled up.
+      // Producers who actually want to ADD a crew member (vs
+      // transfer) use the multi-assignee picker on the task row —
+      // drag-and-drop is for transfer / scheduling, not for
+      // editing the assignee list.
+      nextIds = currentIds.includes(newAssignee) ? currentIds : [newAssignee];
     } else {
       // sourceAssigneeId === newAssignee → just a date change, no assignee change.
       nextIds = currentIds;
