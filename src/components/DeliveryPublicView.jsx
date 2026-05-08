@@ -219,6 +219,11 @@ export function DeliveryPublicView(){
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",minWidth:130}}>Viewix Status</th>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 1 ✎</th>
           <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 2 ✎</th>
+          {/* Posted — checkbox the client ticks once they've published
+              the video. Internal Deliveries view has the same column.
+              Anonymous-auth writes go through the same /videos/{idx}/
+              path as revision1 / revision2 (rule loosened to match). */}
+          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#10B981",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(16,185,129,0.04)"}}>Posted ✎</th>
         </tr></thead>
         <tbody>{videosArr.map(v=>{
           const sc=VIEWIX_STATUS_COLORS[v.viewixStatus]||"#5A6B85";
@@ -228,6 +233,13 @@ export function DeliveryPublicView(){
             <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A",textAlign:"center"}}><span style={{padding:"5px 12px",borderRadius:4,background:`${sc}20`,color:sc,fontSize:11,fontWeight:700,textTransform:"uppercase",whiteSpace:"nowrap"}}>{v.viewixStatus}</span></td>
             <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}><div style={{border:editableBorder,borderRadius:6,padding:"4px",background:editableBg}}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateField(v.id,"revision1",val)}/></div></td>
             <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}><div style={{border:editableBorder,borderRadius:6,padding:"4px",background:editableBg}}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateField(v.id,"revision2",val)}/></div></td>
+            <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(16,185,129,0.04)"}}>
+              <input type="checkbox"
+                checked={!!v.posted}
+                onChange={e=>updateField(v.id,"posted",e.target.checked)}
+                title={v.posted?"Posted — click to unmark":"Mark as posted"}
+                style={{cursor:"pointer",accentColor:"#10B981",width:18,height:18}} />
+            </td>
           </tr>);})}
         </tbody>
       </table></div>)}
