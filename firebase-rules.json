@@ -34,7 +34,8 @@
         "videos": {
           "$idx": {
             "revision1": { ".write": "auth != null" },
-            "revision2": { ".write": "auth != null" }
+            "revision2": { ".write": "auth != null" },
+            "posted":    { ".write": "auth != null" }
           }
         }
       }
