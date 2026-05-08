@@ -26,7 +26,7 @@ import { useState, useMemo, useEffect, useRef, memo, createContext, useContext, 
 // that's the one field they own per spec.
 const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null });
 import { BTN } from "../config";
-import { fmtCur, fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
+import { fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
@@ -1815,7 +1815,11 @@ const ProjectCard = memo(function ProjectCard({ project, onClick }) {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {project.videoType && <Chip>{project.videoType}</Chip>}
         {project.numberOfVideos != null && <Chip color="var(--muted)">{project.numberOfVideos} videos</Chip>}
-        {project.dealValue != null && <Chip color="#10B981">{fmtCur(Number(project.dealValue) || 0)}</Chip>}
+        {/* Deal value chip removed by request — value still persists
+            on /projects/{id}.dealValue, just not surfaced anywhere
+            in the Projects sub-tab or Editors view. Pricing
+            visibility is restricted to the Sale tab + Founders
+            dashboards going forward. */}
       </div>
 
       {descShort && (

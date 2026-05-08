@@ -924,7 +924,11 @@ function TaskDetailsPanel({ task, onOpenProject }) {
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
   })();
   const hasAnyText = !!(m.description || m.targetAudience || m.producerNotes || threadEntries.length);
-  const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.dealValue || m.accountManager || m.projectLead || (m.destinations && m.destinations.length));
+  // dealValue intentionally NOT included in hasAnyMeta — pricing
+  // visibility was removed from the Editors tab by request. The
+  // value still lives on /projects/{id}.dealValue for downstream
+  // founders / sale views, just not rendered here.
+  const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.accountManager || m.projectLead || (m.destinations && m.destinations.length));
   const hasAnyLink = !!(links.sherpaId || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
   if (!hasAnyText && !hasAnyMeta && !hasAnyLink) {
     return (
@@ -979,7 +983,9 @@ function TaskDetailsPanel({ task, onOpenProject }) {
       {m.videoType && <Field label="Video type" value={fmt(m.videoType)} />}
       {m.packageTier && <Field label="Package" value={fmt(m.packageTier)} />}
       {m.numberOfVideos != null && <Field label="Number of videos" value={fmt(m.numberOfVideos)} mono />}
-      {m.dealValue != null && <Field label="Deal value" value={`$${Number(m.dealValue).toLocaleString("en-AU")}`} mono />}
+      {/* Deal value Field removed by request — kept the data on
+          projectMeta in case it's needed for a future audit, but
+          editors don't see pricing in the inline more-info panel. */}
       {m.closeDate && <Field label="Close date" value={fmt(m.closeDate)} mono />}
       {m.dueDate && <Field label="Due date" value={fmt(m.dueDate)} mono />}
       {Array.isArray(m.destinations) && m.destinations.length > 0 && (
@@ -1190,7 +1196,9 @@ function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClos
           {project.videoType && <Field label="Video type" value={fmt(project.videoType)} />}
           {project.packageTier && <Field label="Package" value={fmt(project.packageTier)} />}
           {project.numberOfVideos != null && <Field label="Number of videos" value={fmt(project.numberOfVideos)} mono />}
-          {project.dealValue != null && <Field label="Deal value" value={`$${Number(project.dealValue).toLocaleString("en-AU")}`} mono />}
+          {/* Deal value Field removed by request — same reasoning as
+              the inline more-info panel above. Hidden in both the
+              Editors and Projects surfaces. */}
           {project.closeDate && <Field label="Close date" value={fmt(project.closeDate)} mono />}
           {project.dueDate && <Field label="Due date" value={fmt(project.dueDate)} mono />}
           {Array.isArray(project.destinations) && project.destinations.length > 0 && (
