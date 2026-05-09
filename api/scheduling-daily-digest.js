@@ -20,6 +20,7 @@ import { detectFlags } from "../shared/scheduling/conflicts.js";
 import { computeVideoTypeStats, buildLoggedHoursMap } from "../shared/scheduling/stats.js";
 import { fingerprintFlag, FLAG_SEVERITY } from "../shared/scheduling/flags.js";
 import { inferStage } from "../shared/scheduling/stages.js";
+import { buildAwareness } from "../shared/scheduling/awareness.js";
 import { narrateBrain } from "./_scheduling-narrate.js";
 
 export const config = { maxDuration: 60 };
@@ -101,10 +102,18 @@ async function runDailyDigest({ skipPost = false } = {}) {
   const todayUnassigned = flags
     .filter(f => f.kind === "unassignedScheduled" && f.startDate === today);
 
+  // Build Phase 1A awareness — unscheduled-edit context per project +
+  // editor free-capacity over the next 14 days. Narration uses this
+  // to suggest pulling forward backlog work to fill idle/under days.
+  const awareness = buildAwareness({
+    projects, editors, weekData, videoTypeStats, today,
+  });
+
   // Narrate (always — this is the always-narrate moment).
   const narration = await narrateBrain({
     flags, projects, editors, today,
     mode: "digest",
+    awareness,
   });
 
   const blocks = buildDigestBlocks({
