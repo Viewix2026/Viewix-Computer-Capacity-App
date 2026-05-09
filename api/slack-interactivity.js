@@ -23,6 +23,7 @@ import {
   todaySydney,
   slackUpdateMessage,
   slackPostEphemeral,
+  slackSwapReaction,
   parseAllowlist,
   fingerprintSubtask,
   fingerprintsMatch,
@@ -31,6 +32,7 @@ import {
   STAGE_LABELS,
   STAGE_EMOJI,
   DEFAULT_NAME_FOR_STAGE,
+  REACTION,
 } from "./_slack-helpers.js";
 
 export const config = { api: { bodyParser: false } };
@@ -170,6 +172,17 @@ async function handleConfirm({ payload, botToken }) {
         text: "That confirmation has expired (1h limit) — please re-issue your scheduling request.",
         botToken,
       });
+      // Flip the producer's :eyes: reaction to :warning: so they
+      // can see at a glance the proposal lapsed.
+      if (proposal.slackChannel && proposal.slackTs) {
+        await slackSwapReaction({
+          channel: proposal.slackChannel,
+          timestamp: proposal.slackTs,
+          removeName: REACTION.THINKING,
+          addName: REACTION.ERROR,
+          botToken,
+        });
+      }
     } else {
       await slackPostEphemeral({
         channel: payload.channel?.id,
@@ -190,6 +203,16 @@ async function handleConfirm({ payload, botToken }) {
       usedAt: Date.now(),
       usedBy: payload.user?.id || null,
     });
+    // Flip :eyes: to :white_check_mark: on the producer's message.
+    if (proposal.slackChannel && proposal.slackTs) {
+      await slackSwapReaction({
+        channel: proposal.slackChannel,
+        timestamp: proposal.slackTs,
+        removeName: REACTION.THINKING,
+        addName: REACTION.DONE,
+        botToken,
+      });
+    }
   } catch (e) {
     console.error("slack-interactivity confirm apply error:", e);
     if (e?.code === "STALE") {
@@ -200,8 +223,20 @@ async function handleConfirm({ payload, botToken }) {
         text: "This subtask was modified in the dashboard since the card was created. Please re-issue your scheduling request.",
         botToken,
       });
+      // STALE — flip :eyes: to :warning: so the producer doesn't
+      // think the bot is still working.
+      if (proposal.slackChannel && proposal.slackTs) {
+        await slackSwapReaction({
+          channel: proposal.slackChannel,
+          timestamp: proposal.slackTs,
+          removeName: REACTION.THINKING,
+          addName: REACTION.ERROR,
+          botToken,
+        });
+      }
     } else {
-      // Release the claim so the user can retry.
+      // Release the claim so the user can retry. Reaction stays on
+      // :eyes: because the proposal is still pending.
       await ref.update({ status: "pending", claimedAt: null, claimedBy: null });
       await slackPostEphemeral({
         channel: payload.channel?.id,
@@ -345,6 +380,16 @@ async function handleCancel({ payload, botToken }) {
       ts: proposal.confirmMessageTs,
       blocks: cancelledCardBlocks({ proposal, byUser: payload.user }),
       text: `Cancelled by ${payload.user?.name || payload.user?.id || "someone"}`,
+      botToken,
+    });
+  }
+  // Flip :eyes: to :x: on the producer's message.
+  if (proposal?.slackChannel && proposal?.slackTs) {
+    await slackSwapReaction({
+      channel: proposal.slackChannel,
+      timestamp: proposal.slackTs,
+      removeName: REACTION.THINKING,
+      addName: REACTION.CANCELLED,
       botToken,
     });
   }
