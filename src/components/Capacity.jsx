@@ -4,7 +4,7 @@
 // roster edits) live here to keep App.jsx focused on routing + global state.
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { fbListenSafe } from "../firebase";
+import { fbListenSafe, fbSet } from "../firebase";
 import {
   DK, DL, QT, TH, TD, BTN, NB,
   CONTENT_CATEGORIES, CAT_COLORS,
@@ -36,12 +36,43 @@ export function Capacity({
   // data (set before this migration) appears in the editor until
   // App.jsx's migration effect copies it across.
   const votwSource = (teamHome && teamHome.videoOfTheWeek) || foundersData?.videoOfTheWeek || null;
+  // Direct-write at click time + optimistic local state. The
+  // previous version only called setTeamHome and let App.jsx's
+  // 400ms-debounced bulk-write loop persist to /teamHome later.
+  // Symptom Jeremy hit: type a value → navigate / refresh / close
+  // tab within 400ms of the last keystroke → effect cleanup
+  // cancels the timer → Firebase never saw the write → reload
+  // shows the pre-edit state. Same write-loss-on-navigate bug
+  // pattern /accounts, /deliveries, /sales, /projects all moved
+  // off the bulk loop to fix.
+  //
+  // Now: every edit fires fbSet on a /teamHome/videoOfTheWeek/...
+  // leaf directly, so the network request is in flight the moment
+  // the producer commits the change. Local setTeamHome stays so
+  // the UI stays responsive without waiting for the listener
+  // round-trip. The bulk-write loop's `if(isFounder)fbSet("/teamHome",
+  // teamHome)` in App.jsx is now redundant for VOTW (will write
+  // the same data 400ms later) but harmless — keeping it
+  // untouched avoids breaking the teamQuote edit path which still
+  // relies on the bulk loop.
   const updateVotw = (patch) => {
     if (typeof setTeamHome !== "function") return;
-    setTeamHome(p => ({ ...(p || {}), videoOfTheWeek: { ...(p?.videoOfTheWeek || votwSource || {}), ...patch } }));
+    setTeamHome(p => {
+      const merged = { ...(p?.videoOfTheWeek || votwSource || {}), ...patch };
+      // Persist each patched leaf directly. Object.entries preserves
+      // the field name so e.g. updateVotw({ creator: "Vish",
+      // updatedAt: ts }) writes /teamHome/videoOfTheWeek/creator
+      // and /teamHome/videoOfTheWeek/updatedAt independently.
+      Object.entries(patch).forEach(([k, v]) => {
+        fbSet(`/teamHome/videoOfTheWeek/${k}`, v == null ? null : v);
+      });
+      return { ...(p || {}), videoOfTheWeek: merged };
+    });
   };
   const clearVotw = () => {
     if (typeof setTeamHome !== "function") return;
+    // Direct null-write; same race-avoidance reason as updateVotw.
+    fbSet(`/teamHome/videoOfTheWeek`, null);
     setTeamHome(p => ({ ...(p || {}), videoOfTheWeek: null }));
   };
   // ─── Local UI state ───
