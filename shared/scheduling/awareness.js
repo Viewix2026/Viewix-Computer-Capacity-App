@@ -18,7 +18,7 @@
 // only when it's there (no fabrication).
 
 import { inferStage, FLEXIBLE_STAGES } from "./stages.js";
-import { isWorkingOnDate, datesInRange, fmtDate } from "./availability.js";
+import { isEditorInOnDate, datesInRange, fmtDate } from "./availability.js";
 import { plannedHoursForDate, hydrateEstHours } from "./capacity.js";
 import { CAPACITY_BANDS, FREE_CAPACITY_WINDOW_DAYS } from "./constants.js";
 
@@ -83,11 +83,15 @@ function daysFromTodayTo(today, target) {
 // For each editor (role=editor), compute free capacity across the next
 // FREE_CAPACITY_WINDOW_DAYS days.
 //
-// Free hours = sum over working-days in window of (target - planned),
+// Free hours = sum over edit-suite-days in window of (target - planned),
 // floored at 0 per day so over-loaded days don't contribute "negative"
-// capacity (those are already flagged separately). Working day check
-// uses isWorkingOnDate so "shoot" days don't contribute (the editor's
-// not free for additional flexible work on shoot days).
+// capacity (those are already flagged separately).
+//
+// IMPORTANT: we use isEditorInOnDate (strict "in"), not isWorkingOnDate.
+// "shoot" days mean the editor is working but NOT available to take on
+// additional flexible edit work — counting their shoot day as free
+// capacity would tell Opus to "pull Charlie's edit forward to Luke's
+// Wed shoot day", which is wrong.
 function collectEditorFreeCapacity({ projects, editors, weekData, videoTypeStats, today }) {
   const hydrated = hydrateEstHours(projects, videoTypeStats);
   const targetHours = CAPACITY_BANDS.target;
@@ -101,7 +105,7 @@ function collectEditorFreeCapacity({ projects, editors, weekData, videoTypeStats
     let free = 0;
     for (const dateISO of datesInRange(startDate, endDate)) {
       const dateObj = new Date(`${dateISO}T00:00:00`);
-      if (!isWorkingOnDate(ed, dateObj, weekData)) continue;
+      if (!isEditorInOnDate(ed, dateObj, weekData)) continue;
       const planned = plannedHoursForDate(ed.id, dateISO, hydrated);
       free += Math.max(0, targetHours - planned);
     }
