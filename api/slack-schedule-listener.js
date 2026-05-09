@@ -320,6 +320,19 @@ async function callClaudeForIntent({ userText, context, apiKey }) {
 }
 
 // ─── Target selection + conflict detection (backend) ──────────────
+//
+// Selection rules:
+//  - explicitMode === "create" → create a new subtask
+//  - 0 same-stage subtasks → create
+//  - 1 same-stage subtask → update it
+//  - 2+ same-stage subtasks → ask the user (NEVER auto-pick by
+//    "unscheduled" heuristic; that bit us when the producer wanted to
+//    move an existing dated shoot but the project also had an
+//    auto-seeded default Shoot with no startDate — the heuristic
+//    silently picked the empty one)
+//  - Special case for stage "edit": prefer literally-named "Edit"
+//    over "Selects timeline + kick off video" (both infer to edit
+//    stage, but only the former is the editor's real cut)
 function pickTargetSubtask({ subtasksObj, stage, explicitMode }) {
   if (explicitMode === "create") {
     return { mode: "create", subtaskId: null, existing: null };
@@ -334,9 +347,6 @@ function pickTargetSubtask({ subtasksObj, stage, explicitMode }) {
   }
 
   if (stage === "edit") {
-    // Prefer the literally-named "Edit" subtask over
-    // "Selects timeline + kick off video" — both infer to edit stage
-    // but only the former is the editor's real edit task.
     const exact = sameStage.find(st => st.name === "Edit");
     if (exact) return { mode: "update", subtaskId: exact.id, existing: exact };
   }
@@ -345,19 +355,12 @@ function pickTargetSubtask({ subtasksObj, stage, explicitMode }) {
     return { mode: "update", subtaskId: sameStage[0].id, existing: sameStage[0] };
   }
 
-  // Multiple same-stage. If exactly one has no startDate, that's clearly
-  // the "open" one — use it. Otherwise we need a clarification.
-  const unscheduled = sameStage.filter(st => !st.startDate);
-  if (unscheduled.length === 1) {
-    return { mode: "update", subtaskId: unscheduled[0].id, existing: unscheduled[0] };
-  }
-
   return {
     mode: "clarify",
     subtaskId: null,
     existing: null,
     candidates: sameStage.map(st => ({
-      label: `${st.name || "(unnamed)"}${st.startDate ? ` — ${st.startDate}` : ""}`,
+      label: `${st.name || "(unnamed)"}${st.startDate ? ` — ${st.startDate}` : " — unscheduled"}`,
       value: st.id,
     })),
   };
@@ -554,16 +557,32 @@ async function renderProposalAndPostCard({ claudeOut, context, event, botToken }
 // Build the pending-proposal record. Captures the resolved patch the
 // confirm handler will apply, plus a fingerprint of the target subtask
 // at this moment for race detection.
+//
+// Assignee preservation: when updating an existing subtask AND the
+// user didn't name anyone (Claude returned empty assigneeIds), we
+// preserve the subtask's existing assignees instead of clearing them.
+// "Move the shoot to Wednesday — same people" is a common phrasing,
+// and zeroing the crew is destructive. If the producer wants to clear
+// crew, they can do it on the dashboard.
 async function buildPendingProposal({
   shortId, intent, assigneeIds, target, project, event, now, subtasksObj,
 }) {
+  const preserveExistingAssignees =
+    target.mode === "update" && assigneeIds.length === 0 && target.existing;
+  const finalAssigneeIds = preserveExistingAssignees
+    ? (Array.isArray(target.existing.assigneeIds) ? target.existing.assigneeIds : (target.existing.assigneeId ? [target.existing.assigneeId] : []))
+    : assigneeIds;
+  const finalAssigneeId = preserveExistingAssignees
+    ? (target.existing.assigneeId || finalAssigneeIds[0] || null)
+    : (assigneeIds[0] || null);
+
   const fields = {
     startDate: intent.startDate,
     endDate: intent.endDate || intent.startDate, // single-day default
     startTime: intent.startTime || null,
     endTime: intent.endTime || null,
-    assigneeIds,
-    assigneeId: assigneeIds[0] || null,
+    assigneeIds: finalAssigneeIds,
+    assigneeId: finalAssigneeId,
     stage: intent.stage,
     name: target.mode === "create" ? defaultNameForStage(intent.stage, intent.startDate, subtasksObj) : (target.existing?.name || null),
     source: "slack",
