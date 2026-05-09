@@ -21,6 +21,8 @@ import {
   todaySydney,
   slackPostMessage,
   slackPostEphemeral,
+  slackReactionAdd,
+  slackSwapReaction,
   randomShortId,
   parseAllowlist,
   fingerprintSubtask,
@@ -28,6 +30,7 @@ import {
   STAGE_LABELS,
   STAGE_EMOJI,
   DEFAULT_NAME_FOR_STAGE,
+  REACTION,
 } from "./_slack-helpers.js";
 
 export const config = { api: { bodyParser: false } };
@@ -119,6 +122,16 @@ async function processEvent(payload) {
     return;
   }
 
+  // Visual ack — :eyes: on the user's message means "the bot saw this and
+  // is working on it". Stays through clarifications; flipped to
+  // :white_check_mark: / :x: / :warning: by the interactivity handler.
+  await slackReactionAdd({
+    channel: event.channel,
+    name: REACTION.THINKING,
+    timestamp: event.ts,
+    botToken,
+  }).catch(err => console.warn("slack-schedule-listener thinking reaction failed:", err.message));
+
   // ── Build context for Claude ────────────────────────────────────
   const context = await buildSchedulingContext();
 
@@ -130,6 +143,13 @@ async function processEvent(payload) {
   });
 
   if (claudeOut.kind === "error") {
+    await slackSwapReaction({
+      channel: event.channel,
+      timestamp: event.ts,
+      removeName: REACTION.THINKING,
+      addName: REACTION.ERROR,
+      botToken,
+    });
     await slackPostMessage({
       channel: event.channel,
       thread_ts: event.ts,

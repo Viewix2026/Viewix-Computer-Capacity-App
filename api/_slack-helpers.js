@@ -83,6 +83,51 @@ export function slackPostEphemeral({ channel, user, text, botToken }) {
   return slackCall("chat.postEphemeral", { channel, user, text }, botToken);
 }
 
+// Reaction helpers — at-a-glance bot state on the user's original message.
+// We never re-throw "already_reacted" / "no_reaction" because they're
+// expected when reaction state has already converged (e.g. retried clicks).
+export async function slackReactionAdd({ channel, name, timestamp, botToken }) {
+  try {
+    return await slackCall("reactions.add", { channel, name, timestamp }, botToken);
+  } catch (e) {
+    if (String(e.message || "").includes("already_reacted")) return null;
+    throw e;
+  }
+}
+export async function slackReactionRemove({ channel, name, timestamp, botToken }) {
+  try {
+    return await slackCall("reactions.remove", { channel, name, timestamp }, botToken);
+  } catch (e) {
+    if (String(e.message || "").includes("no_reaction")) return null;
+    throw e;
+  }
+}
+
+// Swap one reaction for another on a message. Used when a proposal
+// transitions through states (eyes → white_check_mark on confirm,
+// eyes → x on cancel, eyes → warning on STALE/error). Always tries
+// to remove the prior emoji even if it isn't present — saves callers
+// having to track which transition they're in.
+export async function slackSwapReaction({ channel, timestamp, removeName, addName, botToken }) {
+  if (removeName) {
+    await slackReactionRemove({ channel, name: removeName, timestamp, botToken }).catch(() => {});
+  }
+  if (addName) {
+    await slackReactionAdd({ channel, name: addName, timestamp, botToken }).catch(() => {});
+  }
+}
+
+// Reaction names — keep here so listener and interactivity stay in
+// lockstep. "eyes" = thinking / waiting for clarification or confirm,
+// "white_check_mark" = scheduled, "x" = cancelled, "warning" =
+// problem (STALE, error, etc).
+export const REACTION = {
+  THINKING: "eyes",
+  DONE: "white_check_mark",
+  CANCELLED: "x",
+  ERROR: "warning",
+};
+
 // ─── Misc ──────────────────────────────────────────────────────────
 export function randomShortId() {
   // 8 chars from a 5-byte hex source — enough entropy for our short-lived
