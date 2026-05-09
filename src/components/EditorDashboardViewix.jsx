@@ -875,13 +875,13 @@ function TaskRow({
                 disabled={!allowed}
                 title={allowed ? "Finish this task" : "Start the timer first — Finish unlocks once you've logged time."}
                 style={{
-                  padding: "7px 14px", borderRadius: 8, border: "none",
+                  padding: "7px 14px", borderRadius: 8,
+                  border: allowed ? "none" : "1px solid var(--border)",
                   background: allowed ? "#10B981" : "var(--bg)",
                   color: allowed ? "#fff" : "var(--muted)",
                   fontSize: 12, fontWeight: 800,
                   cursor: allowed ? "pointer" : "not-allowed",
                   fontFamily: "inherit",
-                  border: allowed ? "none" : "1px solid var(--border)",
                   transition: "background 0.15s, color 0.15s",
                 }}>
                 Finish

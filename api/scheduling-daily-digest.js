@@ -14,6 +14,7 @@
 // link buttons. Iterate after a week of real reading.
 
 import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
+import { requireRole, sendAuthError } from "./_requireAuth.js";
 import { slackPostMessage } from "./_slack-helpers.js";
 import { todaySydney, nowInSydney } from "../shared/scheduling/availability.js";
 import { detectFlags } from "../shared/scheduling/conflicts.js";
@@ -37,10 +38,18 @@ function shouldRunNow(query, isCron) {
 
 export default async function handler(req, res) {
   const isCron = req.headers["x-vercel-cron"] === "1";
-  if (req.method === "GET" && !isCron) {
-    return res.status(401).json({ error: "Cron header required" });
-  }
-  if (req.method !== "GET" && req.method !== "POST") {
+  if (req.method === "GET") {
+    if (!isCron) return res.status(401).json({ error: "Cron header required" });
+  } else if (req.method === "POST") {
+    // Manual run path — require founders auth so the public can't
+    // trigger LLM spend / Slack posts via an unauthenticated POST.
+    // Mirrors api/founders-advisor.js's pattern.
+    try {
+      await requireRole(req, ["founders", "founder"]);
+    } catch (e) {
+      return sendAuthError(res, e);
+    }
+  } else {
     return res.status(405).json({ error: "POST or cron GET only" });
   }
   if (!shouldRunNow(req.query || {}, isCron)) {

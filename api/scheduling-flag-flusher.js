@@ -15,6 +15,7 @@
 // with 24h TTL — same flag won't be reposted within the same day.
 
 import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
+import { requireRole, sendAuthError } from "./_requireAuth.js";
 import {
   slackPostMessage,
   buildBrainFlagsBlocks,
@@ -32,10 +33,17 @@ const POSTED_FP_TTL_MS = 24 * 60 * 60 * 1000;
 
 export default async function handler(req, res) {
   const isCron = req.headers["x-vercel-cron"] === "1";
-  if (req.method === "GET" && !isCron) {
-    return res.status(401).json({ error: "Cron header required" });
-  }
-  if (req.method !== "GET" && req.method !== "POST") {
+  if (req.method === "GET") {
+    if (!isCron) return res.status(401).json({ error: "Cron header required" });
+  } else if (req.method === "POST") {
+    // Manual run path — require founders auth so the public can't
+    // trigger flag posting / Slack mutations via an unauthenticated POST.
+    try {
+      await requireRole(req, ["founders", "founder"]);
+    } catch (e) {
+      return sendAuthError(res, e);
+    }
+  } else {
     return res.status(405).json({ error: "POST or cron GET only" });
   }
 
@@ -124,7 +132,10 @@ async function processOnePending({
     return "silenced";
   }
 
-  const personId = (targetSubtask.assigneeIds?.[0]) || targetSubtask.assigneeId || null;
+  // Codex P1 #4 — scope to ALL assignees, not just the first.
+  // Multi-assignee shoots otherwise miss conflicts on second/third
+  // crew members.
+  const personIds = collectPersonIdsFromSubtask(targetSubtask);
   const dateISO = targetSubtask.startDate || today;
   const startDate = targetSubtask.startDate || dateISO;
   const endDate = targetSubtask.endDate || startDate;
@@ -133,7 +144,9 @@ async function processOnePending({
     startDate, endDate,
     projects, editors, weekData, videoTypeStats,
     loggedHoursBySubtask: {},
-    scope: personId ? { kind: "actor", personId, dateISO, today } : { kind: "all" },
+    scope: personIds.length
+      ? { kind: "actor", personIds, dateISO, today }
+      : { kind: "all" },
   });
   const liveFlags = enrichFlagsForDisplay(liveFlagsRaw, { projects, editors });
 
@@ -205,6 +218,19 @@ async function processOnePending({
 
   await moveToDone(id, rec, "fired");
   return "fired";
+}
+
+// Codex P1 #4 — multi-assignee shoots scope. Pull every assignee id
+// off the live subtask so the flusher re-evaluates conflicts across
+// the full crew, not just the first.
+function collectPersonIdsFromSubtask(st) {
+  const ids = new Set();
+  if (!st) return [];
+  if (Array.isArray(st.assigneeIds)) {
+    for (const id of st.assigneeIds) if (id) ids.add(id);
+  }
+  if (st.assigneeId) ids.add(st.assigneeId);
+  return [...ids];
 }
 
 async function moveToDone(id, rec, status) {

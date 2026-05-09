@@ -89,18 +89,15 @@ async function runBrainCheck({
   // /projects directly may return partial state. Trust the patch.
   const virtualProjects = applyVirtualWrite(projects, projectId, subtaskId, proposedPatch);
 
-  // Affected person — best-effort. Use the single assignee on the
-  // patch (or current subtask). Date — affectedDate from the drag, or
-  // the patch's startDate, or today.
+  // Affected people — full assignee list, not just the first. Multi-
+  // assignee shoots (Sam + Steve on the same shoot) need every crew
+  // member's conflicts surfaced, otherwise a Steve-only conflict slips
+  // through silently.
   const targetSubtask = virtualProjects[projectId]?.subtasks?.[subtaskId];
-  const personId = (proposedPatch.assigneeIds?.[0]) ||
-                   proposedPatch.assigneeId ||
-                   (targetSubtask?.assigneeIds?.[0]) ||
-                   targetSubtask?.assigneeId ||
-                   null;
+  const personIds = collectPersonIds(proposedPatch, targetSubtask);
   const dateISO = affectedDate || proposedPatch.startDate || targetSubtask?.startDate || todaySydney();
 
-  // Run the checker scoped to the affected person/date so the banner
+  // Run the checker scoped to the affected people/date so the banner
   // doesn't surface unrelated flags from elsewhere.
   const startDate = proposedPatch.startDate || targetSubtask?.startDate || dateISO;
   const endDate = proposedPatch.endDate || targetSubtask?.endDate || startDate;
@@ -112,7 +109,9 @@ async function runBrainCheck({
     weekData,
     videoTypeStats,
     loggedHoursBySubtask: {},  // overrun is digest-only
-    scope: personId ? { kind: "actor", personId, dateISO, today } : { kind: "all" },
+    scope: personIds.length
+      ? { kind: "actor", personIds, dateISO, today }
+      : { kind: "all" },
   });
   // Enrich with display-side names (personName, projectName, clientName,
   // subtaskName) so the inline banner can read like a human briefing.
@@ -144,6 +143,28 @@ async function runBrainCheck({
     flags,
     actorSlackUserId,
   };
+}
+
+// Collect every assignee id from the patch + (fallback) current subtask.
+// Codex P1 #4 — multi-assignee shoots were missing conflicts because
+// the drag check scoped to assigneeIds[0] only.
+function collectPersonIds(patch, currentSubtask) {
+  const ids = new Set();
+  const add = list => {
+    if (Array.isArray(list)) for (const id of list) if (id) ids.add(id);
+  };
+  if (patch && Array.isArray(patch.assigneeIds)) add(patch.assigneeIds);
+  if (patch && patch.assigneeId) ids.add(patch.assigneeId);
+  // Only fall back to the current subtask's assignees when the patch
+  // doesn't override them (otherwise we'd re-introduce a person the
+  // drag just removed).
+  const patchTouchedAssignees =
+    (patch && (Array.isArray(patch.assigneeIds) || patch.assigneeId !== undefined));
+  if (!patchTouchedAssignees && currentSubtask) {
+    if (Array.isArray(currentSubtask.assigneeIds)) add(currentSubtask.assigneeIds);
+    if (currentSubtask.assigneeId) ids.add(currentSubtask.assigneeId);
+  }
+  return [...ids];
 }
 
 // ── Virtual write ─────────────────────────────────────────────────

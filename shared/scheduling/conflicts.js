@@ -337,27 +337,34 @@ export function detectFlags({
     });
   }
 
-  // Scope filter: when called from a drag check, restrict to flags
-  // involving the changed person/date so the banner stays focused on
-  // what the drag actually affected.
+  // Scope filter: when called from a drag check or Slack scheduling
+  // pass, restrict to flags involving the changed person(s) / date so
+  // the banner stays focused on what the action actually affected.
   //
-  // Three drops applied for actor scope:
+  // Drops applied for actor scope:
   //   1. unassignedScheduled — project-wide flag with no personId/date,
-  //      so the person/date filter doesn't catch it. On a drag, the 5+
+  //      so the person filter doesn't catch it. On a drag, the 5+
   //      stale "unassigned subtask scheduled for 2026-01-23" flags are
   //      pure noise; they belong on the digest's "Needs an assignee"
   //      section, not the drag banner.
   //   2. Capacity flags for past dates — can't act on yesterday's
-  //      over-capacity. Producer dragging today doesn't need to be
+  //      over-capacity. Producer acting today doesn't need to be
   //      told a past day was overloaded.
-  //   3. The standard person/date filter (kept) — drops flags about
-  //      OTHER people or OTHER days.
+  //   3. Person filter (kept) — drops flags about OTHER people. Accepts
+  //      either `scope.personId` (single — legacy) or
+  //      `scope.personIds` (array — for multi-assignee shoots /
+  //      Slack scheduling proposals).
+  //   4. Date filter (kept) — drops flags about OTHER days when
+  //      `scope.dateISO` is set.
   if (scope?.kind === "actor") {
     const today = scope.today || todaySydney();
+    const allowedIds = Array.isArray(scope.personIds) && scope.personIds.length
+      ? new Set(scope.personIds.filter(Boolean))
+      : (scope.personId ? new Set([scope.personId]) : null);
     return flags.filter(f => {
       if (f.kind === "unassignedScheduled") return false;
       if (CAPACITY_KINDS.has(f.kind) && f.date && f.date < today) return false;
-      if (f.personId && scope.personId && f.personId !== scope.personId) return false;
+      if (allowedIds && f.personId && !allowedIds.has(f.personId)) return false;
       if (f.date && scope.dateISO && f.date !== scope.dateISO) return false;
       return true;
     });
