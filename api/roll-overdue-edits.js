@@ -29,9 +29,14 @@
 //   - "Working day" for an EDIT subtask = dayVal(cell) === "in".
 //     "shoot" cells don't count — the editor's on a shoot, not
 //     in the edit suite.
-//   - Patch /projects/{id}/subtasks/{stId} with the new endDate +
-//     bumped updatedAt. Tracks autoRolledCount + autoRolledLast
-//     so the producer can see how many times it's been rolled
+//   - Patch BOTH startDate AND endDate to bestNext (single-day
+//     bar at the next-available date). Earlier versions only
+//     moved endDate, which made the task STRETCH instead of
+//     SLIDE — bar grew by one day per roll. Symptom Jeremy hit:
+//     end dates extending weeks into the future on the Team
+//     Board for tasks that had been rolling for a while. Bumps
+//     updatedAt + tracks autoRolledCount / autoRolledLast so the
+//     producer can see how many times a task's been rolled
 //     before they intervene.
 //
 // Idempotent — if the cron runs twice in a day, the second run is
@@ -194,7 +199,12 @@ export default async function handler(req, res) {
       if (!bestNext) { skipped.noWorkingDay++; continue; }
 
       const now = new Date().toISOString();
+      // Collapse to a 1-day bar at bestNext. Patches BOTH start
+      // and end so the Gantt bar slides forward instead of
+      // stretching. If the producer wanted a multi-day budget
+      // they'll re-extend manually after the cron repositions.
       await adminPatch(`/projects/${projectId}/subtasks/${stId}`, {
+        startDate: bestNext,
         endDate: bestNext,
         updatedAt: now,
         autoRolledLast: now,
@@ -204,8 +214,13 @@ export default async function handler(req, res) {
         projectId,
         subtaskId: stId,
         name: st.name || "(unnamed)",
-        from: st.endDate,
-        to: bestNext,
+        // Audit shape captures the full move (both ends) so the
+        // cron's response body is useful for debugging stretched
+        // bars from older runs.
+        fromStart: st.startDate || null,
+        fromEnd: st.endDate,
+        toStart: bestNext,
+        toEnd: bestNext,
         assigneeIds,
         autoRolledCount: (Number(st.autoRolledCount) || 0) + 1,
       });
