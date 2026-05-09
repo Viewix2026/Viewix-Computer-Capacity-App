@@ -24,11 +24,16 @@ import {
   randomShortId,
   parseAllowlist,
   fingerprintSubtask,
+  buildBrainFlagsBlocks,
   STAGES,
   STAGE_LABELS,
   STAGE_EMOJI,
   DEFAULT_NAME_FOR_STAGE,
 } from "./_slack-helpers.js";
+import { detectFlagsForDateRange } from "../shared/scheduling/conflicts.js";
+import { fingerprintFlag, SCHEDULING_CARD_KINDS } from "../shared/scheduling/flags.js";
+import { cachedStatsIsFresh } from "../shared/scheduling/stats.js";
+import { narrateBrain } from "./_scheduling-narrate.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -539,6 +544,22 @@ async function renderProposalAndPostCard({ claudeOut, context, event, botToken }
     now,
     subtasksObj,
   });
+
+  // ── Brain pass ──────────────────────────────────────────────────
+  // Run the deterministic checker against a virtual world where the
+  // proposed write is already applied, scoped to the proposed date
+  // range only (no point flagging next month's idle Tuesday when the
+  // user is scheduling for next Thursday). Filter to the kinds that
+  // belong on confirm cards — under-capacity / idle / overrun stay
+  // digest-only because they're noisy at scheduling time.
+  const brainOutcome = await runBrainPassForScheduling({
+    intent, project, target, fields: proposal.resolvedPatch.fields, context,
+  });
+  if (brainOutcome.flags.length) {
+    proposal.brainFlags = brainOutcome.flags;
+    proposal.brainNarration = brainOutcome.narration;
+  }
+
   const { db } = getAdmin();
   await db.ref(`/scheduling/pending/${shortId}`).set(proposal);
 
@@ -552,6 +573,83 @@ async function renderProposalAndPostCard({ claudeOut, context, event, botToken }
   if (post?.ts) {
     await db.ref(`/scheduling/pending/${shortId}/confirmMessageTs`).set(post.ts);
   }
+}
+
+// Run the brain checker over the virtual post-confirm state. Returns
+// { flags, narration } — flags filtered to scheduling-relevant kinds.
+// Empty flags means no API call to Opus.
+async function runBrainPassForScheduling({ intent, project, target, fields, context }) {
+  // Load current full team-board state. Listener already has projects
+  // (paged-down) and editors via context.buildSchedulingContext, but
+  // those are NAME-only. We need the raw projects+subtasks for the
+  // checker.
+  const [projectsRaw, editorsRaw, weekData, cachedStatsRec] = await Promise.all([
+    adminGet("/projects"),
+    adminGet("/editors"),
+    adminGet("/weekData"),
+    adminGet("/scheduling/cachedStats"),
+  ]);
+  const projects = projectsRaw || {};
+  const editorsList = Array.isArray(editorsRaw) ? editorsRaw : Object.values(editorsRaw || {});
+  const editors = editorsList.filter(e => e?.id);
+  const weekDataMap = weekData || {};
+  const videoTypeStats = cachedStatsIsFresh(cachedStatsRec) ? (cachedStatsRec.stats || {}) : {};
+
+  // Build the virtual write. mode=update merges fields onto the
+  // existing subtask; mode=create injects a new subtask.
+  const virtualProjects = applyVirtualWrite(projects, {
+    projectId: project.id,
+    subtaskId: target.subtaskId,
+    mode: target.mode,
+    fields,
+  });
+
+  // Date range: the bar's startDate..endDate (default to single-day
+  // when endDate not set).
+  const startDate = fields.startDate;
+  const endDate = fields.endDate || fields.startDate;
+
+  const allFlags = detectFlagsForDateRange({
+    startDate, endDate,
+    projects: virtualProjects,
+    editors,
+    weekData: weekDataMap,
+    videoTypeStats,
+    loggedHoursBySubtask: {}, // overrun is digest-only
+  });
+
+  // Filter to scheduling-card-relevant kinds.
+  const flags = allFlags.filter(f => SCHEDULING_CARD_KINDS.has(f.kind));
+  if (flags.length === 0) return { flags: [], narration: null };
+
+  // Narrate.
+  const narration = await narrateBrain({
+    flags,
+    projects: virtualProjects,
+    editors,
+    today: context.today,
+    mode: "scheduling",
+  });
+  return { flags, narration };
+}
+
+// Apply the proposed write virtually onto a copy of the projects map.
+// Pure — doesn't mutate the input.
+function applyVirtualWrite(projects, { projectId, subtaskId, mode, fields }) {
+  const targetProject = projects[projectId];
+  if (!targetProject) return projects;
+  const subtasks = { ...(targetProject.subtasks || {}) };
+  if (mode === "update" && subtaskId) {
+    const existing = subtasks[subtaskId] || {};
+    subtasks[subtaskId] = { ...existing, ...fields, id: subtaskId };
+  } else if (mode === "create") {
+    const newId = `_virtual_${Date.now()}`;
+    subtasks[newId] = { ...fields, id: newId };
+  }
+  return {
+    ...projects,
+    [projectId]: { ...targetProject, subtasks },
+  };
 }
 
 // Build the pending-proposal record. Captures the resolved patch the
@@ -653,6 +751,20 @@ function confirmCardBlocks({ proposal, project, editors }) {
   const timeLine = f.startTime ? `\n*Time:* ${f.startTime}${f.endTime ? `–${f.endTime}` : ""}` : "";
   const modeLine = proposal.resolvedPatch.mode === "create" ? "Create new subtask" : "Update existing subtask";
 
+  // Brain flags (if any) flip the Confirm button to "Confirm anyway"
+  // and add a "Heads up" section above the action buttons. Cognitive
+  // friction is intentional — you can still proceed, but you've seen
+  // the warning.
+  const hasBrainFlags = Array.isArray(proposal.brainFlags) && proposal.brainFlags.length > 0;
+  const headsUpBlocks = hasBrainFlags
+    ? buildBrainFlagsBlocks({
+        flags: proposal.brainFlags,
+        narration: proposal.brainNarration,
+        header: ":warning: *Heads up*",
+        fingerprintFn: fingerprintFlag,
+      })
+    : [];
+
   return [
     {
       type: "section",
@@ -666,6 +778,7 @@ function confirmCardBlocks({ proposal, project, editors }) {
           `*Editor:* ${assigneeNames.length ? assigneeNames.join(", ") : "_unassigned_"}`,
       },
     },
+    ...headsUpBlocks,
     {
       type: "context",
       elements: [{ type: "mrkdwn", text: `_From your message:_ ${truncate(proposal.originalText, 140)}` }],
@@ -676,7 +789,7 @@ function confirmCardBlocks({ proposal, project, editors }) {
         {
           type: "button",
           style: "primary",
-          text: { type: "plain_text", text: "Confirm" },
+          text: { type: "plain_text", text: hasBrainFlags ? "Confirm anyway" : "Confirm" },
           action_id: "confirm_schedule",
           value: proposal.shortId,
         },
