@@ -30,9 +30,6 @@
     "api/sync-attio-cache.js": {
       "maxDuration": 300
     },
-    "api/roll-overdue-edits.js": {
-      "maxDuration": 60
-    },
     "api/slack-schedule-listener.js": {
       "maxDuration": 60
     },
@@ -64,10 +61,6 @@
     {
       "path": "/api/sync-attio-cache",
       "schedule": "0 19 * * *"
-    },
-    {
-      "path": "/api/roll-overdue-edits",
-      "schedule": "0 20 * * *"
     },
     {
       "path": "/api/scheduling-daily-digest",
