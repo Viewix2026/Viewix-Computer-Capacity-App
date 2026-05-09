@@ -157,13 +157,23 @@ export function fingerprintSubtask(st) {
   };
 }
 
+// Normalise undefined → null so a fingerprint stored in Firebase
+// (which strips nulls on write, so they round-trip as undefined)
+// compares equal to a freshly computed fingerprint (where absent
+// fields are |
+// '|' null-coalesced to null). Without this, every confirm on a
+// subtask with no startTime/endTime false-positives as STALE.
+function _nullish(v) {
+  return v === undefined ? null : v;
+}
+
 export function fingerprintsMatch(a, b) {
   if (!a || !b) return false;
-  if (a.startDate !== b.startDate) return false;
-  if (a.endDate !== b.endDate) return false;
-  if (a.startTime !== b.startTime) return false;
-  if (a.endTime !== b.endTime) return false;
-  if (a.status !== b.status) return false;
+  if (_nullish(a.startDate) !== _nullish(b.startDate)) return false;
+  if (_nullish(a.endDate) !== _nullish(b.endDate)) return false;
+  if (_nullish(a.startTime) !== _nullish(b.startTime)) return false;
+  if (_nullish(a.endTime) !== _nullish(b.endTime)) return false;
+  if (_nullish(a.status) !== _nullish(b.status)) return false;
   const aa = a.assigneeIds || [];
   const bb = b.assigneeIds || [];
   if (aa.length !== bb.length) return false;
