@@ -1444,8 +1444,9 @@ const headerCell = {
 const rowLabel = {
   padding: "10px 14px", display: "flex", alignItems: "center",
   borderBottom: "1px solid var(--border)",
-  // 18px so editor names stay readable when the producer zooms the
-  // browser out (e.g., 67%) to fit more days on screen. Was 13px,
-  // which became hard to read at zoom-out.
-  fontSize: 18, minHeight: 60,
+  // 24px so editor names stay legible when the producer zooms the
+  // browser out (e.g., 67%) to fit more days on screen. Sized up
+  // twice — 13px → 18px → 24px — based on Jeremy's feedback that
+  // 18px still felt too small at zoom-out.
+  fontSize: 24, minHeight: 60,
 };
