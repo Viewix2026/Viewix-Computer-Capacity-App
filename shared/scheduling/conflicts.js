@@ -18,10 +18,20 @@ import {
   isWorkingOnDate,
   weekDataStatusForEditorOnDate,
   datesInRange,
+  todaySydney,
 } from "./availability.js";
 import { inferStage } from "./stages.js";
 import { plannedHoursForDate, hydrateEstHours, diffHours } from "./capacity.js";
 import { fingerprintFlag } from "./flags.js";
+
+// Capacity-band kinds — flagged per editor per day. We skip these in
+// drag scope when the date is in the past (can't act on yesterday).
+const CAPACITY_KINDS = new Set([
+  "inOfficeIdle",
+  "dailyUnderCapacity",
+  "dailyOverCapacity",
+  "dailyHardOverCapacity",
+]);
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -328,9 +338,25 @@ export function detectFlags({
   }
 
   // Scope filter: when called from a drag check, restrict to flags
-  // involving the changed person/date so banner stays focused.
+  // involving the changed person/date so the banner stays focused on
+  // what the drag actually affected.
+  //
+  // Three drops applied for actor scope:
+  //   1. unassignedScheduled — project-wide flag with no personId/date,
+  //      so the person/date filter doesn't catch it. On a drag, the 5+
+  //      stale "unassigned subtask scheduled for 2026-01-23" flags are
+  //      pure noise; they belong on the digest's "Needs an assignee"
+  //      section, not the drag banner.
+  //   2. Capacity flags for past dates — can't act on yesterday's
+  //      over-capacity. Producer dragging today doesn't need to be
+  //      told a past day was overloaded.
+  //   3. The standard person/date filter (kept) — drops flags about
+  //      OTHER people or OTHER days.
   if (scope?.kind === "actor") {
+    const today = scope.today || todaySydney();
     return flags.filter(f => {
+      if (f.kind === "unassignedScheduled") return false;
+      if (CAPACITY_KINDS.has(f.kind) && f.date && f.date < today) return false;
       if (f.personId && scope.personId && f.personId !== scope.personId) return false;
       if (f.date && scope.dateISO && f.date !== scope.dateISO) return false;
       return true;
@@ -355,3 +381,67 @@ export function detectFlagsForDateRange({ startDate, endDate, ...rest }) {
 
 // Re-export for convenience so consumers only import from one path.
 export { fingerprintFlag };
+
+// Enrich flags for display surfaces (TeamBoard banner, scheduling-card
+// heads-up, drag-flush Slack post). Adds presentational fields
+// (personName, projectName, clientName, subtaskName) so consumers can
+// write "Emesent — Shoot · Sam stretched on Wed" instead of bare ids.
+//
+// Pure: doesn't mutate input flags. The original `kind` / fingerprint
+// fields are preserved unchanged so dedup keys stay stable.
+export function enrichFlagsForDisplay(flags, { projects, editors }) {
+  const editorById = new Map();
+  for (const e of editors || []) {
+    if (e?.id) editorById.set(e.id, e);
+  }
+  const projectById = new Map(Object.entries(projects || {}));
+  // Index every subtask by id so we can look up name/projectId quickly.
+  const subtaskIndex = new Map();
+  for (const [pid, p] of projectById) {
+    if (!p?.subtasks) continue;
+    for (const [stid, st] of Object.entries(p.subtasks)) {
+      if (st?.id || stid) subtaskIndex.set(st?.id || stid, { project: p, subtask: st, projectId: pid });
+    }
+  }
+
+  return (flags || []).map(f => enrichOne(f, { editorById, projectById, subtaskIndex }));
+}
+
+function enrichOne(f, { editorById, projectById, subtaskIndex }) {
+  const out = { ...f };
+  // Person name — from /editors lookup. Falls back to id so the banner
+  // never shows "undefined".
+  if (f.personId) {
+    const ed = editorById.get(f.personId);
+    out.personName = ed?.name || f.personId;
+  }
+  // Project + client + subtask names for flags that reference a
+  // specific subtask (or list of subtasks).
+  if (f.projectId) {
+    const p = projectById.get(f.projectId);
+    out.projectName = p?.projectName || f.projectId;
+    out.clientName = p?.clientName || "";
+  }
+  if (f.subtaskId) {
+    const meta = subtaskIndex.get(f.subtaskId);
+    if (meta) {
+      out.projectName = out.projectName || meta.project?.projectName || meta.projectId;
+      out.clientName = out.clientName || meta.project?.clientName || "";
+      out.subtaskName = meta.subtask?.name || meta.subtask?.id || "";
+    }
+  }
+  // Multi-subtask flags (fixedTimeConflict, multipleUntimedShoots,
+  // offDayAssigned) — annotate each entry with its project + client.
+  if (Array.isArray(f.subtasks)) {
+    out.subtasks = f.subtasks.map(s => {
+      const meta = subtaskIndex.get(s.subtaskId);
+      return {
+        ...s,
+        projectName: meta?.project?.projectName || s.projectId || "",
+        clientName: meta?.project?.clientName || "",
+        subtaskName: meta?.subtask?.name || s.name || "",
+      };
+    });
+  }
+  return out;
+}

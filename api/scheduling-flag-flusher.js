@@ -21,7 +21,7 @@ import {
   hashFingerprint,
 } from "./_slack-helpers.js";
 import { todaySydney } from "../shared/scheduling/availability.js";
-import { detectFlagsForDateRange, fingerprintFlag } from "../shared/scheduling/conflicts.js";
+import { detectFlagsForDateRange, fingerprintFlag, enrichFlagsForDisplay } from "../shared/scheduling/conflicts.js";
 import { cachedStatsIsFresh } from "../shared/scheduling/stats.js";
 import { buildAwareness } from "../shared/scheduling/awareness.js";
 import { narrateBrain } from "./_scheduling-narrate.js";
@@ -129,12 +129,13 @@ async function processOnePending({
   const startDate = targetSubtask.startDate || dateISO;
   const endDate = targetSubtask.endDate || startDate;
 
-  const liveFlags = detectFlagsForDateRange({
+  const liveFlagsRaw = detectFlagsForDateRange({
     startDate, endDate,
     projects, editors, weekData, videoTypeStats,
     loggedHoursBySubtask: {},
-    scope: personId ? { kind: "actor", personId, dateISO } : { kind: "all" },
+    scope: personId ? { kind: "actor", personId, dateISO, today } : { kind: "all" },
   });
+  const liveFlags = enrichFlagsForDisplay(liveFlagsRaw, { projects, editors });
 
   // Surviving flags = live flags whose fingerprint matches one from
   // the original pending record. If the user self-fixed, the matching

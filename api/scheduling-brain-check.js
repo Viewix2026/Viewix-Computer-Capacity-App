@@ -21,7 +21,7 @@
 
 import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
-import { detectFlagsForDateRange } from "../shared/scheduling/conflicts.js";
+import { detectFlagsForDateRange, enrichFlagsForDisplay } from "../shared/scheduling/conflicts.js";
 import { fingerprintFlag } from "../shared/scheduling/flags.js";
 import { cachedStatsIsFresh } from "../shared/scheduling/stats.js";
 import { todaySydney } from "../shared/scheduling/availability.js";
@@ -104,15 +104,19 @@ async function runBrainCheck({
   // doesn't surface unrelated flags from elsewhere.
   const startDate = proposedPatch.startDate || targetSubtask?.startDate || dateISO;
   const endDate = proposedPatch.endDate || targetSubtask?.endDate || startDate;
-  const flags = detectFlagsForDateRange({
+  const today = todaySydney();
+  const rawFlags = detectFlagsForDateRange({
     startDate, endDate,
     projects: virtualProjects,
     editors,
     weekData,
     videoTypeStats,
     loggedHoursBySubtask: {},  // overrun is digest-only
-    scope: personId ? { kind: "actor", personId, dateISO } : { kind: "all" },
+    scope: personId ? { kind: "actor", personId, dateISO, today } : { kind: "all" },
   });
+  // Enrich with display-side names (personName, projectName, clientName,
+  // subtaskName) so the inline banner can read like a human briefing.
+  const flags = enrichFlagsForDisplay(rawFlags, { projects: virtualProjects, editors });
 
   // Best-effort actor lookup — Firebase UID → editor record →
   // slackUserId. Falls back to anonymous if no match (v1 doesn't

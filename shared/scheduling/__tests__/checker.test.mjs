@@ -6,7 +6,7 @@
 // the build doesn't depend on jest/vitest config.
 
 import assert from "node:assert/strict";
-import { detectFlags, detectFlagsForDateRange } from "../conflicts.js";
+import { detectFlags, detectFlagsForDateRange, enrichFlagsForDisplay } from "../conflicts.js";
 import { plannedHoursForDate, hydrateEstHours, diffHours } from "../capacity.js";
 import { computeVideoTypeStats, buildLoggedHoursMap } from "../stats.js";
 import { fingerprintFlag, FLAG_KINDS } from "../flags.js";
@@ -572,6 +572,139 @@ test("diffHours: simple cases", () => {
   assert.equal(diffHours("09:30", "10:00"), 0.5);
   assert.equal(diffHours("14:00", "10:00"), 0); // negative -> 0
   assert.equal(diffHours("bad", "10:00"), 0);
+});
+
+// ─── 8. Actor-scope drag filter (the banner fixes from May 9 feedback) ─
+
+test("detectFlags actor scope: drops unassignedScheduled flags", () => {
+  // Project-wide unassigned subtasks are noise on a drag — they belong
+  // on the daily digest, not the inline banner.
+  const p = project("p", "liveAction", {
+    s1: subtask("s1", { stage: "shoot", startDate: today, assigneeIds: [] }),
+  });
+  // Without scope: unassigned fires.
+  let flags = detectFlags({
+    projects: { p }, editors, weekData: {}, date: today,
+  });
+  assert.ok(flags.find(f => f.kind === "unassignedScheduled"),
+    "unassignedScheduled should fire in 'all' scope");
+
+  // With actor scope: dropped.
+  flags = detectFlags({
+    projects: { p }, editors, weekData: {}, date: today,
+    scope: { kind: "actor", personId: "ed-alex", dateISO: today },
+  });
+  assert.equal(flags.filter(f => f.kind === "unassignedScheduled").length, 0,
+    "unassignedScheduled should be dropped in actor scope");
+});
+
+test("detectFlags actor scope: drops past-date capacity flags", () => {
+  // Capacity flags about yesterday aren't actionable. Drop them in
+  // actor scope so producers don't get scolded about historical days.
+  const yesterday = "2026-05-08";
+  const p = project("p", "liveAction", {
+    // 12h shoot on yesterday for Alex → would normally fire
+    // dailyHardOverCapacity for Alex on 2026-05-08.
+    s1: subtask("s1", {
+      stage: "shoot",
+      startDate: yesterday,
+      startTime: "06:00",
+      endTime: "18:00",
+      assigneeIds: ["ed-alex"],
+    }),
+  });
+
+  // Without actor scope: capacity flag fires.
+  let flags = detectFlags({
+    projects: { p }, editors: [editorAlex], weekData: {}, date: yesterday,
+  });
+  assert.ok(flags.find(f => f.kind === "dailyHardOverCapacity" && f.personId === "ed-alex"),
+    "should fire without actor scope");
+
+  // With actor scope + today=2026-05-09: dropped.
+  flags = detectFlags({
+    projects: { p }, editors: [editorAlex], weekData: {}, date: yesterday,
+    scope: { kind: "actor", personId: "ed-alex", dateISO: yesterday, today: "2026-05-09" },
+  });
+  assert.equal(flags.filter(f => f.kind === "dailyHardOverCapacity").length, 0,
+    "past-date capacity flag should be dropped in actor scope");
+});
+
+test("detectFlags actor scope: keeps capacity flags for today + future", () => {
+  // Sanity check the date filter: TODAY's over-capacity still fires.
+  const p = project("p", "liveAction", {
+    s1: subtask("s1", {
+      stage: "shoot",
+      startDate: today,
+      startTime: "06:00",
+      endTime: "18:00", // 12h
+      assigneeIds: ["ed-alex"],
+    }),
+  });
+  const flags = detectFlags({
+    projects: { p }, editors: [editorAlex], weekData: {}, date: today,
+    scope: { kind: "actor", personId: "ed-alex", dateISO: today, today },
+  });
+  assert.ok(flags.find(f => f.kind === "dailyHardOverCapacity"),
+    "today's over-capacity should still fire in actor scope");
+});
+
+// ─── 9. enrichFlagsForDisplay ─────────────────────────────────────
+
+test("enrichFlagsForDisplay adds personName / projectName / clientName / subtaskName", () => {
+  const projects = {
+    "proj-1": {
+      projectName: "Q3 Brand Refresh",
+      clientName: "Emesent",
+      subtasks: {
+        "st-shoot": { id: "st-shoot", name: "Shoot", stage: "shoot" },
+      },
+    },
+  };
+  const editorsRich = [{ id: "ed-alex", name: "Alex", role: "editor", defaultDays: {} }];
+
+  const rawFlags = [
+    {
+      kind: "fixedTimeConflict",
+      personId: "ed-alex",
+      date: "2026-05-13",
+      subtasks: [{ subtaskId: "st-shoot", name: "Shoot" }],
+    },
+    { kind: "dailyHardOverCapacity", personId: "ed-alex", date: "2026-05-13", plannedHours: 12 },
+    { kind: "unassignedScheduled", projectId: "proj-1", subtaskId: "st-shoot", startDate: "2026-05-13", stage: "shoot" },
+  ];
+
+  const enriched = enrichFlagsForDisplay(rawFlags, { projects, editors: editorsRich });
+
+  assert.equal(enriched[0].personName, "Alex", "personName resolved");
+  assert.equal(enriched[0].subtasks[0].clientName, "Emesent", "subtask client name");
+  assert.equal(enriched[0].subtasks[0].projectName, "Q3 Brand Refresh", "subtask project name");
+  assert.equal(enriched[0].subtasks[0].subtaskName, "Shoot", "subtask name");
+
+  assert.equal(enriched[1].personName, "Alex");
+  assert.ok(!enriched[1].projectName, "no project on a person-only flag");
+
+  assert.equal(enriched[2].clientName, "Emesent");
+  assert.equal(enriched[2].projectName, "Q3 Brand Refresh");
+  assert.equal(enriched[2].subtaskName, "Shoot");
+});
+
+test("enrichFlagsForDisplay falls back gracefully when names missing", () => {
+  // Stale flag pointing at a deleted project / unknown editor — no crash.
+  const enriched = enrichFlagsForDisplay(
+    [{ kind: "inOfficeIdle", personId: "ed-ghost", date: "2026-05-13" }],
+    { projects: {}, editors: [] },
+  );
+  assert.equal(enriched[0].personName, "ed-ghost", "falls back to id when no editor record");
+});
+
+test("enrichFlagsForDisplay doesn't change fingerprint", () => {
+  // Adding presentational fields must not affect dedup keys.
+  const flag = { kind: "inOfficeIdle", personId: "ed-alex", date: "2026-05-13" };
+  const beforeFp = fingerprintFlag(flag);
+  const enriched = enrichFlagsForDisplay([flag], { projects: {}, editors: [editorAlex] });
+  const afterFp = fingerprintFlag(enriched[0]);
+  assert.equal(beforeFp, afterFp, "fingerprint unchanged after enrichment");
 });
 
 console.log(`\n${passed} tests passed`);
