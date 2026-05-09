@@ -854,16 +854,21 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
     console.info("[TeamBoard drag]", {
       mode: "move", projectId: subtask.projectId, subtaskId: subtask.id,
       sourceAssigneeId, newAssignee,
-      oldStart, oldEnd, newStart: newDate,
+      oldStart, oldEnd, newStart: newDate, newEnd: newDate,
     });
 
-    // Date logic: shift the WHOLE subtask (all assignees move together
-    // — they're co-scheduled). Preserve duration when both ends exist.
-    let newEnd = newDate;
-    if (oldStart && oldEnd) {
-      const delta = daysBetween(oldStart, newDate);
-      newEnd = addDays(oldEnd, delta);
-    }
+    // Date logic: SLIDE, don't STRETCH. Drop on a single day = collapse
+    // to a 1-day bar at that day. Producer uses the resize handles to
+    // make a bar multi-day deliberately — same principle as the
+    // auto-roll cron fix in PR #74. Earlier behaviour preserved
+    // duration (delta from oldStart applied to oldEnd), which silently
+    // pushed multi-day bars further into the future on every drag.
+    // Symptom Jeremy hit: dragging a bar that had been silently
+    // stretched by the auto-roll cron made an "unrelated" task appear
+    // to expand by ~14 days when it actually was the same bar
+    // preserving its old span. The audit log line above shows
+    // newStart === newEnd, matching what gets written.
+    const newEnd = newDate;
     patchSubtaskLocal({ startDate: newDate, endDate: newEnd });
     fbSet(`${path}/startDate`, newDate);
     fbSet(`${path}/endDate`, newEnd);
