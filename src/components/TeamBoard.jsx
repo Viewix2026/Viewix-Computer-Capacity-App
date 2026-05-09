@@ -12,7 +12,8 @@
 // webhook patches don't clobber producer drags.
 
 import { useMemo, useState, useRef, useCallback } from "react";
-import { fbSet } from "../firebase";
+import { fbSet, authFetch } from "../firebase";
+import TeamBoardFlagBanner from "./TeamBoardFlagBanner.jsx";
 import {
   DndContext, PointerSensor, useSensor, useSensors,
   useDraggable, useDroppable, useDndContext, closestCenter, DragOverlay,
@@ -664,6 +665,32 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
   }));
   const [dragPreview, setDragPreview] = useState(null);
 
+  // Inline brain-flag banner shown after a drag commits. Populated by
+  // a fire-and-forget POST to /api/scheduling-brain-check at the end
+  // of each drag write. Auto-dismisses after 30s via the banner
+  // component's own timer; producer can dismiss earlier with the X.
+  const [brainFlags, setBrainFlags] = useState(null);
+
+  // Helper: kick off the brain check after a drag write commits.
+  // Fire-and-forget — failures (auth blip, /api/* down) are silent
+  // so they never block the producer's drag UX.
+  const triggerBrainCheck = useCallback(({ projectId, subtaskId, patch, affectedDate }) => {
+    authFetch("/api/scheduling-brain-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trigger: "drag",
+        projectId, subtaskId, affectedDate,
+        proposedPatch: patch,
+      }),
+    })
+      .then(r => r.json().catch(() => ({})))
+      .then(({ flags }) => {
+        if (Array.isArray(flags) && flags.length) setBrainFlags(flags);
+      })
+      .catch(err => console.warn("scheduling-brain-check:", err?.message || err));
+  }, []);
+
   const onDragStart = (e) => {
     // Only show the floating preview for "move" drags. Resize gestures
     // are an edge-pull on a bar that stays put — a floating preview
@@ -779,6 +806,12 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       fbSet(`${path}/startDate`, newStart);
       fbSet(`${path}/endDate`, newEnd);
       fbSet(`${path}/updatedAt`, now);
+      triggerBrainCheck({
+        projectId: subtask.projectId,
+        subtaskId: subtask.id,
+        patch: { startDate: newStart, endDate: newEnd },
+        affectedDate: mode === "resizeEnd" ? newEnd : newStart,
+      });
       return;
     }
 
@@ -788,6 +821,8 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       // intact so the producer can drop the card back into a date cell
       // later without re-picking everyone — pool cards still show all
       // assignees in their footer.
+      // Skip brain check on pool drops — clearing dates only REMOVES
+      // potential conflicts, never creates one. No flag worth posting.
       patchSubtaskLocal({ startDate: null, endDate: null });
       fbSet(`${path}/startDate`, null);
       fbSet(`${path}/endDate`, null);
@@ -851,6 +886,21 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       writeAssignees(nextIds);
     }
     fbSet(`${path}/updatedAt`, now);
+
+    // Brain check on the resulting state. proposedPatch carries the
+    // fields the drag just wrote so the backend can evaluate the
+    // virtual world without racing the per-leaf fbSet calls.
+    triggerBrainCheck({
+      projectId: subtask.projectId,
+      subtaskId: subtask.id,
+      patch: {
+        startDate: newDate,
+        endDate: newEnd,
+        assigneeIds: nextIds,
+        assigneeId: nextIds[0] || null,
+      },
+      affectedDate: newDate,
+    });
   };
 
   // ─── Layout maths ────────────────────────────────────────────────
@@ -891,6 +941,19 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
   // ─── Render ──────────────────────────────────────────────────────
   return (
     <div style={{ padding: "16px 28px 60px" }}>
+      {/* Inline brain-flag banner — appears after a drag commits a
+          write that creates a scheduling conflict (double-book, off-day
+          assignment, over-capacity, etc.). Auto-dismisses after 30s.
+          A delayed Slack post (3 min) follows if the conflict is still
+          active by then — gives the producer time to drag again to fix
+          before the channel pings. See api/scheduling-brain-check.js +
+          api/scheduling-flag-flusher.js. */}
+      {brainFlags && (
+        <TeamBoardFlagBanner
+          flags={brainFlags}
+          onDismiss={() => setBrainFlags(null)}
+        />
+      )}
       {/* Stage colour key — sits above the calendar so producers can
           map a coloured bar back to its stage name. Static, subtle,
           defers to the data below. */}

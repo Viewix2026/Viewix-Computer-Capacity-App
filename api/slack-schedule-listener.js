@@ -33,6 +33,7 @@ import {
 import { detectFlagsForDateRange } from "../shared/scheduling/conflicts.js";
 import { fingerprintFlag, SCHEDULING_CARD_KINDS } from "../shared/scheduling/flags.js";
 import { cachedStatsIsFresh } from "../shared/scheduling/stats.js";
+import { buildAwareness } from "../shared/scheduling/awareness.js";
 import { narrateBrain } from "./_scheduling-narrate.js";
 
 export const config = { api: { bodyParser: false } };
@@ -622,6 +623,14 @@ async function runBrainPassForScheduling({ intent, project, target, fields, cont
   const flags = allFlags.filter(f => SCHEDULING_CARD_KINDS.has(f.kind));
   if (flags.length === 0) return { flags: [], narration: null };
 
+  // Phase 1A awareness — gives the narration access to unscheduled
+  // edits + editor free-capacity so it can suggest concrete fixes
+  // (e.g., "Charlie shoot is unassigned, could pull forward").
+  const awareness = buildAwareness({
+    projects: virtualProjects, editors, weekData: weekDataMap,
+    videoTypeStats, today: context.today,
+  });
+
   // Narrate.
   const narration = await narrateBrain({
     flags,
@@ -629,6 +638,7 @@ async function runBrainPassForScheduling({ intent, project, target, fields, cont
     editors,
     today: context.today,
     mode: "scheduling",
+    awareness,
   });
   return { flags, narration };
 }
