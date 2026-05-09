@@ -32,6 +32,12 @@
     },
     "api/roll-overdue-edits.js": {
       "maxDuration": 60
+    },
+    "api/slack-schedule-listener.js": {
+      "maxDuration": 60
+    },
+    "api/slack-interactivity.js": {
+      "maxDuration": 30
     }
   },
   "crons": [
