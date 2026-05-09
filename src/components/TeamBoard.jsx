@@ -526,36 +526,65 @@ function DropCell({
 // ─── Main board ────────────────────────────────────────────────────
 
 export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, onOpenProject }) {
-  // The board starts on the Monday of the current week so the producer
-  // sees the full current week (including past days they may have
-  // already worked) without scrolling left. From there, we render N
-  // days forward; scrolling near the right edge appends another batch
-  // (no toolbar, no manual prev/next).
-  const fromDate = useMemo(() => startOfWeek(isoToday()), []);
-  const [daysAhead, setDaysAhead] = useState(28);  // 4 weeks initial
-  const dates = useMemo(() => dateRange(fromDate, daysAhead), [fromDate, daysAhead]);
+  // The board opens centred on the Monday of the current week so the
+  // producer sees the full current week (including past days they may
+  // have already worked) without scrolling left. From there:
+  //   - daysAhead controls forward span. Initial 28 days (4 weeks).
+  //     Scrolling near the right edge appends another 14-day batch.
+  //   - daysBack controls past span. Initial 0 (no preloaded history).
+  //     Scrolling near the left edge prepends another 14-day batch.
+  //     Once revealed, prepended columns stay until the page reloads.
+  // Both directions cap at 365 days. No toolbar, no manual prev/next.
+  const [daysAhead, setDaysAhead] = useState(28);
+  const [daysBack, setDaysBack] = useState(0);
+  const fromDate = useMemo(() => {
+    if (daysBack === 0) return startOfWeek(isoToday());
+    const d = new Date(isoToday() + "T00:00:00");
+    d.setDate(d.getDate() - daysBack);
+    return startOfWeek(toISO(d));
+  }, [daysBack]);
+  const dates = useMemo(() => dateRange(fromDate, daysBack + daysAhead), [fromDate, daysBack, daysAhead]);
 
-  // Scroll listener on the grid container. When the user scrolls within
-  // ~300px of the right edge, append another 14 days. We throttle via
-  // a "loading" guard so a fast flick doesn't fire the extension five
-  // times during the same momentum scroll. Cap at 365 days total.
+  // Bidirectional scroll-extension. Right-edge approach appends future
+  // days. Left-edge approach (only when the producer is actively
+  // scrolling left, not on initial mount when scrollLeft sits at 0)
+  // prepends past days, then adjusts scrollLeft by the added pixel
+  // width so the visible position doesn't visually jump backward
+  // across the screen. We throttle via a "loading" guard so a fast
+  // flick doesn't fire the extension multiple times during one
+  // momentum scroll. Cap at 365 days each direction.
   const scrollRef = useRef(null);
   const extending = useRef(false);
+  const lastScrollLeft = useRef(0);
   const onScroll = useCallback((e) => {
     if (extending.current) return;
     const el = e.currentTarget;
-    const remaining = el.scrollWidth - (el.scrollLeft + el.clientWidth);
-    if (remaining < 320 && daysAhead < 365) {
+    const wasScrollingLeft = el.scrollLeft < lastScrollLeft.current;
+    lastScrollLeft.current = el.scrollLeft;
+
+    const remainingRight = el.scrollWidth - (el.scrollLeft + el.clientWidth);
+    if (remainingRight < 320 && daysAhead < 365) {
       extending.current = true;
       setDaysAhead(d => Math.min(365, d + 14));
-      // Reset the guard once the next render lands. Two RAFs is enough
-      // for the new columns to render and grow scrollWidth past the
-      // 320-remaining threshold.
       requestAnimationFrame(() => requestAnimationFrame(() => {
         extending.current = false;
       }));
+      return;
     }
-  }, [daysAhead]);
+    if (wasScrollingLeft && el.scrollLeft < 320 && daysBack < 365) {
+      extending.current = true;
+      const oldScrollWidth = el.scrollWidth;
+      setDaysBack(d => Math.min(365, d + 14));
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const delta = el.scrollWidth - oldScrollWidth;
+        if (delta > 0) {
+          el.scrollLeft += delta;
+          lastScrollLeft.current = el.scrollLeft;
+        }
+        extending.current = false;
+      }));
+    }
+  }, [daysAhead, daysBack]);
 
   // Flatten every subtask across every project, carrying parent project
   // metadata along so the bar can render "Canva: Pre Production" without
