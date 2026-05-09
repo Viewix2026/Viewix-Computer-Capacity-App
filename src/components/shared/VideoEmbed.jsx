@@ -25,7 +25,22 @@ function detectEmbed(url) {
   // TikTok — /@user/video/123 or /v/123
   const tt = u.match(/tiktok\.com\/(?:@[\w.-]+\/video|v)\/(\d+)/);
   if (tt) {
-    return { kind: "tiktok", embedUrl: `https://www.tiktok.com/embed/v2/${tt[1]}`, aspect: "9 / 16" };
+    return {
+      kind: "tiktok",
+      embedUrl: `https://www.tiktok.com/embed/v2/${tt[1]}`,
+      // TikTok's embed wraps a 9:16 video in a header / caption /
+      // footer chrome that's fixed in pixel size — it doesn't
+      // scale proportionally with width. Locking aspect-ratio
+      // (the way YouTube / Instagram embeds work) leaves a big
+      // white area below the rendered content on wider viewports
+      // (the bug Jeremy hit on the home page). Use fixed
+      // dimensions instead, matching TikTok's documented embed
+      // size (max-width 605, default height 750). The render
+      // wrapper centers the embed inside its parent so it
+      // doesn't pin to the left on wide screens.
+      fixedHeight: 750,
+      maxWidth: 605,
+    };
   }
 
   // Frame.io — share URLs (app.frame.io/presentations/... or f.io/... or custom subdomain)
@@ -57,6 +72,33 @@ export function VideoEmbed({ url, aspectRatio }) {
           Open video ↗
         </span>
       </a>
+    );
+  }
+
+  // Fixed-dimension path — TikTok and any future provider whose
+  // embed has fixed-pixel chrome that aspect-ratio can't model.
+  // Wrapper takes the parent's full width up to maxWidth, centers
+  // the embed, and gives the iframe a fixed pixel height so the
+  // chrome below the video sits flush against the wrapper edge
+  // instead of leaving a white gap.
+  if (detected.fixedHeight) {
+    return (
+      <div style={{
+        width: "100%",
+        maxWidth: detected.maxWidth || "100%",
+        height: detected.fixedHeight,
+        margin: "0 auto",
+        background: "#000", borderRadius: 8, overflow: "hidden",
+      }}>
+        <iframe
+          src={detected.embedUrl}
+          title="Video of the week"
+          loading="lazy"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+          allowFullScreen
+          style={{ width: "100%", height: "100%", border: 0, display: "block" }}
+        />
+      </div>
     );
   }
 
