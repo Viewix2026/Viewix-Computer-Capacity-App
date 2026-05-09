@@ -90,6 +90,16 @@ export function randomShortId() {
   return crypto.randomBytes(5).toString("hex").slice(0, 8);
 }
 
+// Hash a fingerprint string (from shared/scheduling/flags.js) to a
+// short hex digest safe for use as a Firebase RTDB key. RTDB rejects
+// keys containing `. # $ / [ ]`, and raw fingerprints contain `.` and
+// `/` — so we hash before persistence. 16 hex chars is plenty of
+// collision space for the small set of pending-flag records we
+// expect (low hundreds at most).
+export function hashFingerprint(fp) {
+  return crypto.createHash("sha256").update(String(fp || "")).digest("hex").slice(0, 16);
+}
+
 // Mirrors SUBTASK_STAGE_OPTIONS in src/components/Projects.jsx.
 // Keeping these here as the single Slack-side reference avoids importing
 // from the React tree into a serverless function.
@@ -186,4 +196,44 @@ export function parseAllowlist(value) {
   if (!value) return null;
   const ids = String(value).split(",").map(s => s.trim()).filter(Boolean);
   return ids.length ? new Set(ids) : null;
+}
+
+// Format a brain flag-set into a Block Kit "Heads up" section for use
+// inside a confirm card (Slack scheduling) or as the flags block in
+// the daily digest.
+//
+// `flags` is the typed Flag[] from detectFlags. `narration` is the
+// output from narrateBrain — { perFlagText, recommendation }. When
+// per-flag text is missing for a fingerprint we fall back to a plain
+// stringification so the block always renders something.
+export function buildBrainFlagsBlocks({ flags, narration, header = ":warning: Heads up", fingerprintFn }) {
+  if (!flags || flags.length === 0) return [];
+  const lines = [];
+  for (const f of flags) {
+    const fp = fingerprintFn ? fingerprintFn(f) : null;
+    const text = (fp && narration?.perFlagText?.[fp]) || _shortFlagText(f);
+    lines.push(`• ${text}`);
+  }
+  if (narration?.recommendation) {
+    lines.push(`_${narration.recommendation}_`);
+  }
+  return [
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: `${header}\n${lines.join("\n")}` },
+    },
+  ];
+}
+
+function _shortFlagText(f) {
+  switch (f?.kind) {
+    case "fixedTimeConflict": return `Time conflict on ${f.date}.`;
+    case "multipleUntimedShoots": return `Multiple untimed shoots on ${f.date}.`;
+    case "offDayAssigned": return `Editor not working on ${f.date}.`;
+    case "dailyOverCapacity": return `Over-capacity (${f.plannedHours}h) on ${f.date}.`;
+    case "dailyHardOverCapacity": return `Hard over-capacity (${f.plannedHours}h) on ${f.date}.`;
+    case "weekDataMismatch": return `Schedule grid mismatch on ${f.date}.`;
+    case "unassignedScheduled": return `Subtask scheduled with no assignee.`;
+    default: return "Flag.";
+  }
 }

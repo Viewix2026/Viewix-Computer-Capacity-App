@@ -14,6 +14,13 @@
 // webhook-created records that haven't hit local state yet.
 
 import { useState, useMemo, useEffect, useRef, memo, createContext, useContext, Fragment } from "react";
+// Stage canonical definitions — single source of truth shared with
+// the scheduling brain in shared/scheduling/stages.js.
+import {
+  STAGE_OPTIONS as SUBTASK_STAGE_OPTIONS,
+  STAGE_MAP as SUBTASK_STAGE_MAP,
+  inferStage,
+} from "../../shared/scheduling/stages.js";
 
 // View-only context — Lead role gets read-only access to the Projects
 // tab (PR #N). Every editable surface inside this file reads from
@@ -84,43 +91,11 @@ function normaliseSubtaskStatus(raw) {
 // stage, "Done" for that stage, etc. The four default phase subtasks
 // get auto-tagged with their matching stage; manual + video subtasks
 // default to Pre Production until the producer moves them on.
-const SUBTASK_STAGE_OPTIONS = [
-  { key: "preProduction", label: "Pre Production", color: "#8B5CF6" },
-  // Shoot is red — visually loud (filming days are the most logistics-
-  // sensitive moment of a project) and distinct from the pink Stuck
-  // status, the brighter delete-button red, and the orange Revisions
-  // stage. Avoids being mistaken for any other dropdown's colour.
-  { key: "shoot",         label: "Shoot",          color: "#DC2626" },
-  { key: "revisions",     label: "Revisions",      color: "#F97316" },
-  // Edit uses the Viewix accent blue (matches --accent in config.js).
-  { key: "edit",          label: "Edit",           color: "#0082FA" },
-  { key: "hold",          label: "Hold",           color: "#EAB308" },
-];
-const SUBTASK_STAGE_MAP = Object.fromEntries(SUBTASK_STAGE_OPTIONS.map(s => [s.key, s]));
-
-// Infer a sensible stage from the subtask's name when no `stage` field
-// has been written yet. Saves the producer from having to retro-tag
-// every existing subtask manually after this feature ships — the four
-// default phases (and any video subtasks named after a phase) light up
-// correctly on first render, and the inferred value gets persisted the
-// first time the producer opens the dropdown.
-function inferStage(subtask) {
-  if (subtask?.stage && SUBTASK_STAGE_MAP[subtask.stage]) return subtask.stage;
-  const name = (subtask?.name || "").toLowerCase();
-  if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
-  if (name.includes("revision")) return "revisions";  // before "shoot" since "reshoot" might match
-  if (name.includes("shoot")) return "shoot";
-  // "Selects timeline + kick off video" is the producer's hand-off
-  // into the edit phase (picking which take/timeline the editor cuts
-  // from + recording the kick-off video the editor uses as their
-  // brief). Lives under the edit stage colour even though the label
-  // doesn't include "edit". Match before the generic "edit" rule
-  // below — substring "timeline" is enough, and is unique among the
-  // defaults so it can't false-match anything.
-  if (name.includes("timeline")) return "edit";
-  if (name.includes("edit")) return "edit";
-  return "preProduction";
-}
+//
+// Stage definitions extracted to shared/scheduling/stages.js so the
+// scheduling brain (api/*) can read the same canonical map. The local
+// SUBTASK_STAGE_OPTIONS / SUBTASK_STAGE_MAP / inferStage names below
+// alias the imported ones so the existing render code reads identically.
 
 // Default subtasks every project gets seeded with on first expand.
 // Mirrors the production lifecycle Jeremy walks through with every
