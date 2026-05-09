@@ -397,11 +397,14 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
           ? `${subtask.startTime} → ${subtask.endTime}`
           : `${span}d`}
       </div>
-      {/* Resting-state grip cue: a 2px coloured stripe inset 3px from
-          each long edge of the bar. Painted via a linear gradient so
-          there's no extra DOM. The 8px wide hit area + ew-resize
-          cursor on hover is unchanged; this just makes the handle
-          visible without hovering. */}
+      {/* Resting-state grip cue + resize hit area. Hit area shrunk
+          from 8px to 5px and the visible cue widened to 3px (was 2px)
+          so the visible stripe matches the actual hit zone. Reason:
+          when bars in the same lane sit adjacent to each other, the
+          ~16px combined "resize zone" between them was easy to
+          accidentally grab while intending to click a bar's body. A
+          5px hit area drops the misfire risk significantly without
+          breaking the resize-by-edge gesture. */}
       <div
         ref={resizeStart.setNodeRef}
         {...resizeStart.listeners}
@@ -409,17 +412,17 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
         onClick={e => e.stopPropagation()}
         style={{
           position: "absolute", top: 0, left: 0, bottom: 0,
-          width: 8, cursor: "ew-resize",
+          width: 5, cursor: "ew-resize",
           background: resizeStart.isDragging
             ? colour
-            : `linear-gradient(to right, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`,
+            : `linear-gradient(to right, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`,
           borderTopLeftRadius: 6, borderBottomLeftRadius: 6,
           zIndex: 2,
         }}
         onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
         onMouseLeave={e => {
           if (!resizeStart.isDragging) {
-            e.currentTarget.style.background = `linear-gradient(to right, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`;
+            e.currentTarget.style.background = `linear-gradient(to right, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`;
           }
         }}
         title="Drag to change start date"
@@ -431,17 +434,17 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
         onClick={e => e.stopPropagation()}
         style={{
           position: "absolute", top: 0, right: 0, bottom: 0,
-          width: 8, cursor: "ew-resize",
+          width: 5, cursor: "ew-resize",
           background: resizeEnd.isDragging
             ? colour
-            : `linear-gradient(to left, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`,
+            : `linear-gradient(to left, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`,
           borderTopRightRadius: 6, borderBottomRightRadius: 6,
           zIndex: 2,
         }}
         onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
         onMouseLeave={e => {
           if (!resizeEnd.isDragging) {
-            e.currentTarget.style.background = `linear-gradient(to left, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`;
+            e.currentTarget.style.background = `linear-gradient(to left, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`;
           }
         }}
         title="Drag to change end date"
@@ -773,6 +776,15 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       if (over.id === POOL_ID) return;
       const { date } = parseCellId(over.id);
       if (!date) return;
+      // Audit log — if a producer reports "an unrelated subtask got
+      // its endDate changed", open the browser console and screenshot
+      // these lines. They show exactly which subtaskId got which mode
+      // applied, so we can tell whether it was a misfire (mode=resize
+      // when intending move) vs a real bug elsewhere.
+      console.info("[TeamBoard drag]", {
+        mode, projectId: subtask.projectId, subtaskId: subtask.id,
+        oldStart: subtask.startDate, oldEnd: subtask.endDate, droppedDate: date,
+      });
 
       // If the bar somehow has no startDate (orphan / corrupted data),
       // treat the dropped date as both ends — collapses to a 1-day bar.
@@ -823,6 +835,10 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       // assignees in their footer.
       // Skip brain check on pool drops — clearing dates only REMOVES
       // potential conflicts, never creates one. No flag worth posting.
+      console.info("[TeamBoard drag]", {
+        mode: "move-to-pool", projectId: subtask.projectId, subtaskId: subtask.id,
+        oldStart: subtask.startDate, oldEnd: subtask.endDate,
+      });
       patchSubtaskLocal({ startDate: null, endDate: null });
       fbSet(`${path}/startDate`, null);
       fbSet(`${path}/endDate`, null);
@@ -835,6 +851,11 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
     if (!newAssignee || !newDate) return;
     const oldStart = subtask.startDate;
     const oldEnd = subtask.endDate;
+    console.info("[TeamBoard drag]", {
+      mode: "move", projectId: subtask.projectId, subtaskId: subtask.id,
+      sourceAssigneeId, newAssignee,
+      oldStart, oldEnd, newStart: newDate,
+    });
 
     // Date logic: shift the WHOLE subtask (all assignees move together
     // — they're co-scheduled). Preserve duration when both ends exist.
@@ -1423,5 +1444,8 @@ const headerCell = {
 const rowLabel = {
   padding: "10px 14px", display: "flex", alignItems: "center",
   borderBottom: "1px solid var(--border)",
-  fontSize: 13, minHeight: 60,
+  // 18px so editor names stay readable when the producer zooms the
+  // browser out (e.g., 67%) to fit more days on screen. Was 13px,
+  // which became hard to read at zoom-out.
+  fontSize: 18, minHeight: 60,
 };
