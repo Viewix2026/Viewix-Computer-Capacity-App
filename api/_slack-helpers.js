@@ -135,8 +135,16 @@ export function nextStatusForUpdate(currentStatus) {
 
 // Fingerprint of the fields a confirm card was rendered against. Used
 // at confirm time to detect that someone edited the target subtask in
-// the dashboard while the card was waiting. updatedAt alone is too
-// weak — drag-only edits don't always bump it.
+// the dashboard while the card was waiting.
+//
+// Scope kept tight on purpose: only the fields a producer would
+// reasonably care about preserving when racing the bot. Earlier
+// versions also included updatedAt / stage / name and got false
+// positives from harmless field-shape differences between the parent
+// fetch (used at proposal time) and the leaf fetch (used at confirm
+// time). Those three add no real safety — if a stage or name changed
+// out from under the user, a Slack-side date update is still the
+// intent — and they're the most likely to drift spuriously.
 export function fingerprintSubtask(st) {
   if (!st) return null;
   return {
@@ -146,9 +154,6 @@ export function fingerprintSubtask(st) {
     endTime: st.endTime || null,
     assigneeIds: Array.isArray(st.assigneeIds) ? [...st.assigneeIds].sort() : [],
     status: st.status || null,
-    stage: st.stage || null,
-    name: st.name || null,
-    updatedAt: st.updatedAt || null,
   };
 }
 
@@ -159,9 +164,6 @@ export function fingerprintsMatch(a, b) {
   if (a.startTime !== b.startTime) return false;
   if (a.endTime !== b.endTime) return false;
   if (a.status !== b.status) return false;
-  if (a.stage !== b.stage) return false;
-  if (a.name !== b.name) return false;
-  if (a.updatedAt !== b.updatedAt) return false;
   const aa = a.assigneeIds || [];
   const bb = b.assigneeIds || [];
   if (aa.length !== bb.length) return false;

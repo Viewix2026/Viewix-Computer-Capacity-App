@@ -235,6 +235,13 @@ async function applyProposal({ proposal, payload, botToken }) {
     }
     beforeFingerprint = fingerprintSubtask(existing);
     if (proposal.targetFingerprint && !fingerprintsMatch(beforeFingerprint, proposal.targetFingerprint)) {
+      // Log both fingerprints so we can diagnose any future false positives.
+      console.error("slack-interactivity STALE mismatch", {
+        shortId: proposal.shortId,
+        path,
+        expected: proposal.targetFingerprint,
+        actual: beforeFingerprint,
+      });
       const err = new Error("target subtask changed since proposal was created");
       err.code = "STALE";
       throw err;
@@ -531,13 +538,24 @@ async function resolveAfterClarification({ proposal, botToken, payload }) {
   }
 
   // Build the resolved proposal and flip status to pending.
+  // Mirror the listener's assignee-preservation rule: if mode=update
+  // and user didn't specify assignees, keep whatever the subtask
+  // already had instead of zeroing them.
+  const preserveExistingAssignees =
+    target.mode === "update" && assigneeIds.length === 0 && target.existing;
+  const finalAssigneeIds = preserveExistingAssignees
+    ? (Array.isArray(target.existing.assigneeIds) ? target.existing.assigneeIds : (target.existing.assigneeId ? [target.existing.assigneeId] : []))
+    : assigneeIds;
+  const finalAssigneeId = preserveExistingAssignees
+    ? (target.existing.assigneeId || finalAssigneeIds[0] || null)
+    : (assigneeIds[0] || null);
   const fields = {
     startDate: partial.startDate,
     endDate: partial.endDate || partial.startDate,
     startTime: partial.startTime || null,
     endTime: partial.endTime || null,
-    assigneeIds,
-    assigneeId: assigneeIds[0] || null,
+    assigneeIds: finalAssigneeIds,
+    assigneeId: finalAssigneeId,
     stage: partial.stage,
     name:
       target.mode === "create"
