@@ -17,6 +17,7 @@
 
 import { waitUntil } from "@vercel/functions";
 import { adminGet, getAdmin } from "./_fb-admin.js";
+import { runBrainPassForScheduling } from "./_scheduling-brain-pass.js";
 import {
   readRawBody,
   verifySlackSignature,
@@ -28,12 +29,14 @@ import {
   fingerprintSubtask,
   fingerprintsMatch,
   nextStatusForUpdate,
+  buildBrainFlagsBlocks,
   STAGES,
   STAGE_LABELS,
   STAGE_EMOJI,
   DEFAULT_NAME_FOR_STAGE,
   REACTION,
 } from "./_slack-helpers.js";
+import { fingerprintFlag } from "../shared/scheduling/flags.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -609,6 +612,20 @@ async function resolveAfterClarification({ proposal, botToken, payload }) {
     source: "slack",
   };
 
+  // Run the brain pass against the resolved post-clarification proposal.
+  // Codex P1 #3 fix — previously this path skipped the brain entirely
+  // and the rebuilt confirm card always read "Confirm" (not "Confirm
+  // anyway"), so clarified scheduling requests could create silent
+  // conflicts. Same helper the listener's clean-path uses, so the two
+  // surfaces stay in lockstep.
+  const brainOutcome = await runBrainPassForScheduling({
+    projectId: partial.projectId,
+    targetSubtaskId: target.subtaskId,
+    targetMode: target.mode,
+    fields,
+    today: todaySydney(),
+  });
+
   const updated = {
     status: "pending",
     claudeIntent: partial,
@@ -623,6 +640,8 @@ async function resolveAfterClarification({ proposal, botToken, payload }) {
     clarificationKind: null,
     clarificationOptions: null,
     clarificationQuestion: null,
+    brainFlags: brainOutcome.flags || [],
+    brainNarration: brainOutcome.narration || null,
   };
   await ref.update(updated);
 
@@ -761,6 +780,20 @@ function confirmCardBlocksInline({ proposal, project, editors }) {
     : f.startDate;
   const timeLine = f.startTime ? `\n*Time:* ${f.startTime}${f.endTime ? `–${f.endTime}` : ""}` : "";
   const modeLine = proposal.resolvedPatch.mode === "create" ? "Create new subtask" : "Update existing subtask";
+
+  // Brain flags: mirror the listener's clean-path confirm card so the
+  // post-clarification card surfaces conflicts the same way. Codex
+  // P1 #3 fix.
+  const hasBrainFlags = Array.isArray(proposal.brainFlags) && proposal.brainFlags.length > 0;
+  const headsUpBlocks = hasBrainFlags
+    ? buildBrainFlagsBlocks({
+        flags: proposal.brainFlags,
+        narration: proposal.brainNarration,
+        header: ":warning: *Heads up*",
+        fingerprintFn: fingerprintFlag,
+      })
+    : [];
+
   return [
     {
       type: "section",
@@ -774,6 +807,7 @@ function confirmCardBlocksInline({ proposal, project, editors }) {
           `*Editor:* ${assigneeNames.length ? assigneeNames.join(", ") : "_unassigned_"}`,
       },
     },
+    ...headsUpBlocks,
     {
       type: "context",
       elements: [{ type: "mrkdwn", text: `_From your message:_ ${truncate(proposal.originalText, 140)}` }],
@@ -781,7 +815,7 @@ function confirmCardBlocksInline({ proposal, project, editors }) {
     {
       type: "actions",
       elements: [
-        { type: "button", style: "primary", text: { type: "plain_text", text: "Confirm" }, action_id: "confirm_schedule", value: proposal.shortId },
+        { type: "button", style: "primary", text: { type: "plain_text", text: hasBrainFlags ? "Confirm anyway" : "Confirm" }, action_id: "confirm_schedule", value: proposal.shortId },
         { type: "button", text: { type: "plain_text", text: "Cancel" }, action_id: "cancel_schedule", value: proposal.shortId },
       ],
     },

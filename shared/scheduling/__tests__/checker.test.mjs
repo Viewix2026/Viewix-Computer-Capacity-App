@@ -649,6 +649,72 @@ test("detectFlags actor scope: keeps capacity flags for today + future", () => {
     "today's over-capacity should still fire in actor scope");
 });
 
+test("detectFlags actor scope: personIds[] surfaces conflicts on every assignee", () => {
+  // Codex P1 #4 — multi-assignee shoots need every crew member's
+  // conflicts surfaced. Steve (assignee #2) is double-booked; the drag
+  // check used to scope to assigneeIds[0] only and would miss this.
+  const p = project("p", "liveAction", {
+    s1: subtask("s1", {
+      stage: "shoot", startDate: today,
+      startTime: "09:00", endTime: "12:00",
+      assigneeIds: ["ed-alex", "ed-steve"],
+    }),
+    s2: subtask("s2", {
+      stage: "shoot", startDate: today,
+      startTime: "10:00", endTime: "13:00",
+      assigneeIds: ["ed-steve"], // Steve overlaps with himself
+    }),
+  });
+
+  // Single-personId scope (legacy, primary assignee only) → misses
+  // Steve's conflict.
+  const aliceOnly = detectFlags({
+    projects: { p }, editors, weekData: {}, date: today,
+    scope: { kind: "actor", personId: "ed-alex", dateISO: today, today },
+  });
+  assert.equal(
+    aliceOnly.filter(f => f.kind === "fixedTimeConflict" && f.personId === "ed-steve").length,
+    0,
+    "single-personId scope should not surface Steve's conflict",
+  );
+
+  // personIds[] scope (multi-assignee) → catches Steve.
+  const both = detectFlags({
+    projects: { p }, editors, weekData: {}, date: today,
+    scope: { kind: "actor", personIds: ["ed-alex", "ed-steve"], dateISO: today, today },
+  });
+  assert.ok(
+    both.find(f => f.kind === "fixedTimeConflict" && f.personId === "ed-steve"),
+    "personIds[] scope should surface Steve's overlap",
+  );
+});
+
+test("detectFlags actor scope: personIds[] still drops unrelated people", () => {
+  // The scope filter must remain restrictive — flags about people NOT
+  // in the personIds list should still be dropped.
+  const p = project("p", "liveAction", {
+    s1: subtask("s1", {
+      stage: "shoot", startDate: today,
+      startTime: "09:00", endTime: "12:00",
+      assigneeIds: ["ed-luke"],
+    }),
+    s2: subtask("s2", {
+      stage: "shoot", startDate: today,
+      startTime: "10:00", endTime: "13:00",
+      assigneeIds: ["ed-luke"],
+    }),
+  });
+  const flags = detectFlags({
+    projects: { p }, editors, weekData: {}, date: today,
+    scope: { kind: "actor", personIds: ["ed-alex", "ed-steve"], dateISO: today, today },
+  });
+  assert.equal(
+    flags.filter(f => f.personId === "ed-luke").length,
+    0,
+    "Luke's conflicts should be filtered out when personIds is [alex, steve]",
+  );
+});
+
 // ─── 9. enrichFlagsForDisplay ─────────────────────────────────────
 
 test("enrichFlagsForDisplay adds personName / projectName / clientName / subtaskName", () => {

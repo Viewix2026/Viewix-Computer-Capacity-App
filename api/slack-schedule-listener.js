@@ -33,11 +33,8 @@ import {
   DEFAULT_NAME_FOR_STAGE,
   REACTION,
 } from "./_slack-helpers.js";
-import { detectFlagsForDateRange } from "../shared/scheduling/conflicts.js";
-import { fingerprintFlag, SCHEDULING_CARD_KINDS } from "../shared/scheduling/flags.js";
-import { cachedStatsIsFresh } from "../shared/scheduling/stats.js";
-import { buildAwareness } from "../shared/scheduling/awareness.js";
-import { narrateBrain } from "./_scheduling-narrate.js";
+import { fingerprintFlag } from "../shared/scheduling/flags.js";
+import { runBrainPassForScheduling } from "./_scheduling-brain-pass.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -577,7 +574,11 @@ async function renderProposalAndPostCard({ claudeOut, context, event, botToken }
   // belong on confirm cards — under-capacity / idle / overrun stay
   // digest-only because they're noisy at scheduling time.
   const brainOutcome = await runBrainPassForScheduling({
-    intent, project, target, fields: proposal.resolvedPatch.fields, context,
+    projectId: project.id,
+    targetSubtaskId: target.subtaskId,
+    targetMode: target.mode,
+    fields: proposal.resolvedPatch.fields,
+    today: context.today,
   });
   if (brainOutcome.flags.length) {
     proposal.brainFlags = brainOutcome.flags;
@@ -599,91 +600,10 @@ async function renderProposalAndPostCard({ claudeOut, context, event, botToken }
   }
 }
 
-// Run the brain checker over the virtual post-confirm state. Returns
-// { flags, narration } — flags filtered to scheduling-relevant kinds.
-// Empty flags means no API call to Opus.
-async function runBrainPassForScheduling({ intent, project, target, fields, context }) {
-  // Load current full team-board state. Listener already has projects
-  // (paged-down) and editors via context.buildSchedulingContext, but
-  // those are NAME-only. We need the raw projects+subtasks for the
-  // checker.
-  const [projectsRaw, editorsRaw, weekData, cachedStatsRec] = await Promise.all([
-    adminGet("/projects"),
-    adminGet("/editors"),
-    adminGet("/weekData"),
-    adminGet("/scheduling/cachedStats"),
-  ]);
-  const projects = projectsRaw || {};
-  const editorsList = Array.isArray(editorsRaw) ? editorsRaw : Object.values(editorsRaw || {});
-  const editors = editorsList.filter(e => e?.id);
-  const weekDataMap = weekData || {};
-  const videoTypeStats = cachedStatsIsFresh(cachedStatsRec) ? (cachedStatsRec.stats || {}) : {};
-
-  // Build the virtual write. mode=update merges fields onto the
-  // existing subtask; mode=create injects a new subtask.
-  const virtualProjects = applyVirtualWrite(projects, {
-    projectId: project.id,
-    subtaskId: target.subtaskId,
-    mode: target.mode,
-    fields,
-  });
-
-  // Date range: the bar's startDate..endDate (default to single-day
-  // when endDate not set).
-  const startDate = fields.startDate;
-  const endDate = fields.endDate || fields.startDate;
-
-  const allFlags = detectFlagsForDateRange({
-    startDate, endDate,
-    projects: virtualProjects,
-    editors,
-    weekData: weekDataMap,
-    videoTypeStats,
-    loggedHoursBySubtask: {}, // overrun is digest-only
-  });
-
-  // Filter to scheduling-card-relevant kinds.
-  const flags = allFlags.filter(f => SCHEDULING_CARD_KINDS.has(f.kind));
-  if (flags.length === 0) return { flags: [], narration: null };
-
-  // Phase 1A awareness — gives the narration access to unscheduled
-  // edits + editor free-capacity so it can suggest concrete fixes
-  // (e.g., "Charlie shoot is unassigned, could pull forward").
-  const awareness = buildAwareness({
-    projects: virtualProjects, editors, weekData: weekDataMap,
-    videoTypeStats, today: context.today,
-  });
-
-  // Narrate.
-  const narration = await narrateBrain({
-    flags,
-    projects: virtualProjects,
-    editors,
-    today: context.today,
-    mode: "scheduling",
-    awareness,
-  });
-  return { flags, narration };
-}
-
-// Apply the proposed write virtually onto a copy of the projects map.
-// Pure — doesn't mutate the input.
-function applyVirtualWrite(projects, { projectId, subtaskId, mode, fields }) {
-  const targetProject = projects[projectId];
-  if (!targetProject) return projects;
-  const subtasks = { ...(targetProject.subtasks || {}) };
-  if (mode === "update" && subtaskId) {
-    const existing = subtasks[subtaskId] || {};
-    subtasks[subtaskId] = { ...existing, ...fields, id: subtaskId };
-  } else if (mode === "create") {
-    const newId = `_virtual_${Date.now()}`;
-    subtasks[newId] = { ...fields, id: newId };
-  }
-  return {
-    ...projects,
-    [projectId]: { ...targetProject, subtasks },
-  };
-}
+// runBrainPassForScheduling + applyVirtualWrite extracted to
+// api/_scheduling-brain-pass.js so the clarification path in
+// api/slack-interactivity.js can call them too. Codex P1 #3 fix —
+// previously, clarification rebuilds bypassed the brain entirely.
 
 // Build the pending-proposal record. Captures the resolved patch the
 // confirm handler will apply, plus a fingerprint of the target subtask

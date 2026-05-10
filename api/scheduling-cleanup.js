@@ -20,6 +20,7 @@
 // doubles as a sanity-check audit.
 
 import { adminGet, getAdmin } from "./_fb-admin.js";
+import { requireRole, sendAuthError } from "./_requireAuth.js";
 
 export const config = { maxDuration: 60 };
 
@@ -30,10 +31,17 @@ const PROPOSAL_TERMINAL_STATUSES = new Set(["used", "cancelled", "stale", "expir
 
 export default async function handler(req, res) {
   const isCron = req.headers["x-vercel-cron"] === "1";
-  if (req.method === "GET" && !isCron) {
-    return res.status(401).json({ error: "Cron header required" });
-  }
-  if (req.method !== "GET" && req.method !== "POST") {
+  if (req.method === "GET") {
+    if (!isCron) return res.status(401).json({ error: "Cron header required" });
+  } else if (req.method === "POST") {
+    // Manual run path — require founders auth so the public can't
+    // trigger cleanup writes via an unauthenticated POST.
+    try {
+      await requireRole(req, ["founders", "founder"]);
+    } catch (e) {
+      return sendAuthError(res, e);
+    }
+  } else {
     return res.status(405).json({ error: "POST or cron GET only" });
   }
   try {
