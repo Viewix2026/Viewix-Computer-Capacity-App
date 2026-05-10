@@ -21,6 +21,8 @@ import {
   todaySydney,
   slackPostMessage,
   slackPostEphemeral,
+  slackAddReaction,
+  slackSwapReaction,
   randomShortId,
   parseAllowlist,
   fingerprintSubtask,
@@ -29,6 +31,7 @@ import {
   STAGE_LABELS,
   STAGE_EMOJI,
   DEFAULT_NAME_FOR_STAGE,
+  REACTION,
 } from "./_slack-helpers.js";
 import { detectFlagsForDateRange } from "../shared/scheduling/conflicts.js";
 import { fingerprintFlag, SCHEDULING_CARD_KINDS } from "../shared/scheduling/flags.js";
@@ -125,6 +128,16 @@ async function processEvent(payload) {
     return;
   }
 
+  // Mark the producer's message with :eyes: so they know the bot saw
+  // it and is working. Stays through clarification rounds; flipped to
+  // :white_check_mark: / :x: / :warning: by the interactivity handler.
+  await slackAddReaction({
+    channel: event.channel,
+    timestamp: event.ts,
+    name: REACTION.THINKING,
+    botToken,
+  });
+
   // ── Build context for Claude ────────────────────────────────────
   const context = await buildSchedulingContext();
 
@@ -136,6 +149,16 @@ async function processEvent(payload) {
   });
 
   if (claudeOut.kind === "error") {
+    // Claude couldn't parse — flip :eyes: to :warning: so the producer
+    // can see at a glance that the message hit a parse error rather
+    // than wondering if the bot is still working.
+    await slackSwapReaction({
+      channel: event.channel,
+      timestamp: event.ts,
+      removeName: REACTION.THINKING,
+      addName: REACTION.ERROR,
+      botToken,
+    });
     await slackPostMessage({
       channel: event.channel,
       thread_ts: event.ts,

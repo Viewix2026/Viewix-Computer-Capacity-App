@@ -83,6 +83,58 @@ export function slackPostEphemeral({ channel, user, text, botToken }) {
   return slackCall("chat.postEphemeral", { channel, user, text }, botToken);
 }
 
+// ─── Reactions ─────────────────────────────────────────────────────
+// Used to mark progress on the producer's original `#scheduling`
+// message: :eyes: while the bot is working / waiting for confirm,
+// :white_check_mark: when scheduled, :x: when cancelled, :warning:
+// on stale / expired / Claude error. Slack returns "already_reacted"
+// or "no_reaction" when state is already what we want — both are
+// expected during retries; swallow them.
+async function slackReactionAdd({ channel, name, timestamp, botToken }) {
+  try {
+    return await slackCall("reactions.add", { channel, name, timestamp }, botToken);
+  } catch (e) {
+    if (String(e.message || "").includes("already_reacted")) return null;
+    throw e;
+  }
+}
+async function slackReactionRemove({ channel, name, timestamp, botToken }) {
+  try {
+    return await slackCall("reactions.remove", { channel, name, timestamp }, botToken);
+  } catch (e) {
+    if (String(e.message || "").includes("no_reaction")) return null;
+    throw e;
+  }
+}
+// Convenience wrapper for state transitions. Always tries the remove
+// even if the from-name isn't actually present — saves callers from
+// tracking which transition they're in.
+export async function slackSwapReaction({ channel, timestamp, removeName, addName, botToken }) {
+  if (!channel || !timestamp || !botToken) return;
+  if (removeName) {
+    await slackReactionRemove({ channel, name: removeName, timestamp, botToken }).catch(() => {});
+  }
+  if (addName) {
+    await slackReactionAdd({ channel, name: addName, timestamp, botToken }).catch(() => {});
+  }
+}
+// Just-add helper for the listener's first :eyes: stamp. No swap
+// needed since there's nothing to remove yet.
+export async function slackAddReaction({ channel, timestamp, name, botToken }) {
+  if (!channel || !timestamp || !botToken) return;
+  await slackReactionAdd({ channel, name, timestamp, botToken }).catch(() => {});
+}
+
+// Reaction names — keep in one place so the listener and interactivity
+// surfaces stay in lockstep. Must match Slack emoji names exactly
+// (no surrounding colons in the API call).
+export const REACTION = {
+  THINKING: "eyes",
+  DONE: "white_check_mark",
+  CANCELLED: "x",
+  ERROR: "warning",
+};
+
 // ─── Misc ──────────────────────────────────────────────────────────
 export function randomShortId() {
   // 8 chars from a 5-byte hex source — enough entropy for our short-lived
