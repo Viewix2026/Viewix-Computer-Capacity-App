@@ -171,9 +171,18 @@ function seedDefaultSubtasksFor(project, accounts, editors, setProjects) {
     const isLeadOwned = name === SELECTS_TIMELINE_SUBTASK;
     const assigneeIds = isLeadOwned && leadId ? [leadId] : [];
     const rec = {
-      id: stId, name, status: "stuck",
+      id: stId, name,
+      // New default (Phase A email work): "scheduled" means "planned
+      // and waiting on its date" — the auto-progress cron flips it to
+      // "inProgress" on the morning of startDate. The old default,
+      // "stuck", now means "actively blocked" only and must be set
+      // by a producer explicitly.
+      status: "scheduled",
       stage: inferStage({ name }),
       startDate: null, endDate: null, startTime: null, endTime: null,
+      // `location` is consumed by the Shoot Tomorrow email; empty
+      // string is a sentinel that means "no line in the email".
+      location: "",
       assigneeIds,
       assigneeId: assigneeIds[0] || null,
       source: "default", order: i,
@@ -1094,6 +1103,21 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
               displayTransform={stripStagePrefix}
               style={{ fontSize: 12, fontWeight: 600 }}
             />
+            {/* Shoot-only second line: location string consumed by the
+                Shoot Tomorrow client email. Empty is fine — the email
+                template omits the line when blank. We deliberately
+                only render this for shoot-stage subtasks so the row
+                doesn't grow vertically on every other phase. */}
+            {subtask.stage === "shoot" && (
+              <div style={{ marginTop: 4 }}>
+                <SubtaskInline
+                  value={subtask.location || ""}
+                  onSave={(v) => persist("location", v.trim())}
+                  placeholder="Location (used in client email)"
+                  style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}
+                />
+              </div>
+            )}
           </div>
           {/* Frame.io review-link cell — inline editable URL field with
               a Watch button next to it. Saves to subtask.frameioLink
@@ -1220,12 +1244,17 @@ function AddSubtaskRow({ projectId, nextOrder, setProjects }) {
     const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
     const rec = {
-      id, name: "New subtask", status: "stuck",
+      id, name: "New subtask",
+      // Phase A: "scheduled" is the new default — the auto-progress
+      // cron flips it to "inProgress" on the morning of startDate.
+      // Use "stuck" only for actively-blocked work.
+      status: "scheduled",
       // Manual subtasks default to the Edit stage — most ad-hoc rows
       // producers add by hand are tracking edit/post work; rename in
       // the dropdown if it's actually a shoot/pre-prod task.
       stage: "edit",
       startDate: null, endDate: null, startTime: null, endTime: null,
+      location: "",
       assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
       createdAt: now, updatedAt: now,
     };
@@ -2081,9 +2110,14 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
             ? Math.max(...subtasks.map(s => s.order ?? 0)) + 1
             : 0;
           const rec = {
-            id, name: "New subtask", status: "stuck",
+            id, name: "New subtask",
+            // Phase A: "scheduled" default (auto-progress cron flips
+            // to "inProgress" on the morning of startDate). "stuck"
+            // is now reserved for actively-blocked work only.
+            status: "scheduled",
             stage: "edit",
             startDate: null, endDate: null, startTime: null, endTime: null,
+            location: "",
             assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
             createdAt: now, updatedAt: now,
           };

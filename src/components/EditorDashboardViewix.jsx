@@ -12,7 +12,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import confetti from "canvas-confetti";
 import { fmtSecsShort, matchSherpaForName, resolveAccountForProject, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
-import { fbSet, fbListen, fbUpdate, onFB } from "../firebase";
+import { fbSet, fbListen, fbUpdate, onFB, authFetch } from "../firebase";
 import { FrameioLinkCell } from "./Projects";
 import { ClientGoalPill } from "./ClientGoalPill";
 
@@ -489,7 +489,12 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
           const clientName  = task.projectMeta?.clientName  || project?.clientName || "";
           const projectName = task.projectMeta?.projectName || project?.projectName || "Untitled project";
           const accountManager = task.projectMeta?.accountManager || "";
-          await fetch("/api/notify-finish", {
+          // authFetch attaches a Firebase ID token bearer so the
+          // server can verify the caller's role before triggering
+          // a client email. Falls through to the same try/catch
+          // that already swallows transient failures — an auth
+          // error here surfaces only in the producer's console.
+          await authFetch("/api/notify-finish", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -501,6 +506,15 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
               projectLead,
               accountManager,
               frameioLink: linkOut,
+              // Phase A — extra IDs let the server (a) send the
+              // Ready-For-Review email to the right client with the
+              // correct delivery URL, and (b) scope the email
+              // idempotency key per-video so multi-video projects
+              // don't collapse into one send.
+              projectId: task.projectId || "",
+              subtaskId: task.id || "",
+              videoId: task.videoId || "",
+              deliveryId: task.deliveryId || "",
             }),
           });
         } catch (slackErr) {
