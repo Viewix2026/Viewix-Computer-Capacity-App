@@ -1,145 +1,138 @@
 // api/_email/templates/ReadyForReview.js
-// Phase A placeholder. Real Claude Design version lands in Phase B.
+// Phase B — Refined direction, Stage 4 (Review).
+// Sourced from viewix-touchpoints/project/src/EmailRefined.jsx +
+// viewix-touchpoints/project/src/data.jsx STAGES[3].
 //
-// Trigger (post-redesign, 2026-05-10): producer/AM-driven batch
-// flow via api/send-review-batch.js (planned Phase A.5). Editors
-// flag videos as "Ready for Review" through their Finish modal as
-// before; the producer/AM then opens the project's Deliveries
-// view, picks one or more flagged videos (defaulting to all
-// editor-flagged, with an override to "show all"), optionally
-// adds a producer note, and clicks Send. One email per batch.
+// Trigger (post-redesign 2026-05-10): producer/AM-driven batch flow
+// via api/send-review-batch.js (planned Phase A.5). Editors flag
+// videos as Ready for Review through their Finish modal; producer
+// then opens the project's Deliveries tab, picks one or more
+// flagged videos (defaulting to all editor-flagged, with an override
+// to "show all"), optionally adds a producer note, and clicks Send.
+// One email per batch.
 //
-// Idempotency key (Phase A.5): /emailLog/{projectId}/ReadyForReview/{batchId}
-// where batchId is generated server-side at send time.
+// Idempotency (Phase A.5): /emailLog/{projectId}/ReadyForReview/{batchId}.
 //
-// Subject (Phase A draft, batch-aware):
-//   "Your videos are ready to watch"
+// Subject (Jeremy to approve before live):
+//   single video:  "Your video is ready for review"
+//   batch of N:    "Your N videos are ready for review"
 //
 // Merge tags expected:
-//   client.firstName
-//   project.projectName
-//   videos                 array of { name, videoId } for the videos in this batch
-//   videosCount            number — len(videos), surfaced separately for templates that don't iterate
-//   producerNote           optional free-text from the producer at send time (renders only if non-empty)
-//   delivery.url           Viewix delivery page (required — built via buildDeliveryUrl())
+//   client.firstName       ({{first_name}})
+//   project.projectName    ({{project_name}})
+//   project.clientName     ({{project_subtitle}})
+//   project.id / shortId   ({{project_id}})
+//   videos                 array of { name, videoId }
+//   videosCount            number — falls back to videos.length or 1
+//   producerNote           optional free-text rendered as a note block
+//   delivery.url           the Viewix delivery page URL — primary CTA
+//   producer / editor      optional chips
+//
+// This template is the ONLY one with an in-hero CTA button (the
+// "View on Viewix dashboard ->" link). When the CTA renders, the
+// layout's footer dashboard link is suppressed via hasInHeroCta.
 
 import { h } from "../_h.js";
 import { Button, Heading, Text } from "@react-email/components";
-import { Layout, BRAND } from "./_layout.js";
+import { BRAND, Layout, heroStyles } from "./_layout.js";
+
+const FONT_MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 const styles = {
-  h1: {
-    fontFamily: "'Montserrat', sans-serif",
-    fontSize: "24px",
-    fontWeight: 700,
-    color: BRAND.ink,
-    margin: "0 0 12px",
-    lineHeight: 1.25,
-  },
-  intro: {
-    fontSize: "16px",
-    color: BRAND.ink,
-    lineHeight: 1.6,
-    margin: "0 0 18px",
-  },
-  body: {
-    fontSize: "15px",
-    color: BRAND.inkSoft,
-    lineHeight: 1.65,
-    margin: "0 0 16px",
-  },
-  cta: {
-    backgroundColor: BRAND.blue,
-    color: BRAND.panel,
-    fontFamily: "'Montserrat', sans-serif",
-    fontWeight: 700,
-    padding: "14px 26px",
-    borderRadius: "8px",
-    textDecoration: "none",
-    display: "inline-block",
-    fontSize: "16px",
-    marginTop: "8px",
-  },
   noteBlock: {
-    fontSize: "14px",
-    color: BRAND.ink,
-    lineHeight: 1.6,
     backgroundColor: BRAND.off,
     padding: "14px 16px",
     borderRadius: "8px",
-    margin: "0 0 18px",
+    margin: "0 0 20px",
     borderLeft: `3px solid ${BRAND.blue}`,
   },
   noteLabel: {
-    fontFamily: "'JetBrains Mono', monospace",
+    fontFamily: FONT_MONO,
     textTransform: "uppercase",
     letterSpacing: "0.08em",
     fontSize: "10px",
     color: BRAND.inkSofter,
     margin: "0 0 4px",
   },
+  noteText: {
+    fontSize: "14px",
+    color: BRAND.ink,
+    margin: 0,
+    lineHeight: 1.6,
+  },
 };
 
 export default function ReadyForReview(props) {
   const firstName = props?.client?.firstName || "there";
-  const projectName = props?.project?.projectName || "your project";
+  const accent = props?.accent || "blue";
   const deliveryUrl = props?.delivery?.url || "";
   const producerNote = (props?.producerNote || "").trim();
 
-  // Count is sourced from videos[] when provided; otherwise from
-  // the explicit videosCount prop; otherwise defaults to 1 so the
-  // copy still reads sensibly for legacy single-video callers.
   const videos = Array.isArray(props?.videos) ? props.videos : [];
   const count = videos.length || Number(props?.videosCount) || 1;
+  const isBatch = count > 1;
 
-  // Singular/plural copy. The Phase B design will likely override
-  // this entirely, but the placeholder needs to read naturally.
-  const videoNoun = count === 1 ? "video is" : "videos are";
-  const headerCopy = count === 1
-    ? `Your video is ready, ${firstName}.`
-    : `Your ${count} videos are ready, ${firstName}.`;
-  const previewCopy = count === 1
-    ? `${firstName}, your video for ${projectName} is ready to watch.`
-    : `${firstName}, ${count} videos for ${projectName} are ready to watch.`;
-  const introBody = count === 1
-    ? "is up on your delivery page and waiting for your eyes."
-    : "are up on your delivery page and waiting for your eyes.";
+  // Stage 4 copy. Headline matches the design's "Ready for your eyes".
+  // Body slightly adapted for batch vs single — natural in both cases.
+  const headline = isBatch
+    ? `${count} videos ready for your eyes`
+    : "Ready for your eyes";
+  const bodyCopy = isBatch
+    ? "The first cuts for this batch are ready to watch. Have a look when you get a moment, leave timestamped notes on the dashboard, or send a thumbs up. Most clients send all their feedback in one go - that's the move if you can."
+    : "The first cut is ready to watch. Have a look when you get a moment, leave timestamped notes on the dashboard, or send a thumbs up. Most clients send all their feedback in one go - that's the move if you can.";
+  const ctaLabel = isBatch ? "Watch all on the dashboard →" : "View on Viewix dashboard →";
 
   return h(
     Layout,
     {
-      preview: previewCopy,
-      title: "Ready to review",
+      stage: 4,
+      preview: isBatch
+        ? `${firstName}, ${count} videos ready for review.`
+        : `${firstName}, your video is ready for review.`,
+      accent,
+      project: props?.project,
+      producer: props?.producer,
+      editor: props?.editor,
+      // No dashboardUrl in the footer — the in-hero CTA carries the link.
+      dashboardUrl: null,
+      hasInHeroCta: !!deliveryUrl,
     },
-    h(Heading, { style: styles.h1 }, headerCopy),
-    h(
-      Text,
-      { style: styles.intro },
-      `The latest ${count === 1 ? "cut" : "cuts"} for `,
-      h("strong", null, projectName),
-      ` ${introBody}`
-    ),
+    h(Text, { style: heroStyles.eyebrow(accent) }, "Ready for your eyes"),
+    h(Heading, { as: "h1", style: heroStyles.headline }, headline),
+    h(Text, { style: heroStyles.body }, `Hi ${firstName}, ${bodyCopy}`),
 
+    // Producer note block — left-bordered, soft background. Only
+    // renders when the producer added a note at send time.
     producerNote
       ? h(
           "div",
           { style: styles.noteBlock },
           h(Text, { style: styles.noteLabel }, "Note from the team"),
-          h(Text, { style: { margin: 0, fontSize: 14, lineHeight: 1.55 } }, producerNote)
+          h(Text, { style: styles.noteText }, producerNote)
         )
       : null,
 
-    h(
-      Text,
-      { style: styles.body },
-      "Watch through, leave timestamped notes anywhere you want a tweak, and we'll turn revisions around fast. Most clients send all their feedback in one go — that's the move if you can."
-    ),
+    // Primary CTA -> delivery page. Resend renders Button as a
+    // bulletproof table-based button (Outlook-safe). If
+    // delivery.url is missing the template skips it and shows a
+    // recovery hint instead.
     deliveryUrl
       ? h(
           Button,
-          { href: deliveryUrl, style: styles.cta },
-          count === 1 ? "Watch on your delivery page" : "Watch all on your delivery page"
+          { href: deliveryUrl, style: heroStyles.cta(accent) },
+          ctaLabel
         )
-      : h(Text, { style: { color: BRAND.orangeDark, fontWeight: 600 } }, "(Delivery link unavailable — please reply and we'll send it directly.)")
+      : h(
+          Text,
+          {
+            style: {
+              ...heroStyles.body,
+              color: BRAND.orangeDark,
+              fontWeight: 600,
+              fontSize: "13px",
+            },
+          },
+          "(Delivery link unavailable — please reply and we'll send it directly.)"
+        )
   );
 }
