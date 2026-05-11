@@ -32,6 +32,7 @@ import {
   classifyFormatWithClaude,
   nicheTakeForCompetitorPost,
   nichePulse,
+  weeklySummary,
 } from "./_analyticsAi.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -698,6 +699,56 @@ export async function recomputeClientAnalytics(clientId) {
     currentInsightsWeek: weekId,
   });
 
+  // ─── Phase 8: Content Decay alerts (rule-based, no AI) ──────────
+  // Compares current 30d format performance vs the prior 30-90d
+  // window. A decay alert fires when a format that was winning
+  // (>= 1.2x median) drops by >= 25%, with at least 3 posts in both
+  // windows so it's signal not noise.
+  const decayAlerts = computeDecayAlerts(videoUpdates, videosRoot, now);
+  await fbSet(`/analytics/insights/${clientId}/${weekId}/decayAlerts`, decayAlerts);
+
+  // ─── Phase 8: Renewal Ammo (basic v1, since tracking began) ─────
+  // Internal-only — surfaced to founders + leads in the dashboard
+  // for retention conversations. Per the plan, the
+  // "since first Viewix delivery" window is v1.1; this phase ships
+  // only the "since tracking began" window.
+  const renewalAmmo = computeRenewalAmmoSinceTrackingBegan({
+    videoUpdates, videosRoot, followersRoot, enabledPlatforms, now,
+  });
+  await fbSet(`/analytics/renewalAmmo/${clientId}`, {
+    windows: { sinceTrackingBegan: renewalAmmo },
+    generatedAt: computedAt,
+  });
+
+  // ─── Phase 8: AI Weekly Summary (Claude, optional) ──────────────
+  // Reads precomputed state, outputs a 1-paragraph synthesis +
+  // 1 actionable recommendation. Caches by snapshot hash.
+  if (isClaudeEnabled()) {
+    try {
+      const snapshot = buildWeeklySummarySnapshot({
+        status, momentum, formatCounts, decayAlerts,
+        topRecs: recs.slice(0, 3),
+        winningVideos: videoUpdates
+          .filter(u => u.scoring?.repeatabilityLabel === "Likely repeatable")
+          .slice(0, 3)
+          .map(u => ({
+            format: u.classification?.format,
+            overperformanceLabel: u.scoring.overperformanceLabel,
+            repeatabilityScore: u.scoring.repeatabilityScore,
+          })),
+      });
+      const { paragraph, generatedAt: summaryAt } = await weeklySummary(snapshot);
+      if (paragraph) {
+        await fbSet(`/analytics/insights/${clientId}/${weekId}/weeklySummary`, {
+          paragraph,
+          generatedAt: summaryAt,
+        });
+      }
+    } catch (err) {
+      console.warn(`[analytics-scoring] weekly summary failed for ${clientId}: ${err.message}`);
+    }
+  }
+
   // ─── 10. lastRecomputeAt last so it reflects a fully successful run.
   await fbPatch(`/analytics/clients/${clientId}`, {
     lastRecomputeAt: computedAt,
@@ -1027,6 +1078,191 @@ function collectRecentCompetitorPosts(competitorsRoot, enabledPlatforms, now, da
 
 function pickTopRecent(posts, n) {
   return [...posts].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, n);
+}
+
+// ─── Phase 8 helpers ───────────────────────────────────────────────
+
+// Decay alerts — format-level engagement trend.
+// Walks videoUpdates (which now carry classification.format), groups
+// by format, splits into recent (last 30d) and prior (30–90d), and
+// flags formats whose performance has dropped meaningfully.
+//
+// Output: array of { format, trend, message, prevOverperf,
+//                    currentOverperf, prevSampleSize, currentSampleSize }
+function computeDecayAlerts(videoUpdates, videosRoot, now) {
+  const day = 24 * 3600 * 1000;
+  const winRecent = now - 30 * day;
+  const winPrior  = now - 90 * day;
+  // Group by format → { recent: [overperf], prior: [overperf] }
+  const grouped = {};
+  for (const u of videoUpdates) {
+    const format = u.classification?.format;
+    if (!format || format === "other") continue;
+    const src = videosRoot?.[u.platform]?.[u.videoId];
+    const ts = src?.post?.timestamp ? new Date(src.post.timestamp).getTime() : null;
+    if (!ts) continue;
+    const op = u.scoring?.overperformanceScore;
+    if (op == null) continue;
+    if (!grouped[format]) grouped[format] = { recent: [], prior: [] };
+    if (ts >= winRecent) grouped[format].recent.push(op);
+    else if (ts >= winPrior) grouped[format].prior.push(op);
+  }
+
+  const alerts = [];
+  for (const [format, { recent, prior }] of Object.entries(grouped)) {
+    if (recent.length < 3 || prior.length < 3) continue;     // sample-size guard
+    const prevMed = median(prior);
+    const curMed  = median(recent);
+    if (prevMed < 1.2) continue;                              // was it ever winning?
+    if (curMed > prevMed * 0.75) continue;                    // < 25% drop → not decay
+    const dropPct = Math.round((1 - curMed / prevMed) * 100);
+    alerts.push({
+      format,
+      trend: "down",
+      message: `${format} was averaging ${prevMed.toFixed(2)}x your usual views; last 30 days it's at ${curMed.toFixed(2)}x — down ${dropPct}% vs the prior window.`,
+      prevOverperf: +prevMed.toFixed(2),
+      currentOverperf: +curMed.toFixed(2),
+      prevSampleSize: prior.length,
+      currentSampleSize: recent.length,
+    });
+  }
+  return alerts;
+}
+
+// Renewal Ammo — internal-only "since tracking began" stats. Top
+// posts by overperformance, follower trajectory milestones, best
+// week (rolling 7-day window of summed views). Honest copy: never
+// overclaim that Viewix caused the lift; the reader makes the
+// connection.
+function computeRenewalAmmoSinceTrackingBegan({
+  videoUpdates, videosRoot, followersRoot, enabledPlatforms, now,
+}) {
+  // Top performing posts lifetime — by overperformanceScore.
+  const topPosts = [...videoUpdates]
+    .filter(u => u.scoring?.overperformanceScore != null)
+    .sort((a, b) => (b.scoring.overperformanceScore || 0) - (a.scoring.overperformanceScore || 0))
+    .slice(0, 5)
+    .map(u => {
+      const src = videosRoot?.[u.platform]?.[u.videoId];
+      const snap = latestSnapshot(src);
+      return {
+        platform: u.platform,
+        videoId: u.videoId,
+        url: src?.post?.url || null,
+        thumbnail: src?.post?.thumbnail || null,
+        caption: (src?.post?.caption || "").slice(0, 200),
+        views: snap?.views ?? null,
+        overperformanceLabel: u.scoring.overperformanceLabel,
+        overperformanceScore: u.scoring.overperformanceScore,
+        timestamp: src?.post?.timestamp || null,
+      };
+    });
+
+  // Follower trajectory across enabled platforms. For each platform,
+  // sample the first + last data point + roughly monthly mileposts
+  // in between. Keeps the chart compact in the UI.
+  const trajectoryHighlights = [];
+  for (const platform of enabledPlatforms) {
+    const map = followersRoot?.[platform] || {};
+    const dates = Object.keys(map).sort();
+    if (dates.length === 0) continue;
+    const points = dates.map(d => ({ date: d, count: map[d]?.count ?? null })).filter(p => p.count != null);
+    if (points.length === 0) continue;
+    // Sample: first, last, and roughly monthly between.
+    const sampled = [];
+    let lastMs = -Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const ms = new Date(points[i].date).getTime();
+      const isFirst = i === 0;
+      const isLast = i === points.length - 1;
+      const monthAway = ms - lastMs >= 28 * 24 * 3600 * 1000;
+      if (isFirst || isLast || monthAway) {
+        sampled.push(points[i]);
+        lastMs = ms;
+      }
+    }
+    trajectoryHighlights.push({
+      platform,
+      points: sampled,
+      firstCount: points[0].count,
+      lastCount: points[points.length - 1].count,
+      firstDate: points[0].date,
+      lastDate: points[points.length - 1].date,
+    });
+  }
+
+  // Best week by summed views across all videos posted in that week.
+  // Rolling 7-day window over all timestamps. Returns the {start, end,
+  // totalViews, postCount} of the best window.
+  const allWithTs = videoUpdates
+    .map(u => {
+      const src = videosRoot?.[u.platform]?.[u.videoId];
+      const snap = latestSnapshot(src);
+      return {
+        ts: src?.post?.timestamp ? new Date(src.post.timestamp).getTime() : null,
+        views: snap?.views || 0,
+      };
+    })
+    .filter(p => p.ts != null);
+  let bestWeek = null;
+  if (allWithTs.length > 0) {
+    allWithTs.sort((a, b) => a.ts - b.ts);
+    let windowStart = 0;
+    let windowSum = 0;
+    let windowCount = 0;
+    let best = { sum: -1, start: null, end: null, count: 0 };
+    for (let i = 0; i < allWithTs.length; i++) {
+      windowSum += allWithTs[i].views;
+      windowCount++;
+      while (allWithTs[i].ts - allWithTs[windowStart].ts > 7 * 24 * 3600 * 1000) {
+        windowSum -= allWithTs[windowStart].views;
+        windowCount--;
+        windowStart++;
+      }
+      if (windowSum > best.sum) {
+        best = {
+          sum: windowSum,
+          start: allWithTs[windowStart].ts,
+          end: allWithTs[i].ts,
+          count: windowCount,
+        };
+      }
+    }
+    if (best.sum > 0) {
+      bestWeek = {
+        startDate: new Date(best.start).toISOString().slice(0, 10),
+        endDate: new Date(best.end).toISOString().slice(0, 10),
+        totalViews: best.sum,
+        postCount: best.count,
+      };
+    }
+  }
+
+  return {
+    topPosts,
+    trajectoryHighlights,
+    bestWeek,
+  };
+}
+
+// Snapshot the recompute hands to the weekly-summary Claude call.
+// Bounded shape so the cache hit rate is high — adding new noisy
+// fields invalidates everything.
+function buildWeeklySummarySnapshot({ status, momentum, formatCounts, decayAlerts, topRecs, winningVideos }) {
+  return {
+    status: { state: status.state, reason: status.reason },
+    momentum: { score: momentum.score, reasonLine: momentum.reasonLine },
+    topFormats: Object.entries(formatCounts || {})
+      .filter(([k]) => k !== "other")
+      .map(([k, v]) => ({
+        format: k, count: v.count, medianOverperf: v.medianOverperf,
+      }))
+      .sort((a, b) => (b.medianOverperf || 0) - (a.medianOverperf || 0))
+      .slice(0, 5),
+    decayAlerts: (decayAlerts || []).map(d => ({ format: d.format, drop: `${Math.round((1 - d.currentOverperf / d.prevOverperf) * 100)}%` })),
+    winningVideos: winningVideos || [],
+    topRecs: (topRecs || []).map(r => ({ idea: r.idea, ruleId: r.ruleId, confidence: r.confidence })),
+  };
 }
 
 function aggregateCohortEngagement30d(competitorCohort, enabledPlatforms) {
