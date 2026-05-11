@@ -28,10 +28,12 @@ export function useClientDashboardData(clientId) {
     status: null,
     momentum: null,
     baselines: null,
+    competitorCohort: null,   // Phase 5: precomputed cohort summary
     lastRecomputeAt: null,
     lastRefreshedAt: null,
-    videos: {},      // { [platform]: { [videoId]: { post, snapshots, scoring } } }
-    followers: {},   // { [platform]: { [YYYY-MM-DD]: { count } } }
+    videos: {},               // { [platform]: { [videoId]: { post, snapshots, scoring } } }
+    followers: {},            // { [platform]: { [YYYY-MM-DD]: { count } } }
+    competitorsRoot: {},      // { [platform]: { [handleKey]: { profile, videos } } } (Phase 5)
     loading: true,
   });
 
@@ -55,6 +57,7 @@ export function useClientDashboardData(clientId) {
           status: record?.status || null,
           momentum: record?.momentum || null,
           baselines: record?.baselines || null,
+          competitorCohort: record?.competitorCohort || null,
           lastRecomputeAt: record?.lastRecomputeAt || null,
           lastRefreshedAt: record?.lastRefreshedAt || null,
           loading: false,
@@ -71,6 +74,14 @@ export function useClientDashboardData(clientId) {
 
       unsubs.push(fbListen(`/analytics/followers/${clientId}`, (fs) => {
         setData(prev => ({ ...prev, followers: fs || {} }));
+      }));
+
+      // Phase 5 — competitor videos for the CompetitorWatchlist
+      // sidebar. Lives at /analytics/competitors/{clientId}, mirrors
+      // /analytics/videos/{clientId} structurally (post + snapshots
+      // per video, organised under each competitor handle).
+      unsubs.push(fbListen(`/analytics/competitors/${clientId}`, (cr) => {
+        setData(prev => ({ ...prev, competitorsRoot: cr || {} }));
       }));
     });
 

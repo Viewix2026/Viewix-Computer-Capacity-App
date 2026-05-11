@@ -314,6 +314,7 @@ export async function recomputeClientAnalytics(clientId) {
 
   const videosRoot = (await fbGet(`/analytics/videos/${clientId}`)) || {};
   const followersRoot = (await fbGet(`/analytics/followers/${clientId}`)) || {};
+  const competitorsRoot = (await fbGet(`/analytics/competitors/${clientId}`)) || {};
 
   // ─── 2. Baselines per platform ─────────────────────────────────
   const baselines = {
@@ -439,7 +440,28 @@ export async function recomputeClientAnalytics(clientId) {
     fbSet(`/analytics/videos/${clientId}/${u.platform}/${u.videoId}/scoring`, u.scoring)
   ));
 
-  // ─── 7. Aggregate stats across platforms (v1: IG only, so this is
+  // ─── 7. Competitor cohort baselines (Phase 5) ──────────────────────
+  // The client's saved competitors define the niche cohort (per the
+  // plan's "niche = saved competitors" decision). For each platform
+  // we compute:
+  //   - per-handle baselines (median views + engagement per handle)
+  //   - pooled cohort baselines (median across ALL competitor videos)
+  //   - observed posting frequency per handle
+  // Note the wording: this is OBSERVED posting frequency. Public
+  // scrape only sees posts the actor returned — if a competitor
+  // posts stories or paid-only content we don't capture, we don't
+  // know about them. UI labels must reflect that uncertainty.
+  const competitorCohort = await computeCompetitorCohorts({
+    competitorsRoot, enabledPlatforms, now,
+  });
+  // Write cohort summary under the client record so the frontend
+  // can read it alongside the client's own baselines.
+  await fbSet(`/analytics/clients/${clientId}/competitorCohort`, {
+    ...competitorCohort,
+    updatedAt: computedAt,
+  });
+
+  // ─── 8. Aggregate stats across platforms (v1: IG only, so this is
   //         effectively a passthrough — but keeps the door open for
   //         v2 multi-platform without rewiring). ────────────────────
   const aggregate = aggregatePlatformStats(platformStats);
@@ -459,8 +481,14 @@ export async function recomputeClientAnalytics(clientId) {
   const postFrequencyDelta = (aggregate.postsPerWeekPrior && aggregate.postsPerWeekPrior > 0)
     ? (aggregate.postsPerWeekRecent - aggregate.postsPerWeekPrior) / aggregate.postsPerWeekPrior
     : null;
-  // competitorDelta lands in Phase 5 once competitor baselines compute.
-  const competitorDelta = null;
+
+  // competitorDelta — client's 30d engagement vs cohort median 30d
+  // engagement. Pooled across all enabled platforms (matches the
+  // status + momentum aggregation pattern).
+  const cohortEngagement30d = aggregateCohortEngagement30d(competitorCohort, enabledPlatforms);
+  const competitorDelta = (cohortEngagement30d && cohortEngagement30d > 0 && aggregate.engagement30d != null)
+    ? (aggregate.engagement30d - cohortEngagement30d) / cohortEngagement30d
+    : null;
 
   const momentum = computeMomentum({
     viewsDelta, engagementDelta, postFrequencyDelta, competitorDelta,
@@ -523,4 +551,140 @@ function aggregatePlatformStats(byPlatform) {
   if (engN30) agg.engagement30d = engSum30 / engN30;
   if (engNPrior) agg.engagementPrior30d = engSumPrior / engNPrior;
   return agg;
+}
+
+// ─── Competitor cohort computation (Phase 5) ──────────────────────
+//
+// Pooled cohort vs per-handle stats:
+//   - byPlatform[platform].pooled — one set of stats across ALL
+//     competitor videos for that platform. The benchmark line on
+//     the engagement chart reads this.
+//   - byPlatform[platform].byHandle[handle] — per-competitor stats.
+//     The CompetitorWatchlist sidebar reads this.
+//
+// Returns:
+//   {
+//     instagram: {
+//       pooled: {
+//         medianViews, medianEngagementRate,
+//         engagement30d, postCount, sampleHandles, observedPostsPerWeek,
+//       },
+//       byHandle: {
+//         [handleKey]: { handle, displayName, followerCount,
+//                        medianViews, medianEngagementRate,
+//                        engagement30d, postCount, observedPostsPerWeek,
+//                        topRecentVideoId },
+//       },
+//     },
+//   }
+function computeCompetitorCohorts({ competitorsRoot, enabledPlatforms, now }) {
+  const day = 24 * 3600 * 1000;
+  const win30 = now - 30 * day;
+  const win28 = now - 28 * day;
+
+  const out = {};
+  for (const platform of enabledPlatforms) {
+    const platformData = competitorsRoot?.[platform] || {};
+    const handleKeys = Object.keys(platformData);
+    const byHandle = {};
+    const allViews = [];
+    const allEng = [];
+    let pooledEng30Sum = 0, pooledEng30N = 0;
+    let pooledPostCount = 0;
+    let pooledPostsRecent = 0;
+
+    for (const handleKey of handleKeys) {
+      const entry = platformData[handleKey] || {};
+      const profile = entry.profile || {};
+      const videos = Object.entries(entry.videos || {}).map(([videoId, v]) => ({ videoId, ...v }));
+      if (videos.length === 0) {
+        // Still record the handle with empty stats so the UI can
+        // show "scraped, no posts yet" rather than just hiding it.
+        byHandle[handleKey] = {
+          handle: profile.displayName || `@${handleKey}`,
+          displayName: profile.displayName || `@${handleKey}`,
+          followerCount: profile.followerCount ?? null,
+          medianViews: null,
+          medianEngagementRate: null,
+          engagement30d: null,
+          postCount: 0,
+          observedPostsPerWeek: 0,
+          topRecentVideoId: null,
+        };
+        continue;
+      }
+
+      const handleViews = [];
+      const handleEng = [];
+      let handleEng30Sum = 0, handleEng30N = 0;
+      let handleRecent = 0;
+      let topRecent = null;
+      for (const v of videos) {
+        const snap = latestSnapshotForCompetitor(v);
+        if (!snap) continue;
+        if (snap.views != null) handleViews.push(snap.views);
+        if (snap.engagementRate != null) handleEng.push(snap.engagementRate);
+        const ts = v.post?.timestamp ? new Date(v.post.timestamp).getTime() : null;
+        if (ts && ts >= win30) {
+          if (snap.engagementRate != null) { handleEng30Sum += snap.engagementRate; handleEng30N++; }
+        }
+        if (ts && ts >= win28) handleRecent++;
+        // Track top recent by views in the last 7d for the watchlist.
+        if (ts && ts >= now - 7 * day) {
+          if (!topRecent || (snap.views || 0) > (topRecent.views || 0)) {
+            topRecent = { videoId: v.videoId, views: snap.views || 0 };
+          }
+        }
+
+        allViews.push(snap.views || 0);
+        if (snap.engagementRate != null) allEng.push(snap.engagementRate);
+        if (ts && ts >= win30 && snap.engagementRate != null) {
+          pooledEng30Sum += snap.engagementRate; pooledEng30N++;
+        }
+        if (ts && ts >= win28) pooledPostsRecent++;
+        pooledPostCount++;
+      }
+
+      byHandle[handleKey] = {
+        handle: profile.displayName || `@${handleKey}`,
+        displayName: profile.displayName || `@${handleKey}`,
+        followerCount: profile.followerCount ?? null,
+        medianViews: Math.round(median(handleViews)) || null,
+        medianEngagementRate: +median(handleEng).toFixed(3) || null,
+        engagement30d: handleEng30N ? +(handleEng30Sum / handleEng30N).toFixed(3) : null,
+        postCount: videos.length,
+        observedPostsPerWeek: +(handleRecent / 4).toFixed(2),
+        topRecentVideoId: topRecent?.videoId || null,
+      };
+    }
+
+    out[platform] = {
+      pooled: {
+        medianViews: Math.round(median(allViews)) || null,
+        medianEngagementRate: +median(allEng).toFixed(3) || null,
+        engagement30d: pooledEng30N ? +(pooledEng30Sum / pooledEng30N).toFixed(3) : null,
+        postCount: pooledPostCount,
+        sampleHandles: handleKeys.length,
+        observedPostsPerWeek: +(pooledPostsRecent / 4 / Math.max(1, handleKeys.length)).toFixed(2),
+      },
+      byHandle,
+    };
+  }
+  return out;
+}
+
+function latestSnapshotForCompetitor(video) {
+  const snaps = video?.snapshots || {};
+  const keys = Object.keys(snaps).sort();
+  if (!keys.length) return null;
+  return snaps[keys[keys.length - 1]];
+}
+
+function aggregateCohortEngagement30d(competitorCohort, enabledPlatforms) {
+  let sum = 0, n = 0;
+  for (const platform of enabledPlatforms) {
+    const v = competitorCohort?.[platform]?.pooled?.engagement30d;
+    if (v != null) { sum += v; n++; }
+  }
+  return n ? sum / n : null;
 }
