@@ -136,6 +136,13 @@ function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
           description:     p.description     || "",
           targetAudience:  p.targetAudience  || "",
           producerNotes:   p.producerNotes   || "",
+          // Comment thread written by founders / leads from the
+          // Producer Notes card on the project detail panel. Editor
+          // needs this to follow the brief evolution (PR #65 added
+          // it as an append-only chronological log; before this
+          // edit the editor view only saw the legacy free-form
+          // producerNotes field above it).
+          producerCommentsThread: p.producerCommentsThread || null,
           videoType:       p.videoType       || "",
           packageTier:     p.packageTier     || "",
           numberOfVideos:  p.numberOfVideos  || null,
@@ -301,39 +308,64 @@ function fireSmallBurst() {
   confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 }, startVelocity: 25, ticks: 180 });
 }
 
-// ─── Kick-off video helpers ───────────────────────────────────────
-// Extract the 11-char YouTube video id from any of the common URL
-// shapes: youtu.be/VID, youtube.com/watch?v=VID, /embed/VID,
-// /shorts/VID, /live/VID. Returns null when no id is found, so the
-// pill / modal render conditionally on a real url.
-function parseYoutubeId(raw) {
+// ─── Kick Off helpers ──────────────────────────────────────────────
+// The Kick Off field (Projects → Kick Off) accepts either a YouTube
+// URL (project lead records a quick Loom-style video brief) or a
+// Google Doc URL (written brief). Editors see one pill on each task
+// row that opens the right embed for whichever shape was saved.
+//
+// parseKickoffMedia returns one of:
+//   { kind: "youtube",   id: "<11-char video id>" }
+//   { kind: "googleDoc", id: "<doc id>" }
+//   null   — empty / unparseable URL → pill doesn't render
+function parseKickoffMedia(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
-  // youtu.be short link
-  const m1 = s.match(/youtu\.be\/([\w-]{11})/);
-  if (m1) return m1[1];
-  // ?v= query param
-  const m2 = s.match(/[?&]v=([\w-]{11})/);
-  if (m2) return m2[1];
-  // /embed/, /shorts/, /live/
-  const m3 = s.match(/youtube\.com\/(?:embed|shorts|live)\/([\w-]{11})/);
-  if (m3) return m3[1];
+  if (!s) return null;
+  // YouTube: youtu.be/VID, ?v=VID, /embed/VID, /shorts/VID, /live/VID
+  const yt1 = s.match(/youtu\.be\/([\w-]{11})/);
+  if (yt1) return { kind: "youtube", id: yt1[1] };
+  const yt2 = s.match(/[?&]v=([\w-]{11})/);
+  if (yt2) return { kind: "youtube", id: yt2[1] };
+  const yt3 = s.match(/youtube\.com\/(?:embed|shorts|live)\/([\w-]{11})/);
+  if (yt3) return { kind: "youtube", id: yt3[1] };
+  // Google Doc: docs.google.com/document/d/{ID}/...
+  const gd = s.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/);
+  if (gd) return { kind: "googleDoc", id: gd[1] };
   return null;
 }
 
-// Modal that embeds a YouTube player and autoplays. Click outside
-// or press Esc to close. Used by the Kick-off Video pill on the
-// editor TaskRow.
-function KickoffVideoModal({ youtubeId, projectName, onClose }) {
+// Legacy shim — the pill / modal lookups elsewhere still reference
+// this name in some commit history. Returns just the YouTube id when
+// applicable so existing callers keep working without a wider sweep.
+function parseYoutubeId(raw) {
+  const m = parseKickoffMedia(raw);
+  return m && m.kind === "youtube" ? m.id : null;
+}
+
+// Modal that embeds either a YouTube player (autoplay) or a Google
+// Doc preview, picked by `media.kind`. Click outside / press Esc to
+// close. Used by the Kick Off pill on the editor TaskRow.
+function KickoffMediaModal({ media, projectName, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  if (!youtubeId) return null;
-  // autoplay=1 + mute=0 so the editor sees + hears it the moment
-  // it loads. rel=0 hides the related-videos overlay at the end.
-  const src = `https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0&modestbranding=1`;
+  if (!media) return null;
+  // YouTube: autoplay=1 + rel=0 hides related-videos overlay at end.
+  // Google Docs: /preview is the iframe-friendly URL — strips Google's
+  // own chrome + skips the X-Frame-Options block on /edit. The doc
+  // owner's sharing must be at least "Anyone with the link can view"
+  // for this to load — the producer is responsible for that, same as
+  // Sherpa Doc links.
+  const src = media.kind === "youtube"
+    ? `https://www.youtube.com/embed/${media.id}?autoplay=1&rel=0&modestbranding=1`
+    : `https://docs.google.com/document/d/${media.id}/preview`;
+  const headerLabel = media.kind === "googleDoc"
+    ? "📄 Kick Off"
+    : "🎬 Kick Off";
+  const iframeTitle = media.kind === "googleDoc" ? "Kick-off doc" : "Kick-off video";
   return (
     <div onClick={onClose}
       style={{
@@ -351,7 +383,7 @@ function KickoffVideoModal({ youtubeId, projectName, onClose }) {
         }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: "var(--fg)" }}>
-            🎬 Kick-off video {projectName ? <span style={{ color: "var(--muted)", fontWeight: 600 }}> · {projectName}</span> : null}
+            {headerLabel} {projectName ? <span style={{ color: "var(--muted)", fontWeight: 600 }}> · {projectName}</span> : null}
           </div>
           <button onClick={onClose} title="Close (Esc)"
             style={{
@@ -362,10 +394,19 @@ function KickoffVideoModal({ youtubeId, projectName, onClose }) {
               fontFamily: "inherit", flexShrink: 0,
             }}>×</button>
         </div>
-        <div style={{ position: "relative", paddingTop: "56.25%", borderRadius: 8, overflow: "hidden", background: "#000" }}>
+        {/* Aspect-ratio wrapper. Video stays 16:9; doc gets a tall
+            container so the producer can scroll the brief without
+            squinting. Google Docs preview iframes scroll internally. */}
+        <div style={{
+          position: "relative",
+          paddingTop: media.kind === "googleDoc" ? "min(72vh, 900px)" : "56.25%",
+          height: media.kind === "googleDoc" ? "min(72vh, 900px)" : undefined,
+          borderRadius: 8, overflow: "hidden",
+          background: media.kind === "googleDoc" ? "var(--bg)" : "#000",
+        }}>
           <iframe
             src={src}
-            title="Kick-off video"
+            title={iframeTitle}
             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
@@ -691,7 +732,7 @@ function TaskRow({
   onStart, onStop, onReset, onAdjust, onFinish, dim,
   expanded, onToggleExpand, onOpenProject, onOpenKickoff,
 }) {
-  const kickoffYtId = parseYoutubeId(task.kickoffVideoUrl);
+  const kickoffMedia = parseKickoffMedia(task.kickoffVideoUrl);
   return (
     <div style={{
       display: "flex", flexDirection: "column",
@@ -761,15 +802,15 @@ function TaskRow({
               account + project rows. Renders nothing when unset, so
               tasks for accounts without a goal stay visually clean. */}
           <ClientGoalPill goal={task.clientGoal} />
-          {/* Kick-off Video pill — set by leads / founders in the
-              project detail. Only renders when the URL parses to a
-              valid YouTube id; clicking pops the inline player.
-              Glows + pulses to catch the editor's eye on the first
-              task they see for a fresh project. */}
-          {kickoffYtId && (
+          {/* Kick Off pill — set by leads / founders in the project
+              detail. Renders for either a YouTube video URL (🎬) or
+              a Google Doc URL (📄); clicking pops the inline player /
+              doc preview. Glows + pulses to catch the editor's eye
+              on the first task they see for a fresh project. */}
+          {kickoffMedia && (
             <button
               onClick={(e) => { e.stopPropagation(); onOpenKickoff && onOpenKickoff(task.id); }}
-              title="Watch the kick-off video"
+              title={kickoffMedia.kind === "googleDoc" ? "Read the kick-off brief" : "Watch the kick-off video"}
               style={{
                 flexShrink: 0,
                 padding: "1px 8px", borderRadius: 4,
@@ -782,7 +823,7 @@ function TaskRow({
                 display: "inline-flex", alignItems: "center", gap: 3,
                 animation: "viewix-kickoff-glow 2.2s ease-in-out infinite",
               }}>
-              🎬 Kick-off Video
+              {kickoffMedia.kind === "googleDoc" ? "📄" : "🎬"} Kick Off
             </button>
           )}
         </div>
@@ -848,13 +889,13 @@ function TaskRow({
                 disabled={!allowed}
                 title={allowed ? "Finish this task" : "Start the timer first — Finish unlocks once you've logged time."}
                 style={{
-                  padding: "7px 14px", borderRadius: 8, border: "none",
+                  padding: "7px 14px", borderRadius: 8,
+                  border: allowed ? "none" : "1px solid var(--border)",
                   background: allowed ? "#10B981" : "var(--bg)",
                   color: allowed ? "#fff" : "var(--muted)",
                   fontSize: 12, fontWeight: 800,
                   cursor: allowed ? "pointer" : "not-allowed",
                   fontFamily: "inherit",
-                  border: allowed ? "none" : "1px solid var(--border)",
                   transition: "background 0.15s, color 0.15s",
                 }}>
                 Finish
@@ -885,9 +926,30 @@ function TaskDetailsPanel({ task, onOpenProject }) {
   const m = task.projectMeta || {};
   const links = m.links || {};
   const fmt = v => (v == null || v === "") ? "—" : v;
-  const hasAnyText = !!(m.description || m.targetAudience || m.producerNotes);
-  const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.dealValue || m.accountManager || m.projectLead || (m.destinations && m.destinations.length));
-  const hasAnyLink = !!(links.sherpaId || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
+  // Producer comment thread — stored as an object keyed by entry id
+  // (see PR #65). Sorted oldest-first so the editor can read the
+  // brief evolution as a conversation. Empty object / null collapses
+  // to no entries; the rendering below short-circuits.
+  const threadEntries = (() => {
+    const t = m.producerCommentsThread;
+    if (!t || typeof t !== "object") return [];
+    return Object.values(t)
+      .filter(Boolean)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  })();
+  const hasAnyText = !!(m.description || m.targetAudience || m.producerNotes || threadEntries.length);
+  // dealValue intentionally NOT included in hasAnyMeta — pricing
+  // visibility was removed from the Editors tab by request. The
+  // value still lives on /projects/{id}.dealValue for downstream
+  // founders / sale views, just not rendered here.
+  const hasAnyMeta = !!(m.videoType || m.packageTier || m.numberOfVideos || m.dueDate || m.closeDate || m.accountManager || m.projectLead || (m.destinations && m.destinations.length));
+  // Sherpa Doc is gated on the resolved task.sherpaUrl (the actual
+  // Google Doc URL), not links.sherpaId. The old gate used the id
+  // and built a dead hash route (#clients/{id}) — clicking it
+  // navigated to a non-existent route and the screen went blank,
+  // exactly the bug Jeremy hit. Render path below uses the URL
+  // directly with target="_blank".
+  const hasAnyLink = !!(task.sherpaUrl || links.preprodId || links.runsheetId || links.deliveryId || links.accountId);
   if (!hasAnyText && !hasAnyMeta && !hasAnyLink) {
     return (
       <div style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.015)", fontSize: 12, color: "var(--muted)" }}>
@@ -941,7 +1003,9 @@ function TaskDetailsPanel({ task, onOpenProject }) {
       {m.videoType && <Field label="Video type" value={fmt(m.videoType)} />}
       {m.packageTier && <Field label="Package" value={fmt(m.packageTier)} />}
       {m.numberOfVideos != null && <Field label="Number of videos" value={fmt(m.numberOfVideos)} mono />}
-      {m.dealValue != null && <Field label="Deal value" value={`$${Number(m.dealValue).toLocaleString("en-AU")}`} mono />}
+      {/* Deal value Field removed by request — kept the data on
+          projectMeta in case it's needed for a future audit, but
+          editors don't see pricing in the inline more-info panel. */}
       {m.closeDate && <Field label="Close date" value={fmt(m.closeDate)} mono />}
       {m.dueDate && <Field label="Due date" value={fmt(m.dueDate)} mono />}
       {Array.isArray(m.destinations) && m.destinations.length > 0 && (
@@ -959,9 +1023,63 @@ function TaskDetailsPanel({ task, onOpenProject }) {
           <Field label="Producer notes" value={m.producerNotes} multiline />
         </div>
       )}
+      {/* Producer comments thread — append-only chronological log
+          founders / leads write from the project detail panel. Read-
+          only here (editors don't post into the thread; they
+          communicate via Finish-modal notes). Each entry is shown
+          with the author chip + timestamp so the editor sees the
+          provenance + reading order. */}
+      {threadEntries.length > 0 && (
+        <div style={{ gridColumn: "1 / -1" }}>
+          <div style={{ fontSize: 9, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+            Producer comments
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {threadEntries.map(e => (
+              <div key={e.id || e.createdAt} style={{
+                padding: "8px 10px",
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                  <span style={{
+                    fontSize: 8, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase",
+                    padding: "1px 5px", borderRadius: 3,
+                    background: e.authorRole === "Founder" ? "rgba(0,130,250,0.15)" : "rgba(139,92,246,0.15)",
+                    color: e.authorRole === "Founder" ? "#0082FA" : "#8B5CF6",
+                  }}>
+                    {e.authorRole || "Producer"}
+                  </span>
+                  <span style={{ fontSize: 9, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
+                    {e.createdAt ? new Date(e.createdAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {e.text || ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {hasAnyLink && (
         <div style={{ gridColumn: "1 / -1", display: "flex", flexWrap: "wrap", gap: 6, paddingTop: 4, borderTop: "1px dashed var(--border)" }}>
-          {links.sherpaId   && linkBtn("Sherpa Doc", hash(`clients/${links.sherpaId}`), "#8B5CF6")}
+          {/* Sherpa Doc — external Google Doc URL. Opens in a new
+              tab via target="_blank" rather than the dead
+              #clients/{id} hash route the old code built. */}
+          {task.sherpaUrl && (
+            <a href={task.sherpaUrl}
+              target="_blank" rel="noopener noreferrer"
+              title="Open the client's Sherpa doc in a new tab"
+              style={{
+                padding: "5px 10px", borderRadius: 6,
+                border: "1px solid #8B5CF6",
+                background: "transparent", color: "#8B5CF6",
+                fontSize: 11, fontWeight: 700, textDecoration: "none",
+                fontFamily: "inherit",
+              }}>Sherpa Doc</a>
+          )}
           {links.preprodId  && linkBtn("Pre-Prod",   hash(`preproduction/${links.preprodType || "metaAds"}/${links.preprodId}`), "#EC4899")}
           {links.runsheetId && linkBtn("Runsheet",   hash(`preproduction/runsheets/${links.runsheetId}`), "#06B6D4")}
           {links.deliveryId && linkBtn("Delivery",   hash(`projects/deliveries/${links.deliveryId}`), "#10B981")}
@@ -1112,7 +1230,9 @@ function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClos
           {project.videoType && <Field label="Video type" value={fmt(project.videoType)} />}
           {project.packageTier && <Field label="Package" value={fmt(project.packageTier)} />}
           {project.numberOfVideos != null && <Field label="Number of videos" value={fmt(project.numberOfVideos)} mono />}
-          {project.dealValue != null && <Field label="Deal value" value={`$${Number(project.dealValue).toLocaleString("en-AU")}`} mono />}
+          {/* Deal value Field removed by request — same reasoning as
+              the inline more-info panel above. Hidden in both the
+              Editors and Projects surfaces. */}
           {project.closeDate && <Field label="Close date" value={fmt(project.closeDate)} mono />}
           {project.dueDate && <Field label="Due date" value={fmt(project.dueDate)} mono />}
           {Array.isArray(project.destinations) && project.destinations.length > 0 && (
@@ -1640,18 +1760,19 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
         />
       )}
 
-      {/* Kick-off video modal — popped by the glowing pill on a task
-          row. Resolved against the latest task list on render so a
-          Firebase update during the modal's open window doesn't leave
-          it pinned to a stale URL. */}
+      {/* Kick Off modal — popped by the glowing pill on a task row.
+          Resolved against the latest task list on render so a
+          Firebase update during the modal's open window doesn't
+          leave it pinned to a stale URL. Handles both YouTube
+          videos and Google Doc briefs via parseKickoffMedia. */}
       {kickoffTaskId && (() => {
         const kt = allTasks.find(x => x.id === kickoffTaskId);
         if (!kt) return null;
-        const ytId = parseYoutubeId(kt.kickoffVideoUrl);
-        if (!ytId) { setKickoffTaskId(null); return null; }
+        const media = parseKickoffMedia(kt.kickoffVideoUrl);
+        if (!media) { setKickoffTaskId(null); return null; }
         return (
-          <KickoffVideoModal
-            youtubeId={ytId}
+          <KickoffMediaModal
+            media={media}
             projectName={kt.parentName}
             onClose={() => setKickoffTaskId(null)}
           />

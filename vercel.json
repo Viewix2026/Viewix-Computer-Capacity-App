@@ -29,6 +29,24 @@
     },
     "api/sync-attio-cache.js": {
       "maxDuration": 300
+    },
+    "api/slack-schedule-listener.js": {
+      "maxDuration": 60
+    },
+    "api/slack-interactivity.js": {
+      "maxDuration": 30
+    },
+    "api/scheduling-daily-digest.js": {
+      "maxDuration": 60
+    },
+    "api/scheduling-brain-check.js": {
+      "maxDuration": 30
+    },
+    "api/scheduling-flag-flusher.js": {
+      "maxDuration": 30
+    },
+    "api/scheduling-cleanup.js": {
+      "maxDuration": 60
     }
   },
   "crons": [
@@ -51,6 +69,22 @@
     {
       "path": "/api/cron/daily-09",
       "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/scheduling-daily-digest",
+      "schedule": "50 21 * * *"
+    },
+    {
+      "path": "/api/scheduling-daily-digest",
+      "schedule": "50 22 * * *"
+    },
+    {
+      "path": "/api/scheduling-flag-flusher",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/scheduling-cleanup",
+      "schedule": "0 21 * * *"
     }
   ],
   "rewrites": [

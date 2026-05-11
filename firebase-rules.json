@@ -22,7 +22,7 @@
     "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
     "meetingFeedback": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
     "foundersMetrics": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "foundersBriefings": { ".read": "auth != null && auth.token.role == 'founders'", ".write": "auth != null && auth.token.role == 'founders'" },
+    "foundersBriefings": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')" },
     "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')" },
 
     "deliveries": {
@@ -34,7 +34,8 @@
         "videos": {
           "$idx": {
             "revision1": { ".write": "auth != null" },
-            "revision2": { ".write": "auth != null" }
+            "revision2": { ".write": "auth != null" },
+            "posted":    { ".write": "auth != null" }
           }
         }
       }
@@ -104,7 +105,7 @@
 
     "foundersData": {
       ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
-      ".write": "auth != null && auth.token.role == 'founders'"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
     },
 
     "teamHome": {

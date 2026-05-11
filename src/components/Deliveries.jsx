@@ -189,6 +189,12 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 120 }}>Rev Round 1</th>
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 120 }}>Rev Round 2</th>
                   <th style={{ ...TH, textAlign: "left", padding: "8px 12px", width: 180 }}>Notes</th>
+                  {/* Posted — anyone can tick. Client view writes the
+                      same /videos/{idx}/posted leaf via anon auth
+                      (rule loosened to match revision1/revision2).
+                      Used to confirm the video has been published
+                      to the client's destinations after delivery. */}
+                  <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 80 }}>Posted</th>
                   <th style={{ ...TH, width: 40 }}></th>
                 </tr></thead>
                 <tbody>{d.videos.map(v => (
@@ -199,6 +205,13 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val => updateVideo(v.id, { revision1: val })} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val => updateVideo(v.id, { revision2: val })} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)" }}><input value={v.notes || ""} onChange={e => updateVideo(v.id, { notes: e.target.value })} placeholder="Notes..." style={inputSt} /></td>
+                    <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}>
+                      <input type="checkbox"
+                        checked={!!v.posted}
+                        onChange={e => updateVideo(v.id, { posted: e.target.checked })}
+                        title={v.posted ? "Posted — click to unmark" : "Mark as posted"}
+                        style={{ cursor: "pointer", accentColor: "#10B981", width: 16, height: 16 }} />
+                    </td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><button onClick={() => removeVideo(v.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 16 }}>x</button></td>
                   </tr>
                 ))}</tbody>

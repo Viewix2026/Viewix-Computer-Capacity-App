@@ -12,7 +12,8 @@
 // webhook patches don't clobber producer drags.
 
 import { useMemo, useState, useRef, useCallback } from "react";
-import { fbSet } from "../firebase";
+import { fbSet, authFetch } from "../firebase";
+import TeamBoardFlagBanner from "./TeamBoardFlagBanner.jsx";
 import {
   DndContext, PointerSensor, useSensor, useSensors,
   useDraggable, useDroppable, useDndContext, closestCenter, DragOverlay,
@@ -396,11 +397,14 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
           ? `${subtask.startTime} → ${subtask.endTime}`
           : `${span}d`}
       </div>
-      {/* Resting-state grip cue: a 2px coloured stripe inset 3px from
-          each long edge of the bar. Painted via a linear gradient so
-          there's no extra DOM. The 8px wide hit area + ew-resize
-          cursor on hover is unchanged; this just makes the handle
-          visible without hovering. */}
+      {/* Resting-state grip cue + resize hit area. Hit area shrunk
+          from 8px to 5px and the visible cue widened to 3px (was 2px)
+          so the visible stripe matches the actual hit zone. Reason:
+          when bars in the same lane sit adjacent to each other, the
+          ~16px combined "resize zone" between them was easy to
+          accidentally grab while intending to click a bar's body. A
+          5px hit area drops the misfire risk significantly without
+          breaking the resize-by-edge gesture. */}
       <div
         ref={resizeStart.setNodeRef}
         {...resizeStart.listeners}
@@ -408,17 +412,17 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
         onClick={e => e.stopPropagation()}
         style={{
           position: "absolute", top: 0, left: 0, bottom: 0,
-          width: 8, cursor: "ew-resize",
+          width: 5, cursor: "ew-resize",
           background: resizeStart.isDragging
             ? colour
-            : `linear-gradient(to right, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`,
+            : `linear-gradient(to right, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`,
           borderTopLeftRadius: 6, borderBottomLeftRadius: 6,
           zIndex: 2,
         }}
         onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
         onMouseLeave={e => {
           if (!resizeStart.isDragging) {
-            e.currentTarget.style.background = `linear-gradient(to right, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`;
+            e.currentTarget.style.background = `linear-gradient(to right, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`;
           }
         }}
         title="Drag to change start date"
@@ -430,17 +434,17 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
         onClick={e => e.stopPropagation()}
         style={{
           position: "absolute", top: 0, right: 0, bottom: 0,
-          width: 8, cursor: "ew-resize",
+          width: 5, cursor: "ew-resize",
           background: resizeEnd.isDragging
             ? colour
-            : `linear-gradient(to left, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`,
+            : `linear-gradient(to left, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`,
           borderTopRightRadius: 6, borderBottomRightRadius: 6,
           zIndex: 2,
         }}
         onMouseEnter={e => e.currentTarget.style.background = `${colour}aa`}
         onMouseLeave={e => {
           if (!resizeEnd.isDragging) {
-            e.currentTarget.style.background = `linear-gradient(to left, transparent 3px, ${colour}55 3px, ${colour}55 5px, transparent 5px)`;
+            e.currentTarget.style.background = `linear-gradient(to left, transparent 1px, ${colour}55 1px, ${colour}55 4px, transparent 4px)`;
           }
         }}
         title="Drag to change end date"
@@ -521,37 +525,66 @@ function DropCell({
 
 // ─── Main board ────────────────────────────────────────────────────
 
-export function TeamBoard({ projects = [], editors = [], setEditors, weekData = {}, onOpenProject }) {
-  // The board starts on the Monday of the current week so the producer
-  // sees the full current week (including past days they may have
-  // already worked) without scrolling left. From there, we render N
-  // days forward; scrolling near the right edge appends another batch
-  // (no toolbar, no manual prev/next).
-  const fromDate = useMemo(() => startOfWeek(isoToday()), []);
-  const [daysAhead, setDaysAhead] = useState(28);  // 4 weeks initial
-  const dates = useMemo(() => dateRange(fromDate, daysAhead), [fromDate, daysAhead]);
+export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, onOpenProject }) {
+  // The board opens centred on the Monday of the current week so the
+  // producer sees the full current week (including past days they may
+  // have already worked) without scrolling left. From there:
+  //   - daysAhead controls forward span. Initial 28 days (4 weeks).
+  //     Scrolling near the right edge appends another 14-day batch.
+  //   - daysBack controls past span. Initial 0 (no preloaded history).
+  //     Scrolling near the left edge prepends another 14-day batch.
+  //     Once revealed, prepended columns stay until the page reloads.
+  // Both directions cap at 365 days. No toolbar, no manual prev/next.
+  const [daysAhead, setDaysAhead] = useState(28);
+  const [daysBack, setDaysBack] = useState(0);
+  const fromDate = useMemo(() => {
+    if (daysBack === 0) return startOfWeek(isoToday());
+    const d = new Date(isoToday() + "T00:00:00");
+    d.setDate(d.getDate() - daysBack);
+    return startOfWeek(toISO(d));
+  }, [daysBack]);
+  const dates = useMemo(() => dateRange(fromDate, daysBack + daysAhead), [fromDate, daysBack, daysAhead]);
 
-  // Scroll listener on the grid container. When the user scrolls within
-  // ~300px of the right edge, append another 14 days. We throttle via
-  // a "loading" guard so a fast flick doesn't fire the extension five
-  // times during the same momentum scroll. Cap at 365 days total.
+  // Bidirectional scroll-extension. Right-edge approach appends future
+  // days. Left-edge approach (only when the producer is actively
+  // scrolling left, not on initial mount when scrollLeft sits at 0)
+  // prepends past days, then adjusts scrollLeft by the added pixel
+  // width so the visible position doesn't visually jump backward
+  // across the screen. We throttle via a "loading" guard so a fast
+  // flick doesn't fire the extension multiple times during one
+  // momentum scroll. Cap at 365 days each direction.
   const scrollRef = useRef(null);
   const extending = useRef(false);
+  const lastScrollLeft = useRef(0);
   const onScroll = useCallback((e) => {
     if (extending.current) return;
     const el = e.currentTarget;
-    const remaining = el.scrollWidth - (el.scrollLeft + el.clientWidth);
-    if (remaining < 320 && daysAhead < 365) {
+    const wasScrollingLeft = el.scrollLeft < lastScrollLeft.current;
+    lastScrollLeft.current = el.scrollLeft;
+
+    const remainingRight = el.scrollWidth - (el.scrollLeft + el.clientWidth);
+    if (remainingRight < 320 && daysAhead < 365) {
       extending.current = true;
       setDaysAhead(d => Math.min(365, d + 14));
-      // Reset the guard once the next render lands. Two RAFs is enough
-      // for the new columns to render and grow scrollWidth past the
-      // 320-remaining threshold.
       requestAnimationFrame(() => requestAnimationFrame(() => {
         extending.current = false;
       }));
+      return;
     }
-  }, [daysAhead]);
+    if (wasScrollingLeft && el.scrollLeft < 320 && daysBack < 365) {
+      extending.current = true;
+      const oldScrollWidth = el.scrollWidth;
+      setDaysBack(d => Math.min(365, d + 14));
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const delta = el.scrollWidth - oldScrollWidth;
+        if (delta > 0) {
+          el.scrollLeft += delta;
+          lastScrollLeft.current = el.scrollLeft;
+        }
+        extending.current = false;
+      }));
+    }
+  }, [daysAhead, daysBack]);
 
   // Flatten every subtask across every project, carrying parent project
   // metadata along so the bar can render "Canva: Pre Production" without
@@ -664,6 +697,32 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
   }));
   const [dragPreview, setDragPreview] = useState(null);
 
+  // Inline brain-flag banner shown after a drag commits. Populated by
+  // a fire-and-forget POST to /api/scheduling-brain-check at the end
+  // of each drag write. Auto-dismisses after 30s via the banner
+  // component's own timer; producer can dismiss earlier with the X.
+  const [brainFlags, setBrainFlags] = useState(null);
+
+  // Helper: kick off the brain check after a drag write commits.
+  // Fire-and-forget — failures (auth blip, /api/* down) are silent
+  // so they never block the producer's drag UX.
+  const triggerBrainCheck = useCallback(({ projectId, subtaskId, patch, affectedDate }) => {
+    authFetch("/api/scheduling-brain-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trigger: "drag",
+        projectId, subtaskId, affectedDate,
+        proposedPatch: patch,
+      }),
+    })
+      .then(r => r.json().catch(() => ({})))
+      .then(({ flags }) => {
+        if (Array.isArray(flags) && flags.length) setBrainFlags(flags);
+      })
+      .catch(err => console.warn("scheduling-brain-check:", err?.message || err));
+  }, []);
+
   const onDragStart = (e) => {
     // Only show the floating preview for "move" drags. Resize gestures
     // are an edge-pull on a bar that stays put — a floating preview
@@ -709,12 +768,34 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
     const path = `/projects/${subtask.projectId}/subtasks/${subtask.id}`;
     const now = new Date().toISOString();
 
+    // Optimistic local-state patch for a single subtask leaf. Mirrors
+    // the pattern used in Projects.jsx for inline edits / status pill
+    // changes (PRs #49 / #59 / #60): without this, every fbSet below
+    // hits Firebase fine but the App.jsx listener wrapper suppresses
+    // the listener echo for ~1.5s via recentlyWroteTo("/projects"),
+    // so the local `projects` array never advances and the dragged
+    // GanttBar visibly "snaps back" until reload — which is exactly
+    // the symptom Jeremy reported as "drag and drop has stopped
+    // working" on the Team Board.
+    const patchSubtaskLocal = (patch) => {
+      if (typeof setProjects !== "function") return;
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== subtask.projectId) return p;
+        const subs = { ...(p.subtasks || {}) };
+        const cur = subs[subtask.id] || {};
+        subs[subtask.id] = { ...cur, ...patch, updatedAt: now };
+        return { ...p, subtasks: subs, updatedAt: now };
+      }));
+    };
+
     // Helper: write a new assignee list back to Firebase, keeping the
     // legacy `assigneeId` field in sync as the first entry so any code
     // that still reads it gets a sensible value. Pass null/empty to
-    // unassign entirely.
+    // unassign entirely. Patches local state in the same call so the
+    // Gantt bar moves immediately, not on the next listener fire.
     const writeAssignees = (nextIds) => {
       const cleaned = (nextIds || []).filter(Boolean);
+      patchSubtaskLocal({ assigneeIds: cleaned, assigneeId: cleaned[0] || null });
       fbSet(`${path}/assigneeIds`, cleaned);
       fbSet(`${path}/assigneeId`, cleaned[0] || null);
     };
@@ -724,6 +805,15 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
       if (over.id === POOL_ID) return;
       const { date } = parseCellId(over.id);
       if (!date) return;
+      // Audit log — if a producer reports "an unrelated subtask got
+      // its endDate changed", open the browser console and screenshot
+      // these lines. They show exactly which subtaskId got which mode
+      // applied, so we can tell whether it was a misfire (mode=resize
+      // when intending move) vs a real bug elsewhere.
+      console.info("[TeamBoard drag]", {
+        mode, projectId: subtask.projectId, subtaskId: subtask.id,
+        oldStart: subtask.startDate, oldEnd: subtask.endDate, droppedDate: date,
+      });
 
       // If the bar somehow has no startDate (orphan / corrupted data),
       // treat the dropped date as both ends — collapses to a 1-day bar.
@@ -753,9 +843,16 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
         }
       }
 
+      patchSubtaskLocal({ startDate: newStart, endDate: newEnd });
       fbSet(`${path}/startDate`, newStart);
       fbSet(`${path}/endDate`, newEnd);
       fbSet(`${path}/updatedAt`, now);
+      triggerBrainCheck({
+        projectId: subtask.projectId,
+        subtaskId: subtask.id,
+        patch: { startDate: newStart, endDate: newEnd },
+        affectedDate: mode === "resizeEnd" ? newEnd : newStart,
+      });
       return;
     }
 
@@ -765,6 +862,13 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
       // intact so the producer can drop the card back into a date cell
       // later without re-picking everyone — pool cards still show all
       // assignees in their footer.
+      // Skip brain check on pool drops — clearing dates only REMOVES
+      // potential conflicts, never creates one. No flag worth posting.
+      console.info("[TeamBoard drag]", {
+        mode: "move-to-pool", projectId: subtask.projectId, subtaskId: subtask.id,
+        oldStart: subtask.startDate, oldEnd: subtask.endDate,
+      });
+      patchSubtaskLocal({ startDate: null, endDate: null });
       fbSet(`${path}/startDate`, null);
       fbSet(`${path}/endDate`, null);
       fbSet(`${path}/updatedAt`, now);
@@ -776,14 +880,25 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
     if (!newAssignee || !newDate) return;
     const oldStart = subtask.startDate;
     const oldEnd = subtask.endDate;
+    console.info("[TeamBoard drag]", {
+      mode: "move", projectId: subtask.projectId, subtaskId: subtask.id,
+      sourceAssigneeId, newAssignee,
+      oldStart, oldEnd, newStart: newDate, newEnd: newDate,
+    });
 
-    // Date logic: shift the WHOLE subtask (all assignees move together
-    // — they're co-scheduled). Preserve duration when both ends exist.
-    let newEnd = newDate;
-    if (oldStart && oldEnd) {
-      const delta = daysBetween(oldStart, newDate);
-      newEnd = addDays(oldEnd, delta);
-    }
+    // Date logic: SLIDE, don't STRETCH. Drop on a single day = collapse
+    // to a 1-day bar at that day. Producer uses the resize handles to
+    // make a bar multi-day deliberately — same principle as the
+    // auto-roll cron fix in PR #74. Earlier behaviour preserved
+    // duration (delta from oldStart applied to oldEnd), which silently
+    // pushed multi-day bars further into the future on every drag.
+    // Symptom Jeremy hit: dragging a bar that had been silently
+    // stretched by the auto-roll cron made an "unrelated" task appear
+    // to expand by ~14 days when it actually was the same bar
+    // preserving its old span. The audit log line above shows
+    // newStart === newEnd, matching what gets written.
+    const newEnd = newDate;
+    patchSubtaskLocal({ startDate: newDate, endDate: newEnd });
     fbSet(`${path}/startDate`, newDate);
     fbSet(`${path}/endDate`, newEnd);
 
@@ -802,8 +917,22 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
       const stripped = currentIds.filter(id => id !== sourceAssigneeId);
       nextIds = stripped.includes(newAssignee) ? stripped : [...stripped, newAssignee];
     } else if (!sourceAssigneeId) {
-      // From the pool: just add target if not already present.
-      nextIds = currentIds.includes(newAssignee) ? currentIds : [...currentIds, newAssignee];
+      // From the pool — transfer to target, don't append.
+      //   - target IS already in assigneeIds → reschedule with same
+      //     crew, no assignee change. Common for multi-assignee
+      //     shoots that got unscheduled and dragged back to one of
+      //     the crew's row.
+      //   - target is NOT in assigneeIds → REPLACE with just
+      //     [target]. Single-assignee transfer flow: producer drops
+      //     to pool, drags to a new editor = ownership moves to
+      //     that editor. The bug Jeremy hit was the old "append"
+      //     behaviour leaving both original AND new owner
+      //     assigned — append-not-replace silently doubled up.
+      // Producers who actually want to ADD a crew member (vs
+      // transfer) use the multi-assignee picker on the task row —
+      // drag-and-drop is for transfer / scheduling, not for
+      // editing the assignee list.
+      nextIds = currentIds.includes(newAssignee) ? currentIds : [newAssignee];
     } else {
       // sourceAssigneeId === newAssignee → just a date change, no assignee change.
       nextIds = currentIds;
@@ -812,6 +941,21 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
       writeAssignees(nextIds);
     }
     fbSet(`${path}/updatedAt`, now);
+
+    // Brain check on the resulting state. proposedPatch carries the
+    // fields the drag just wrote so the backend can evaluate the
+    // virtual world without racing the per-leaf fbSet calls.
+    triggerBrainCheck({
+      projectId: subtask.projectId,
+      subtaskId: subtask.id,
+      patch: {
+        startDate: newDate,
+        endDate: newEnd,
+        assigneeIds: nextIds,
+        assigneeId: nextIds[0] || null,
+      },
+      affectedDate: newDate,
+    });
   };
 
   // ─── Layout maths ────────────────────────────────────────────────
@@ -852,6 +996,19 @@ export function TeamBoard({ projects = [], editors = [], setEditors, weekData = 
   // ─── Render ──────────────────────────────────────────────────────
   return (
     <div style={{ padding: "16px 28px 60px" }}>
+      {/* Inline brain-flag banner — appears after a drag commits a
+          write that creates a scheduling conflict (double-book, off-day
+          assignment, over-capacity, etc.). Auto-dismisses after 30s.
+          A delayed Slack post (3 min) follows if the conflict is still
+          active by then — gives the producer time to drag again to fix
+          before the channel pings. See api/scheduling-brain-check.js +
+          api/scheduling-flag-flusher.js. */}
+      {brainFlags && (
+        <TeamBoardFlagBanner
+          flags={brainFlags}
+          onDismiss={() => setBrainFlags(null)}
+        />
+      )}
       {/* Stage colour key — sits above the calendar so producers can
           map a coloured bar back to its stage name. Static, subtle,
           defers to the data below. */}
@@ -1321,5 +1478,9 @@ const headerCell = {
 const rowLabel = {
   padding: "10px 14px", display: "flex", alignItems: "center",
   borderBottom: "1px solid var(--border)",
-  fontSize: 13, minHeight: 60,
+  // 24px so editor names stay legible when the producer zooms the
+  // browser out (e.g., 67%) to fit more days on screen. Sized up
+  // twice — 13px → 18px → 24px — based on Jeremy's feedback that
+  // 18px still felt too small at zoom-out.
+  fontSize: 24, minHeight: 60,
 };

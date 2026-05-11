@@ -224,7 +224,17 @@ export default function App(){
   },[]);
 
   const isFounder=role==="founder"||role==="founders";
-  const isFounders=role==="founders";
+  // Per Jeremy: `founder` and `founders` are the same tier — both
+  // passwords grant identical access. The constants used to be
+  // distinct (isFounders = plural-only) and the codebase has dozens
+  // of gates that read each one differently. Aliasing isFounders
+  // to isFounder collapses the distinction in one line: every
+  // downstream `isFounders` check now permits both roles, including
+  // the Founders sidebar tab + tab route, the /foundersData
+  // bulk-write, and Sale.jsx's pricing/charge/reconcile actions.
+  // Firebase rule on /foundersData write was loosened in lockstep
+  // (see firebase-rules.json) so both roles' writes actually land.
+  const isFounders=isFounder;
   const isLead=role==="lead";
 
   // Firebase data listeners — gated on auth being ready so the root listener
