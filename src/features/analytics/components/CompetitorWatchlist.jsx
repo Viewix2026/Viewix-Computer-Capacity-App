@@ -8,9 +8,18 @@
 
 import { fmtCount } from "../utils/displayFormatters";
 
-export function CompetitorWatchlist({ cohort, competitorsRoot, platform = "instagram" }) {
+export function CompetitorWatchlist({ cohort, competitorsRoot, thisWeekInNiche, platform = "instagram" }) {
   const byHandle = cohort?.[platform]?.byHandle || {};
   const competitors = competitorsRoot?.[platform] || {};
+
+  // Build a quick lookup of Claude takes by (handle, videoId) so each
+  // row can show its "why this is working + apply" take when Phase 7's
+  // niche generation has run.
+  const takesByKey = {};
+  for (const t of thisWeekInNiche?.posts || []) {
+    if (!t?.handle || !t?.videoId) continue;
+    takesByKey[`${t.handle}::${t.videoId}`] = t;
+  }
 
   // Sort: prefer handles with a top-recent post, then by post count.
   const entries = Object.entries(byHandle).sort(([, a], [, b]) => {
@@ -35,21 +44,25 @@ export function CompetitorWatchlist({ cohort, competitorsRoot, platform = "insta
       <div style={{
         fontSize: 11, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5,
       }}>
-        Each saved competitor's top post from the last 7 days. AI takes
-        on what's working land in Phase 7.
+        Each saved competitor's top post from the last 7 days. When
+        AI takes are available, they appear below the post.
       </div>
 
       {entries.length === 0 ? (
         <Empty>No competitor data yet. Add competitors in setup + run a refresh.</Empty>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
-          {entries.map(([handleKey, stats]) => (
-            <CompetitorRow
-              key={handleKey}
-              stats={stats}
-              topVideo={pickTopVideo(competitors[handleKey], stats.topRecentVideoId)}
-            />
-          ))}
+          {entries.map(([handleKey, stats]) => {
+            const takeKey = `${stats.displayName || `@${handleKey}`}::${stats.topRecentVideoId || ""}`;
+            return (
+              <CompetitorRow
+                key={handleKey}
+                stats={stats}
+                topVideo={pickTopVideo(competitors[handleKey], stats.topRecentVideoId)}
+                take={takesByKey[takeKey]?.take || null}
+              />
+            );
+          })}
         </div>
       )}
     </div>
@@ -61,7 +74,7 @@ function pickTopVideo(handleData, topId) {
   return handleData?.videos?.[topId] || null;
 }
 
-function CompetitorRow({ stats, topVideo }) {
+function CompetitorRow({ stats, topVideo, take }) {
   const post = topVideo?.post;
   const latest = pickLatestSnapshot(topVideo);
 
@@ -144,6 +157,27 @@ function CompetitorRow({ stats, topVideo }) {
           {(stats.postCount || 0)} posts tracked
           {stats.observedPostsPerWeek ? ` · ~${stats.observedPostsPerWeek.toFixed(1)}/wk observed` : ""}
         </div>
+
+        {take && (
+          <div style={{
+            marginTop: 8,
+            padding: "8px 10px",
+            background: "rgba(16,185,129,0.08)",
+            border: "1px solid rgba(16,185,129,0.25)",
+            borderRadius: 6,
+            fontSize: 11,
+            color: "var(--fg)",
+            lineHeight: 1.5,
+          }}>
+            <div style={{
+              fontSize: 9, fontWeight: 800, color: "#10B981",
+              textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4,
+            }}>
+              AI take · why this works + how to apply
+            </div>
+            {take}
+          </div>
+        )}
       </div>
     </div>
   );

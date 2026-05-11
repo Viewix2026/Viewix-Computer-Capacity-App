@@ -12,10 +12,13 @@
 import { EngagementChart } from "./EngagementChart";
 import { Compare } from "./Compare";
 import { CompetitorWatchlist } from "./CompetitorWatchlist";
+import { NichePulse } from "./NichePulse";
 
 export function NicheIntel({ data, competitorsRoot }) {
   const cohort = data?.competitorCohort || null;
   const cohortMedian = cohort?.instagram?.pooled?.medianEngagementRate ?? null;
+  const nichePulse = data?.insights?.nichePulse || null;
+  const thisWeekInNiche = data?.insights?.thisWeekInNiche || null;
 
   const followerHistory = (data?.followers?.instagram) || {};
   const followerDates = Object.keys(followerHistory).sort();
@@ -60,6 +63,7 @@ export function NicheIntel({ data, competitorsRoot }) {
             followerNow={followerNow}
             followerPrev30d={followerPrev30d}
           />
+          {nichePulse && <NichePulse pulse={nichePulse} />}
           <div style={{
             background: "var(--card)",
             border: "1px solid var(--border)",
@@ -84,6 +88,7 @@ export function NicheIntel({ data, competitorsRoot }) {
         <CompetitorWatchlist
           cohort={cohort}
           competitorsRoot={competitorsRoot}
+          thisWeekInNiche={thisWeekInNiche}
           platform="instagram"
         />
       </div>
