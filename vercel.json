@@ -63,6 +63,14 @@
       "schedule": "0 19 * * *"
     },
     {
+      "path": "/api/cron/daily-09",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/daily-09",
+      "schedule": "0 23 * * *"
+    },
+    {
       "path": "/api/scheduling-daily-digest",
       "schedule": "50 21 * * *"
     },

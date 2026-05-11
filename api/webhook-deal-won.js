@@ -6,6 +6,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { identifyDeal, productLineLabel, videoTypeToPartnership } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
+import { send as sendEmail } from "./_email/send.js";
 import { randomBytes } from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -398,6 +399,47 @@ export default async function handler(req, res) {
       updatedAt: new Date().toISOString(),
     });
     results.project = projectId;
+
+    // --- 4c. CLIENT CONFIRMATION EMAIL ---
+    // Phase A: lands behind EMAIL_DRY_RUN gate. The 5s timeout lives
+    // INSIDE send() (sendTimeoutMs) so the underlying Resend call is
+    // properly abandoned-but-reconciled rather than left dangling
+    // alongside a moved-on webhook. On timeout: send() returns with
+    // state:'failed' immediately, writes a `failed` log entry, and
+    // the background Resend call (when it eventually completes)
+    // overwrites that with the real outcome. The webhook never waits
+    // beyond ~5s for the email leg, regardless of Resend latency.
+    try {
+      if (clientEmail) {
+        const emailResult = await sendEmail({
+          template: "Confirmation",
+          idempotencyKey: `${projectId}/Confirmation`,
+          to: clientEmail,
+          subject: "You're locked in — here's what happens next",
+          props: {
+            client: { firstName: firstName || "there", email: clientEmail },
+            project: {
+              id: projectId,
+              projectName: (dealName || "").trim() || "Untitled project",
+              clientName: companyName,
+              numberOfVideos: parseInt(numberOfVideos) || null,
+            },
+          },
+          projectId,
+          sendTimeoutMs: 5000,
+        });
+        results.confirmationEmail = emailResult.state + (emailResult.reason ? ` (${emailResult.reason})` : "");
+      } else {
+        results.confirmationEmail = "skipped (no client email)";
+      }
+    } catch (emailErr) {
+      // send() should never throw — it catches its own errors. This
+      // catch is a defence-in-depth against an unexpected failure
+      // mode (e.g. a render bug throwing inside the lock acquisition
+      // before its own try/catch kicks in).
+      console.error("webhook-deal-won: Confirmation email unexpected throw:", emailErr.message);
+      results.confirmationEmail = `unexpected_throw: ${emailErr.message}`;
+    }
 
     // --- 5. REFRESH ATTIO CACHE ---
     // Pull a fresh copy of all deals from Attio and store at /attioCache so the

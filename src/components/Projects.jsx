@@ -146,9 +146,22 @@ function seedDefaultSubtasksFor(project, accounts, editors, setProjects) {
     const isLeadOwned = name === SELECTS_TIMELINE_SUBTASK;
     const assigneeIds = isLeadOwned && leadId ? [leadId] : [];
     const rec = {
-      id: stId, name, status: "stuck",
+      id: stId, name,
+      // Default: "stuck" — the producer-gate state. Email triggers
+      // (shoot-tomorrow, in-edit-suite, auto-progress) all skip
+      // stuck subtasks. The producer's deliberate action of placing
+      // this on the timeline (adding a startDate and flipping
+      // status to "scheduled") is what greenlights all downstream
+      // automation. This default is restored from an earlier Phase A
+      // draft that flipped defaults to "scheduled" — corrected per
+      // Jeremy's spec: "stuck is the gate, nothing goes to client
+      // unless specifically scheduled by a producer."
+      status: "stuck",
       stage: inferStage({ name }),
       startDate: null, endDate: null, startTime: null, endTime: null,
+      // `location` is consumed by the Shoot Tomorrow email; empty
+      // string is a sentinel that means "no line in the email".
+      location: "",
       assigneeIds,
       assigneeId: assigneeIds[0] || null,
       source: "default", order: i,
@@ -952,6 +965,42 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, ts);
 
+    // Auto-flip stuck → scheduled when a producer commits a startDate.
+    //
+    // `stuck` is the producer-gate: emails + auto-progress all skip
+    // stuck subtasks. The act of putting a date on the timeline is
+    // the producer saying "this is committed, treat it as scheduled
+    // work." Without this auto-flip, every scheduled subtask
+    // requires two clicks: set date AND flip status. Producers
+    // forget the status flip and downstream automation stays silent.
+    //
+    // Only triggers on the stuck → scheduled transition. Once a
+    // producer has explicitly set stuck after the subtask was
+    // already scheduled (e.g. "client ghosted, blocked"), removing
+    // and re-adding a date won't auto-undo that — the producer has
+    // to flip status themselves. Why: the auto-flip only fires when
+    // BOTH (a) the field being saved is startDate, (b) the saved
+    // value is non-empty, AND (c) the in-memory subtask.status is
+    // currently "stuck". A deliberate "stuck" set during ongoing
+    // work means status is no longer just-the-default; it's an
+    // active producer intent. We preserve that.
+    if (
+      field === "startDate" &&
+      value &&                       // non-null, non-empty date string
+      subtask.status === "stuck"
+    ) {
+      // Optimistic local update so the status pill flips in real time.
+      if (typeof setProjects === "function") {
+        setProjects(prev => prev.map(p => {
+          if (!p || p.id !== projectId) return p;
+          const subs = { ...(p.subtasks || {}) };
+          subs[subtask.id] = { ...(subs[subtask.id] || {}), status: "scheduled", updatedAt: ts };
+          return { ...p, subtasks: subs, updatedAt: ts };
+        }));
+      }
+      fbSet(`/projects/${projectId}/subtasks/${subtask.id}/status`, "scheduled");
+    }
+
     // Rollup: when a subtask flips to Done, check whether every sibling
     // is now Done too — if so, mark the project Done. We compute against
     // local state (treating this subtask as already-Done) because the
@@ -1069,6 +1118,21 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
               displayTransform={stripStagePrefix}
               style={{ fontSize: 12, fontWeight: 600 }}
             />
+            {/* Shoot-only second line: location string consumed by the
+                Shoot Tomorrow client email. Empty is fine — the email
+                template omits the line when blank. We deliberately
+                only render this for shoot-stage subtasks so the row
+                doesn't grow vertically on every other phase. */}
+            {subtask.stage === "shoot" && (
+              <div style={{ marginTop: 4 }}>
+                <SubtaskInline
+                  value={subtask.location || ""}
+                  onSave={(v) => persist("location", v.trim())}
+                  placeholder="Location (used in client email)"
+                  style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}
+                />
+              </div>
+            )}
           </div>
           {/* Frame.io review-link cell — inline editable URL field with
               a Watch button next to it. Saves to subtask.frameioLink
@@ -1195,12 +1259,18 @@ function AddSubtaskRow({ projectId, nextOrder, setProjects }) {
     const id = `st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
     const rec = {
-      id, name: "New subtask", status: "stuck",
+      id, name: "New subtask",
+      // Default: "stuck" — the producer-gate state. Adding a
+      // startDate and flipping to "scheduled" is the explicit
+      // signal that downstream automation (auto-progress, client
+      // emails) should pick this up.
+      status: "stuck",
       // Manual subtasks default to the Edit stage — most ad-hoc rows
       // producers add by hand are tracking edit/post work; rename in
       // the dropdown if it's actually a shoot/pre-prod task.
       stage: "edit",
       startDate: null, endDate: null, startTime: null, endTime: null,
+      location: "",
       assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
       createdAt: now, updatedAt: now,
     };
@@ -2186,9 +2256,14 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
             ? Math.max(...subtasks.map(s => s.order ?? 0)) + 1
             : 0;
           const rec = {
-            id, name: "New subtask", status: "stuck",
+            id, name: "New subtask",
+            // Default: "stuck" — producer-gate. Adding a startDate
+            // and flipping to "scheduled" is the explicit signal
+            // that downstream automation should pick this up.
+            status: "stuck",
             stage: "edit",
             startDate: null, endDate: null, startTime: null, endTime: null,
+            location: "",
             assigneeIds: [], assigneeId: null, source: "manual", order: nextOrder,
             createdAt: now, updatedAt: now,
           };
