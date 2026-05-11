@@ -25,6 +25,8 @@
 // turn these into strings; this file is the *truth*.
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { classifyFormat } from "./_analyticsFormatHeuristic.js";
+import { buildNextVideoRecs } from "./_analyticsRecsBuilder.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -373,6 +375,37 @@ export async function recomputeClientAnalytics(clientId) {
         followerNormalisedViews,
       });
 
+      // ─── Phase 6: heuristic format classification ──────────────
+      // Preserve any manual override the team has set; the heuristic
+      // (and Phase 7's Claude classifier) never overwrites the
+      // manualFormatOverride field.
+      const existing = v.classifications || {};
+      let classification;
+      if (existing.manualFormatOverride) {
+        classification = {
+          format: existing.manualFormatOverride,
+          formatConfidence: "high",
+          heuristicReason: "manual override",
+          manualFormatOverride: existing.manualFormatOverride,
+          manualFormatOverrideBy: existing.manualFormatOverrideBy ?? null,
+          manualFormatOverrideAt: existing.manualFormatOverrideAt ?? null,
+          manualFormatOverrideReason: existing.manualFormatOverrideReason ?? null,
+        };
+      } else {
+        const h = classifyFormat({ caption: v.post?.caption || "" });
+        classification = {
+          format: h.format,
+          formatConfidence: h.formatConfidence,
+          heuristicReason: h.heuristicReason,
+          // Preserve override fields if they existed but weren't set —
+          // keeps the storage shape consistent across writes.
+          manualFormatOverride: existing.manualFormatOverride ?? null,
+          manualFormatOverrideBy: existing.manualFormatOverrideBy ?? null,
+          manualFormatOverrideAt: existing.manualFormatOverrideAt ?? null,
+          manualFormatOverrideReason: existing.manualFormatOverrideReason ?? null,
+        };
+      }
+
       videoUpdates.push({
         platform,
         videoId: v.videoId,
@@ -386,6 +419,7 @@ export async function recomputeClientAnalytics(clientId) {
           tags,
           computedAt,
         },
+        classification,
       });
     }
 
@@ -435,10 +469,18 @@ export async function recomputeClientAnalytics(clientId) {
   // ─── 5. Write baselines ──────────────────────────────────────────
   await fbSet(`/analytics/clients/${clientId}/baselines`, baselines);
 
-  // ─── 6. Write per-video scoring (parallel) ───────────────────────
-  await Promise.all(videoUpdates.map(u =>
-    fbSet(`/analytics/videos/${clientId}/${u.platform}/${u.videoId}/scoring`, u.scoring)
-  ));
+  // ─── 6. Write per-video scoring + classifications (parallel) ────
+  // Two writes per video: scoring (recomputed every run) and
+  // classifications (carries the heuristic format + manual override
+  // metadata).
+  await Promise.all([
+    ...videoUpdates.map(u =>
+      fbSet(`/analytics/videos/${clientId}/${u.platform}/${u.videoId}/scoring`, u.scoring)
+    ),
+    ...videoUpdates.map(u =>
+      fbSet(`/analytics/videos/${clientId}/${u.platform}/${u.videoId}/classifications`, u.classification)
+    ),
+  ]);
 
   // ─── 7. Competitor cohort baselines (Phase 5) ──────────────────────
   // The client's saved competitors define the niche cohort (per the
@@ -510,7 +552,44 @@ export async function recomputeClientAnalytics(clientId) {
     computedAt,
   });
 
-  // ─── 9. lastRecomputeAt last so it reflects a fully successful run.
+  // ─── 9. Format Playbook aggregation + Next Video Recommendations
+  //         (Phase 6, rules-first). ─────────────────────────────────
+  //
+  // Aggregate format counts from this run's classifications (the
+  // playbook UI reads these). Then build rule-based recs with the
+  // Quality Gate enforced at write-time in _analyticsRecsBuilder.
+  // Insights write to /analytics/insights/{clientId}/{weekId}/...
+  // and overwrite — derived state, never carried stale.
+  const formatCounts = buildFormatCounts(videoUpdates, now);
+  const competitorByHandleForRecs = buildCompetitorRecInputs(competitorsRoot, enabledPlatforms);
+  const clientVideosForRecs = buildClientRecInputs(videoUpdates, videosRoot);
+
+  let recs = [];
+  try {
+    recs = buildNextVideoRecs({
+      clientVideos: clientVideosForRecs,
+      competitorByHandle: competitorByHandleForRecs,
+      formatCounts,
+      now,
+    });
+  } catch (err) {
+    console.error(`[analytics-scoring] recs build failed for ${clientId}:`, err);
+  }
+
+  const weekId = isoWeekId(now);
+  // Write the format playbook summary alongside the recs so the UI
+  // reads both from one place.
+  await fbSet(`/analytics/insights/${clientId}/${weekId}/formatPlaybook`, {
+    formats: formatCounts,
+    computedAt,
+    accuracyCaveat: "v0 heuristic — ~70% accuracy. Phase 7 swaps in the Claude classifier.",
+  });
+  await fbSet(`/analytics/insights/${clientId}/${weekId}/nextVideoRecs`, recs);
+  await fbPatch(`/analytics/clients/${clientId}`, {
+    currentInsightsWeek: weekId,
+  });
+
+  // ─── 10. lastRecomputeAt last so it reflects a fully successful run.
   await fbPatch(`/analytics/clients/${clientId}`, {
     lastRecomputeAt: computedAt,
   });
@@ -521,8 +600,121 @@ export async function recomputeClientAnalytics(clientId) {
     status: status.state,
     momentum: momentum.score,
     videosScored: videoUpdates.length,
+    recsWritten: recs.length,
     enabledPlatforms,
   };
+}
+
+// ISO-week id (e.g. "2026-W19"). Used to bucket weekly insights so
+// rerunning the recompute on the same week overwrites the same
+// slot; a fresh week creates a new one (and last week's recs stay
+// readable for context).
+function isoWeekId(now) {
+  const d = new Date(now);
+  // Thursday-shift trick: pick the Thursday of this week, then year + ISO week number.
+  const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const dayNum = (target.getUTCDay() + 6) % 7; // Mon = 0
+  target.setUTCDate(target.getUTCDate() - dayNum + 3); // shift to Thursday
+  const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(((target - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+  return `${target.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+// Build the per-format aggregate the recs builder + Format Playbook UI both need.
+function buildFormatCounts(videoUpdates, now) {
+  const out = {};
+  for (const u of videoUpdates) {
+    const format = u.classification?.format;
+    if (!format) continue;
+    if (!out[format]) {
+      out[format] = {
+        count: 0,
+        sumOverperf: 0,
+        sumOverperfN: 0,
+        lastPostedTs: 0,
+        recentIds: [], // recent video ids for sourceIds in the silence rec
+      };
+    }
+    const slot = out[format];
+    slot.count++;
+    const op = u.scoring?.overperformanceScore;
+    if (op != null) { slot.sumOverperf += op; slot.sumOverperfN++; }
+    // We don't have timestamp on the videoUpdate directly; resolve
+    // from the original video record passed in. Falls back gracefully
+    // if missing.
+    const tsIso = u._sourceTimestamp;
+    const ts = tsIso ? new Date(tsIso).getTime() : null;
+    if (ts && ts > slot.lastPostedTs) slot.lastPostedTs = ts;
+    if (slot.recentIds.length < 3) slot.recentIds.push(u.videoId);
+  }
+  // Reduce to the shape the recs builder expects.
+  const final = {};
+  for (const [k, v] of Object.entries(out)) {
+    final[k] = {
+      count: v.count,
+      medianOverperf: v.sumOverperfN ? v.sumOverperf / v.sumOverperfN : null,
+      lastPostedTs: v.lastPostedTs || null,
+      recentIds: v.recentIds,
+    };
+  }
+  return final;
+}
+
+// Build the input array the recs builder expects from the client side.
+// Pairs each videoUpdate's classification + scoring with its post +
+// snapshot from the source videosRoot.
+function buildClientRecInputs(videoUpdates, videosRoot) {
+  const out = [];
+  for (const u of videoUpdates) {
+    const src = videosRoot?.[u.platform]?.[u.videoId];
+    if (!src) continue;
+    out.push({
+      platform: u.platform,
+      videoId: u.videoId,
+      post: src.post,
+      snapshot: latestSnapshot(src),
+      scoring: u.scoring,
+      classification: u.classification,
+    });
+    // Stamp the source timestamp on the update for buildFormatCounts.
+    u._sourceTimestamp = src.post?.timestamp || null;
+  }
+  return out;
+}
+
+// Build the competitor input map the recs builder expects.
+// Re-runs the heuristic on each competitor post so the cross-niche
+// recommendations can reason about format. (Cheap — caption-only
+// keyword test.)
+function buildCompetitorRecInputs(competitorsRoot, enabledPlatforms) {
+  const out = {};
+  for (const platform of enabledPlatforms) {
+    const handles = competitorsRoot?.[platform] || {};
+    for (const [handleKey, entry] of Object.entries(handles)) {
+      if (!entry?.videos) continue;
+      const byVideo = Object.entries(entry.videos).map(([videoId, v]) => {
+        const snap = latestSnapshot(v);
+        const overperf = v.scoring?.overperformanceScore != null
+          ? {
+              overperformanceScore: v.scoring.overperformanceScore,
+              overperformanceLabel: v.scoring.overperformanceLabel || null,
+            }
+          : null;
+        return {
+          videoId,
+          post: v.post,
+          snapshot: snap,
+          scoring: overperf,
+          classification: classifyFormat({ caption: v.post?.caption || "" }),
+        };
+      });
+      out[handleKey] = {
+        displayName: entry?.profile?.displayName || `@${handleKey}`,
+        byVideo,
+      };
+    }
+  }
+  return out;
 }
 
 function aggregatePlatformStats(byPlatform) {
