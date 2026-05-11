@@ -27,6 +27,12 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { classifyFormat } from "./_analyticsFormatHeuristic.js";
 import { buildNextVideoRecs } from "./_analyticsRecsBuilder.js";
+import {
+  isClaudeEnabled,
+  classifyFormatWithClaude,
+  nicheTakeForCompetitorPost,
+  nichePulse,
+} from "./_analyticsAi.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -329,6 +335,35 @@ export async function recomputeClientAnalytics(clientId) {
   const videoUpdates = []; // [{ platform, videoId, scoring }]
   const platformStats = {};
 
+  // ─── Phase 7: pre-fetch Claude classifications in parallel ──────
+  // Done before the per-platform loop so the scoring loop can stay
+  // synchronous. The cache in _analyticsAi.js makes repeat recomputes
+  // sub-second; the first one pays the classifier cost. We skip any
+  // video with a manualFormatOverride (manual always wins).
+  // Concurrency cap of 5 to be polite to the Anthropic rate limits.
+  const claudeClassifications = new Map(); // videoId → { format, formatConfidence, source, claudeReason }
+  if (isClaudeEnabled()) {
+    const toClassify = [];
+    for (const platform of enabledPlatforms) {
+      for (const [videoId, v] of Object.entries(videosRoot[platform] || {})) {
+        if (!v?.post) continue;
+        if (v.classifications?.manualFormatOverride) continue;
+        toClassify.push({ videoId, post: v.post });
+      }
+    }
+    await runWithConcurrency(toClassify, 5, async ({ videoId, post }) => {
+      try {
+        const result = await classifyFormatWithClaude(post);
+        claudeClassifications.set(videoId, result);
+      } catch (err) {
+        // Soft fail — caller falls back to the v0 heuristic for this
+        // video. Log + continue; never let one classifier error
+        // cascade into a failed recompute.
+        console.warn(`[analytics-scoring] Claude classify failed for ${videoId}: ${err.message}`);
+      }
+    });
+  }
+
   for (const platform of enabledPlatforms) {
     const videos = videosRoot[platform] || {};
     const videosList = Object.entries(videos).map(([videoId, v]) => ({ videoId, ...v }));
@@ -382,28 +417,47 @@ export async function recomputeClientAnalytics(clientId) {
       const existing = v.classifications || {};
       let classification;
       if (existing.manualFormatOverride) {
+        // Manual override always wins, per the plan. Claude
+        // reclassifications never touch the override fields.
         classification = {
           format: existing.manualFormatOverride,
           formatConfidence: "high",
-          heuristicReason: "manual override",
+          source: "manual",
+          classifierReason: "manual override",
           manualFormatOverride: existing.manualFormatOverride,
           manualFormatOverrideBy: existing.manualFormatOverrideBy ?? null,
           manualFormatOverrideAt: existing.manualFormatOverrideAt ?? null,
           manualFormatOverrideReason: existing.manualFormatOverrideReason ?? null,
         };
       } else {
-        const h = classifyFormat({ caption: v.post?.caption || "" });
-        classification = {
-          format: h.format,
-          formatConfidence: h.formatConfidence,
-          heuristicReason: h.heuristicReason,
-          // Preserve override fields if they existed but weren't set —
-          // keeps the storage shape consistent across writes.
-          manualFormatOverride: existing.manualFormatOverride ?? null,
-          manualFormatOverrideBy: existing.manualFormatOverrideBy ?? null,
-          manualFormatOverrideAt: existing.manualFormatOverrideAt ?? null,
-          manualFormatOverrideReason: existing.manualFormatOverrideReason ?? null,
-        };
+        // Phase 7: use the precomputed Claude classification if
+        // available (filled in before this loop); fall back to the
+        // Phase 6 heuristic if Claude is disabled or errored.
+        const pre = claudeClassifications.get(v.videoId);
+        if (pre) {
+          classification = {
+            format: pre.format,
+            formatConfidence: pre.formatConfidence,
+            source: pre.source,             // "claude" if present
+            classifierReason: pre.claudeReason || "claude classifier",
+            manualFormatOverride: existing.manualFormatOverride ?? null,
+            manualFormatOverrideBy: existing.manualFormatOverrideBy ?? null,
+            manualFormatOverrideAt: existing.manualFormatOverrideAt ?? null,
+            manualFormatOverrideReason: existing.manualFormatOverrideReason ?? null,
+          };
+        } else {
+          const h = classifyFormat({ caption: v.post?.caption || "" });
+          classification = {
+            format: h.format,
+            formatConfidence: h.formatConfidence,
+            source: "heuristic",
+            classifierReason: h.heuristicReason,
+            manualFormatOverride: existing.manualFormatOverride ?? null,
+            manualFormatOverrideBy: existing.manualFormatOverrideBy ?? null,
+            manualFormatOverrideAt: existing.manualFormatOverrideAt ?? null,
+            manualFormatOverrideReason: existing.manualFormatOverrideReason ?? null,
+          };
+        }
       }
 
       videoUpdates.push({
@@ -577,14 +631,69 @@ export async function recomputeClientAnalytics(clientId) {
   }
 
   const weekId = isoWeekId(now);
-  // Write the format playbook summary alongside the recs so the UI
-  // reads both from one place.
+  // The format playbook's caveat is determined by what actually
+  // classified the posts. If Claude ran for the majority, drop the
+  // v0 caveat. Otherwise keep it.
+  const claudeClassifiedCount = videoUpdates.filter(u => u.classification?.source === "claude").length;
+  const usingClaude = isClaudeEnabled() && claudeClassifiedCount > 0 && (claudeClassifiedCount / Math.max(1, videoUpdates.length)) > 0.5;
   await fbSet(`/analytics/insights/${clientId}/${weekId}/formatPlaybook`, {
     formats: formatCounts,
     computedAt,
-    accuracyCaveat: "v0 heuristic — ~70% accuracy. Phase 7 swaps in the Claude classifier.",
+    classifierSource: usingClaude ? "claude" : "heuristic",
+    accuracyCaveat: usingClaude
+      ? null
+      : "v0 heuristic — ~70% accuracy. Phase 7's Claude classifier hasn't run on these posts yet.",
   });
   await fbSet(`/analytics/insights/${clientId}/${weekId}/nextVideoRecs`, recs);
+
+  // ─── Phase 7: niche takes + pulse ──────────────────────────────
+  // Top 3 competitor posts of the last 7d get a 2-sentence Claude take.
+  // Niche pulse summarises last-7d competitor posts into max 2 dot-points.
+  // Both gated on isClaudeEnabled — recompute still succeeds without them.
+  if (isClaudeEnabled()) {
+    try {
+      const last7dCompetitorPosts = collectRecentCompetitorPosts(competitorsRoot, enabledPlatforms, now, 7);
+      const topThree = pickTopRecent(last7dCompetitorPosts, 3);
+      const takes = await runWithConcurrency(topThree, 3, async (entry) => {
+        try {
+          const { take } = await nicheTakeForCompetitorPost(entry.post, entry.handle);
+          return {
+            handle: entry.handle,
+            platform: entry.platform,
+            videoId: entry.videoId,
+            post: {
+              url: entry.post.url || null,
+              thumbnail: entry.post.thumbnail || null,
+              caption: (entry.post.caption || "").slice(0, 600),
+            },
+            take,
+            generatedAt: new Date().toISOString(),
+          };
+        } catch (err) {
+          console.warn(`[analytics-scoring] niche take failed for ${entry.handle}/${entry.videoId}: ${err.message}`);
+          return null;
+        }
+      });
+      await fbSet(`/analytics/insights/${clientId}/${weekId}/thisWeekInNiche`, {
+        posts: takes.filter(Boolean),
+        generatedAt: new Date().toISOString(),
+      });
+
+      const pulseInput = last7dCompetitorPosts.map(p => ({ caption: p.post?.caption || "" }));
+      try {
+        const { pulse, generatedAt: pulseAt } = await nichePulse(pulseInput);
+        await fbSet(`/analytics/insights/${clientId}/${weekId}/nichePulse`, {
+          pulse,
+          generatedAt: pulseAt,
+        });
+      } catch (err) {
+        console.warn(`[analytics-scoring] niche pulse failed for ${clientId}: ${err.message}`);
+      }
+    } catch (err) {
+      console.warn(`[analytics-scoring] Phase 7 niche generation failed for ${clientId}: ${err.message}`);
+    }
+  }
+
   await fbPatch(`/analytics/clients/${clientId}`, {
     currentInsightsWeek: weekId,
   });
@@ -870,6 +979,54 @@ function latestSnapshotForCompetitor(video) {
   const keys = Object.keys(snaps).sort();
   if (!keys.length) return null;
   return snaps[keys[keys.length - 1]];
+}
+
+// ─── Phase 7 helpers ───────────────────────────────────────────────
+
+// Simple bounded-concurrency map. Caps in-flight promises at `limit`.
+// Returns the same shape Promise.all would (array of resolved values).
+async function runWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) return;
+      try { results[idx] = await fn(items[idx], idx); }
+      catch (err) { results[idx] = { _error: err.message }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+// Walk /analytics/competitors/{clientId} and pull every post from
+// the last N days into a flat array.
+function collectRecentCompetitorPosts(competitorsRoot, enabledPlatforms, now, days = 7) {
+  const cutoff = now - days * 24 * 3600 * 1000;
+  const out = [];
+  for (const platform of enabledPlatforms) {
+    const handles = competitorsRoot?.[platform] || {};
+    for (const [handleKey, entry] of Object.entries(handles)) {
+      const displayName = entry?.profile?.displayName || `@${handleKey}`;
+      for (const [videoId, v] of Object.entries(entry?.videos || {})) {
+        if (!v?.post?.timestamp) continue;
+        const ts = new Date(v.post.timestamp).getTime();
+        if (ts < cutoff) continue;
+        const snap = latestSnapshotForCompetitor(v);
+        out.push({
+          platform, handle: displayName, videoId,
+          post: v.post,
+          views: snap?.views || 0,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function pickTopRecent(posts, n) {
+  return [...posts].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, n);
 }
 
 function aggregateCohortEngagement30d(competitorCohort, enabledPlatforms) {

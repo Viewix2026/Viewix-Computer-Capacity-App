@@ -45,7 +45,7 @@ export function FormatPlaybook({ playbook }) {
         <div style={{ fontSize: 13, fontWeight: 800, color: "var(--fg)" }}>
           Format playbook
         </div>
-        <V0Pill />
+        {playbook?.classifierSource === "claude" ? <ClaudePill /> : <V0Pill />}
       </div>
       <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
         Which formats over-perform for this client. Sorted by median
@@ -119,13 +119,27 @@ function FormatRow({ row }) {
 function V0Pill() {
   return (
     <span
-      title="Format classifier is a keyword-matching heuristic (~70% accuracy). Phase 7 swaps in Claude's classifier and this label comes off."
+      title="Format classifier is a keyword-matching heuristic (~70% accuracy). Phase 7's Claude classifier hasn't run on these posts yet — recompute once ANTHROPIC_API_KEY + ANALYTICS_CLAUDE_ENABLED are set."
       style={{
         padding: "2px 8px", borderRadius: 4,
         background: "rgba(245,158,11,0.15)", color: "#F59E0B",
         fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5,
       }}>
       v0 · improving
+    </span>
+  );
+}
+
+function ClaudePill() {
+  return (
+    <span
+      title="Format classifier is Claude (Sonnet) — caption + metadata. ~85–90% expected accuracy. Manual overrides on individual posts always win."
+      style={{
+        padding: "2px 8px", borderRadius: 4,
+        background: "rgba(16,185,129,0.15)", color: "#10B981",
+        fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5,
+      }}>
+      AI classified
     </span>
   );
 }

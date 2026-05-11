@@ -193,10 +193,9 @@ function NextPhasesHint() {
       color: "var(--muted)",
       lineHeight: 1.6,
     }}>
-      <strong style={{ color: "var(--fg)" }}>Coming in next phases:</strong>{" "}
-      Phase 7 → Claude format classifier (replaces the v0 heuristic) +
-      "This week in your niche" takes. Phase 8 → Content Decay alerts,
-      AI Weekly Summary, Renewal Ammo, optional Hook Analyzer.
+      <strong style={{ color: "var(--fg)" }}>Coming in Phase 8 (stretch):</strong>{" "}
+      Content Decay alerts · AI Weekly Summary · basic Renewal Ammo ·
+      optional Hook Analyzer. Pilot expands to 5 friendly accounts.
     </div>
   );
 }
