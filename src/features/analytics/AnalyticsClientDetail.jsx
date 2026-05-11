@@ -23,6 +23,7 @@ import { normaliseHandle, displayHandle } from "./utils/displayFormatters";
 import { authFetch } from "../../firebase";
 import { StatusHeader } from "./components/StatusHeader";
 import { WinningVideos } from "./components/WinningVideos";
+import { NicheIntel } from "./components/NicheIntel";
 
 export function AnalyticsClientDetail({ accountId, onBack }) {
   const { accounts } = useAccounts();
@@ -91,6 +92,10 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
           <>
             <StatusHeader data={dashboard} config={config} />
             <WinningVideos videos={dashboard.videos} limit={5} />
+            <NicheIntel
+              data={dashboard}
+              competitorsRoot={dashboard.competitorsRoot}
+            />
 
             <NextPhasesHint />
 
@@ -185,8 +190,8 @@ function NextPhasesHint() {
       lineHeight: 1.6,
     }}>
       <strong style={{ color: "var(--fg)" }}>Coming in next phases:</strong>{" "}
-      What's Working (Format Playbook) · Niche Intelligence ·
-      Next Video Recommendations · Content Decay alerts · Renewal Ammo.
+      What's Working (Format Playbook) · Next Video Recommendations ·
+      Content Decay alerts · Renewal Ammo · optional Hook Analyzer.
     </div>
   );
 }
