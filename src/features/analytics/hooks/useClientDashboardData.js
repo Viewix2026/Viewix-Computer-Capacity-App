@@ -36,6 +36,7 @@ export function useClientDashboardData(clientId) {
     competitorsRoot: {},      // { [platform]: { [handleKey]: { profile, videos } } } (Phase 5)
     currentInsightsWeek: null, // ISO week id, set by recompute (Phase 6+)
     insights: null,            // /analytics/insights/{id}/{weekId} (Phase 6+)
+    renewalAmmo: null,         // /analytics/renewalAmmo/{id} (Phase 8)
     loading: true,
   });
 
@@ -104,6 +105,12 @@ export function useClientDashboardData(clientId) {
       // per video, organised under each competitor handle).
       unsubs.push(fbListen(`/analytics/competitors/${clientId}`, (cr) => {
         setData(prev => ({ ...prev, competitorsRoot: cr || {} }));
+      }));
+
+      // Phase 8 — Renewal Ammo (internal-only). Surfaced to
+      // founders + leads for retention conversations.
+      unsubs.push(fbListen(`/analytics/renewalAmmo/${clientId}`, (ra) => {
+        setData(prev => ({ ...prev, renewalAmmo: ra || null }));
       }));
     });
 
