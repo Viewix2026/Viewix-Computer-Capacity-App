@@ -229,6 +229,47 @@ export async function nicheTakeForCompetitorPost(post, handle) {
   return { take, generatedAt };
 }
 
+// ─── Weekly Summary (Phase 8 stretch) ─────────────────────────────
+
+const WEEKLY_SUMMARY_SYSTEM_PROMPT = `You are a content strategy advisor for a video production agency.
+You are given a structured snapshot of a single client's analytics for the past week.
+In ONE short paragraph (3–4 sentences max) write:
+- What worked / what didn't this week. Quote ONE concrete number from the snapshot.
+- One concrete recommendation for next week — match what the data supports.
+
+Be direct. No filler. No second-person ("you should…") — write as an internal advisor reading the data, e.g. "the founder talking-head posts pulled 1.8x median, while explainers underperformed; lean into talking-head format next week, hold off on explainers."
+
+Output PLAIN TEXT, no markdown, no JSON, no headings.`;
+
+/**
+ * weeklySummary(snapshot) → { paragraph, generatedAt }
+ *
+ * Caller assembles a structured snapshot of the week's state
+ * (status + momentum + winning videos + decay alerts + top recs).
+ * Caches by hash(JSON.stringify(snapshot)) so re-runs on the same
+ * data hit the cache.
+ */
+export async function weeklySummary(snapshot) {
+  if (!isClaudeEnabled()) throw new Error("Claude not enabled");
+  const cacheKey = hashOf(JSON.stringify(snapshot));
+  const cachePath = `/analytics/_aiCache/weeklySummary/${cacheKey}`;
+  const cached = await fbGet(cachePath);
+  if (cached?.paragraph) {
+    return { paragraph: cached.paragraph, generatedAt: cached.generatedAt, cacheHit: true };
+  }
+  const userMessage = `Snapshot:\n${JSON.stringify(snapshot, null, 2)}`;
+  const raw = await callClaude({
+    model: MODEL_TAKES,
+    systemPrompt: WEEKLY_SUMMARY_SYSTEM_PROMPT,
+    userMessage,
+    maxTokens: 280,
+  });
+  const paragraph = (raw || "").trim();
+  const generatedAt = new Date().toISOString();
+  if (paragraph) await fbSet(cachePath, { paragraph, generatedAt });
+  return { paragraph, generatedAt };
+}
+
 // ─── Niche pulse ──────────────────────────────────────────────────
 
 const NICHE_PULSE_SYSTEM_PROMPT = `You are a content strategy advisor for a video production agency.

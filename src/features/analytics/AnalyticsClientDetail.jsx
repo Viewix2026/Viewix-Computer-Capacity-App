@@ -26,6 +26,9 @@ import { WinningVideos } from "./components/WinningVideos";
 import { NicheIntel } from "./components/NicheIntel";
 import { WhatsWorking } from "./components/WhatsWorking";
 import { NextVideoRecs } from "./components/NextVideoRecs";
+import { DecayAlerts } from "./components/DecayAlerts";
+import { WeeklySummary } from "./components/WeeklySummary";
+import { RenewalAmmo } from "./components/RenewalAmmo";
 
 export function AnalyticsClientDetail({ accountId, onBack }) {
   const { accounts } = useAccounts();
@@ -92,6 +95,8 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
           // setup behind a collapse so the producer can edit when
           // needed but isn't distracted by config every visit.
           <>
+            <DecayAlerts alerts={dashboard.insights?.decayAlerts} />
+            <WeeklySummary summary={dashboard.insights?.weeklySummary} />
             <StatusHeader data={dashboard} config={config} />
             <WinningVideos videos={dashboard.videos} limit={5} />
             <WhatsWorking playbook={dashboard.insights?.formatPlaybook} />
@@ -100,6 +105,7 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
               competitorsRoot={dashboard.competitorsRoot}
             />
             <NextVideoRecs recs={dashboard.insights?.nextVideoRecs} />
+            <RenewalAmmo ammo={dashboard.renewalAmmo} />
 
             <NextPhasesHint />
 
@@ -193,9 +199,9 @@ function NextPhasesHint() {
       color: "var(--muted)",
       lineHeight: 1.6,
     }}>
-      <strong style={{ color: "var(--fg)" }}>Coming in Phase 8 (stretch):</strong>{" "}
-      Content Decay alerts · AI Weekly Summary · basic Renewal Ammo ·
-      optional Hook Analyzer. Pilot expands to 5 friendly accounts.
+      <strong style={{ color: "var(--fg)" }}>v1 complete.</strong>{" "}
+      Hook Analyzer deferred to v1.1 (data slot reserved, no UI yet).
+      Next: client-facing portal (v2) + monthly digest email + TikTok / YouTube platforms.
     </div>
   );
 }
