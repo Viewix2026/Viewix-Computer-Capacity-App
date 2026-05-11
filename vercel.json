@@ -47,6 +47,15 @@
     },
     "api/scheduling-cleanup.js": {
       "maxDuration": 60
+    },
+    "api/analytics.js": {
+      "maxDuration": 60
+    },
+    "api/analytics-webhook.js": {
+      "maxDuration": 300
+    },
+    "api/cron/analytics-schedule.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -85,6 +94,10 @@
     {
       "path": "/api/scheduling-cleanup",
       "schedule": "0 21 * * *"
+    },
+    {
+      "path": "/api/cron/analytics-schedule",
+      "schedule": "0 17 * * *"
     }
   ],
   "rewrites": [
