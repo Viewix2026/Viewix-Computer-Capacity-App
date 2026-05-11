@@ -17,14 +17,19 @@
 import { useState } from "react";
 import { useAccounts } from "./hooks/useAccounts";
 import { useAnalyticsConfig } from "./hooks/useAnalyticsConfig";
+import { useClientDashboardData } from "./hooks/useClientDashboardData";
 import { PLATFORMS } from "./config/constants";
 import { normaliseHandle, displayHandle } from "./utils/displayFormatters";
 import { authFetch } from "../../firebase";
+import { StatusHeader } from "./components/StatusHeader";
+import { WinningVideos } from "./components/WinningVideos";
 
 export function AnalyticsClientDetail({ accountId, onBack }) {
   const { accounts } = useAccounts();
   const account = accounts?.[accountId];
   const { config, updateConfig, loading } = useAnalyticsConfig(accountId, account?.companyName);
+  const dashboard = useClientDashboardData(accountId);
+  const [showConfig, setShowConfig] = useState(false);
 
   return (
     <>
@@ -65,18 +70,124 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
         <RefreshButton accountId={accountId} enabled={!!config?.enabled} />
       </div>
 
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 28px 60px" }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "24px 28px 60px" }}>
         {loading ? (
           <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-            Loading config…
+            Loading…
           </div>
+        ) : !config?.enabled ? (
+          // Analytics hasn't been turned on for this account yet. Show
+          // the config form up front so the founder can fill in
+          // handles + competitors + flip the toggle. The dashboard
+          // zones only render meaningfully once data exists.
+          <>
+            <NotEnabledBanner />
+            <ConfigForm config={config} updateConfig={updateConfig} />
+          </>
         ) : (
-          <ConfigForm config={config} updateConfig={updateConfig} />
-        )}
+          // Analytics is enabled. Lead with the dashboard zones; tuck
+          // setup behind a collapse so the producer can edit when
+          // needed but isn't distracted by config every visit.
+          <>
+            <StatusHeader data={dashboard} config={config} />
+            <WinningVideos videos={dashboard.videos} limit={5} />
 
-        <ComingSoonPanel />
+            <NextPhasesHint />
+
+            <SetupSection
+              expanded={showConfig}
+              onToggle={() => setShowConfig(v => !v)}
+            >
+              <ConfigForm config={config} updateConfig={updateConfig} />
+            </SetupSection>
+          </>
+        )}
       </div>
     </>
+  );
+}
+
+// ─── Layout helpers (Phase 4) ─────────────────────────────────────
+
+function NotEnabledBanner() {
+  return (
+    <div style={{
+      padding: "12px 16px",
+      background: "rgba(245,158,11,0.08)",
+      border: "1px solid rgba(245,158,11,0.35)",
+      borderRadius: 10,
+      color: "#F59E0B",
+      fontSize: 12,
+      fontWeight: 600,
+      marginBottom: 14,
+      lineHeight: 1.5,
+    }}>
+      Analytics isn't enabled for this account yet. Fill in handles + competitors below,
+      then flip the <strong>Enable analytics</strong> toggle. The dashboard appears here
+      once data starts flowing.
+    </div>
+  );
+}
+
+function SetupSection({ expanded, onToggle, children }) {
+  return (
+    <div style={{
+      marginTop: 16,
+      background: "var(--card)",
+      border: "1px solid var(--border)",
+      borderRadius: 12,
+      overflow: "hidden",
+    }}>
+      <button
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          padding: "12px 20px",
+          background: "transparent",
+          border: "none",
+          textAlign: "left",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          fontFamily: "inherit",
+          color: "var(--fg)",
+        }}>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>
+          Setup &amp; configuration
+        </span>
+        <span style={{
+          fontSize: 11, fontWeight: 700, color: "var(--muted)",
+          textTransform: "uppercase", letterSpacing: 0.4,
+        }}>
+          {expanded ? "Hide ▴" : "Show ▾"}
+        </span>
+      </button>
+      {expanded && (
+        <div style={{ padding: "0 20px 20px", borderTop: "1px solid var(--border)" }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NextPhasesHint() {
+  return (
+    <div style={{
+      marginTop: 6,
+      padding: "10px 14px",
+      background: "var(--bg)",
+      border: "1px dashed var(--border)",
+      borderRadius: 8,
+      fontSize: 11,
+      color: "var(--muted)",
+      lineHeight: 1.6,
+    }}>
+      <strong style={{ color: "var(--fg)" }}>Coming in next phases:</strong>{" "}
+      What's Working (Format Playbook) · Niche Intelligence ·
+      Next Video Recommendations · Content Decay alerts · Renewal Ammo.
+    </div>
   );
 }
 
@@ -402,35 +513,9 @@ function RefreshButton({ accountId, enabled }) {
   );
 }
 
-// ─── Coming-soon placeholder ──────────────────────────────────────
-
-function ComingSoonPanel() {
-  return (
-    <div style={{
-      background: "var(--card)",
-      border: "1px dashed var(--border)",
-      borderRadius: 12,
-      padding: "32px 28px",
-      textAlign: "center",
-    }}>
-      <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.5 }}>📊</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)", marginBottom: 6 }}>
-        Dashboard zones land in Phases 2–7
-      </div>
-      <div style={{
-        fontSize: 12,
-        color: "var(--muted)",
-        lineHeight: 1.6,
-        maxWidth: 540,
-        margin: "0 auto",
-      }}>
-        Status Header, Winning Videos, What's Working, Niche Intelligence,
-        and Next Video Recommendations will replace this panel once the
-        ingestion pipeline + scoring engine are live. Phase 1 is config only.
-      </div>
-    </div>
-  );
-}
+// (Phase 1's ComingSoonPanel was removed in Phase 4 — replaced
+//  inline by StatusHeader + WinningVideos + NextPhasesHint near the
+//  top of this file.)
 
 // ─── Small layout helpers ─────────────────────────────────────────
 
