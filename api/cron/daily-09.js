@@ -30,11 +30,25 @@
 // Anything else returns 401.
 //
 // Test-only overrides (only effective when ?secret is valid):
-//   &force=1            -> skip the 09:00-Sydney guard (run any hour)
-//   &today=YYYY-MM-DD   -> override "today" for fixture testing
-//                          (tomorrow is computed from this)
-//   &dryRunReport=1     -> return a per-pass summary instead of an
-//                          aggregate count (handy for fixture diffs)
+//   &force=1               -> skip the 09:00-Sydney guard (run any hour)
+//   &today=YYYY-MM-DD      -> override "today" for fixture testing
+//                             (tomorrow is computed from this)
+//   &dryRunReport=1        -> return a per-pass summary instead of an
+//                             aggregate count (handy for fixture diffs)
+//   &skipAutoProgress=1    -> skip Pass 2 entirely. ESSENTIAL when
+//                             manually invoking the cron against
+//                             production with a `today=` override:
+//                             Pass 2 writes status:"inProgress" to
+//                             real subtasks regardless of
+//                             EMAIL_DRY_RUN. Without this flag, a
+//                             test invocation like
+//                             ?secret=…&force=1&today=2026-05-19
+//                             on production would flip every
+//                             scheduled subtask with startDate=
+//                             2026-05-19 to inProgress, even
+//                             though you only wanted to preview
+//                             the emails. EMAIL_DRY_RUN does NOT
+//                             gate Pass 2 — only the email send.
 
 import { adminGet, adminPatch, adminSet } from "../_fb-admin.js";
 import { send, newCounters, postCronSummary } from "../_email/send.js";
@@ -332,6 +346,19 @@ export default async function handler(req, res) {
   const force = secretValid && url.searchParams.get("force") === "1";
   const todayOverride = secretValid ? (url.searchParams.get("today") || "") : "";
   const dryRunReport = secretValid && url.searchParams.get("dryRunReport") === "1";
+  const skipAutoProgress = secretValid && url.searchParams.get("skipAutoProgress") === "1";
+
+  // Belt-and-braces: if a `today=` override was passed AND we're not
+  // explicitly opting in to auto-progress writes, refuse Pass 2.
+  // A `today=` override on production means the caller is testing,
+  // not running the real daily flow. Pass 2 would mutate real
+  // subtasks based on a fake "today" — almost never the desired
+  // behaviour for a test. Caller can re-enable Pass 2 explicitly by
+  // setting `skipAutoProgress=0` (explicit opt-in) if they really
+  // want the date override AND the writes.
+  const skipAutoProgressEffective =
+    skipAutoProgress ||
+    (todayOverride && url.searchParams.get("skipAutoProgress") !== "0");
 
   // Time guard. The Vercel platform fires both 22:00 UTC and 23:00
   // UTC entries every day, but only one will be 09:00 in Sydney.
@@ -389,12 +416,21 @@ export default async function handler(req, res) {
   }
 
   // Pass 2 — Auto-progress
-  try {
-    const r = await passAutoProgress({ projects, today });
-    summary.pass2 = r;
-  } catch (e) {
-    console.error("daily-09 Pass 2 failed:", e);
-    summary.pass2 = { error: e.message };
+  // Skipped when `skipAutoProgress=1` OR when a `today=` override is
+  // passed without explicit `skipAutoProgress=0`. Pass 2 mutates real
+  // subtasks (status: "inProgress") and is NOT gated by EMAIL_DRY_RUN
+  // — only the email send is gated there. Letting a fake `today=`
+  // drive real writes would be a footgun.
+  if (skipAutoProgressEffective) {
+    summary.pass2 = { skipped: skipAutoProgress ? "skipAutoProgress=1" : "today_override_without_explicit_optIn" };
+  } else {
+    try {
+      const r = await passAutoProgress({ projects, today });
+      summary.pass2 = r;
+    } catch (e) {
+      console.error("daily-09 Pass 2 failed:", e);
+      summary.pass2 = { error: e.message };
+    }
   }
 
   // Pass 3 — In Edit Suite (re-reads each project to pick up Pass 2 writes)

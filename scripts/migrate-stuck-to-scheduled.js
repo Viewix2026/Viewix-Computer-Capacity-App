@@ -9,9 +9,13 @@
 //
 // Two safe filtering modes baked in:
 //   --safe-only   only flip records where audit.safeAutoFlip === true
-//                 (no startDate or startDate > today). Recommended.
-//   --all         flip every record listed in the input file.
-//                 Requires the input to be human-reviewed.
+//                 (subtask has a startDate — i.e. already on the
+//                 timeline view, just stuck because of the old
+//                 default). Recommended.
+//   --all         flip every record listed in the input file,
+//                 including subtasks with no startDate. Effectively
+//                 removes the producer-gate for every stuck subtask.
+//                 Use with caution.
 //
 // Always re-checks the server-side status before writing — if a
 // producer has flipped the subtask to inProgress / done / waitingClient

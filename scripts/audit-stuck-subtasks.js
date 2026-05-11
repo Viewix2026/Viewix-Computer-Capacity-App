@@ -2,11 +2,17 @@
 // scripts/audit-stuck-subtasks.js
 //
 // Read-only audit of every subtask currently set to status "stuck".
-// Phase A changes the meaning of "stuck" to "actively blocked" only;
-// the old default was "stuck" for any newly-created task. This
-// script lists the stuck pile so Jeremy can review and decide which
-// to flip to "scheduled" (auto-progress eligible) and which to leave
-// stuck because they're genuinely blocked.
+//
+// Model (corrected 2026-05-11): `stuck` is the producer-gate
+// default — emails and auto-progress all skip stuck subtasks. A
+// producer "schedules" a subtask by adding a startDate and flipping
+// status to "scheduled", which greenlights downstream automation.
+//
+// This script lists the stuck pile so we can identify items that
+// already have a startDate (i.e. they're on the timeline view) but
+// are still flagged stuck — these are the migration candidates.
+// Items without a startDate stay stuck (not yet scheduled by a
+// producer; gate stays in place).
 //
 // Output format: stable JSON array of { projectId, projectName,
 // clientName, subtaskId, subtaskName, stage, startDate, endDate }
@@ -66,20 +72,23 @@ async function main() {
         startDate: st.startDate || null,
         endDate: st.endDate || null,
         source: st.source || "",
-        // Convenience flag for the migration script: anything with a
-        // future or null startDate is the safest auto-flip target,
-        // matching the plan's "conservative auto-rule" option.
-        safeAutoFlip: !st.startDate || st.startDate > today,
+        // safeAutoFlip = "this subtask has a startDate, so it's
+        // already on the timeline view — a producer scheduled it at
+        // some point, just left it in stuck via the old default."
+        // Items without a startDate stay stuck (not yet scheduled).
+        // This matches Jeremy's spec: stuck = the producer-gate;
+        // anything on the timeline view should already be scheduled.
+        safeAutoFlip: !!st.startDate,
       });
     }
   }
 
   if (pretty) {
     console.log(`Total stuck subtasks: ${stuck.length}`);
-    console.log(`Safe to auto-flip (future / undated): ${stuck.filter(s => s.safeAutoFlip).length}`);
-    console.log(`Past-dated stuck (review manually):   ${stuck.filter(s => !s.safeAutoFlip).length}\n`);
+    console.log(`On timeline (has startDate, flip → scheduled): ${stuck.filter(s => s.safeAutoFlip).length}`);
+    console.log(`No startDate (not yet scheduled, stay stuck):  ${stuck.filter(s => !s.safeAutoFlip).length}\n`);
     for (const s of stuck) {
-      const flag = s.safeAutoFlip ? "  " : "⚠️ ";
+      const flag = s.safeAutoFlip ? "→ " : "  ";
       console.log(`${flag}${s.projectId}/${s.subtaskId}  ·  ${s.clientName} / ${s.projectName}  ·  [${s.stage}] "${s.subtaskName}"  ·  ${s.startDate || "(no date)"}${s.source === "default" ? "  · (auto-seeded)" : ""}`);
     }
   } else {

@@ -1,15 +1,20 @@
 // api/notify-finish.js
-// Slack notifications fired by the Editor's Finish modal, plus —
-// for client-review finishes — a Ready-For-Review client email.
+// Slack notifications fired by the Editor's Finish modal.
 //
-// Auth (added Phase A): requires a Firebase ID token bearer in the
+// Note (Phase A redesign, 2026-05-10): an earlier draft of this
+// endpoint also fired a Ready-For-Review client email automatically
+// when reviewType === "client". That auto-fire path has been
+// removed — client review emails are now producer/AM-driven via a
+// batch flow (see api/send-review-batch.js, planned Phase A.5).
+// Editors still click "Finish" with reviewType=client to mark a
+// video as Ready for Review in the Deliveries tab, but no client
+// email leaves until a producer/AM explicitly batches and sends.
+//
+// Auth (Phase A): requires a Firebase ID token bearer in the
 // Authorization header for the user's role to be one of founders /
-// founder / lead / editor. The pre-Phase-A endpoint was rate-limited
-// by IP but otherwise unauthenticated. That was tolerable when this
-// endpoint only sent Slack messages — the worst-case abuse was
-// internal channel spam. Now that it also fires client emails, an
-// unauthenticated POST could be weaponised to spam clients with
-// fake Ready-For-Review notes. Auth + role check closes that.
+// founder / lead / editor. Even though this is now Slack-only
+// again, the auth gate stays — the endpoint is still callable from
+// the dashboard and rate-limited Slack spam isn't a great default.
 //
 //   reviewType: "internal"  -> SLACK_PROJECT_LEADS_WEBHOOK_URL
 //                              "<projectName>: <videoName> ready for
@@ -37,8 +42,9 @@
 
 import { adminGet } from "./_fb-admin.js";
 import { requireRole, sendAuthError } from "./_requireAuth.js";
-import { send as sendEmail } from "./_email/send.js";
-import { buildDeliveryUrl } from "./_email/deliveryUrl.js";
+// Note: send/buildDeliveryUrl no longer imported — this endpoint
+// became Slack-only again after the ReadyForReview redesign. The
+// batch-send flow lives in api/send-review-batch.js (planned).
 
 // Roles that may fire a Finish notification. `editor` covers the
 // primary caller (editor flagging their own video done). `lead`
@@ -156,23 +162,10 @@ async function postSlack(webhookUrl, text) {
   }
 }
 
-// Resolve the delivery record for the Ready-For-Review email.
-// Prefer the deliveryId on the request payload (caller knows which
-// video maps to which delivery in multi-delivery projects); fall
-// back to project.links.deliveryId; bail (return null) if both
-// missing. Returns the full delivery record so the email payload
-// has shortId + clientName + projectName for URL construction.
-async function resolveDelivery({ payloadDeliveryId, project }) {
-  const id = payloadDeliveryId || project?.links?.deliveryId || null;
-  if (!id) return null;
-  try {
-    const d = await adminGet(`/deliveries/${id}`);
-    return d || null;
-  } catch (e) {
-    console.warn("notify-finish: delivery lookup failed:", e.message);
-    return null;
-  }
-}
+// (Removed in Phase A redesign: resolveDelivery() helper. The
+// Ready-For-Review email no longer auto-fires from here. The same
+// helper has been moved to api/send-review-batch.js where the
+// producer-driven batch flow needs it.)
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
@@ -223,108 +216,24 @@ export default async function handler(req, res) {
       ? process.env.SLACK_PROJECT_LEADS_WEBHOOK_URL
       : process.env.SLACK_VIDEO_DELIVERIES_WEBHOOK_URL;
 
-    // Run Slack + (for client reviews) email concurrently. Both
-    // settle independently. Internal-review finishes have no email
-    // step at all, only Slack.
-    const slackTask = postSlack(slackWebhook, slackText);
+    // Slack-only path (Phase A redesign — see file header). The
+    // ReadyForReview email used to fire here for reviewType=client;
+    // it now waits for a producer/AM to explicitly batch and send
+    // via api/send-review-batch.js. Editor's Finish flow is back to
+    // its original Slack-notification-only behaviour.
+    const slack = await postSlack(slackWebhook, slackText);
 
-    let emailTask = null;
-    if (reviewType === "client") {
-      // Build the email task lazily so we only do the Firebase reads
-      // when needed. If the project / delivery cannot be resolved,
-      // the task resolves to a "skipped" record — Slack still goes
-      // out independently.
-      emailTask = (async () => {
-        if (!projectId) {
-          console.warn("notify-finish: client reviewType missing projectId — email skipped");
-          return { ok: false, reason: "no_projectId" };
-        }
-        const project = await adminGet(`/projects/${projectId}`).catch(() => null);
-        if (!project) return { ok: false, reason: "project_not_found" };
-        const clientEmail = (project.clientContact?.email || "").trim();
-        if (!clientEmail) return { ok: false, reason: "no_client_email" };
-
-        const delivery = await resolveDelivery({ payloadDeliveryId, project });
-        if (!delivery) {
-          return { ok: false, reason: "no_delivery_record" };
-        }
-
-        // Use the canonical helper rather than hard-checking
-        // delivery.shortId here. `buildDeliveryUrl()` already falls
-        // back to the legacy `?d={id}` form when shortId is missing,
-        // and returns null only when PUBLIC_BASE_URL is unset or
-        // both shortId and id are missing. That keeps older delivery
-        // records (pre-shortId era) from silently breaking the
-        // Ready-For-Review email.
-        const deliveryUrl = buildDeliveryUrl({
-          ...delivery,
-          // Fill in client/project name so the slug builder produces
-          // a friendly URL even if the delivery record itself only
-          // stored an id.
-          clientName: delivery.clientName || project.clientName || "",
-          projectName: delivery.projectName || project.projectName || "",
-        });
-        if (!deliveryUrl) {
-          // Missing PUBLIC_BASE_URL or unrenderable record. Skip the
-          // email rather than send a broken link.
-          return { ok: false, reason: "no_delivery_url" };
-        }
-
-        // Idempotency key: prefer videoId so per-video review emails
-        // don't collapse into one project-level send when the same
-        // project produces multiple videos. Fall back to subtaskId
-        // (the legacy frame in the editor dashboard) and finally to
-        // the project itself as a last resort.
-        const keySegment = videoId || subtaskId || "project";
-        const idempotencyKey = `${projectId}/ReadyForReview/${keySegment}`;
-
-        const result = await sendEmail({
-          template: "ReadyForReview",
-          idempotencyKey,
-          to: clientEmail,
-          subject: "Your video is ready to watch",
-          props: {
-            client: {
-              firstName: (project.clientContact?.firstName || "").trim() || "there",
-              email: clientEmail,
-            },
-            project: {
-              id: projectId,
-              projectName: project.projectName || "your project",
-            },
-            delivery: {
-              shortId: delivery.shortId || null,
-              id: delivery.id || null,
-              url: deliveryUrl,
-            },
-            videoName,
-          },
-          projectId,
-        });
-        return { ok: result.state === "sent", reason: result.reason || result.state };
-      })();
-    }
-
-    const [slackResult, emailResult] = await Promise.allSettled([
-      slackTask,
-      emailTask || Promise.resolve(null),
-    ]);
-
-    // Normalise into a single response shape. Always returns 200;
-    // a failure in one channel must not poison the editor's Finish
-    // flow on the dashboard.
-    const slack = slackResult.status === "fulfilled"
-      ? slackResult.value
-      : { ok: false, reason: slackResult.reason?.message || "rejected" };
-    const email = emailResult.status === "fulfilled"
-      ? emailResult.value
-      : { ok: false, reason: emailResult.reason?.message || "rejected" };
+    // Tip: payload fields projectId/subtaskId/videoId/deliveryId are
+    // accepted (and validated/clamped above) for forward compatibility
+    // — the dashboard already sends them, and a future enhancement may
+    // want them on the Slack post. We don't act on them today.
+    void projectId; void subtaskId; void videoId; void payloadDeliveryId;
 
     return res.status(200).json({
       ok: true,
       reviewType,
-      slack: slack ? { ok: !!slack.ok, reason: slack.reason || (slack.ok ? "sent" : "unknown") } : null,
-      email: email ? { ok: !!email.ok, reason: email.reason || (email.ok ? "sent" : "unknown") } : null,
+      slack: { ok: !!slack.ok, reason: slack.reason || (slack.ok ? "sent" : "unknown") },
+      email: null, // intentionally inert in this endpoint after the redesign
     });
   } catch (e) {
     console.error("notify-finish error:", e);
