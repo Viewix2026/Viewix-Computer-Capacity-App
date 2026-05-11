@@ -24,6 +24,8 @@ import { authFetch } from "../../firebase";
 import { StatusHeader } from "./components/StatusHeader";
 import { WinningVideos } from "./components/WinningVideos";
 import { NicheIntel } from "./components/NicheIntel";
+import { WhatsWorking } from "./components/WhatsWorking";
+import { NextVideoRecs } from "./components/NextVideoRecs";
 
 export function AnalyticsClientDetail({ accountId, onBack }) {
   const { accounts } = useAccounts();
@@ -92,10 +94,12 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
           <>
             <StatusHeader data={dashboard} config={config} />
             <WinningVideos videos={dashboard.videos} limit={5} />
+            <WhatsWorking playbook={dashboard.insights?.formatPlaybook} />
             <NicheIntel
               data={dashboard}
               competitorsRoot={dashboard.competitorsRoot}
             />
+            <NextVideoRecs recs={dashboard.insights?.nextVideoRecs} />
 
             <NextPhasesHint />
 
@@ -190,8 +194,9 @@ function NextPhasesHint() {
       lineHeight: 1.6,
     }}>
       <strong style={{ color: "var(--fg)" }}>Coming in next phases:</strong>{" "}
-      What's Working (Format Playbook) · Next Video Recommendations ·
-      Content Decay alerts · Renewal Ammo · optional Hook Analyzer.
+      Phase 7 → Claude format classifier (replaces the v0 heuristic) +
+      "This week in your niche" takes. Phase 8 → Content Decay alerts,
+      AI Weekly Summary, Renewal Ammo, optional Hook Analyzer.
     </div>
   );
 }

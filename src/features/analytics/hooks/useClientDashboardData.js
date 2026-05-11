@@ -34,6 +34,8 @@ export function useClientDashboardData(clientId) {
     videos: {},               // { [platform]: { [videoId]: { post, snapshots, scoring } } }
     followers: {},            // { [platform]: { [YYYY-MM-DD]: { count } } }
     competitorsRoot: {},      // { [platform]: { [handleKey]: { profile, videos } } } (Phase 5)
+    currentInsightsWeek: null, // ISO week id, set by recompute (Phase 6+)
+    insights: null,            // /analytics/insights/{id}/{weekId} (Phase 6+)
     loading: true,
   });
 
@@ -58,10 +60,30 @@ export function useClientDashboardData(clientId) {
           momentum: record?.momentum || null,
           baselines: record?.baselines || null,
           competitorCohort: record?.competitorCohort || null,
+          currentInsightsWeek: record?.currentInsightsWeek || null,
           lastRecomputeAt: record?.lastRecomputeAt || null,
           lastRefreshedAt: record?.lastRefreshedAt || null,
           loading: false,
         }));
+      }));
+
+      // Phase 6 — insights for the current ISO week. Includes
+      // formatPlaybook + nextVideoRecs (Phase 7 adds thisWeekInNiche
+      // + weeklySummary). The whole insights subtree is precomputed
+      // server-side by recomputeClientAnalytics; this hook just reads.
+      unsubs.push(fbListen(`/analytics/insights/${clientId}`, (allWeeks) => {
+        if (!allWeeks) {
+          setData(prev => ({ ...prev, insights: null }));
+          return;
+        }
+        // Pick the most recent week. Recompute writes
+        // /analytics/clients/{id}/currentInsightsWeek which the UI
+        // could honour for tighter control; for v1 the lexically
+        // highest ISO-week key wins (works as long as ids stay
+        // YYYY-Www).
+        const weeks = Object.keys(allWeeks).sort();
+        const latest = weeks[weeks.length - 1];
+        setData(prev => ({ ...prev, insights: allWeeks[latest] || null }));
       }));
 
       // Videos can grow large — Phase 4 reads them all and lets the
