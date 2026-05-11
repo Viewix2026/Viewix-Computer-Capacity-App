@@ -77,6 +77,11 @@
       ".write": "auth != null && auth.token.role != null"
     },
 
+    "analytics": {
+      ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'lead')",
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'lead')"
+    },
+
     "sales": {
       ".read": "auth != null",
       ".write": "auth != null && auth.token.role != null",
