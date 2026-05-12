@@ -7,10 +7,16 @@ import { useState, useEffect } from "react";
 import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
 import { StatusSelect } from "./UIComponents";
-import { fbSet } from "../firebase";
+import { fbSet, authFetch } from "../firebase";
 
 export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDeliveryId }) {
   const [activeDeliveryId, setActiveDeliveryId] = useState(null);
+  // Phase A.5 "Share with client" modal state. Lifted to the parent
+  // (rather than the detail-view block) so the modal lifecycle stays
+  // simple — only one share flow can be active at a time, and the
+  // result banner survives a tab pinball back to the same delivery.
+  const [shareOpenFor, setShareOpenFor] = useState(null); // delivery id when open
+  const [lastShareResult, setLastShareResult] = useState(null); // { deliveryId, state, batchId, videoCount, at }
 
   // Deep-link receiver — Projects → Delivery linked-record pill drops
   // a hash route like #projects/deliveries/del-1234 which lands here.
@@ -151,11 +157,58 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
               <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{d.clientName}</span>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {/* Phase A.5 banner — surfaces the result of the most-
+                recent "Share with client" send for this delivery.
+                Stays visible until the producer navigates away or
+                fires another send. */}
+            {lastShareResult && lastShareResult.deliveryId === d.id && (
+              <span style={{
+                fontSize: 11,
+                color: lastShareResult.state === "sent" ? "#10B981"
+                  : lastShareResult.state === "dryRun" ? "var(--accent)"
+                  : "var(--muted)",
+                fontWeight: 600,
+                marginRight: 4,
+              }}>
+                {lastShareResult.state === "sent" && `✓ Sent ${lastShareResult.videoCount} ${lastShareResult.videoCount === 1 ? "video" : "videos"} at ${lastShareResult.at}`}
+                {lastShareResult.state === "dryRun" && `✓ Dry-run logged at ${lastShareResult.at} (${lastShareResult.videoCount} videos)`}
+                {lastShareResult.state === "skipped" && `Already sent (${lastShareResult.batchId.slice(0, 6)}…)`}
+                {lastShareResult.state === "noop" && "Kill switch on — send suppressed"}
+              </span>
+            )}
+            <button
+              onClick={() => setShareOpenFor(d.id)}
+              disabled={!d.videos?.length}
+              title={d.videos?.length ? "Share with client" : "Add at least one video first"}
+              style={{
+                ...BTN,
+                background: d.videos?.length ? "#10B981" : "#374151",
+                color: "white",
+                opacity: d.videos?.length ? 1 : 0.5,
+                cursor: d.videos?.length ? "pointer" : "not-allowed",
+              }}
+            >Share with client</button>
             <button onClick={() => copyLink(d.id)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>Copy Share Link</button>
             <button onClick={() => deleteDelivery(d.id)} style={{ ...BTN, background: "#374151", color: "#EF4444" }}>Delete</button>
           </div>
         </div>
+        {shareOpenFor === d.id && (
+          <ShareWithClientModal
+            delivery={d}
+            onClose={() => setShareOpenFor(null)}
+            onSent={(result) => {
+              setLastShareResult({
+                deliveryId: d.id,
+                state: result.state,
+                batchId: result.batchId,
+                videoCount: result.videoCount,
+                at: new Date().toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" }),
+              });
+              setShareOpenFor(null);
+            }}
+          />
+        )}
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
           {/* Project details */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
@@ -293,4 +346,263 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
       </div>
     </>
   );
+}
+
+// ───────────────────────────────────────────────────────────────
+// ShareWithClientModal — Phase A.5 producer "Send the review email"
+// flow. Locked design rules:
+//
+//   - This is the ONLY production trigger for ReadyForReview emails.
+//     Editors never fire client emails; notify-finish stays Slack-
+//     only forever.
+//   - All videos in the delivery are shown in one checklist (no
+//     "show all" toggle). Videos with viewixStatus === "Ready for
+//     Review" are pre-checked; producer manually toggles others.
+//   - Producer note (optional) renders as a quoted block at the top
+//     of the email.
+//   - On Send: POST /api/send-review-batch with { deliveryId,
+//     videoIds, producerNote }. Endpoint reverse-looks up the parent
+//     project, builds context, calls send().
+//   - Failure modes (no client email, no delivery URL, validation
+//     errors) surface as inline error text below the buttons;
+//     modal stays open so the producer can fix and retry.
+// ───────────────────────────────────────────────────────────────
+function ShareWithClientModal({ delivery, onClose, onSent }) {
+  const videos = Array.isArray(delivery?.videos) ? delivery.videos.filter(Boolean) : [];
+  // Pre-check rule: any video flagged "Ready for Review" by the editor's
+  // Finish flow is pre-selected. Producer can still uncheck anything.
+  const [checked, setChecked] = useState(() => {
+    const init = {};
+    for (const v of videos) {
+      init[v.id] = v.viewixStatus === "Ready for Review";
+    }
+    return init;
+  });
+  const [producerNote, setProducerNote] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+
+  const checkedCount = Object.values(checked).filter(Boolean).length;
+  const canSend = checkedCount > 0 && !sending;
+
+  const toggleAll = (val) => {
+    const next = {};
+    for (const v of videos) next[v.id] = val;
+    setChecked(next);
+  };
+
+  const submit = async () => {
+    setError(null);
+    setSending(true);
+    // Build the videoIds list from the checked state. Use videoId
+    // (the stable identifier) when present, fall back to id.
+    const ids = videos
+      .filter(v => checked[v.id])
+      .map(v => v.videoId || v.id)
+      .filter(Boolean);
+    try {
+      const res = await authFetch("/api/send-review-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deliveryId: delivery.id,
+          videoIds: ids,
+          producerNote: producerNote.trim(),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) {
+        setError(formatEndpointError(res.status, json));
+        setSending(false);
+        return;
+      }
+      onSent({
+        state: json.state,
+        batchId: json.batchId,
+        videoCount: json.videoCount,
+      });
+    } catch (e) {
+      setError(`Network error: ${e.message}`);
+      setSending(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Share videos with client"
+      style={{
+        position: "fixed", inset: 0, zIndex: 100,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 16,
+      }}
+      onClick={(e) => {
+        // Backdrop click closes — but only on the backdrop, not the card.
+        if (e.target === e.currentTarget && !sending) onClose();
+      }}
+    >
+      <div style={{
+        maxWidth: 560, width: "100%", maxHeight: "90vh", overflow: "auto",
+        background: "var(--card)", border: "1px solid var(--border)",
+        borderRadius: 12, padding: 24,
+        boxShadow: "0 24px 48px rgba(0,0,0,0.4)",
+      }}>
+        <div style={{ marginBottom: 16 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--fg)", margin: 0 }}>
+            Share with client
+          </h2>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+            {delivery.clientName || "(no client name)"} · {delivery.projectName || "(no project name)"}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Videos to include ({checkedCount} of {videos.length})
+          </span>
+          <div style={{ display: "flex", gap: 12 }}>
+            <button
+              type="button"
+              onClick={() => toggleAll(true)}
+              style={{ background: "none", border: "none", color: "var(--accent)", fontSize: 11, cursor: "pointer", padding: 0 }}
+            >Check all</button>
+            <button
+              type="button"
+              onClick={() => toggleAll(false)}
+              style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 11, cursor: "pointer", padding: 0 }}
+            >Clear</button>
+          </div>
+        </div>
+
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, marginBottom: 16, maxHeight: 280, overflow: "auto" }}>
+          {videos.length === 0 ? (
+            <div style={{ padding: 16, fontSize: 12, color: "var(--muted)", textAlign: "center" }}>
+              No videos in this delivery.
+            </div>
+          ) : videos.map((v, i) => (
+            <label
+              key={v.id}
+              style={{
+                display: "flex", alignItems: "center", gap: 12,
+                padding: "10px 12px",
+                borderBottom: i < videos.length - 1 ? "1px solid var(--border-light)" : "none",
+                cursor: "pointer",
+                background: checked[v.id] ? "rgba(16,185,129,0.06)" : "transparent",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={!!checked[v.id]}
+                onChange={(e) => setChecked(prev => ({ ...prev, [v.id]: e.target.checked }))}
+                style={{ accentColor: "#10B981", width: 16, height: 16, cursor: "pointer" }}
+              />
+              <span style={{ flex: 1, fontSize: 13, color: "var(--fg)", fontWeight: 600 }}>
+                {v.name || "(unnamed video)"}
+              </span>
+              {v.viewixStatus && (
+                <span style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  padding: "3px 8px",
+                  borderRadius: 4,
+                  background: VIEWIX_STATUS_COLORS[v.viewixStatus] || "#374151",
+                  color: "white",
+                }}>{v.viewixStatus}</span>
+              )}
+            </label>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6, display: "block" }}>
+            Producer note (optional)
+          </label>
+          <textarea
+            value={producerNote}
+            onChange={e => setProducerNote(e.target.value)}
+            rows={3}
+            maxLength={2000}
+            placeholder="A quick note for the client — renders as a quoted block at the top of the email."
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 6,
+              border: "1px solid var(--border)",
+              background: "var(--input-bg)",
+              color: "var(--fg)",
+              fontSize: 13,
+              fontFamily: "inherit",
+              outline: "none",
+              resize: "vertical",
+            }}
+          />
+        </div>
+
+        {error && (
+          <div style={{
+            marginBottom: 16,
+            padding: "10px 12px",
+            background: "rgba(239,68,68,0.1)",
+            border: "1px solid rgba(239,68,68,0.4)",
+            borderRadius: 6,
+            color: "#EF4444",
+            fontSize: 12,
+            lineHeight: 1.45,
+          }}>{error}</div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => !sending && onClose()}
+            disabled={sending}
+            style={{ ...BTN, background: "transparent", color: "var(--fg)", border: "1px solid var(--border)" }}
+          >Cancel</button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!canSend}
+            style={{
+              ...BTN,
+              background: canSend ? "#10B981" : "#374151",
+              color: "white",
+              opacity: canSend ? 1 : 0.6,
+              cursor: canSend ? "pointer" : "not-allowed",
+            }}
+          >{sending ? "Sending…" : `Send ${checkedCount > 0 ? `(${checkedCount})` : ""}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Map the endpoint's JSON error responses to readable strings.
+function formatEndpointError(status, json) {
+  const code = json?.error || "unknown_error";
+  switch (code) {
+    case "deliveryId required":
+      return "Internal error: deliveryId missing from request.";
+    case "delivery_not_found":
+      return "This delivery record can't be found in Firebase.";
+    case "no_project_for_delivery":
+      return "No project links to this delivery. Open the project record and set links.deliveryId, then retry.";
+    case "no_client_email":
+      return "The project has no client email on file. Add clientContact.email to the project before sending.";
+    case "no_delivery_url":
+      return "This delivery has no usable share URL (missing both shortId and id). Cannot send a review email without a destination.";
+    case "no_videos_selected":
+      return "Pick at least one video to send.";
+    case "send_failed":
+      return `Email send failed: ${json.detail || "unknown reason"}`;
+    case "Forbidden":
+    case "Missing bearer token":
+    case "Invalid bearer token":
+      return `Auth issue: ${code}. Producers and founders only — editors can't trigger client emails.`;
+    default:
+      return `Send failed (${status}): ${code}${json.detail ? ` — ${json.detail}` : ""}`;
+  }
 }
