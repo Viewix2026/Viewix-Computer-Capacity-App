@@ -234,13 +234,25 @@ export async function getProjectContext(projectId, opts = {}) {
       const d = await adminGet(`/deliveries/${deliveryId}`);
       if (d) {
         const slug = slugify(`${d.clientName || project.clientName || ""} ${d.projectName || project.projectName || ""}`);
+        // Videos array exposed so ReadyForReview senders can filter
+        // to the producer-selected subset. Firebase RTDB stores
+        // delivery videos as either an array or an object-keyed-by-
+        // index — normalise to a plain array of {id, videoId, name,
+        // viewixStatus, ...}.
+        const rawVideos = d.videos;
+        const videos = Array.isArray(rawVideos)
+          ? rawVideos.filter(Boolean)
+          : (rawVideos && typeof rawVideos === "object" ? Object.values(rawVideos).filter(Boolean) : []);
         delivery = {
           id: d.id || deliveryId,
           shortId: d.shortId || null,
           slug,
           url: buildDeliveryUrl(d) || null,
+          clientName: d.clientName || project.clientName || "",
+          projectName: d.projectName || project.projectName || "",
+          videos,
         };
-        if (!delivery.url) gaps.push({ kind: "missing_delivery", detail: `delivery ${deliveryId} has no shortId` });
+        if (!delivery.url) gaps.push({ kind: "missing_delivery", detail: `delivery ${deliveryId} has no usable URL (no shortId AND no id)` });
       } else {
         gaps.push({ kind: "missing_delivery", detail: `delivery ${deliveryId} not found` });
       }
