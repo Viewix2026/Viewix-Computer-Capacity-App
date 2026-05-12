@@ -80,7 +80,10 @@ export default function ReadyForReview(props) {
   const bodyCopy = isBatch
     ? "The first cuts for this batch are ready to watch. Have a look when you get a moment, leave timestamped notes on the dashboard, or send a thumbs up. Most clients send all their feedback in one go - that's the move if you can."
     : "The first cut is ready to watch. Have a look when you get a moment, leave timestamped notes on the dashboard, or send a thumbs up. Most clients send all their feedback in one go - that's the move if you can.";
-  const ctaLabel = isBatch ? "Watch all on the dashboard →" : "View on Viewix dashboard →";
+  // Unified CTA label per Jeremy's spec — same button on single, batch,
+  // and any future case. Cleaner brand voice than "View on Viewix
+  // dashboard →" with its directional arrow.
+  const ctaLabel = "View Videos Here";
 
   return h(
     Layout,
@@ -113,26 +116,23 @@ export default function ReadyForReview(props) {
       : null,
 
     // Primary CTA -> delivery page. Resend renders Button as a
-    // bulletproof table-based button (Outlook-safe). If
-    // delivery.url is missing the template skips it and shows a
-    // recovery hint instead.
+    // bulletproof table-based button (Outlook-safe).
+    //
+    // Hard requirement (Jeremy's spec 2026-05-12): the email MUST have
+    // a real delivery URL. If delivery.url is missing the template
+    // renders without the button — and the calling endpoint
+    // (notify-finish.js / send-review-batch.js) is responsible for
+    // refusing the send entirely. No fallback link is shown because
+    // there's no client-viewable destination to send them to. Phase
+    // A.5's batch-send endpoint guards on this server-side; if a send
+    // ever reaches this template with no URL it's a bug, not a UX
+    // case to design for.
     deliveryUrl
       ? h(
           Button,
           { href: deliveryUrl, style: heroStyles.cta(accent) },
           ctaLabel
         )
-      : h(
-          Text,
-          {
-            style: {
-              ...heroStyles.body,
-              color: BRAND.orangeDark,
-              fontWeight: 600,
-              fontSize: "13px",
-            },
-          },
-          "(Delivery link unavailable — please reply and we'll send it directly.)"
-        )
+      : null
   );
 }
