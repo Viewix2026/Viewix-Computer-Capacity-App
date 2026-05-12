@@ -440,50 +440,167 @@ function EmailHeader() {
 // background-image gradient on the current column (falls back to a
 // solid border) — degraded but still readable in both cases.
 // ────────────────────────────────────────────────────────────────
+// ─── Stepper rewrite 2026-05-12 (post-canary) ───
+// The earlier two-row layout used `marginTop: -12px` to pull each
+// dot up into a separate line row. Gmail Web strips negative
+// margins, so the dot stayed below the line — confirmed live in the
+// first production canary send. Pure HTML-table geometry now: the
+// line halves and the dot share one row of a nested per-stage
+// table, all valign="middle". Forbidden constructs: negative
+// margins, position:absolute/relative, transform, calc(),
+// margin:auto, background-image, gradients. Tables stay dumb.
 function Stepper({ stage, accent }) {
   const accentColor = accent === "orange" ? BRAND.orange : BRAND.blue;
   const lineColorDone = accentColor;
   const lineColorUpcoming = BRAND.borderStrong;
 
-  // Track is rendered as ONE 2px-tall row with 8 cells (left + right
-  // half of each stage). Each half is painted with an explicit
-  // backgroundColor — the most reliable line-drawing mechanism in
-  // email clients (no gradient, no border-top/background-image
-  // conflict). Cells in the row sit edge-to-edge so the line is
-  // continuous across the stepper with no half-pixel drift.
-  //
-  // Colour rule per half:
-  //   left  half of stage S  -> blue if S <= currentStage  (done or current's left side)
-  //   right half of stage S  -> blue if S <  currentStage  (only fully-done stages)
-  //
-  // This produces:
-  //   stage 1 selected: [B][G][G][G][G][G][G][G]  blue stops at dot 1 centre
-  //   stage 2 selected: [B][B][B][G][G][G][G][G]  blue stops at dot 2 centre
-  //   stage 4 selected: [B][B][B][B][B][B][B][G]  blue stops at dot 4 centre
-  //
-  // The dots are rendered in a separate row below the track, pulled
-  // up via negative margin to overlap. Outlook strips negative
-  // margins → dot renders below the line — still readable.
-  const halfCell = (key, color) =>
-    h(Column, {
-      key,
-      style: {
-        width: "12.5%",
-        height: "2px",
-        lineHeight: "2px",
-        fontSize: "0",
-        backgroundColor: color,
-        // Belt-and-braces for Outlook desktop, which loves to add
-        // a default cell border.
-        borderCollapse: "collapse",
-        padding: 0,
+  // 2px-tall line bar. backgroundColor only. NBSP keeps the div
+  // from collapsing in clients that aggressively strip empty divs.
+  const lineBar = (color) =>
+    h(
+      "div",
+      {
+        style: {
+          height: "2px",
+          lineHeight: "2px",
+          fontSize: "0",
+          backgroundColor: color,
+          width: "100%",
+        },
       },
-    }, " ");
+      " "
+    );
+
+  // Dot. No marginTop, no position offset. Sits at the natural
+  // vertical centre of its td (valign=middle).
+  const renderDot = (s) => {
+    const isDone = s.num < stage;
+    const isUpcoming = s.num > stage;
+    const dotFill = isUpcoming ? BRAND.gray : accentColor;
+    const dotBorder = isUpcoming
+      ? `2px solid ${BRAND.gray}`
+      : `2px solid ${accentColor}`;
+    const dotChar = isDone ? "✓" : String(s.num);
+    return h(
+      "div",
+      {
+        style: {
+          width: "22px",
+          height: "22px",
+          lineHeight: "18px",
+          borderRadius: "50%",
+          background: dotFill,
+          border: dotBorder,
+          color: BRAND.panel,
+          fontFamily: FONT_BODY,
+          fontWeight: 700,
+          fontSize: "11px",
+          textAlign: "center",
+          display: "inline-block",
+        },
+      },
+      dotChar
+    );
+  };
+
+  // One stage column. Raw <table> because we need cellPadding=0,
+  // cellSpacing=0, border=0 HTML attributes plus a colspan row
+  // for the label — React Email's Row/Column don't pass those
+  // through cleanly.
+  const stageColumn = (s) => {
+    const isCurrent = s.num === stage;
+    const isDone = s.num < stage;
+    const leftColor = s.num <= stage ? lineColorDone : lineColorUpcoming;
+    const rightColor = s.num < stage ? lineColorDone : lineColorUpcoming;
+    const labelColor = isCurrent ? BRAND.ink : (isDone ? BRAND.inkSoft : BRAND.inkMuted);
+    const labelWeight = isCurrent ? 700 : 500;
+
+    return h(
+      "td",
+      {
+        key: s.num,
+        width: "25%",
+        align: "center",
+        valign: "middle",
+        style: { width: "25%", padding: 0, verticalAlign: "middle" },
+      },
+      h(
+        "table",
+        {
+          cellPadding: "0",
+          cellSpacing: "0",
+          border: "0",
+          width: "100%",
+          style: { borderCollapse: "collapse", width: "100%" },
+        },
+        h(
+          "tbody",
+          null,
+          h(
+            "tr",
+            null,
+            h(
+              "td",
+              {
+                valign: "middle",
+                style: { verticalAlign: "middle", padding: 0 },
+              },
+              lineBar(leftColor)
+            ),
+            h(
+              "td",
+              {
+                width: "22",
+                valign: "middle",
+                style: {
+                  width: "22px",
+                  padding: 0,
+                  verticalAlign: "middle",
+                  textAlign: "center",
+                  lineHeight: 0,
+                  fontSize: 0,
+                },
+              },
+              renderDot(s)
+            ),
+            h(
+              "td",
+              {
+                valign: "middle",
+                style: { verticalAlign: "middle", padding: 0 },
+              },
+              lineBar(rightColor)
+            )
+          ),
+          h(
+            "tr",
+            null,
+            h(
+              "td",
+              {
+                colSpan: 3,
+                align: "center",
+                style: {
+                  textAlign: "center",
+                  paddingTop: "10px",
+                  fontFamily: FONT_BODY,
+                  fontSize: "12px",
+                  color: labelColor,
+                  fontWeight: labelWeight,
+                  lineHeight: 1.3,
+                },
+              },
+              s.label
+            )
+          )
+        )
+      )
+    );
+  };
 
   return h(
     Section,
     { style: styles.stepperWrap },
-    // Meta row: "STAGE X OF 4".
     h(
       Row,
       { style: styles.stepperMetaRow },
@@ -493,97 +610,28 @@ function Stepper({ stage, accent }) {
         h("span", { style: { fontFamily: FONT_MONO } }, `Stage ${stage} of 4`)
       )
     ),
-    // Track row — 8 half-cells.
     h(
-      Row,
+      "table",
       {
+        cellPadding: "0",
+        cellSpacing: "0",
+        border: "0",
+        width: "100%",
         style: {
-          marginTop: "12px",
-          height: "2px",
-          lineHeight: "2px",
-          fontSize: "0",
+          width: "100%",
           borderCollapse: "collapse",
+          marginTop: "12px",
         },
       },
-      ...STAGES.flatMap(s => {
-        const leftColor = s.num <= stage ? lineColorDone : lineColorUpcoming;
-        const rightColor = s.num < stage ? lineColorDone : lineColorUpcoming;
-        return [
-          halfCell(`${s.num}L`, leftColor),
-          halfCell(`${s.num}R`, rightColor),
-        ];
-      })
-    ),
-    // Dot + label row.
-    h(
-      Row,
-      null,
-      ...STAGES.map(s => {
-        const isDone = s.num < stage;
-        const isCurrent = s.num === stage;
-        const isUpcoming = s.num > stage;
-
-        const dotFill = isUpcoming ? BRAND.gray : accentColor;
-        const dotBorder = isUpcoming
-          ? `2px solid ${BRAND.gray}`
-          : `2px solid ${accentColor}`;
-        const dotChar = isDone ? "✓" : String(s.num);
-        const dotColor = BRAND.panel;
-        const labelColor = isCurrent ? BRAND.ink : (isDone ? BRAND.inkSoft : BRAND.inkMuted);
-        const labelWeight = isCurrent ? 700 : 500;
-
-        return h(
-          Column,
-          {
-            key: s.num,
-            style: {
-              width: "25%",
-              textAlign: "center",
-              verticalAlign: "top",
-              paddingTop: "0",
-            },
-          },
-          h(
-            "div",
-            {
-              style: {
-                // Pull the dot up so it overlaps the 2px line above,
-                // centring the line through the dot's vertical
-                // midpoint. (22px dot height + 2px line, -12px to
-                // overlap puts the dot's centre on the line.)
-                marginTop: "-12px",
-                display: "inline-block",
-                width: "22px",
-                height: "22px",
-                lineHeight: "18px",
-                borderRadius: "50%",
-                background: dotFill,
-                border: dotBorder,
-                color: dotColor,
-                fontFamily: FONT_BODY,
-                fontWeight: 700,
-                fontSize: "11px",
-                textAlign: "center",
-              },
-            },
-            dotChar
-          ),
-          h(
-            Text,
-            {
-              style: {
-                ...styles.stepperLabel,
-                color: labelColor,
-                fontWeight: labelWeight,
-              },
-            },
-            s.label
-          )
-        );
-      })
+      h(
+        "tbody",
+        null,
+        h("tr", null, ...STAGES.map(stageColumn))
+      )
     )
   );
 }
+
 
 // ────────────────────────────────────────────────────────────────
 // PersonChip — circular avatar with initials, name, role.
