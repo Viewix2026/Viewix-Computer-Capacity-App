@@ -26,21 +26,26 @@ export default function Confirmation(props) {
   const firstName = props?.client?.firstName || "there";
   const accent = props?.accent || "blue";
 
-  // Stage 1 copy. From data.jsx STAGES[0].body, with hyphens.
+  // Stage 1 copy. Updated 2026-05-11 per Jeremy's review.
   const headline = "You're locked in";
-  const bodyCopy = "We've got your brief and everything's loaded into the studio. Your producer will reach out in the next 48 hours to confirm shoot dates and logistics.";
+  const bodyCopy = "We've got your brief and everything's loaded into the studio. We're excited to bring your brand to life.";
 
   return h(
     Layout,
     {
       stage: 1,
-      preview: `${firstName}, you're locked in. Here's what happens next.`,
+      preview: `${firstName}, you're locked in. We're excited to bring your brand to life.`,
       accent,
       project: props?.project,
       producer: props?.producer,
       editor: props?.editor,
       dashboardUrl: props?.delivery?.url || null,
       hasInHeroCta: false,
+      // Per Jeremy's review 2026-05-11: Confirmation's Up Next reads
+      // "Your shoot day" instead of the generic Stage 1 default
+      // ("Producer call & shoot scheduling"). Matches the client-
+      // facing language and keeps the lifecycle narrative simple.
+      upNext: "Your shoot day",
     },
     h(Text, { style: heroStyles.eyebrow(accent) }, "Brief locked in"),
     h(Heading, { as: "h1", style: heroStyles.headline }, headline),

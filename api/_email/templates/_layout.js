@@ -42,10 +42,9 @@ import {
   Text,
 } from "@react-email/components";
 
-// Brand variables. Sourced from the design's data and the Viewix brand
-// guidelines (page 1 of the PDF Jeremy uploaded). Blue is the primary
-// accent; orange is alternate. Phase B keeps these centralised so a
-// theme switch is a one-place edit.
+// Brand variables. Centralised so every template (and the Phase B
+// redesign) references one source of truth. Sourced from the
+// Viewix brand guidelines + the design's data layer.
 export const BRAND = {
   blue: "#0082FA",
   blueDark: "#004F99",
@@ -67,25 +66,45 @@ export const BRAND = {
   bg: "#EEF0F4",
 };
 
-// Email-safe font stack. Inter + Montserrat are loaded from Google Fonts
-// CDN at the top of every email. Outlook desktop strips webfont
-// @font-face — the system fallbacks must form a sensible stack on their
-// own there. JetBrains Mono is used for eyebrow / label text; we don't
-// load it via webfont (rare client support) and rely on the monospace
-// fallback (Courier, Menlo) where it matters.
+// Email-safe font stack. Inter + Montserrat loaded via Google
+// Fonts CDN in the Layout's <Head>. Outlook desktop strips
+// webfonts so the system fallbacks must form a sensible stack on
+// their own. JetBrains Mono is used for eyebrow / label text and
+// uses ui-monospace + Menlo as fallbacks for the same reason.
 const FONT_BODY    = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
 const FONT_DISPLAY = "'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
 const FONT_MONO    = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
-// Logo: served from the deployed dashboard's /public folder.
-// Re-uses the existing /public/viewix-logo.png (already in repo).
-// Resend + most inbox renderers fetch this remotely. If
-// PUBLIC_BASE_URL is unset we fall back to a relative path which
-// won't load — better than embedding a base64 PNG bloat in every
-// email.
+// Per Codex review 2026-05-12: dedicated email-specific logo asset.
+//
+// Root cause of the earlier clipping bug: the original
+// /public/viewix-logo.png was CORRUPTED — the IDAT chunk claimed
+// 16319 bytes of pixel data in a file that's only 12576 bytes
+// total. Browsers were rendering the partial-decoded image at
+// natural size and ignoring our explicit dimensions because they
+// were fighting through broken PNG data.
+//
+// Fix: regenerated both viewix-logo.png (600x160 for dashboard use)
+// and viewix-logo-email.png (278x74 for email display at 139x37
+// retina-sharp) from the clean 2400x638 source in the Claude
+// Design handoff bundle. Pillow confirms both load cleanly.
+//
+// Email-side: use the smaller dedicated asset over HTTPS.
 function brandLogoUrl() {
-  const base = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-  return base ? `${base}/viewix-logo.png` : "/viewix-logo.png";
+  const base = (process.env.PUBLIC_BASE_URL || "https://planner.viewix.com.au").replace(/\/+$/, "");
+  return `${base}/viewix-logo-email.png`;
+}
+
+// Optional per-stage hero imagery URL helper. These files do not ship
+// with Phase B yet, so Layout defaults imagery off. If we later add
+// real assets, pass showImagery={true} and commit the matching files
+// under /public/.
+function heroImageUrl(stage) {
+  const slugByStage = { 1: "kickoff", 2: "shoot", 3: "edit", 4: "review" };
+  const slug = slugByStage[stage];
+  if (!slug) return null;
+  const base = (process.env.PUBLIC_BASE_URL || "https://planner.viewix.com.au").replace(/\/+$/, "");
+  return `${base}/email-hero-${stage}-${slug}.png`;
 }
 
 // The 4 lifecycle stages, in order. Stage 1 = Kickoff (Confirmation),
@@ -96,7 +115,7 @@ const STAGES = [
   { num: 1, label: "Kickoff",  next: "Producer call & shoot scheduling" },
   { num: 2, label: "Shooting", next: "Footage ingest & first edit pass" },
   { num: 3, label: "Editing",  next: "First cut ready for your review" },
-  { num: 4, label: "Review",   next: "Apply your notes & finalise" },
+  { num: 4, label: "Review",   next: "Leave your feedback and finalize" },
 ];
 
 const styles = {
@@ -121,14 +140,25 @@ const styles = {
       "0 1px 0 rgba(0,0,0,0.04), 0 30px 60px -30px rgba(12,16,24,0.35), 0 18px 36px -24px rgba(12,16,24,0.22)",
   },
   // ─── Header ────────────────────────────────────────────────
+  // Bumped top/bottom padding from 22 to 28 so the 37px logo
+  // sits centrally with breathing room above and below.
   header: {
-    padding: "22px 28px",
+    padding: "28px 28px",
     borderBottom: `1px solid ${BRAND.borderLight}`,
   },
   logoImg: {
-    height: "24px",
-    width: "auto",
+    // Style mirrors the explicit width/height attributes so any
+    // email client honouring style over attributes still gets the
+    // right sizing. `display: block` strips the baseline gap an
+    // inline <img> would inherit; `maxWidth: 100%` keeps it within
+    // the column on very narrow viewports.
+    width: "120px",
+    height: "32px",
     display: "block",
+    maxWidth: "100%",
+    border: "0",
+    outline: "none",
+    textDecoration: "none",
   },
   headerEyebrow: {
     fontFamily: FONT_MONO,
@@ -297,71 +327,148 @@ const styles = {
 
 // ────────────────────────────────────────────────────────────────
 // Email header — wordmark left, "CLIENT UPDATE" eyebrow right.
-// Uses a Row/Column pair so Outlook lays it out as a table row.
+//
+// Logo sizing notes:
+// - Source PNG is 301x80 (aspect ratio ~3.76:1)
+// - Rendered at 140x37 to give a comfortable header presence
+//
+// IMPORTANT — this is a deliberate from-scratch rewrite using raw
+// <table>/<tr>/<td> primitives instead of React Email's
+// Section/Row/Column. Earlier attempts with the React Email
+// abstractions caused the logo to clip at the top in the user's
+// browser preview (the table cells were collapsing to a height
+// shorter than the image, and the email card's `overflow:hidden`
+// + border-radius then cut the top of the image off). The raw
+// table approach explicitly sets cell heights and uses the
+// `valign` attribute (more reliable than CSS vertical-align in
+// table contexts) so the cell always grows to fit the image.
 // ────────────────────────────────────────────────────────────────
 function EmailHeader() {
+  // Actual PNG logo served from the deployed dashboard domain. Avoid
+  // data: URIs here; common email clients strip them.
+  const tableStyle = {
+    width: "100%",
+    borderCollapse: "collapse",
+    borderBottom: `1px solid ${BRAND.borderLight}`,
+  };
+  const cellLeftStyle = {
+    padding: "24px 0 24px 28px",
+    verticalAlign: "middle",
+    width: "60%",
+    lineHeight: "0",
+  };
+  const cellRightStyle = {
+    padding: "24px 28px 24px 0",
+    verticalAlign: "middle",
+    width: "40%",
+    textAlign: "right",
+  };
   return h(
-    Section,
-    { style: styles.header },
+    "table",
+    {
+      role: "presentation",
+      cellPadding: "0",
+      cellSpacing: "0",
+      border: "0",
+      style: tableStyle,
+    },
     h(
-      Row,
+      "tbody",
       null,
       h(
-        Column,
-        { style: { width: "60%", verticalAlign: "middle" } },
-        h(Img, {
-          src: brandLogoUrl(),
-          alt: "Viewix",
-          width: "84",
-          style: styles.logoImg,
-        })
-      ),
-      h(
-        Column,
-        { style: { width: "40%", verticalAlign: "middle" } },
-        h(Text, { style: styles.headerEyebrow }, "Client update")
+        "tr",
+        null,
+        h(
+          "td",
+          { style: cellLeftStyle, valign: "middle" },
+          // Email logo: viewix-logo-email.png is 278x74 natural,
+          // displayed at 139x37. Half-scale matches retina 2x
+          // density so the logo stays crisp.
+          h("img", {
+            src: brandLogoUrl(),
+            alt: "Viewix",
+            width: "139",
+            height: "37",
+            style: {
+              display: "block",
+              width: "139px",
+              height: "37px",
+              border: "0",
+            },
+          })
+        ),
+        h(
+          "td",
+          { style: cellRightStyle, valign: "middle" },
+          h(
+            "span",
+            {
+              style: {
+                fontFamily: FONT_MONO,
+                fontSize: "10px",
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: BRAND.inkMuted,
+                whiteSpace: "nowrap",
+              },
+            },
+            "Client update"
+          )
+        )
       )
     )
   );
 }
 
 // ────────────────────────────────────────────────────────────────
-// Stepper — "STAGE X OF 4" + project ID, then 4 dots + labels.
+// Stepper — "STAGE X OF 4" + project ID, then a connecting line +
+// 4 dots + labels.
 //
 // Done stages render as a filled accent dot with ✓.
 // Current stage renders as a filled accent dot with the stage number.
 // Upcoming stages render as a white dot with a gray border.
 //
-// The connecting line from the design is dropped — it's an absolute-
-// position overlay that doesn't translate to email tables. The dot
-// row + labels carry the sequence information on their own.
+// Connecting line: each stage column gets a `border-top: 2px solid`
+// that joins with its neighbours into a continuous horizontal line.
+// Completed segments (i.e. columns up to and including the current
+// stage) use the accent colour; upcoming segments use gray. The dot
+// sits half-overlapping the line via `marginTop: -12px` so the line
+// visually runs through the dot, matching the design. Outlook
+// desktop strips the negative margin and renders the dot below the
+// line — still readable, gracefully degraded.
+//
+// Email-safe rendering trick: 2px-tall colored backgrounds on the
+// connector segments AND on the dot row's table cells let the line
+// extend across the full row even when individual <Column> elements
+// don't directly touch.
 // ────────────────────────────────────────────────────────────────
-function Stepper({ stage, accent, projectId }) {
+function Stepper({ stage, accent }) {
   const accentColor = accent === "orange" ? BRAND.orange : BRAND.blue;
+  const lineColorDone = accentColor;
+  const lineColorUpcoming = BRAND.borderStrong;
   return h(
     Section,
     { style: styles.stepperWrap },
-    // Meta row: "STAGE X OF 4" + project ID
+    // Meta row: "STAGE X OF 4". The project ID slot was removed
+    // 2026-05-11 per Jeremy — the shortIds we generate are random
+    // 10-char strings, not pretty like the "VX-2041" design
+    // placeholder. The header eyebrow ("CLIENT UPDATE") already
+    // signals what this email is. Keep the row left-aligned only.
     h(
       Row,
       { style: styles.stepperMetaRow },
       h(
         Column,
-        { style: { width: "50%", textAlign: "left" } },
+        { style: { width: "100%", textAlign: "left" } },
         h("span", { style: { fontFamily: FONT_MONO } }, `Stage ${stage} of 4`)
-      ),
-      h(
-        Column,
-        { style: { width: "50%", textAlign: "right" } },
-        projectId
-          ? h("span", { style: { fontFamily: FONT_MONO } }, projectId)
-          : null
       )
     ),
-    // Dot row + labels — one column per stage
+    // Dot row + labels — one column per stage. Each column's
+    // border-top draws the connector line; dots are pulled up via
+    // negative margin to overlap the line.
     h(
       Row,
-      null,
+      { style: { paddingTop: "12px" } },
       ...STAGES.map(s => {
         const isDone = s.num < stage;
         const isCurrent = s.num === stage;
@@ -371,20 +478,35 @@ function Stepper({ stage, accent, projectId }) {
         const dotColor = isDone || isCurrent ? BRAND.panel : BRAND.inkMuted;
         const labelColor = isCurrent ? BRAND.ink : (isDone ? BRAND.inkSoft : BRAND.inkMuted);
         const labelWeight = isCurrent ? 700 : 500;
+        // Each column's top border becomes part of the connecting
+        // line. A column is "complete" (accent-colored line) when
+        // its stage number is <= current stage. That means the line
+        // runs accent up to and including the current stage's dot.
+        const lineColor = s.num <= stage ? lineColorDone : lineColorUpcoming;
         return h(
           Column,
           {
             key: s.num,
-            style: { width: "25%", textAlign: "center", verticalAlign: "top" },
+            style: {
+              width: "25%",
+              textAlign: "center",
+              verticalAlign: "top",
+              borderTop: `2px solid ${lineColor}`,
+              paddingTop: "0",
+            },
           },
           h(
             "div",
             {
               style: {
+                // Negative top margin pulls the dot up to overlap the
+                // border-top line, so the line visually runs through
+                // the centre of the dot.
+                marginTop: "-12px",
                 display: "inline-block",
                 width: "22px",
                 height: "22px",
-                lineHeight: "22px",
+                lineHeight: "18px",
                 borderRadius: "50%",
                 background: dotFill,
                 border: dotBorder,
@@ -559,6 +681,46 @@ function UpNext({ text }) {
 }
 
 // ────────────────────────────────────────────────────────────────
+// HeroImagery — optional per-stage decorative block between the hero
+// text and the project card. Keep disabled unless the referenced PNGs
+// have actually been committed and deployed; otherwise email clients
+// show broken-image boxes.
+// ────────────────────────────────────────────────────────────────
+function HeroImagery({ stage }) {
+  const url = heroImageUrl(stage);
+  if (!url) return null;
+  const altByStage = {
+    1: "Kickoff — your project is loaded into the studio",
+    2: "On location — REC 00:12:04:17",
+    3: "In the edit suite — timeline waveform",
+    4: "Ready for review — first cut",
+  };
+  return h(
+    Section,
+    { style: { padding: "4px 28px 20px" } },
+    h(
+      "div",
+      { style: { borderRadius: "12px", overflow: "hidden", lineHeight: 0 } },
+      h("img", {
+        src: url,
+        alt: altByStage[stage] || "",
+        width: "480",
+        height: "140",
+        style: {
+          display: "block",
+          width: "100%",
+          maxWidth: "480px",
+          height: "auto",
+          border: "0",
+          outline: "none",
+          textDecoration: "none",
+        },
+      })
+    )
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
 // Footer link — only shown when the hero block didn't have a CTA.
 // "View project on dashboard ->" small-cap link.
 // ────────────────────────────────────────────────────────────────
@@ -623,6 +785,7 @@ export function Layout({
   upNext,
   dashboardUrl,
   hasInHeroCta = false,
+  showImagery = false,
   children,
 }) {
   const stageInfo = STAGES.find(s => s.num === stage) || STAGES[0];
@@ -666,13 +829,17 @@ export function Layout({
           Container,
           { style: styles.card },
           h(EmailHeader, null),
-          h(Stepper, {
-            stage,
-            accent,
-            projectId: project?.shortId || project?.id || null,
-          }),
+          h(Stepper, { stage, accent }),
           // Hero block — template-specific
           h(Section, { style: styles.hero }, children),
+          // Per-stage hero imagery (Kickoff = blue gradient/play, Shoot
+          // = REC indicator, Edit = timeline waveform, Review = circle
+          // play + progress bar). Lives between the hero text block and
+          // the project card. Hidden gracefully if showImagery is false
+          // (no <img> rendered at all, so no broken-image icon).
+          showImagery !== false
+            ? h(HeroImagery, { stage })
+            : null,
           // Project card
           h(ProjectCard, { project, producer, editor, accent }),
           // Up next

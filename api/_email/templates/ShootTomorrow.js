@@ -104,6 +104,13 @@ export default function ShootTomorrow(props) {
       editor: props?.editor,
       dashboardUrl: props?.delivery?.url || null,
       hasInHeroCta: false,
+      // Per Jeremy's request 2026-05-11: ShootTomorrow's Up Next
+      // reads "Your videos are in the edit suite." instead of the
+      // generic Stage 2 default ("Footage ingest & first edit pass").
+      // This matches the client-facing language of the next email
+      // they'll receive (InEditSuite) so the lifecycle reads as a
+      // continuous narrative.
+      upNext: "Your videos are in the edit suite.",
     },
     // Hero block (children of Layout's hero <Section>)
     h(Text, { style: heroStyles.eyebrow(accent) }, "On location"),
@@ -164,13 +171,13 @@ export default function ShootTomorrow(props) {
         )
       : null,
 
-    // Notice: mobiles are tomorrow-only. Last in the hero block.
-    crew.some(c => c.hasPhone)
-      ? h(
-          Text,
-          { style: { ...heroStyles.body, fontStyle: "italic", color: BRAND.inkSofter, fontSize: "12.5px" } },
-          "These mobiles are for tomorrow only. Anything before or after, just hit reply and you'll get a real human at Viewix."
-        )
-      : null
+    // Notice: redirect non-shoot-day questions to the account
+    // manager. Renders even when there are no crew phones — keeps
+    // the client's escalation path clear regardless.
+    h(
+      Text,
+      { style: { ...heroStyles.body, fontStyle: "italic", color: BRAND.inkSofter, fontSize: "12.5px" } },
+      "For any other communication, please contact your account manager."
+    )
   );
 }
