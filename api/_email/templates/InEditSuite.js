@@ -1,75 +1,61 @@
 // api/_email/templates/InEditSuite.js
-// Phase A placeholder. Real Claude Design version lands in Phase B.
+// Phase B — Refined direction, Stage 3 (Editing).
+// Sourced from viewix-touchpoints/project/src/EmailRefined.jsx +
+// viewix-touchpoints/project/src/data.jsx STAGES[2].
 //
 // Trigger: api/cron/daily-09.js Pass 3, when a project newly has at
-// least one edit-stage subtask in `inProgress` and no prior log
-// entry. One per project; idempotency key /emailLog/{projectId}/InEditSuite.
+// least one edit-stage subtask in "inProgress" and no prior log
+// entry. One per project. Idempotency: /emailLog/{projectId}/InEditSuite.
 //
-// Subject (Phase A draft):
-//   "Your videos are in the edit suite"
+// Subject (Jeremy to approve before live): "It's in the edit suite"
 //
 // Merge tags expected:
-//   client.firstName
-//   project.projectName
-//   project.numberOfVideos       (optional — falls back to "your videos")
+//   client.firstName       ({{first_name}})
+//   project.projectName    ({{project_name}})
+//   project.clientName     ({{project_subtitle}})
+//   project.id / shortId   ({{project_id}})
+//   editor                 (optional — surfaced in the project card chip)
+//   delivery.url           (optional; rendered as the footer dashboard link)
 
 import { h } from "../_h.js";
 import { Heading, Text } from "@react-email/components";
-import { Layout, BRAND } from "./_layout.js";
-
-const styles = {
-  h1: {
-    fontFamily: "'Montserrat', sans-serif",
-    fontSize: "24px",
-    fontWeight: 700,
-    color: BRAND.ink,
-    margin: "0 0 12px",
-    lineHeight: 1.25,
-  },
-  intro: {
-    fontSize: "16px",
-    color: BRAND.ink,
-    lineHeight: 1.6,
-    margin: "0 0 18px",
-  },
-  body: {
-    fontSize: "15px",
-    color: BRAND.inkSoft,
-    lineHeight: 1.65,
-    margin: "0 0 14px",
-  },
-};
+import { Layout, heroStyles } from "./_layout.js";
 
 export default function InEditSuite(props) {
   const firstName = props?.client?.firstName || "there";
-  const projectName = props?.project?.projectName || "your project";
-  const videoCountText = props?.project?.numberOfVideos
-    ? (props.project.numberOfVideos === 1 ? "your video" : `your ${props.project.numberOfVideos} videos`)
-    : "your videos";
+  const accent = props?.accent || "blue";
+
+  // Stage 3 copy from data.jsx STAGES[2].
+  const headline = "It's in the edit suite";
+  // Body kept version-agnostic — same reasoning as ReadyForReview:
+  // this email's "next up" is the review email, which may be the
+  // initial cut OR a revision round.
+  const bodyCopy = "Your edit is now underway. Our team is shaping the cut, colour and sound. You'll hear from us as soon as it's ready for your eyes.";
 
   return h(
     Layout,
     {
-      preview: `${firstName}, ${videoCountText} just landed on an editor's timeline.`,
-      title: "In the edit suite",
+      stage: 3,
+      preview: `${firstName}, your project is in the edit suite. First cut coming soon.`,
+      accent,
+      project: props?.project,
+      producer: props?.producer,
+      editor: props?.editor,
+      // No dashboard link in the footer. Removed 2026-05-12 per
+      // Jeremy — same reasoning as ShootTomorrow: the InEditSuite
+      // email is a status note, not an action item. The client
+      // doesn't need a generic dashboard link here; the
+      // ReadyForReview email (next in the lifecycle) carries the
+      // call-to-action.
+      dashboardUrl: null,
+      hasInHeroCta: false,
     },
-    h(Heading, { style: styles.h1 }, `${videoCountText.charAt(0).toUpperCase() + videoCountText.slice(1)} are in the edit suite.`),
+    h(Text, { style: heroStyles.eyebrow(accent) }, "In the edit suite"),
+    h(Heading, { as: "h1", style: heroStyles.headline }, headline),
     h(
       Text,
-      { style: styles.intro },
-      `Hey ${firstName} — quick update from the team behind `,
-      h("strong", null, projectName),
-      ". The footage from your shoot is now on an editor's timeline and the cuts are coming together."
-    ),
-    h(
-      Text,
-      { style: styles.body },
-      "Editing is the part where we shape the rough footage into something that actually moves people. Music, pacing, the way one shot leans into the next — it all gets sweated over here."
-    ),
-    h(
-      Text,
-      { style: styles.body },
-      "Next time you hear from us, it'll be with a link to watch the first cut. In the meantime, no action needed from you — but if a thought pops up about what you want this video to do, hit reply and tell us. The earlier we know, the better the cut."
+      { style: heroStyles.body },
+      `Hi ${firstName}, ${bodyCopy}`
     )
   );
 }

@@ -1,91 +1,66 @@
 // api/_email/templates/Confirmation.js
-// Phase A placeholder. Real Claude Design version lands in Phase B.
+// Phase B — Refined direction, Stage 1 (Kickoff).
+// Sourced from viewix-touchpoints/project/src/EmailRefined.jsx +
+// viewix-touchpoints/project/src/data.jsx STAGES[0].
 //
-// Trigger: api/webhook-deal-won.js, immediately after the project record
-// is created. One per project, idempotency key /emailLog/{projectId}/Confirmation.
+// Trigger: api/webhook-deal-won.js right after the project record is
+// created. One per project. Idempotency: /emailLog/{projectId}/Confirmation.
 //
-// Subject (Phase A draft, Jeremy to approve before live):
-//   "You're locked in — here's what happens next"
+// Subject (Jeremy to approve before live): "You're booked in"
 //
-// Merge tags expected (sourced from getProjectContext):
-//   client.firstName
-//   project.projectName
-//   project.clientName
-//   project.numberOfVideos        (optional — falls back to "your videos")
+// Merge tags expected:
+//   client.firstName        ({{first_name}})
+//   project.projectName     ({{project_name}})
+//   project.clientName      ({{project_subtitle}})
+//   project.id / shortId    ({{project_id}})
+//   project.numberOfVideos  (optional; surfaced in body copy fallback)
+//   producer                (optional { name, role, initials })
+//   editor                  (optional { name, role, initials })
+//   delivery.url            (optional; rendered as the footer dashboard link)
 
 import { h } from "../_h.js";
-import { Button, Heading, Text } from "@react-email/components";
-import { Layout, BRAND } from "./_layout.js";
-
-const styles = {
-  h1: {
-    fontFamily: "'Montserrat', sans-serif",
-    fontSize: "24px",
-    fontWeight: 700,
-    color: BRAND.ink,
-    margin: "0 0 12px",
-    lineHeight: 1.25,
-  },
-  intro: {
-    fontSize: "16px",
-    color: BRAND.ink,
-    lineHeight: 1.6,
-    margin: "0 0 18px",
-  },
-  body: {
-    fontSize: "15px",
-    color: BRAND.inkSoft,
-    lineHeight: 1.65,
-    margin: "0 0 14px",
-  },
-  cta: {
-    backgroundColor: BRAND.orange,
-    color: BRAND.panel,
-    fontFamily: "'Montserrat', sans-serif",
-    fontWeight: 700,
-    padding: "12px 22px",
-    borderRadius: "8px",
-    textDecoration: "none",
-    display: "inline-block",
-    marginTop: "8px",
-  },
-};
+import { Heading, Text } from "@react-email/components";
+import { Layout, heroStyles } from "./_layout.js";
 
 export default function Confirmation(props) {
   const firstName = props?.client?.firstName || "there";
-  const projectName = props?.project?.projectName || "your project";
-  const videoCountText = props?.project?.numberOfVideos
-    ? `${props.project.numberOfVideos} ${props.project.numberOfVideos === 1 ? "video" : "videos"}`
-    : "your videos";
+  const accent = props?.accent || "blue";
+
+  // Stage 1 copy. Updated 2026-05-12 per Jeremy: headline reads
+  // "You're booked in" (was "You're locked in") — softer welcome
+  // tone, more accurate to the reality of having a booking on the
+  // schedule.
+  const headline = "You're booked in";
+  const bodyCopy = "We've got your brief and everything's loaded into the studio. We're excited to bring your brand to life.";
 
   return h(
     Layout,
     {
-      preview: `${firstName}, you're locked in. Here's what happens next on ${projectName}.`,
-      title: "Confirmation",
+      stage: 1,
+      preview: `${firstName}, you're booked in. We're excited to bring your brand to life.`,
+      accent,
+      project: props?.project,
+      producer: props?.producer,
+      editor: props?.editor,
+      // No dashboard link in the footer. Removed 2026-05-12 per
+      // Jeremy — the Confirmation email is a welcome note, not an
+      // action item. ReadyForReview is the email that carries the
+      // CTA into the dashboard; everything before it stays
+      // navigationally clean.
+      dashboardUrl: null,
+      hasInHeroCta: false,
+      // Per Jeremy's review 2026-05-11: Confirmation's Up Next reads
+      // "Your shoot day" instead of the generic Stage 1 default
+      // ("Producer call & shoot scheduling"). Matches the client-
+      // facing language and keeps the lifecycle narrative simple.
+      upNext: "Your shoot day",
     },
-    h(Heading, { style: styles.h1 }, `You're locked in, ${firstName}.`),
+    h(Text, { style: heroStyles.eyebrow(accent) }, "Brief locked in"),
+    h(Heading, { as: "h1", style: heroStyles.headline }, headline),
     h(
       Text,
-      { style: styles.intro },
-      `Welcome to Viewix. We're producing ${videoCountText} for `,
-      h("strong", null, projectName),
-      ", and the whole team is excited to bring this to life."
-    ),
-    h(
-      Text,
-      { style: styles.body },
-      "From here, you'll hear from us at every key moment — the day before the shoot, when editing kicks off, and the second your videos are ready to review. No silence between updates, ever."
-    ),
-    h(
-      Text,
-      { style: styles.body },
-      "If anything comes up that you want to flag early — references, brand assets, an audience nuance — just hit reply. The fastest way to get to a great video is for us to know what's in your head."
-    ),
-    h(
-      Button,
-      { href: "https://viewix.com.au", style: styles.cta },
-      "Visit viewix.com.au"
+      { style: heroStyles.body },
+      `Hi ${firstName}, ${bodyCopy}`
     )
   );
 }

@@ -1,59 +1,130 @@
 // api/_email/templates/_layout.js
-// Shared chrome for every Phase A placeholder template:
-//   - <Html> wrapper with preview text + Inter font CDN
-//   - Header with Viewix wordmark
-//   - Body container with brand background
-//   - Footer with the standard "reply hits a real human" line
+// Phase B layout — Refined direction from Claude Design (Direction 01).
+// Sourced from viewix-touchpoints/project/src/EmailRefined.jsx.
 //
-// Phase B (real designs) will likely refactor or replace this layout
-// to match Claude Design's actual visual treatment. For now this is
-// deliberately ugly-but-on-brand so dry-run sanity checks confirm
-// the wiring works without anyone mistaking a placeholder for the
-// finished product.
+// Structure (top to bottom):
+//   1. Header bar:    Viewix wordmark (left) + "CLIENT UPDATE" eyebrow (right)
+//   2. Stepper:       "STAGE X OF 4" + project ID, then 4 dots + labels
+//                     Done = ✓ in accent fill; current = filled accent; upcoming = empty
+//   3. Hero block:    per-template children — eyebrow, headline, body, optional CTA
+//   4. Project card:  project name + subtitle + producer chip + editor chip
+//   5. Up next:       eyebrow divider + next-step text
+//   6. Footer link:   "View project on dashboard ->" (rendered when no CTA in hero)
+//   7. Footer:        "The Viewix team" + viewix.com.au
+//
+// Translates the original flex / absolute positioned design to React Email
+// table primitives that Outlook desktop renders correctly. Where the
+// design uses gradients / SVG / pulse animations (the per-stage imagery
+// blocks), those are dropped from Phase B — they don't translate to email
+// and the hero block carries the message on its own. Imagery can come
+// back in a Phase C as static PNGs hosted under /public if needed.
+//
+// All copy uses hyphens, not em dashes (per Jeremy's correction on the
+// design chat — "We're going to take out any end dashes and replace
+// them with hyphens").
 
 import { h } from "../_h.js";
 import {
   Body,
+  Button,
+  Column,
   Container,
   Font,
   Head,
   Heading,
   Hr,
   Html,
+  Img,
+  Link,
   Preview,
+  Row,
   Section,
   Text,
 } from "@react-email/components";
 
-// Brand variables sourced from the Claude Design viewer shell.
-// Centralised here so every template (and the Phase B redesign)
-// references one source of truth.
+// Brand variables. Centralised so every template (and the Phase B
+// redesign) references one source of truth. Sourced from the
+// Viewix brand guidelines + the design's data layer.
 export const BRAND = {
   blue: "#0082FA",
   blueDark: "#004F99",
   orange: "#F87700",
   orangeDark: "#AE3A00",
   off: "#F4F5F9",
+  offDeep: "#EEF0F4",
+  panelTint: "#FAFBFC",
+  borderLight: "#F0F1F5",
+  borderMid: "#EEF0F4",
+  borderStrong: "#E5E7EC",
   gray: "#CBCCD1",
   ink: "#0B0D12",
-  panel: "#FFFFFF",
-  bg: "#EEF0F4",
+  inkMid: "#3A3F4C",
   inkSoft: "#4A4F5C",
   inkSofter: "#6B7180",
+  inkMuted: "#9AA0AE",
+  panel: "#FFFFFF",
+  bg: "#EEF0F4",
 };
 
-// Email-safe font stack. Outlook desktop strips webfont @font-face,
-// so the fallbacks must form a sensible system stack on their own.
-const FONT_BODY = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
-const FONT_HEAD = "'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
+// Email-safe font stack. Inter + Montserrat loaded via Google
+// Fonts CDN in the Layout's <Head>. Outlook desktop strips
+// webfonts so the system fallbacks must form a sensible stack on
+// their own. JetBrains Mono is used for eyebrow / label text and
+// uses ui-monospace + Menlo as fallbacks for the same reason.
+const FONT_BODY    = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
+const FONT_DISPLAY = "'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
+const FONT_MONO    = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+// Per Codex review 2026-05-12: dedicated email-specific logo asset.
+//
+// Root cause of the earlier clipping bug: the original
+// /public/viewix-logo.png was CORRUPTED — the IDAT chunk claimed
+// 16319 bytes of pixel data in a file that's only 12576 bytes
+// total. Browsers were rendering the partial-decoded image at
+// natural size and ignoring our explicit dimensions because they
+// were fighting through broken PNG data.
+//
+// Fix: regenerated both viewix-logo.png (600x160 for dashboard use)
+// and viewix-logo-email.png (278x74 for email display at 139x37
+// retina-sharp) from the clean 2400x638 source in the Claude
+// Design handoff bundle. Pillow confirms both load cleanly.
+//
+// Email-side: use the smaller dedicated asset over HTTPS.
+function brandLogoUrl() {
+  const base = (process.env.PUBLIC_BASE_URL || "https://planner.viewix.com.au").replace(/\/+$/, "");
+  return `${base}/viewix-logo-email.png`;
+}
+
+// Optional per-stage hero imagery URL helper. These files do not ship
+// with Phase B yet, so Layout defaults imagery off. If we later add
+// real assets, pass showImagery={true} and commit the matching files
+// under /public/.
+function heroImageUrl(stage) {
+  const slugByStage = { 1: "kickoff", 2: "shoot", 3: "edit", 4: "review" };
+  const slug = slugByStage[stage];
+  if (!slug) return null;
+  const base = (process.env.PUBLIC_BASE_URL || "https://planner.viewix.com.au").replace(/\/+$/, "");
+  return `${base}/email-hero-${stage}-${slug}.png`;
+}
+
+// The 4 lifecycle stages, in order. Stage 1 = Kickoff (Confirmation),
+// Stage 2 = Shooting (ShootTomorrow), Stage 3 = Editing (InEditSuite),
+// Stage 4 = Review (ReadyForReview). Labels and the "next up" lines
+// match the design's STAGES array verbatim, with hyphens not em dashes.
+const STAGES = [
+  { num: 1, label: "Kickoff",  next: "Producer call & shoot scheduling" },
+  { num: 2, label: "Shooting", next: "Footage ingest & editing" },
+  { num: 3, label: "Editing",  next: "Ready for your review" },
+  { num: 4, label: "Review",   next: "Leave your feedback and finalize" },
+];
 
 const styles = {
   body: {
     backgroundColor: BRAND.bg,
-    color: BRAND.ink,
-    fontFamily: FONT_BODY,
     margin: 0,
     padding: 0,
+    fontFamily: FONT_BODY,
+    color: BRAND.ink,
   },
   outerWrap: {
     backgroundColor: BRAND.bg,
@@ -61,52 +132,775 @@ const styles = {
   },
   card: {
     backgroundColor: BRAND.panel,
-    borderRadius: "16px",
     maxWidth: "560px",
     margin: "0 auto",
+    borderRadius: "16px",
     overflow: "hidden",
-    boxShadow: "0 1px 0 rgba(0,0,0,0.04), 0 12px 28px -16px rgba(12,16,24,0.18)",
+    boxShadow:
+      "0 1px 0 rgba(0,0,0,0.04), 0 30px 60px -30px rgba(12,16,24,0.35), 0 18px 36px -24px rgba(12,16,24,0.22)",
   },
+  // ─── Header ────────────────────────────────────────────────
+  // Bumped top/bottom padding from 22 to 28 so the 37px logo
+  // sits centrally with breathing room above and below.
   header: {
-    backgroundColor: BRAND.ink,
-    padding: "24px 28px",
+    padding: "28px 28px",
+    borderBottom: `1px solid ${BRAND.borderLight}`,
   },
-  brand: {
-    color: BRAND.panel,
-    fontFamily: FONT_HEAD,
+  logoImg: {
+    // Style mirrors the explicit width/height attributes so any
+    // email client honouring style over attributes still gets the
+    // right sizing. `display: block` strips the baseline gap an
+    // inline <img> would inherit; `maxWidth: 100%` keeps it within
+    // the column on very narrow viewports.
+    width: "120px",
+    height: "32px",
+    display: "block",
+    maxWidth: "100%",
+    border: "0",
+    outline: "none",
+    textDecoration: "none",
+  },
+  headerEyebrow: {
+    fontFamily: FONT_MONO,
+    fontSize: "10px",
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    color: BRAND.inkMuted,
+    margin: 0,
+    textAlign: "right",
+  },
+  // ─── Stepper ───────────────────────────────────────────────
+  stepperWrap: {
+    padding: "28px 28px 0",
+  },
+  stepperMetaRow: {
+    fontFamily: FONT_MONO,
+    fontSize: "10px",
+    letterSpacing: "0.14em",
+    color: BRAND.inkMuted,
+    textTransform: "uppercase",
+    marginBottom: "12px",
+  },
+  stepperLabel: {
+    fontFamily: FONT_BODY,
+    fontSize: "10px",
+    fontWeight: 500,
+    color: BRAND.inkMuted,
+    textAlign: "center",
+    letterSpacing: "0.02em",
+    margin: 0,
+    padding: "8px 2px 0",
+  },
+  // ─── Hero ──────────────────────────────────────────────────
+  hero: {
+    padding: "28px 28px 8px",
+  },
+  heroEyebrow: {
+    fontFamily: FONT_MONO,
+    fontSize: "11px",
+    textTransform: "uppercase",
+    letterSpacing: "0.14em",
+    fontWeight: 600,
+    marginBottom: "14px",
+    margin: "0 0 14px",
+  },
+  heroHeadline: {
+    fontFamily: FONT_DISPLAY,
     fontWeight: 800,
-    fontSize: "20px",
+    fontSize: "30px",
+    lineHeight: 1.1,
+    letterSpacing: "-0.025em",
+    margin: "0 0 18px",
+    color: BRAND.ink,
+  },
+  heroBody: {
+    fontSize: "15px",
+    lineHeight: 1.55,
+    color: BRAND.inkMid,
+    margin: "0 0 20px",
+  },
+  ctaButton: {
+    background: BRAND.blue,
+    color: BRAND.panel,
+    fontFamily: FONT_DISPLAY,
+    fontWeight: 600,
+    fontSize: "13.5px",
+    letterSpacing: "-0.005em",
+    padding: "12px 18px",
+    borderRadius: "8px",
+    textDecoration: "none",
+    display: "inline-block",
+  },
+  // ─── Project card ──────────────────────────────────────────
+  projectCardWrap: {
+    padding: "0 28px 24px",
+  },
+  projectCard: {
+    backgroundColor: BRAND.panelTint,
+    border: `1px solid ${BRAND.borderMid}`,
+    borderRadius: "12px",
+    padding: "16px 18px",
+  },
+  projectCardEyebrow: {
+    fontFamily: FONT_MONO,
+    fontSize: "10px",
+    letterSpacing: "0.14em",
+    textTransform: "uppercase",
+    color: BRAND.inkMuted,
+    margin: "0 0 10px",
+  },
+  projectCardName: {
+    fontFamily: FONT_DISPLAY,
+    fontWeight: 600,
+    fontSize: "14px",
     letterSpacing: "-0.01em",
+    margin: "0 0 4px",
+    color: BRAND.ink,
+  },
+  projectCardSub: {
+    fontSize: "12px",
+    color: BRAND.inkSofter,
+    lineHeight: 1.4,
+    margin: "0 0 14px",
+  },
+  chipsRow: {
+    borderTop: `1px solid ${BRAND.borderMid}`,
+    paddingTop: "12px",
+  },
+  // ─── Up next ───────────────────────────────────────────────
+  upNextEyebrow: {
+    fontFamily: FONT_MONO,
+    fontSize: "10px",
+    letterSpacing: "0.14em",
+    textTransform: "uppercase",
+    color: BRAND.inkMuted,
     margin: 0,
   },
-  brandTagline: {
-    color: BRAND.gray,
-    fontSize: "12px",
-    margin: "4px 0 0",
+  upNextText: {
+    fontSize: "14px",
+    color: BRAND.ink,
+    fontWeight: 500,
+    margin: 0,
+    padding: "0 28px 30px",
   },
-  content: {
-    padding: "32px 28px 12px",
+  upNextRow: {
+    padding: "0 28px 12px",
   },
+  upNextHr: {
+    borderTop: `1px solid ${BRAND.borderMid}`,
+    margin: 0,
+    width: "100%",
+  },
+  // ─── Footer link (no-CTA case) ─────────────────────────────
+  footerLinkWrap: {
+    padding: "0 28px 30px",
+  },
+  footerLink: {
+    fontFamily: FONT_MONO,
+    fontSize: "11px",
+    fontWeight: 600,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    textDecoration: "none",
+  },
+  // ─── Footer ────────────────────────────────────────────────
   footer: {
-    padding: "16px 28px 28px",
-    color: BRAND.inkSofter,
-    fontSize: "12px",
-    lineHeight: 1.55,
+    padding: "22px 28px",
+    backgroundColor: BRAND.panelTint,
+    borderTop: `1px solid ${BRAND.borderLight}`,
+    textAlign: "center",
   },
-  hr: {
-    borderColor: BRAND.off,
-    margin: "20px 0 16px",
+  footerByline: {
+    fontSize: "12px",
+    color: BRAND.inkSofter,
+    margin: "0 0 4px",
+  },
+  footerDomain: {
+    fontFamily: FONT_MONO,
+    fontSize: "10px",
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    color: BRAND.inkMuted,
+    margin: 0,
   },
 };
 
-/**
- * Render a child node tree inside the standard Viewix shell.
- * @param {object} args
- * @param {string} args.preview      - 80–120 char preview text shown in inbox lists
- * @param {string} args.title        - On-brand title shown in the dark header
- * @param {React.ReactNode} args.children - Body content to render between header and footer
- */
-export function Layout({ preview, title, children }) {
+// ────────────────────────────────────────────────────────────────
+// Email header — wordmark left, "CLIENT UPDATE" eyebrow right.
+//
+// Logo sizing notes:
+// - Source PNG is 301x80 (aspect ratio ~3.76:1)
+// - Rendered at 140x37 to give a comfortable header presence
+//
+// IMPORTANT — this is a deliberate from-scratch rewrite using raw
+// <table>/<tr>/<td> primitives instead of React Email's
+// Section/Row/Column. Earlier attempts with the React Email
+// abstractions caused the logo to clip at the top in the user's
+// browser preview (the table cells were collapsing to a height
+// shorter than the image, and the email card's `overflow:hidden`
+// + border-radius then cut the top of the image off). The raw
+// table approach explicitly sets cell heights and uses the
+// `valign` attribute (more reliable than CSS vertical-align in
+// table contexts) so the cell always grows to fit the image.
+// ────────────────────────────────────────────────────────────────
+function EmailHeader() {
+  // Actual PNG logo served from the deployed dashboard domain. Avoid
+  // data: URIs here; common email clients strip them.
+  const tableStyle = {
+    width: "100%",
+    borderCollapse: "collapse",
+    borderBottom: `1px solid ${BRAND.borderLight}`,
+  };
+  const cellLeftStyle = {
+    padding: "24px 0 24px 28px",
+    verticalAlign: "middle",
+    width: "60%",
+    lineHeight: "0",
+  };
+  const cellRightStyle = {
+    padding: "24px 28px 24px 0",
+    verticalAlign: "middle",
+    width: "40%",
+    textAlign: "right",
+  };
+  return h(
+    "table",
+    {
+      role: "presentation",
+      cellPadding: "0",
+      cellSpacing: "0",
+      border: "0",
+      style: tableStyle,
+    },
+    h(
+      "tbody",
+      null,
+      h(
+        "tr",
+        null,
+        h(
+          "td",
+          { style: cellLeftStyle, valign: "middle" },
+          // Email logo: viewix-logo-email.png is 278x74 natural,
+          // displayed at 139x37. Half-scale matches retina 2x
+          // density so the logo stays crisp.
+          h("img", {
+            src: brandLogoUrl(),
+            alt: "Viewix",
+            width: "139",
+            height: "37",
+            style: {
+              display: "block",
+              width: "139px",
+              height: "37px",
+              border: "0",
+            },
+          })
+        ),
+        h(
+          "td",
+          { style: cellRightStyle, valign: "middle" },
+          h(
+            "span",
+            {
+              style: {
+                fontFamily: FONT_MONO,
+                fontSize: "10px",
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: BRAND.inkMuted,
+                whiteSpace: "nowrap",
+              },
+            },
+            "Client update"
+          )
+        )
+      )
+    )
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Stepper — "STAGE X OF 4" + 4 dots + labels with a connector line.
+//
+// Per Jeremy 2026-05-12: the accent (blue) progress line must STOP
+// at the centre of the current-stage circle. Upcoming circles are
+// filled gray and show their stage number — not empty/hollow — so
+// the client always sees all four steps numbered.
+//
+// Done stages:      blue filled dot with ✓, blue line across top.
+// Current stage:    blue filled dot with number, blue line from the
+//                   left edge of the column to the column centre,
+//                   then gray from the centre out (gradient).
+// Upcoming stages:  gray filled dot with number, gray line across.
+//
+// The dot sits half-overlapping the line via `marginTop: -12px` so
+// the line visually runs through the dot. Outlook desktop strips
+// the negative margin (renders the dot below the line) and the
+// background-image gradient on the current column (falls back to a
+// solid border) — degraded but still readable in both cases.
+// ────────────────────────────────────────────────────────────────
+function Stepper({ stage, accent }) {
+  const accentColor = accent === "orange" ? BRAND.orange : BRAND.blue;
+  const lineColorDone = accentColor;
+  const lineColorUpcoming = BRAND.borderStrong;
+
+  // Track is rendered as ONE 2px-tall row with 8 cells (left + right
+  // half of each stage). Each half is painted with an explicit
+  // backgroundColor — the most reliable line-drawing mechanism in
+  // email clients (no gradient, no border-top/background-image
+  // conflict). Cells in the row sit edge-to-edge so the line is
+  // continuous across the stepper with no half-pixel drift.
+  //
+  // Colour rule per half:
+  //   left  half of stage S  -> blue if S <= currentStage  (done or current's left side)
+  //   right half of stage S  -> blue if S <  currentStage  (only fully-done stages)
+  //
+  // This produces:
+  //   stage 1 selected: [B][G][G][G][G][G][G][G]  blue stops at dot 1 centre
+  //   stage 2 selected: [B][B][B][G][G][G][G][G]  blue stops at dot 2 centre
+  //   stage 4 selected: [B][B][B][B][B][B][B][G]  blue stops at dot 4 centre
+  //
+  // The dots are rendered in a separate row below the track, pulled
+  // up via negative margin to overlap. Outlook strips negative
+  // margins → dot renders below the line — still readable.
+  const halfCell = (key, color) =>
+    h(Column, {
+      key,
+      style: {
+        width: "12.5%",
+        height: "2px",
+        lineHeight: "2px",
+        fontSize: "0",
+        backgroundColor: color,
+        // Belt-and-braces for Outlook desktop, which loves to add
+        // a default cell border.
+        borderCollapse: "collapse",
+        padding: 0,
+      },
+    }, " ");
+
+  return h(
+    Section,
+    { style: styles.stepperWrap },
+    // Meta row: "STAGE X OF 4".
+    h(
+      Row,
+      { style: styles.stepperMetaRow },
+      h(
+        Column,
+        { style: { width: "100%", textAlign: "left" } },
+        h("span", { style: { fontFamily: FONT_MONO } }, `Stage ${stage} of 4`)
+      )
+    ),
+    // Track row — 8 half-cells.
+    h(
+      Row,
+      {
+        style: {
+          marginTop: "12px",
+          height: "2px",
+          lineHeight: "2px",
+          fontSize: "0",
+          borderCollapse: "collapse",
+        },
+      },
+      ...STAGES.flatMap(s => {
+        const leftColor = s.num <= stage ? lineColorDone : lineColorUpcoming;
+        const rightColor = s.num < stage ? lineColorDone : lineColorUpcoming;
+        return [
+          halfCell(`${s.num}L`, leftColor),
+          halfCell(`${s.num}R`, rightColor),
+        ];
+      })
+    ),
+    // Dot + label row.
+    h(
+      Row,
+      null,
+      ...STAGES.map(s => {
+        const isDone = s.num < stage;
+        const isCurrent = s.num === stage;
+        const isUpcoming = s.num > stage;
+
+        const dotFill = isUpcoming ? BRAND.gray : accentColor;
+        const dotBorder = isUpcoming
+          ? `2px solid ${BRAND.gray}`
+          : `2px solid ${accentColor}`;
+        const dotChar = isDone ? "✓" : String(s.num);
+        const dotColor = BRAND.panel;
+        const labelColor = isCurrent ? BRAND.ink : (isDone ? BRAND.inkSoft : BRAND.inkMuted);
+        const labelWeight = isCurrent ? 700 : 500;
+
+        return h(
+          Column,
+          {
+            key: s.num,
+            style: {
+              width: "25%",
+              textAlign: "center",
+              verticalAlign: "top",
+              paddingTop: "0",
+            },
+          },
+          h(
+            "div",
+            {
+              style: {
+                // Pull the dot up so it overlaps the 2px line above,
+                // centring the line through the dot's vertical
+                // midpoint. (22px dot height + 2px line, -12px to
+                // overlap puts the dot's centre on the line.)
+                marginTop: "-12px",
+                display: "inline-block",
+                width: "22px",
+                height: "22px",
+                lineHeight: "18px",
+                borderRadius: "50%",
+                background: dotFill,
+                border: dotBorder,
+                color: dotColor,
+                fontFamily: FONT_BODY,
+                fontWeight: 700,
+                fontSize: "11px",
+                textAlign: "center",
+              },
+            },
+            dotChar
+          ),
+          h(
+            Text,
+            {
+              style: {
+                ...styles.stepperLabel,
+                color: labelColor,
+                fontWeight: labelWeight,
+              },
+            },
+            s.label
+          )
+        );
+      })
+    )
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// PersonChip — circular avatar with initials, name, role.
+// ────────────────────────────────────────────────────────────────
+// Display AU mobile numbers in the conventional "0477 515 963" form.
+// Falls back to the raw stored string for anything that doesn't match
+// the 04XXXXXXXX shape (international, landlines, free-form, etc.).
+function formatPhoneAU(raw) {
+  if (!raw) return "";
+  const digits = String(raw).replace(/[^\d]/g, "");
+  if (/^04\d{8}$/.test(digits)) {
+    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
+  }
+  return String(raw).trim();
+}
+
+function PersonChip({ person, accent }) {
+  if (!person || !person.name) return null;
+  const accentColor = accent === "orange" ? BRAND.orange : BRAND.blue;
+  const initials =
+    (person.initials || "").trim() ||
+    (person.name || "")
+      .trim()
+      .split(/\s+/)
+      .map(w => w.charAt(0))
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+  // Avatar URL takes priority over initials. Slack profile photos
+  // (https://ca.slack-edge.com/...) are square; we crop to a circle
+  // with border-radius. Falls back to initials disk when no avatar
+  // URL is provided.
+  const avatarUrl = person.avatar || person.avatarUrl || null;
+  const avatarNode = avatarUrl
+    ? h("img", {
+        src: avatarUrl,
+        alt: person.name,
+        width: 32,
+        height: 32,
+        style: {
+          display: "block",
+          width: "32px",
+          height: "32px",
+          borderRadius: "50%",
+          border: "0",
+          objectFit: "cover",
+        },
+      })
+    : h(
+        "div",
+        {
+          style: {
+            width: "32px",
+            height: "32px",
+            lineHeight: "32px",
+            borderRadius: "50%",
+            background: accentColor,
+            color: BRAND.panel,
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: "11px",
+            letterSpacing: "0.02em",
+            textAlign: "center",
+          },
+        },
+        initials
+      );
+  return h(
+    Column,
+    { style: { verticalAlign: "middle", paddingRight: "10px" } },
+    h(
+      Row,
+      null,
+      h(
+        Column,
+        { style: { width: "32px", verticalAlign: "middle", lineHeight: 0 } },
+        avatarNode
+      ),
+      h(
+        Column,
+        { style: { verticalAlign: "middle", paddingLeft: "9px" } },
+        h(
+          Text,
+          {
+            style: {
+              fontSize: "12px",
+              fontWeight: 600,
+              color: BRAND.ink,
+              margin: 0,
+              lineHeight: 1.3,
+            },
+          },
+          person.name
+        ),
+        h(
+          Text,
+          {
+            style: {
+              fontSize: "10.5px",
+              color: BRAND.inkMuted,
+              fontFamily: FONT_MONO,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              margin: 0,
+              lineHeight: 1.3,
+            },
+          },
+          person.role || ""
+        ),
+        // Mobile number line — per Jeremy 2026-05-12, the account
+        // manager's mobile must always appear in the chip so the
+        // client has a direct escalation channel on every touchpoint.
+        // Rendered as a tel: link for one-tap dialling on mobile;
+        // mailto-style fallbacks gracefully if the email client
+        // strips the href (the number text remains).
+        person.phone
+          ? h(
+              Text,
+              {
+                style: {
+                  fontSize: "11px",
+                  color: BRAND.inkSoft,
+                  margin: "2px 0 0",
+                  lineHeight: 1.3,
+                  fontVariantNumeric: "tabular-nums",
+                },
+              },
+              h(
+                "a",
+                {
+                  href: `tel:${String(person.phone).replace(/[^\d+]/g, "")}`,
+                  style: { color: BRAND.inkSoft, textDecoration: "none" },
+                },
+                formatPhoneAU(person.phone)
+              )
+            )
+          : null
+      )
+    )
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// ProjectCard — project name + subtitle + producer / editor chips.
+// Chips only render when their person data is present (name set).
+// ────────────────────────────────────────────────────────────────
+function ProjectCard({ project, producer, editor, accent }) {
+  if (!project) return null;
+  const hasAnyChip = (producer && producer.name) || (editor && editor.name);
+  return h(
+    Section,
+    { style: styles.projectCardWrap },
+    h(
+      "div",
+      { style: styles.projectCard },
+      h(Text, { style: styles.projectCardEyebrow }, "Project"),
+      h(Text, { style: styles.projectCardName }, project.projectName || "Untitled project"),
+      project.clientName
+        ? h(Text, { style: styles.projectCardSub }, project.clientName)
+        : null,
+      hasAnyChip
+        ? h(
+            "div",
+            { style: styles.chipsRow },
+            h(
+              Row,
+              null,
+              producer ? h(PersonChip, { person: producer, accent }) : null,
+              editor ? h(PersonChip, { person: editor, accent }) : null
+            )
+          )
+        : null
+    )
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// UpNext — eyebrow divider + next-step text.
+// ────────────────────────────────────────────────────────────────
+function UpNext({ text }) {
+  if (!text) return null;
+  return h(
+    "div",
+    null,
+    h(
+      Section,
+      { style: styles.upNextRow },
+      h(
+        Row,
+        null,
+        h(
+          Column,
+          { style: { width: "70px", verticalAlign: "middle" } },
+          h(Text, { style: styles.upNextEyebrow }, "Up next")
+        ),
+        h(
+          Column,
+          { style: { verticalAlign: "middle", paddingLeft: "10px" } },
+          h(Hr, { style: styles.upNextHr })
+        )
+      )
+    ),
+    h(Text, { style: styles.upNextText }, `→ ${text}`)
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// HeroImagery — optional per-stage decorative block between the hero
+// text and the project card. Keep disabled unless the referenced PNGs
+// have actually been committed and deployed; otherwise email clients
+// show broken-image boxes.
+// ────────────────────────────────────────────────────────────────
+function HeroImagery({ stage }) {
+  const url = heroImageUrl(stage);
+  if (!url) return null;
+  const altByStage = {
+    1: "Kickoff — your project is loaded into the studio",
+    2: "On location — REC 00:12:04:17",
+    3: "In the edit suite — timeline waveform",
+    4: "Ready for review — first cut",
+  };
+  return h(
+    Section,
+    { style: { padding: "4px 28px 20px" } },
+    h(
+      "div",
+      { style: { borderRadius: "12px", overflow: "hidden", lineHeight: 0 } },
+      h("img", {
+        src: url,
+        alt: altByStage[stage] || "",
+        width: "480",
+        height: "140",
+        style: {
+          display: "block",
+          width: "100%",
+          maxWidth: "480px",
+          height: "auto",
+          border: "0",
+          outline: "none",
+          textDecoration: "none",
+        },
+      })
+    )
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Footer link — only shown when the hero block didn't have a CTA.
+// "View project on dashboard ->" small-cap link.
+// ────────────────────────────────────────────────────────────────
+function FooterDashboardLink({ url, accent }) {
+  if (!url) return null;
+  const accentColor = accent === "orange" ? BRAND.orange : BRAND.blue;
+  return h(
+    Section,
+    { style: styles.footerLinkWrap },
+    h(
+      Link,
+      {
+        href: url,
+        style: { ...styles.footerLink, color: accentColor },
+      },
+      "View project on dashboard →"
+    )
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Brand footer — "The Viewix team" + viewix.com.au, on tinted bg.
+// ────────────────────────────────────────────────────────────────
+function BrandFooter() {
+  return h(
+    Section,
+    { style: styles.footer },
+    h(Text, { style: styles.footerByline }, "The Viewix team"),
+    h(Text, { style: styles.footerDomain }, "viewix.com.au")
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Main layout. Templates pass their stage number + hero content
+// (children), plus optional project/producer/editor/upNext/dashboardUrl.
+//
+// Args:
+//   stage:      1-4. Drives the stepper highlight and the "up next" default.
+//   preview:    inbox preview text (60-120 chars).
+//   accent:     "blue" | "orange". Defaults to "blue" (Viewix primary).
+//   project:    { id, projectName, clientName, ... }
+//   client:     { firstName, email } — not rendered directly; templates
+//               use it in their hero body copy.
+//   producer:   optional { name, role, initials }
+//   editor:     optional { name, role, initials }
+//   upNext:     optional override text. Defaults to STAGES[stage-1].next.
+//   dashboardUrl: optional URL. If set AND the hero block has no CTA,
+//               renders the "View project on dashboard ->" footer link.
+//   children:   the hero block — eyebrow + headline + body + optional
+//               in-hero CTA. Each template renders its own.
+//   hasInHeroCta: signals to the layout that the hero rendered its own
+//               CTA, so the footer dashboard link should be suppressed
+//               to avoid two CTAs in the same email.
+// ────────────────────────────────────────────────────────────────
+export function Layout({
+  stage,
+  preview,
+  accent = "blue",
+  project,
+  producer,
+  editor,
+  upNext,
+  dashboardUrl,
+  hasInHeroCta = false,
+  showImagery = false,
+  children,
+}) {
+  const stageInfo = STAGES.find(s => s.num === stage) || STAGES[0];
+  const resolvedUpNext = (upNext != null ? upNext : stageInfo.next) || "";
+
   return h(
     Html,
     { lang: "en" },
@@ -116,15 +910,21 @@ export function Layout({ preview, title, children }) {
       h(Font, {
         fontFamily: "Inter",
         fallbackFontFamily: ["Helvetica", "Arial", "sans-serif"],
-        webFont: { url: "https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50ojIw2boKoduKmMEVuLyfMZg.woff2", format: "woff2" },
+        webFont: {
+          url: "https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50ojIw2boKoduKmMEVuLyfMZg.woff2",
+          format: "woff2",
+        },
         fontWeight: 400,
         fontStyle: "normal",
       }),
       h(Font, {
         fontFamily: "Montserrat",
         fallbackFontFamily: ["Helvetica", "Arial", "sans-serif"],
-        webFont: { url: "https://fonts.gstatic.com/s/montserrat/v30/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2", format: "woff2" },
-        fontWeight: 700,
+        webFont: {
+          url: "https://fonts.gstatic.com/s/montserrat/v30/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2",
+          format: "woff2",
+        },
+        fontWeight: 800,
         fontStyle: "normal",
       })
     ),
@@ -138,24 +938,43 @@ export function Layout({ preview, title, children }) {
         h(
           Container,
           { style: styles.card },
-          h(
-            Section,
-            { style: styles.header },
-            h(Heading, { as: "h1", style: styles.brand }, "VIEWIX"),
-            title ? h(Text, { style: styles.brandTagline }, title) : null
-          ),
-          h(Section, { style: styles.content }, children),
-          h(Hr, { style: styles.hr }),
-          h(
-            Section,
-            { style: styles.footer },
-            h(Text, { style: { margin: 0 } }, "Hit reply on this email and a real human at Viewix will read it. We're at hello@viewix.com.au."),
-            h(Text, { style: { margin: "10px 0 0", color: BRAND.gray } }, "Viewix Video Production · Sydney, Australia")
-          )
+          h(EmailHeader, null),
+          h(Stepper, { stage, accent }),
+          // Hero block — template-specific
+          h(Section, { style: styles.hero }, children),
+          // Per-stage hero imagery (Kickoff = blue gradient/play, Shoot
+          // = REC indicator, Edit = timeline waveform, Review = circle
+          // play + progress bar). Lives between the hero text block and
+          // the project card. Hidden gracefully if showImagery is false
+          // (no <img> rendered at all, so no broken-image icon).
+          showImagery !== false
+            ? h(HeroImagery, { stage })
+            : null,
+          // Project card
+          h(ProjectCard, { project, producer, editor, accent }),
+          // Up next
+          h(UpNext, { text: resolvedUpNext }),
+          // Footer dashboard link (only when no in-hero CTA)
+          !hasInHeroCta && dashboardUrl
+            ? h(FooterDashboardLink, { url: dashboardUrl, accent })
+            : null,
+          h(BrandFooter, null)
         )
       )
     )
   );
 }
+
+// Helper exports so the per-template files can render their hero blocks
+// using the same heading / body / eyebrow / CTA styles. Templates can
+// also reach into BRAND for any one-off colour need.
+export const heroStyles = {
+  eyebrow: (accent) =>
+    ({ ...styles.heroEyebrow, color: accent === "orange" ? BRAND.orange : BRAND.blue }),
+  headline: styles.heroHeadline,
+  body: styles.heroBody,
+  cta: (accent) =>
+    ({ ...styles.ctaButton, background: accent === "orange" ? BRAND.orange : BRAND.blue }),
+};
 
 export default Layout;
