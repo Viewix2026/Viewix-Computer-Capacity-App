@@ -66,6 +66,10 @@ function normaliseScrapedAd(raw, pageName) {
   const pickImage = () => {
     const images = snapshot?.images || raw?.images || [];
     if (Array.isArray(images) && images[0]) return images[0].original_image_url || images[0].resized_image_url || images[0].url || null;
+    const videosForThumb = snapshot?.videos || raw?.videos || [];
+    if (Array.isArray(videosForThumb) && videosForThumb[0]) return videosForThumb[0].video_preview_image_url || videosForThumb[0].preview_image_url || videosForThumb[0].image_url || null;
+    const cards = snapshot?.cards || raw?.cards || [];
+    if (Array.isArray(cards) && cards[0]) return cards[0].original_image_url || cards[0].resized_image_url || cards[0].image_url || cards[0].url || null;
     return snapshot?.creative_body_image || raw?.thumbnail_url || raw?.thumbnailUrl || null;
   };
   const pickVideo = () => {
@@ -98,7 +102,10 @@ function normaliseScrapedAd(raw, pageName) {
   return {
     id: String(adId),
     adId: String(adId),
-    adUrl: raw?.url || raw?.ad_library_url || `https://www.facebook.com/ads/library/?id=${adId}`,
+    adUrl: raw?.url || raw?.ad_library_url || raw?.ad_snapshot_url || raw?.permalink_url || raw?.snapshot?.url
+      || ((raw?.page_id || raw?.pageId)
+        ? `https://www.facebook.com/ads/library/?id=${adId}&view_all_page_id=${raw.page_id || raw.pageId}`
+        : `https://www.facebook.com/ads/library/?id=${adId}`),
     pageName: raw?.page_name || raw?.pageName || pageName || "Unknown",
     pageId: raw?.page_id || raw?.pageId || null,
     pageUrl: raw?.page_url || raw?.pageUrl || null,

@@ -741,7 +741,7 @@ function ResearchStep({ project, onPatch }) {
 // typically only have an ad URL until the producer visits it — they
 // render with a FB-logo placeholder.
 function AdCard({ ad, onRemove }) {
-  const thumb = ad.thumbnailUrl || ad.snapshotUrl || null;
+  const thumb = ad.thumbnailUrl || null;
   const pageName = ad.pageName || ad.advertiserName || "Unknown advertiser";
   const body = (ad.bodyText || ad.headline || "").slice(0, 160);
   const adLink = ad.adUrl || (ad.adId ? `https://www.facebook.com/ads/library/?id=${ad.adId}` : null);
@@ -953,7 +953,7 @@ function VideoReviewStep({ project, onPatch }) {
 }
 
 function ReviewAdCard({ ad, status, onTick, onCross }) {
-  const thumb = ad.thumbnailUrl || ad.snapshotUrl || null;
+  const thumb = ad.thumbnailUrl || null;
   const adLink = ad.adUrl || (ad.adId ? `https://www.facebook.com/ads/library/?id=${ad.adId}` : null);
   const border = status === "ticked" ? "rgba(34,197,94,0.6)" : status === "crossed" ? "rgba(239,68,68,0.6)" : "var(--border)";
   return (
