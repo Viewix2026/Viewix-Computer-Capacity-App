@@ -65,12 +65,12 @@ function normaliseScrapedAd(raw, pageName) {
   const snapshot = raw?.snapshot || {};
   const pickImage = () => {
     const images = snapshot?.images || raw?.images || [];
-    if (Array.isArray(images) && images[0]) return images[0].original_image_url || images[0].resized_image_url || images[0].url;
+    if (Array.isArray(images) && images[0]) return images[0].original_image_url || images[0].resized_image_url || images[0].url || null;
     return snapshot?.creative_body_image || raw?.thumbnail_url || raw?.thumbnailUrl || null;
   };
   const pickVideo = () => {
     const videos = snapshot?.videos || raw?.videos || [];
-    if (Array.isArray(videos) && videos[0]) return videos[0].video_hd_url || videos[0].video_sd_url || videos[0].url;
+    if (Array.isArray(videos) && videos[0]) return videos[0].video_hd_url || videos[0].video_sd_url || videos[0].url || null;
     return raw?.video_url || raw?.videoUrl || null;
   };
   const pickBody = () => {
