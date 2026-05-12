@@ -77,9 +77,51 @@ export function resolveCrew(editors, assigneeIds) {
       phone,
       role: ed.role || "",
       hasPhone: !!phone,
+      // Slack profile photo from /editors. Used to render a face
+      // next to each crew row in the ShootTomorrow email's
+      // "Who you'll meet" block. Falls back to initials in the
+      // template when missing.
+      avatar: ed.avatarUrl || ed.avatar || null,
     });
   }
   return { crew, gaps };
+}
+
+// Resolve the account manager chip for a project. Per Jeremy
+// 2026-05-12 the chip MUST carry the AM's mobile so every client
+// touchpoint exposes a direct escalation channel.
+//
+// Resolution order (matches the preview script in
+// scripts/render-preview-from-firebase.js):
+//   1. accounts[project.links.accountId].accountManager
+//   2. project.accountManager
+//   3. project.projectLead
+//
+// Once a name is resolved, look it up (case-insensitive) in
+// /editors to attach the Slack avatar URL and phone number.
+// Returns null when no name can be resolved at all (chip is then
+// hidden in the email — by design).
+export function resolveAccountManagerChip({ project, accounts, editors }) {
+  let name = null;
+  const acctId = project?.links?.accountId;
+  const accountsMap = accounts || {};
+  if (acctId && accountsMap[acctId]?.accountManager) {
+    name = accountsMap[acctId].accountManager;
+  } else if (project?.accountManager) {
+    name = project.accountManager;
+  } else if (project?.projectLead) {
+    name = project.projectLead;
+  }
+  if (!name) return null;
+  const list = Array.isArray(editors) ? editors : [];
+  const lc = String(name).trim().toLowerCase();
+  const editor = list.find(e => (e?.name || "").trim().toLowerCase() === lc);
+  return {
+    name,
+    role: "Account Manager",
+    avatar: editor?.avatarUrl || editor?.avatar || null,
+    phone: (editor?.phone || "").trim() || null,
+  };
 }
 
 // Format a date for human reading. `dateStr` is YYYY-MM-DD as stored

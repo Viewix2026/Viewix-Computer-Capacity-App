@@ -77,13 +77,42 @@ export default function ReadyForReview(props) {
   const headline = isBatch
     ? `${count} videos ready for your eyes`
     : "Ready for your eyes";
+  // Body copy stays version-agnostic — this email also fires on
+  // v2 / v3 / revision rounds, not just the very first cut. Earlier
+  // "first cut" wording would have been wrong on every send after
+  // the kickoff round.
   const bodyCopy = isBatch
-    ? "The first cuts for this batch are ready to watch. Have a look when you get a moment, leave timestamped notes on the dashboard, or send a thumbs up. Most clients send all their feedback in one go - that's the move if you can."
-    : "The first cut is ready to watch. Have a look when you get a moment, leave timestamped notes on the dashboard, or send a thumbs up. Most clients send all their feedback in one go - that's the move if you can.";
+    ? "Your videos are ready to watch. Have a look when you get a moment, leave timestamped notes when watching each video, or approve the video. Most clients send all their feedback in one go - that's the move if you can."
+    : "Your video is ready to watch. Have a look when you get a moment, leave timestamped notes when watching each video, or approve the video. Most clients send all their feedback in one go - that's the move if you can.";
   // Unified CTA label per Jeremy's spec — same button on single, batch,
   // and any future case. Cleaner brand voice than "View on Viewix
   // dashboard →" with its directional arrow.
   const ctaLabel = "View Videos Here";
+
+  // Per Jeremy's spec 2026-05-12: ReadyForReview shows ONE chip in
+  // the project card — the account manager. Other emails (Confirmation,
+  // ShootTomorrow, InEditSuite) keep the producer + editor pair. The
+  // account manager is the right escalation contact at the review
+  // stage; producer/editor names are noise once the client just needs
+  // to know who to reply to about feedback.
+  //
+  // Mapping: our context loader resolves `producer` from the project's
+  // account.accountManager already. We just relabel the role for this
+  // template's chip, and explicitly null out the editor. Pass through
+  // the avatar URL so the chip renders the Slack profile photo, not
+  // just initials.
+  const accountManagerChip = props?.producer && props.producer.name
+    ? {
+        name: props.producer.name,
+        role: "Account Manager",
+        initials: props.producer.initials,
+        avatar: props.producer.avatar || props.producer.avatarUrl,
+        // Phone passes through so the AM's mobile renders under the
+        // role in the chip — same behaviour as every other email.
+        // Earlier omission was a bug in the chip relabel (2026-05-12).
+        phone: props.producer.phone || null,
+      }
+    : null;
 
   return h(
     Layout,
@@ -94,8 +123,8 @@ export default function ReadyForReview(props) {
         : `${firstName}, your video is ready for review.`,
       accent,
       project: props?.project,
-      producer: props?.producer,
-      editor: props?.editor,
+      producer: accountManagerChip,
+      editor: null,
       // No dashboardUrl in the footer — the in-hero CTA carries the link.
       dashboardUrl: null,
       hasInHeroCta: !!deliveryUrl,

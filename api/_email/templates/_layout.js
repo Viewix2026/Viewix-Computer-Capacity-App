@@ -113,8 +113,8 @@ function heroImageUrl(stage) {
 // match the design's STAGES array verbatim, with hyphens not em dashes.
 const STAGES = [
   { num: 1, label: "Kickoff",  next: "Producer call & shoot scheduling" },
-  { num: 2, label: "Shooting", next: "Footage ingest & first edit pass" },
-  { num: 3, label: "Editing",  next: "First cut ready for your review" },
+  { num: 2, label: "Shooting", next: "Footage ingest & editing" },
+  { num: 3, label: "Editing",  next: "Ready for your review" },
   { num: 4, label: "Review",   next: "Leave your feedback and finalize" },
 ];
 
@@ -421,39 +421,69 @@ function EmailHeader() {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Stepper — "STAGE X OF 4" + project ID, then a connecting line +
-// 4 dots + labels.
+// Stepper — "STAGE X OF 4" + 4 dots + labels with a connector line.
 //
-// Done stages render as a filled accent dot with ✓.
-// Current stage renders as a filled accent dot with the stage number.
-// Upcoming stages render as a white dot with a gray border.
+// Per Jeremy 2026-05-12: the accent (blue) progress line must STOP
+// at the centre of the current-stage circle. Upcoming circles are
+// filled gray and show their stage number — not empty/hollow — so
+// the client always sees all four steps numbered.
 //
-// Connecting line: each stage column gets a `border-top: 2px solid`
-// that joins with its neighbours into a continuous horizontal line.
-// Completed segments (i.e. columns up to and including the current
-// stage) use the accent colour; upcoming segments use gray. The dot
-// sits half-overlapping the line via `marginTop: -12px` so the line
-// visually runs through the dot, matching the design. Outlook
-// desktop strips the negative margin and renders the dot below the
-// line — still readable, gracefully degraded.
+// Done stages:      blue filled dot with ✓, blue line across top.
+// Current stage:    blue filled dot with number, blue line from the
+//                   left edge of the column to the column centre,
+//                   then gray from the centre out (gradient).
+// Upcoming stages:  gray filled dot with number, gray line across.
 //
-// Email-safe rendering trick: 2px-tall colored backgrounds on the
-// connector segments AND on the dot row's table cells let the line
-// extend across the full row even when individual <Column> elements
-// don't directly touch.
+// The dot sits half-overlapping the line via `marginTop: -12px` so
+// the line visually runs through the dot. Outlook desktop strips
+// the negative margin (renders the dot below the line) and the
+// background-image gradient on the current column (falls back to a
+// solid border) — degraded but still readable in both cases.
 // ────────────────────────────────────────────────────────────────
 function Stepper({ stage, accent }) {
   const accentColor = accent === "orange" ? BRAND.orange : BRAND.blue;
   const lineColorDone = accentColor;
   const lineColorUpcoming = BRAND.borderStrong;
+
+  // Track is rendered as ONE 2px-tall row with 8 cells (left + right
+  // half of each stage). Each half is painted with an explicit
+  // backgroundColor — the most reliable line-drawing mechanism in
+  // email clients (no gradient, no border-top/background-image
+  // conflict). Cells in the row sit edge-to-edge so the line is
+  // continuous across the stepper with no half-pixel drift.
+  //
+  // Colour rule per half:
+  //   left  half of stage S  -> blue if S <= currentStage  (done or current's left side)
+  //   right half of stage S  -> blue if S <  currentStage  (only fully-done stages)
+  //
+  // This produces:
+  //   stage 1 selected: [B][G][G][G][G][G][G][G]  blue stops at dot 1 centre
+  //   stage 2 selected: [B][B][B][G][G][G][G][G]  blue stops at dot 2 centre
+  //   stage 4 selected: [B][B][B][B][B][B][B][G]  blue stops at dot 4 centre
+  //
+  // The dots are rendered in a separate row below the track, pulled
+  // up via negative margin to overlap. Outlook strips negative
+  // margins → dot renders below the line — still readable.
+  const halfCell = (key, color) =>
+    h(Column, {
+      key,
+      style: {
+        width: "12.5%",
+        height: "2px",
+        lineHeight: "2px",
+        fontSize: "0",
+        backgroundColor: color,
+        // Belt-and-braces for Outlook desktop, which loves to add
+        // a default cell border.
+        borderCollapse: "collapse",
+        padding: 0,
+      },
+    }, " ");
+
   return h(
     Section,
     { style: styles.stepperWrap },
-    // Meta row: "STAGE X OF 4". The project ID slot was removed
-    // 2026-05-11 per Jeremy — the shortIds we generate are random
-    // 10-char strings, not pretty like the "VX-2041" design
-    // placeholder. The header eyebrow ("CLIENT UPDATE") already
-    // signals what this email is. Keep the row left-aligned only.
+    // Meta row: "STAGE X OF 4".
     h(
       Row,
       { style: styles.stepperMetaRow },
@@ -463,26 +493,45 @@ function Stepper({ stage, accent }) {
         h("span", { style: { fontFamily: FONT_MONO } }, `Stage ${stage} of 4`)
       )
     ),
-    // Dot row + labels — one column per stage. Each column's
-    // border-top draws the connector line; dots are pulled up via
-    // negative margin to overlap the line.
+    // Track row — 8 half-cells.
     h(
       Row,
-      { style: { paddingTop: "12px" } },
+      {
+        style: {
+          marginTop: "12px",
+          height: "2px",
+          lineHeight: "2px",
+          fontSize: "0",
+          borderCollapse: "collapse",
+        },
+      },
+      ...STAGES.flatMap(s => {
+        const leftColor = s.num <= stage ? lineColorDone : lineColorUpcoming;
+        const rightColor = s.num < stage ? lineColorDone : lineColorUpcoming;
+        return [
+          halfCell(`${s.num}L`, leftColor),
+          halfCell(`${s.num}R`, rightColor),
+        ];
+      })
+    ),
+    // Dot + label row.
+    h(
+      Row,
+      null,
       ...STAGES.map(s => {
         const isDone = s.num < stage;
         const isCurrent = s.num === stage;
-        const dotFill = isDone || isCurrent ? accentColor : BRAND.panel;
-        const dotBorder = isDone || isCurrent ? `2px solid ${accentColor}` : `2px solid ${BRAND.borderStrong}`;
-        const dotChar = isDone ? "✓" : (isCurrent ? String(s.num) : "");
-        const dotColor = isDone || isCurrent ? BRAND.panel : BRAND.inkMuted;
+        const isUpcoming = s.num > stage;
+
+        const dotFill = isUpcoming ? BRAND.gray : accentColor;
+        const dotBorder = isUpcoming
+          ? `2px solid ${BRAND.gray}`
+          : `2px solid ${accentColor}`;
+        const dotChar = isDone ? "✓" : String(s.num);
+        const dotColor = BRAND.panel;
         const labelColor = isCurrent ? BRAND.ink : (isDone ? BRAND.inkSoft : BRAND.inkMuted);
         const labelWeight = isCurrent ? 700 : 500;
-        // Each column's top border becomes part of the connecting
-        // line. A column is "complete" (accent-colored line) when
-        // its stage number is <= current stage. That means the line
-        // runs accent up to and including the current stage's dot.
-        const lineColor = s.num <= stage ? lineColorDone : lineColorUpcoming;
+
         return h(
           Column,
           {
@@ -491,7 +540,6 @@ function Stepper({ stage, accent }) {
               width: "25%",
               textAlign: "center",
               verticalAlign: "top",
-              borderTop: `2px solid ${lineColor}`,
               paddingTop: "0",
             },
           },
@@ -499,9 +547,10 @@ function Stepper({ stage, accent }) {
             "div",
             {
               style: {
-                // Negative top margin pulls the dot up to overlap the
-                // border-top line, so the line visually runs through
-                // the centre of the dot.
+                // Pull the dot up so it overlaps the 2px line above,
+                // centring the line through the dot's vertical
+                // midpoint. (22px dot height + 2px line, -12px to
+                // overlap puts the dot's centre on the line.)
                 marginTop: "-12px",
                 display: "inline-block",
                 width: "22px",
@@ -539,6 +588,18 @@ function Stepper({ stage, accent }) {
 // ────────────────────────────────────────────────────────────────
 // PersonChip — circular avatar with initials, name, role.
 // ────────────────────────────────────────────────────────────────
+// Display AU mobile numbers in the conventional "0477 515 963" form.
+// Falls back to the raw stored string for anything that doesn't match
+// the 04XXXXXXXX shape (international, landlines, free-form, etc.).
+function formatPhoneAU(raw) {
+  if (!raw) return "";
+  const digits = String(raw).replace(/[^\d]/g, "");
+  if (/^04\d{8}$/.test(digits)) {
+    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
+  }
+  return String(raw).trim();
+}
+
 function PersonChip({ person, accent }) {
   if (!person || !person.name) return null;
   const accentColor = accent === "orange" ? BRAND.orange : BRAND.blue;
@@ -551,6 +612,45 @@ function PersonChip({ person, accent }) {
       .slice(0, 2)
       .join("")
       .toUpperCase();
+  // Avatar URL takes priority over initials. Slack profile photos
+  // (https://ca.slack-edge.com/...) are square; we crop to a circle
+  // with border-radius. Falls back to initials disk when no avatar
+  // URL is provided.
+  const avatarUrl = person.avatar || person.avatarUrl || null;
+  const avatarNode = avatarUrl
+    ? h("img", {
+        src: avatarUrl,
+        alt: person.name,
+        width: 32,
+        height: 32,
+        style: {
+          display: "block",
+          width: "32px",
+          height: "32px",
+          borderRadius: "50%",
+          border: "0",
+          objectFit: "cover",
+        },
+      })
+    : h(
+        "div",
+        {
+          style: {
+            width: "32px",
+            height: "32px",
+            lineHeight: "32px",
+            borderRadius: "50%",
+            background: accentColor,
+            color: BRAND.panel,
+            fontFamily: FONT_DISPLAY,
+            fontWeight: 700,
+            fontSize: "11px",
+            letterSpacing: "0.02em",
+            textAlign: "center",
+          },
+        },
+        initials
+      );
   return h(
     Column,
     { style: { verticalAlign: "middle", paddingRight: "10px" } },
@@ -559,26 +659,8 @@ function PersonChip({ person, accent }) {
       null,
       h(
         Column,
-        { style: { width: "32px", verticalAlign: "middle" } },
-        h(
-          "div",
-          {
-            style: {
-              width: "32px",
-              height: "32px",
-              lineHeight: "32px",
-              borderRadius: "50%",
-              background: accentColor,
-              color: BRAND.panel,
-              fontFamily: FONT_DISPLAY,
-              fontWeight: 700,
-              fontSize: "11px",
-              letterSpacing: "0.02em",
-              textAlign: "center",
-            },
-          },
-          initials
-        )
+        { style: { width: "32px", verticalAlign: "middle", lineHeight: 0 } },
+        avatarNode
       ),
       h(
         Column,
@@ -610,7 +692,35 @@ function PersonChip({ person, accent }) {
             },
           },
           person.role || ""
-        )
+        ),
+        // Mobile number line — per Jeremy 2026-05-12, the account
+        // manager's mobile must always appear in the chip so the
+        // client has a direct escalation channel on every touchpoint.
+        // Rendered as a tel: link for one-tap dialling on mobile;
+        // mailto-style fallbacks gracefully if the email client
+        // strips the href (the number text remains).
+        person.phone
+          ? h(
+              Text,
+              {
+                style: {
+                  fontSize: "11px",
+                  color: BRAND.inkSoft,
+                  margin: "2px 0 0",
+                  lineHeight: 1.3,
+                  fontVariantNumeric: "tabular-nums",
+                },
+              },
+              h(
+                "a",
+                {
+                  href: `tel:${String(person.phone).replace(/[^\d+]/g, "")}`,
+                  style: { color: BRAND.inkSoft, textDecoration: "none" },
+                },
+                formatPhoneAU(person.phone)
+              )
+            )
+          : null
       )
     )
   );

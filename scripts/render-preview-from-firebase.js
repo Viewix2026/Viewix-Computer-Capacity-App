@@ -83,29 +83,42 @@ function pickShootSubtask(project) {
   return shoots[0] || subs.find(s => s.stage === "preProduction") || subs[0] || null;
 }
 
-function pickEditor(project, editors) {
-  // Look for an edit-stage subtask with an assigneeId, look that
-  // person up in /editors. Falls back to the first editor in the
-  // roster if no assignments exist.
-  const subs = listSubtasks(project);
-  const editSubtasks = subs.filter(s => s.stage === "edit");
-  for (const st of editSubtasks) {
-    const ids = Array.isArray(st.assigneeIds) ? st.assigneeIds : (st.assigneeId ? [st.assigneeId] : []);
-    for (const id of ids) {
-      const ed = editors.find(e => String(e?.id) === String(id));
-      if (ed && ed.name) return { name: ed.name, role: "Lead Editor" };
-    }
-  }
-  return null;
-}
-
-function pickProducer(project, accounts) {
-  // Account manager on the linked account record acts as the producer.
+// Per Jeremy's spec 2026-05-12: the project card across ALL emails
+// shows a single chip — the account manager. The editor chip is
+// dropped entirely; clients don't need to see who's editing their
+// video, just who to escalate to.
+//
+// Multi-source resolution because the account manager can live in
+// any of these spots depending on how the project was created:
+//   1. project.links.accountId  →  /accounts/{id}.accountManager
+//   2. project.accountManager   (direct field, set by some webhook paths)
+//   3. project.projectLead      (fallback — often the same person)
+//
+// Once the name is resolved, look it up in /editors to get the
+// avatarUrl (Slack profile photo) so the chip renders with the
+// real face instead of just initials.
+function pickAccountManager(project, accounts, editors) {
+  let name = null;
   const acctId = project?.links?.accountId;
-  if (!acctId) return null;
-  const acct = accounts[acctId];
-  if (!acct?.accountManager) return null;
-  return { name: acct.accountManager, role: "Your Producer" };
+  if (acctId && accounts[acctId]?.accountManager) {
+    name = accounts[acctId].accountManager;
+  } else if (project?.accountManager) {
+    name = project.accountManager;
+  } else if (project?.projectLead) {
+    name = project.projectLead;
+  }
+  if (!name) return null;
+  // Match the name (case-insensitive) against /editors to grab the
+  // avatar URL and phone number. Falls back to no avatar / no phone
+  // if there's no roster match — the chip still renders by name.
+  const lc = name.trim().toLowerCase();
+  const editor = editors.find(e => (e?.name || "").trim().toLowerCase() === lc);
+  return {
+    name,
+    role: "Account Manager",
+    avatar: editor?.avatarUrl || editor?.avatar || null,
+    phone: (editor?.phone || "").trim() || null,
+  };
 }
 
 async function main() {
@@ -136,8 +149,9 @@ async function main() {
 
   const editors = normaliseEditors(editorsRaw);
   const shoot = pickShootSubtask(project);
-  const producer = pickProducer(project, accountsRaw);
-  const editor = pickEditor(project, editors);
+  // Single chip across all emails — the account manager. The previous
+  // producer/editor pair is dropped per Jeremy's redesign.
+  const accountManager = pickAccountManager(project, accountsRaw, editors);
 
   // Build delivery
   let delivery = null;
@@ -174,8 +188,11 @@ async function main() {
       numberOfVideos: project.numberOfVideos || null,
       links: project.links || {},
     },
-    producer,
-    editor,
+    // Templates take a `producer` slot (the chip render). We feed the
+    // account manager there so the project card shows a single
+    // "Account Manager" chip. Editor explicitly null — chip is hidden.
+    producer: accountManager,
+    editor: null,
     delivery,
   };
 
@@ -187,7 +204,27 @@ async function main() {
     .filter(s => s.stage === "edit" || s.stage === "revisions")
     .slice(0, 3)
     .map(s => ({ name: s.name || "Video", videoId: s.id }));
-  const reviewProps = { ...baseProps, videos: fakeVideos.length ? fakeVideos : [{ name: "First cut", videoId: "v1" }], producerNote: "" };
+
+  // ReadyForReview hard-requires a delivery URL — production refuses
+  // to send without one. For preview purposes we synthesise a
+  // placeholder URL when the project has no delivery linked, so the
+  // CTA button always renders and Jeremy can review it. The
+  // production guard lives in api/send-review-batch.js (Phase A.5),
+  // not in this template, so injecting a fake URL here doesn't
+  // weaken the real safety check.
+  const reviewDelivery = delivery && delivery.url
+    ? delivery
+    : {
+        id: "preview-delivery",
+        shortId: "preview",
+        url: `${(process.env.PUBLIC_BASE_URL || "https://planner.viewix.com.au").replace(/\/+$/, "")}/d/preview/${slugify(project.projectName || projectId)}`,
+      };
+  const reviewProps = {
+    ...baseProps,
+    delivery: reviewDelivery,
+    videos: fakeVideos.length ? fakeVideos : [{ name: "First cut", videoId: "v1" }],
+    producerNote: "",
+  };
 
   // Render all 4
   const outDir = "/tmp/viewix-email-previews-real";
@@ -206,8 +243,7 @@ async function main() {
   console.log(`Project: ${project.projectName || projectId}`);
   console.log(`Client:  ${project.clientName || "(no client)"} <${baseProps.client.email || "no email"}>`);
   console.log(`First name: ${baseProps.client.firstName}`);
-  console.log(`Producer: ${producer?.name || "(none on record)"}`);
-  console.log(`Editor:   ${editor?.name || "(none assigned)"}`);
+  console.log(`Account Manager: ${accountManager?.name || "(none on record - chip will be hidden)"}${accountManager?.phone ? ` (${accountManager.phone})` : " (no phone on /editors)"}`);
   console.log(`Shoot:    ${shootCtx ? `${shootCtx.dateLabel} ${shootCtx.timeLabel} at ${shootCtx.location || "(no location)"} — ${shootCtx.crew.length} crew` : "(no shoot subtask)"}`);
   console.log(`Delivery: ${delivery?.url || "(no delivery)"}`);
   console.log("");

@@ -6,7 +6,7 @@
 // Trigger: api/webhook-deal-won.js right after the project record is
 // created. One per project. Idempotency: /emailLog/{projectId}/Confirmation.
 //
-// Subject (Jeremy to approve before live): "You're locked in"
+// Subject (Jeremy to approve before live): "You're booked in"
 //
 // Merge tags expected:
 //   client.firstName        ({{first_name}})
@@ -26,20 +26,28 @@ export default function Confirmation(props) {
   const firstName = props?.client?.firstName || "there";
   const accent = props?.accent || "blue";
 
-  // Stage 1 copy. Updated 2026-05-11 per Jeremy's review.
-  const headline = "You're locked in";
+  // Stage 1 copy. Updated 2026-05-12 per Jeremy: headline reads
+  // "You're booked in" (was "You're locked in") — softer welcome
+  // tone, more accurate to the reality of having a booking on the
+  // schedule.
+  const headline = "You're booked in";
   const bodyCopy = "We've got your brief and everything's loaded into the studio. We're excited to bring your brand to life.";
 
   return h(
     Layout,
     {
       stage: 1,
-      preview: `${firstName}, you're locked in. We're excited to bring your brand to life.`,
+      preview: `${firstName}, you're booked in. We're excited to bring your brand to life.`,
       accent,
       project: props?.project,
       producer: props?.producer,
       editor: props?.editor,
-      dashboardUrl: props?.delivery?.url || null,
+      // No dashboard link in the footer. Removed 2026-05-12 per
+      // Jeremy — the Confirmation email is a welcome note, not an
+      // action item. ReadyForReview is the email that carries the
+      // CTA into the dashboard; everything before it stays
+      // navigationally clean.
+      dashboardUrl: null,
       hasInHeroCta: false,
       // Per Jeremy's review 2026-05-11: Confirmation's Up Next reads
       // "Your shoot day" instead of the generic Stage 1 default

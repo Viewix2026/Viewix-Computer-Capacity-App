@@ -27,7 +27,10 @@ export default function InEditSuite(props) {
 
   // Stage 3 copy from data.jsx STAGES[2].
   const headline = "It's in the edit suite";
-  const bodyCopy = "Your edit is now underway. Our team is shaping the cut, colour and sound. You'll hear from us as soon as the first version is ready for your eyes.";
+  // Body kept version-agnostic — same reasoning as ReadyForReview:
+  // this email's "next up" is the review email, which may be the
+  // initial cut OR a revision round.
+  const bodyCopy = "Your edit is now underway. Our team is shaping the cut, colour and sound. You'll hear from us as soon as it's ready for your eyes.";
 
   return h(
     Layout,
@@ -38,7 +41,13 @@ export default function InEditSuite(props) {
       project: props?.project,
       producer: props?.producer,
       editor: props?.editor,
-      dashboardUrl: props?.delivery?.url || null,
+      // No dashboard link in the footer. Removed 2026-05-12 per
+      // Jeremy — same reasoning as ShootTomorrow: the InEditSuite
+      // email is a status note, not an action item. The client
+      // doesn't need a generic dashboard link here; the
+      // ReadyForReview email (next in the lifecycle) carries the
+      // call-to-action.
+      dashboardUrl: null,
       hasInHeroCta: false,
     },
     h(Text, { style: heroStyles.eyebrow(accent) }, "In the edit suite"),
