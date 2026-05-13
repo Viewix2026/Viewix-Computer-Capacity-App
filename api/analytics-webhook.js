@@ -218,42 +218,41 @@ export default async function handler(req, res) {
 
   const todayUtc = new Date().toISOString().slice(0, 10);
 
-  // Write each post + append today's snapshot. UTC date keys so
-  // re-running the webhook on the same day overwrites the same
-  // snapshot slot (idempotent), not appending a duplicate.
+  // Bulk-write all posts + today's snapshots in a SINGLE Firebase
+  // PATCH per platform. Doing 60+ sequential `fbSet` calls was
+  // taking >30 seconds over REST, which is past Apify's webhook
+  // timeout — Apify gave up and retried, none of the deliveries
+  // ever marked the run completed. PATCH with slash-keyed paths
+  // updates the same nested locations atomically in one HTTP call.
+  //
+  // UTC date keys still mean re-running the webhook on the same
+  // day overwrites the same snapshot slot (idempotent).
   let writtenCount = 0;
   if (target === "client") {
+    const batch = {};
     for (const n of filtered) {
-      await fbSet(
-        `/analytics/videos/${clientId}/${platform}/${n.videoId}/post`,
-        n.post,
-      );
-      await fbSet(
-        `/analytics/videos/${clientId}/${platform}/${n.videoId}/snapshots/${todayUtc}`,
-        n.snapshot,
-      );
+      batch[`${n.videoId}/post`] = n.post;
+      batch[`${n.videoId}/snapshots/${todayUtc}`] = n.snapshot;
       writtenCount++;
+    }
+    if (writtenCount > 0) {
+      await fbPatch(`/analytics/videos/${clientId}/${platform}`, batch);
     }
   } else if (target === "competitor") {
     const handleKey = safeHandleKey(sidecarHandle);
-    await fbPatch(
-      `/analytics/competitors/${clientId}/${platform}/${handleKey}/profile`,
-      {
-        displayName: sidecarHandle,
-        lastScrapedAt: new Date().toISOString(),
-      },
-    );
+    const batch = {
+      "profile/displayName": sidecarHandle,
+      "profile/lastScrapedAt": new Date().toISOString(),
+    };
     for (const n of filtered) {
-      await fbSet(
-        `/analytics/competitors/${clientId}/${platform}/${handleKey}/videos/${n.videoId}/post`,
-        n.post,
-      );
-      await fbSet(
-        `/analytics/competitors/${clientId}/${platform}/${handleKey}/videos/${n.videoId}/snapshots/${todayUtc}`,
-        n.snapshot,
-      );
+      batch[`videos/${n.videoId}/post`] = n.post;
+      batch[`videos/${n.videoId}/snapshots/${todayUtc}`] = n.snapshot;
       writtenCount++;
     }
+    await fbPatch(
+      `/analytics/competitors/${clientId}/${platform}/${handleKey}`,
+      batch,
+    );
   }
 
   // Follower count snapshot for the day. Only meaningful for client
@@ -276,33 +275,32 @@ export default async function handler(req, res) {
     }
   }
 
-  // Mark the run completed with actual cost. Apify charges per result
-  // returned (not per result we kept); use the raw items count.
+  // Mark the run completed + stamp lastRefreshedAt in parallel —
+  // independent writes that don't need to serialise.
   const actualCostUsd = +(items.length * APIFY_IG_COST_PER_RESULT_USD).toFixed(4);
-  await fbPatch(`/analytics/runs/${runId}`, {
-    status: "completed",
-    completedAt: new Date().toISOString(),
-    actualItems: items.length,
-    actualCostUsd,
-    writtenCount,
-  });
+  await Promise.all([
+    fbPatch(`/analytics/runs/${runId}`, {
+      status: "completed",
+      completedAt: new Date().toISOString(),
+      actualItems: items.length,
+      actualCostUsd,
+      writtenCount,
+    }),
+    fbPatch(`/analytics/clients/${clientId}/lastRefreshedAt`, {
+      [platform]: new Date().toISOString(),
+    }),
+  ]);
 
-  // Stamp the last-refreshed timestamp on the client config so the
-  // UI can show "scraped 2h ago" without walking /analytics/runs.
-  await fbPatch(`/analytics/clients/${clientId}/lastRefreshedAt`, {
-    [platform]: new Date().toISOString(),
-  });
-
-  // Single, deterministic recompute path. Phase 2 stub; Phase 3
-  // fills in the actual scoring math.
-  try {
-    await recomputeClientAnalytics(clientId);
-  } catch (err) {
-    console.error(`[analytics-webhook] recompute failed for ${clientId}:`, err);
-    // Don't fail the webhook on recompute error — the raw data is
-    // already written. Recompute can be retried.
-  }
-
+  // Respond to Apify FIRST, then kick off the recompute. The
+  // recompute is itself heavy (loads videos, scores them, writes
+  // baselines + status + momentum + insights) and was the second
+  // factor pushing webhooks past the 30s timeout. Returning 200
+  // here means Apify is satisfied regardless of recompute cost.
+  //
+  // The recompute is idempotent — if Vercel cuts the function off
+  // before recompute finishes, the cron at 4am Sydney will pick
+  // it up. And the next webhook from a sibling run will re-trigger
+  // it. Worst case: dashboard scoring lags by minutes-not-seconds.
   res.status(200).json({
     ok: true,
     outcome: "processed",
@@ -313,4 +311,10 @@ export default async function handler(req, res) {
     itemsReceived: items.length,
     written: writtenCount,
   });
+
+  try {
+    await recomputeClientAnalytics(clientId);
+  } catch (err) {
+    console.error(`[analytics-webhook] recompute failed for ${clientId}:`, err);
+  }
 }
