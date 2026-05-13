@@ -928,7 +928,7 @@ function MultiAssigneePicker({ value, editors, onChange }) {
   );
 }
 
-function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects }) {
+function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects, setDeliveries }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
   // useSortable wires this row into whatever <SortableContext> wraps
   // it (project details + the projects sub-tab list each have their
@@ -964,6 +964,26 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
     }
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/${field}`, value);
     fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, ts);
+
+    if (isVideoNameEdit && project) {
+      const delId = (project.links || {}).deliveryId;
+      const delivery = delId && Array.isArray(deliveries)
+        ? deliveries.find(d => d?.id === delId)
+        : null;
+      if (delivery && Array.isArray(delivery.videos)) {
+        const idx = delivery.videos.findIndex(v => v && (v.videoId === subtask.videoId || v.id === subtask.videoId));
+        if (idx >= 0) {
+          if (typeof setDeliveries === "function") {
+            setDeliveries(prev => prev.map(d => {
+              if (!d || d.id !== delId) return d;
+              const videos = Array.isArray(d.videos) ? d.videos : [];
+              return { ...d, videos: videos.map(v => v && (v.videoId === subtask.videoId || v.id === subtask.videoId) ? { ...v, name: value } : v) };
+            }));
+          }
+          fbSet(`/deliveries/${delId}/videos/${idx}/name`, value);
+        }
+      }
+    }
 
     // Auto-flip stuck → scheduled when a producer commits a startDate.
     //
@@ -1557,7 +1577,7 @@ const dateCellStyle = {
   fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
 };
 
-function ProjectTable({ projects, allProjects, setProjects, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
+function ProjectTable({ projects, allProjects, setProjects, setDeliveries, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
   // Header checkbox is tri-state: empty / checked (all) / indeterminate
   // (some). Browsers don't have a CSS-only indeterminate state — set
@@ -1727,6 +1747,7 @@ function ProjectTable({ projects, allProjects, setProjects, deliveries, accounts
                           deliveries={deliveries}
                           striped={idx % 2 === 1}
                           setProjects={setProjects}
+                          setDeliveries={setDeliveries}
                           onDelete={(stId) => {
                             // Optimistic local delete — same reason
                             // the inline + add paths above do it.
@@ -2018,7 +2039,7 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
   );
 }
 
-function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects }) {
+function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries }) {
   const { viewOnly, canEditKickoff, canEditProducerNotes, role: viewerRole } = useContext(ProjectsAccessContext);
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
@@ -2317,6 +2338,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                               deliveries={deliveries}
                               striped={idx % 2 === 1}
                               setProjects={setProjects}
+                              setDeliveries={setDeliveries}
                               onDelete={(stId) => {
                                 // Optimistic local delete — same as the
                                 // ProjectTable's onDelete above. Without
@@ -2397,7 +2419,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts, setProjects }) {
+function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -2457,6 +2479,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
           deliveries={deliveries}
           accounts={accounts}
           setProjects={setProjects}
+          setDeliveries={setDeliveries}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -2834,6 +2857,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
                 projects={filtered}
                 allProjects={projects}
                 setProjects={setProjects}
+                setDeliveries={setDeliveries}
                 deliveries={deliveries}
                 accounts={accounts}
                 onOpen={(id) => setActiveProjectId(id)}
@@ -2868,7 +2892,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
       )}
 
       {subTab === "projects" && active && (
-        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} setProjects={setProjects} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} setProjects={setProjects} setDeliveries={setDeliveries} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
       )}
 
       {subTab === "teamBoard" && !active && (
@@ -2899,6 +2923,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
                 deliveries={deliveries}
                 accounts={accounts}
                 setProjects={setProjects}
+                setDeliveries={setDeliveries}
                 onClose={() => setQuickViewProjectId(null)}
                 onDelete={async () => {
                   await deleteProject(qv.id);
