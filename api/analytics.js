@@ -278,6 +278,7 @@ async function handleRefresh(req, res, body) {
     && r.clientId === accountId
     && r.platform === platform
     && r.target === "client"
+    && r.mode !== "profile"   // auxiliary; doesn't count toward the 1/day post-scrape cap
     && r.startedAt
     && new Date(r.startedAt).getTime() >= since
   );
@@ -333,8 +334,17 @@ async function handleRefresh(req, res, body) {
   // ─── Fire the runs ───
   // Client + (each saved competitor). Competitors are best-effort:
   // if one fails to start we don't abort the whole refresh.
-  const runIds = { client: null, competitors: {} };
+  //
+  // For each handle we fire TWO runs:
+  //   - posts run (the main scrape: 60 / 20 / 90 posts depending on mode)
+  //   - profile run (single-item details fetch, just to capture
+  //     followersCount — IG post items don't include it)
+  // Profile runs are ~$0.003 each; cheap relative to the post run
+  // and they unlock the engagement-rate + follower-delta zones.
+  const runIds = { client: null, clientProfile: null, competitors: {}, competitorProfiles: {} };
   const errors = [];
+  const PROFILE_ITEM_COUNT = 1;
+  const profileRunCost = PROFILE_ITEM_COUNT * APIFY_IG_COST_PER_RESULT_USD;
 
   try {
     runIds.client = await startAnalyticsApifyRun({
@@ -344,10 +354,25 @@ async function handleRefresh(req, res, body) {
   } catch (err) {
     errors.push({ scope: "client", error: err.message });
   }
+  // Profile run for the client (best-effort — if it fails, the post
+  // run still proceeds; follower count just stays stale).
+  try {
+    runIds.clientProfile = await startAnalyticsApifyRun({
+      clientId: accountId, platform, mode: "profile",
+      target: "client", handle, apifyToken,
+      expectedItems: PROFILE_ITEM_COUNT,
+    });
+  } catch (err) {
+    errors.push({ scope: "client_profile", error: err.message });
+  }
 
   const competitors = config.competitors?.[platform] || [];
-  let runningClientCost = perClientCost + (runIds.client ? clientRunCost : 0);
-  let runningGlobalCost = globalCost + (runIds.client ? clientRunCost : 0);
+  let runningClientCost = perClientCost
+    + (runIds.client ? clientRunCost : 0)
+    + (runIds.clientProfile ? profileRunCost : 0);
+  let runningGlobalCost = globalCost
+    + (runIds.client ? clientRunCost : 0)
+    + (runIds.clientProfile ? profileRunCost : 0);
   for (const c of competitors) {
     if (!c?.handle) continue;
     const compRunCost = estimateRunCostUsd(mode) * 0.5; // competitors get ~30 items
@@ -369,9 +394,28 @@ async function handleRefresh(req, res, body) {
     } catch (err) {
       errors.push({ scope: "competitor", handle: c.handle, error: err.message });
     }
+    // Competitor profile run — gated under the same per-client +
+    // global budget caps. Skipped silently if budget is tight; the
+    // post run is the priority.
+    if (runningClientCost + profileRunCost > perClientCap) continue;
+    if (runningGlobalCost + profileRunCost > globalCap) continue;
+    try {
+      runIds.competitorProfiles[c.handle] = await startAnalyticsApifyRun({
+        clientId: accountId, platform, mode: "profile",
+        target: "competitor", handle: c.handle, apifyToken,
+        expectedItems: PROFILE_ITEM_COUNT,
+      });
+      runningClientCost += profileRunCost;
+      runningGlobalCost += profileRunCost;
+    } catch (err) {
+      errors.push({ scope: "competitor_profile", handle: c.handle, error: err.message });
+    }
   }
 
-  const totalStarted = (runIds.client ? 1 : 0) + Object.keys(runIds.competitors).length;
+  const totalStarted = (runIds.client ? 1 : 0)
+    + (runIds.clientProfile ? 1 : 0)
+    + Object.keys(runIds.competitors).length
+    + Object.keys(runIds.competitorProfiles).length;
   if (totalStarted === 0) {
     res.status(500).json({
       ok: false,

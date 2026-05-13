@@ -56,9 +56,15 @@ async function fbGet(path) {
 // Rough cost estimate for a planned run. Mirrors the limits in
 // buildIgScrapeInput; keep in sync.
 function estimateRunCostUsd(mode) {
+  if (mode === "profile") return 1 * APIFY_IG_COST_PER_RESULT_USD;
   const items = mode === "initial" ? 60 : mode === "weekly" ? 90 : 20;
   return items * APIFY_IG_COST_PER_RESULT_USD;
 }
+
+// Profile mode fans out 1 item per handle to capture followersCount
+// (which posts mode doesn't return). Cheap (~$0.003 per handle) and
+// unlocks engagement-rate scoring + the follower-delta zone.
+const PROFILE_RUN_COST_USD = 1 * APIFY_IG_COST_PER_RESULT_USD;
 
 export default async function handler(req, res) {
   // Cron auth — FAIL CLOSED. Vercel sends `Authorization: Bearer
@@ -160,6 +166,27 @@ export default async function handler(req, res) {
         summary.errors.push({ clientId, platform, scope: "client", error: err.message });
       }
 
+      // ─── Client profile scrape (follower count) ───
+      // Fires alongside the posts scrape on every cron tick. Cheap;
+      // budget-gated; best-effort (failure doesn't abort the post run).
+      if (runningGlobalCost + PROFILE_RUN_COST_USD <= globalCap
+          && perClientCost + PROFILE_RUN_COST_USD <= perClientCap) {
+        try {
+          await startAnalyticsApifyRun({
+            clientId, platform, mode: "profile",
+            target: "client",
+            handle: clientHandle,
+            apifyToken,
+            expectedItems: 1,
+          });
+          summary.runsStarted++;
+          perClientCost += PROFILE_RUN_COST_USD;
+          runningGlobalCost += PROFILE_RUN_COST_USD;
+        } catch (err) {
+          summary.errors.push({ clientId, platform, scope: "client_profile", error: err.message });
+        }
+      }
+
       // ─── Competitor scrapes ───
       // Competitors get a slightly leaner refresh than the client's
       // own handle (you care most about your own posts). Initial
@@ -190,6 +217,25 @@ export default async function handler(req, res) {
           runningGlobalCost += compRunCost;
         } catch (err) {
           summary.errors.push({ clientId, platform, scope: "competitor", handle: c.handle, error: err.message });
+        }
+        // Competitor profile scrape — same shape as the client one,
+        // gated under the same budget caps. Best-effort.
+        if (runningGlobalCost + PROFILE_RUN_COST_USD <= globalCap
+            && perClientCost + PROFILE_RUN_COST_USD <= perClientCap) {
+          try {
+            await startAnalyticsApifyRun({
+              clientId, platform, mode: "profile",
+              target: "competitor",
+              handle: c.handle,
+              apifyToken,
+              expectedItems: 1,
+            });
+            summary.runsStarted++;
+            perClientCost += PROFILE_RUN_COST_USD;
+            runningGlobalCost += PROFILE_RUN_COST_USD;
+          } catch (err) {
+            summary.errors.push({ clientId, platform, scope: "competitor_profile", handle: c.handle, error: err.message });
+          }
         }
       }
     }
