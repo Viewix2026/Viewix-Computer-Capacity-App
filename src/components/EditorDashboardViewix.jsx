@@ -445,9 +445,10 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const linkValid = isFrameioLink(link);
+  const linkRequired = reviewType === "client";
   const canSubmit = isShoot
     ? !submitting
-    : (linkValid && watched && reviewType && !submitting);
+    : (reviewType && (!linkRequired || (linkValid && watched)) && !submitting);
 
   // ESC closes — same affordance as the project quick-view modal.
   useEffect(() => {
@@ -506,9 +507,10 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
         if (delivery && task.videoId && Array.isArray(delivery.videos)) {
           const idx = delivery.videos.findIndex(v => v && v.videoId === task.videoId);
           if (idx >= 0) {
-            const patch = { link: linkOut };
+            const patch = {};
+            if (linkOut) patch.link = linkOut;
             if (reviewType === "client") patch.viewixStatus = "Ready for Review";
-            await fbUpdate(`/deliveries/${delId}/videos/${idx}`, patch);
+            if (Object.keys(patch).length) await fbUpdate(`/deliveries/${delId}/videos/${idx}`, patch);
           }
         }
         if (reviewType === "client") fireFireworks();
@@ -621,7 +623,7 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
         ) : (
           <>
             <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 6 }}>
-              Frame.io review link
+              Frame.io review link{reviewType === "internal" ? " (optional for internal review)" : ""}
             </label>
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
               <input

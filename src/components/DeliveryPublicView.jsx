@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
-import { initFB, onFB, fbSet, fbListen, signInAnonymouslyForPublic } from "../firebase";
+import { initFB, onFB, fbSetAsync, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { StatusSelect } from "./UIComponents";
 import { Logo } from "./Logo";
 import { logoBg } from "../utils";
@@ -129,7 +129,8 @@ export function DeliveryPublicView(){
     // object would fail with PERMISSION_DENIED and the listener would then
     // rehydrate state back to the server version, producing the "status
     // flickers then goes blank" bug clients were seeing.
-    fbSet(`/deliveries/${delivery.id}/videos/${videoIndex}/${field}`,value);
+    const path=`/deliveries/${delivery.id}/videos/${videoIndex}/${field}`;
+    fbSetAsync(path,value).catch(e=>console.error("posted/revision leaf write failed",{path,field,value,e}));
     setTimeout(()=>setSaving(false),800);
     if(field==="revision1"||field==="revision2"){
       pendingChanges.current.push({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});

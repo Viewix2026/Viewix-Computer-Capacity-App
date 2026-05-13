@@ -940,10 +940,10 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
     setNodeRef: setDragRef, transform, transition, isDragging,
   } = useSortable({ id: subtask.id });
   const persist = (field, value) => {
-    // View-only role can't write any subtask field. Bail early so any
-    // stray inline-input save attempt is a no-op rather than racing
-    // the server with a write that'd be rejected by rules anyway.
-    if (viewOnly) return;
+    // Leads can rename video subtasks, but all other view-only writes
+    // stay locked.
+    const isVideoNameEdit = field === "name" && !!subtask.videoId;
+    if (viewOnly && !isVideoNameEdit) return;
     // Optimistic local update — same pattern PR #49 applied to the
     // row-level status pill + drag-to-commission. Without this the
     // listener-echo guard (recentlyWroteTo("/projects")) suppresses
