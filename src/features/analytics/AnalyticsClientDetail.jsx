@@ -73,7 +73,10 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
           </div>
         </div>
 
-        <RefreshButton accountId={accountId} enabled={!!config?.enabled} />
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <RecomputeButton accountId={accountId} enabled={!!config?.enabled} />
+          <RefreshButton accountId={accountId} enabled={!!config?.enabled} />
+        </div>
       </div>
 
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: "24px 28px 60px" }}>
@@ -513,6 +516,79 @@ function RefreshButton({ accountId, enabled }) {
         }}
       >
         {status === "pending" ? "Refreshing…" : "Refresh now"}
+      </button>
+      {message && (
+        <span style={{
+          fontSize: 10,
+          color: status === "error" ? "#EF4444" : "var(--muted)",
+          maxWidth: 240,
+          textAlign: "right",
+        }}>
+          {message}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── Recompute button (re-derives scoring/insights from existing data) ─
+//
+// Different from Refresh: no Apify call, no cost, no rate limit. Just
+// re-runs recomputeClientAnalytics on the data we already have. Useful
+// when a previous webhook recompute was cut off mid-flight (the
+// pre-PR-#121 bug), or after tuning a threshold.
+function RecomputeButton({ accountId, enabled }) {
+  const [status, setStatus] = useState(null); // null | "pending" | "done" | "error"
+  const [message, setMessage] = useState("");
+
+  const onClick = async () => {
+    if (!enabled) return;
+    setStatus("pending");
+    setMessage("");
+    try {
+      const res = await authFetch("/api/analytics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "recompute", clientId: accountId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus("error");
+        setMessage(data?.error || `HTTP ${res.status}`);
+      } else {
+        setStatus("done");
+        setMessage(`Scored ${data?.result?.videosScored ?? "?"} · ${data?.result?.recsWritten ?? "?"} recs`);
+      }
+    } catch (err) {
+      setStatus("error");
+      setMessage(err?.message || "Network error");
+    }
+  };
+
+  const tooltip = enabled
+    ? "Re-run scoring + insights on existing data. No Apify cost, no rate limit."
+    : "Enable analytics for this account first.";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <button
+        onClick={onClick}
+        disabled={!enabled || status === "pending"}
+        title={tooltip}
+        style={{
+          padding: "8px 14px",
+          borderRadius: 8,
+          border: "1px solid var(--border)",
+          background: "transparent",
+          color: "var(--text)",
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: enabled && status !== "pending" ? "pointer" : "not-allowed",
+          opacity: enabled ? 1 : 0.5,
+          fontFamily: "inherit",
+        }}
+      >
+        {status === "pending" ? "Recomputing…" : "Recompute"}
       </button>
       {message && (
         <span style={{

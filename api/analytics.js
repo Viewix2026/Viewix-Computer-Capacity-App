@@ -83,10 +83,41 @@ export default async function handler(req, res) {
   const action = body.action;
 
   if (action === "refresh") return await handleRefresh(req, res, body);
+  if (action === "recompute") return await handleRecompute(req, res, body);
   if (action === "setManualFormatOverride") return await handleSetManualFormatOverride(req, res, body);
   if (action === "clearManualFormatOverride") return await handleClearManualFormatOverride(req, res, body);
 
   res.status(400).json({ error: `Unknown action: ${action || "(none)"}` });
+}
+
+// ─── recompute ────────────────────────────────────────────────────
+//
+// Re-derives all analytics state (baselines, scoring, status,
+// momentum, insights, decay, renewal ammo) from the data ALREADY
+// in /analytics/videos/... — no Apify call, no cost, no rate limit.
+//
+// Use this when:
+//   - You've tuned a threshold and want to see it applied to existing
+//     data without paying for a new scrape.
+//   - A previous webhook recompute was cut off mid-flight and you want
+//     to backfill the derived state.
+//   - The Claude classifier was enabled/disabled and you want the
+//     formatPlaybook caveat to update.
+//
+// Same founder/lead gate as the rest of the file.
+async function handleRecompute(req, res, body) {
+  const clientId = body.clientId;
+  if (!clientId) {
+    res.status(400).json({ error: "Missing clientId" });
+    return;
+  }
+  try {
+    const result = await recomputeClientAnalytics(clientId);
+    res.status(200).json({ ok: true, action: "recompute", result });
+  } catch (err) {
+    console.error(`[analytics] recompute action failed for ${clientId}:`, err);
+    res.status(500).json({ error: err.message || "Recompute failed" });
+  }
 }
 
 // ─── setManualFormatOverride / clearManualFormatOverride ─────────
