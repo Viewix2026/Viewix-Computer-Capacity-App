@@ -1007,6 +1007,14 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
     if (
       field === "startDate" &&
       value &&                       // non-null, non-empty date string
+      !subtask.startDate &&          // ONLY auto-flip the FIRST time a date
+                                     // is added. If the task already had a
+                                     // startDate and the producer later set
+                                     // status to "stuck" (deliberate block),
+                                     // any subsequent re-save of startDate
+                                     // (date change, fix-up) must NOT unblock
+                                     // it. Codex audit 2026-05-13 caught the
+                                     // older code flipping on every save.
       subtask.status === "stuck"
     ) {
       // Optimistic local update so the status pill flips in real time.

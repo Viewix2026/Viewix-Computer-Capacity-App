@@ -423,24 +423,15 @@ function EmailHeader() {
 // ────────────────────────────────────────────────────────────────
 // Stepper — "STAGE X OF 4" + 4 dots + labels with a connector line.
 //
-// Per Jeremy 2026-05-12: the accent (blue) progress line must STOP
-// at the centre of the current-stage circle. Upcoming circles are
-// filled gray and show their stage number — not empty/hollow — so
-// the client always sees all four steps numbered.
+// Behaviour: the accent (blue) progress line stops at the centre of
+// the current-stage dot. Upcoming dots are filled gray and show
+// their stage number so the client always sees all four steps.
 //
-// Done stages:      blue filled dot with ✓, blue line across top.
-// Current stage:    blue filled dot with number, blue line from the
-//                   left edge of the column to the column centre,
-//                   then gray from the centre out (gradient).
-// Upcoming stages:  gray filled dot with number, gray line across.
+// Done stages:      blue filled dot with ✓
+// Current stage:    blue filled dot with the stage number
+// Upcoming stages:  gray filled dot with the stage number
 //
-// The dot sits half-overlapping the line via `marginTop: -12px` so
-// the line visually runs through the dot. Outlook desktop strips
-// the negative margin (renders the dot below the line) and the
-// background-image gradient on the current column (falls back to a
-// solid border) — degraded but still readable in both cases.
-// ────────────────────────────────────────────────────────────────
-// ─── Stepper rewrite 2026-05-12 (post-canary) ───
+// Implementation note 2026-05-12 (post-canary, locked in PR #113):
 // The earlier two-row layout used `marginTop: -12px` to pull each
 // dot up into a separate line row. Gmail Web strips negative
 // margins, so the dot stayed below the line — confirmed live in the

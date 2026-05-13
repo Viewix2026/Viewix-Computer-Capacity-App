@@ -368,6 +368,21 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
 //     errors) surface as inline error text below the buttons;
 //     modal stays open so the producer can fix and retry.
 // ───────────────────────────────────────────────────────────────
+// Generate a batchId once per modal open. Same value gets re-sent on
+// every retry / double-click, so a duplicate POST converges on the
+// existing /emailLog lock (skipped:already_sent) instead of minting a
+// fresh key and double-sending. Codex audit 2026-05-13 caught the
+// previous server-side mint-per-call making the in-flight lock claim
+// false. Format: 6-40 chars, alphanumerics + hyphens only (validated
+// server-side too).
+function makeBatchId() {
+  return (
+    Date.now().toString(36) +
+    "-" +
+    Math.random().toString(36).slice(2, 10)
+  );
+}
+
 function ShareWithClientModal({ delivery, onClose, onSent }) {
   const videos = Array.isArray(delivery?.videos) ? delivery.videos.filter(Boolean) : [];
   // Pre-check rule: any video flagged "Ready for Review" by the editor's
@@ -382,6 +397,11 @@ function ShareWithClientModal({ delivery, onClose, onSent }) {
   const [producerNote, setProducerNote] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
+  // batchId minted exactly once when the modal mounts. Re-rendering
+  // during typing / checkbox toggles does NOT change it. Closing and
+  // re-opening the modal remounts and mints a fresh id (new intent =
+  // new batch).
+  const [batchId] = useState(makeBatchId);
 
   const checkedCount = Object.values(checked).filter(Boolean).length;
   const canSend = checkedCount > 0 && !sending;
@@ -409,6 +429,7 @@ function ShareWithClientModal({ delivery, onClose, onSent }) {
           deliveryId: delivery.id,
           videoIds: ids,
           producerNote: producerNote.trim(),
+          batchId, // see comment on the useState above — stable per modal-open
         }),
       });
       const json = await res.json().catch(() => ({}));

@@ -54,6 +54,7 @@ const ALLOWED_ROLES = ["founders", "founder", "lead"];
 // modal can render a clean inline message.
 const STATUS_BY_CODE = {
   missing_projectId: 400,
+  invalid_batchId: 400,
   firebase_init_failed: 500,
   no_project: 404,
   no_client_email: 422,
@@ -117,6 +118,15 @@ export default async function handler(req, res) {
     ? body.videoIds.map(v => String(v).trim()).filter(Boolean)
     : [];
   const producerNote = String(body.producerNote || "").slice(0, 2000); // soft cap
+  // batchId is client-minted (one per modal open). Same value on every
+  // retry/double-click means the second POST hits the existing /emailLog
+  // lock and short-circuits to skipped:already_sent. Format validated
+  // again inside dispatchReviewBatch — the regex check here is just to
+  // surface a clean 400 instead of a 500 if a malformed value arrives.
+  const batchId = body.batchId != null ? String(body.batchId).trim() : "";
+  if (batchId && !/^[a-zA-Z0-9-]{6,40}$/.test(batchId)) {
+    return res.status(400).json({ ok: false, error: "invalid_batchId", detail: "batchId must be 6-40 chars, alphanumerics + hyphens only" });
+  }
 
   if (!deliveryId) {
     return res.status(400).json({ ok: false, error: "deliveryId required" });
@@ -160,6 +170,7 @@ export default async function handler(req, res) {
       projectId,
       videoIds,
       producerNote,
+      batchId: batchId || undefined, // empty string -> let helper mint a server id (no client batchId case)
     });
   } catch (e) {
     const status = STATUS_BY_CODE[e.code] || 500;

@@ -24,14 +24,21 @@
 //                              "<projectName>: <videoName> is ready
 //                               for client review · added to
 //                               Deliveries · <link>"
-//                            + Ready-For-Review email to the client
-//                              via api/_email/send.js
+//                              AND the matching delivery video's
+//                              viewixStatus is set to "Ready for Review"
+//                              so the producer's Deliveries-tab
+//                              "Share with client" modal can pre-check it.
 //
-// Slack and email are independent: a missing SLACK_*_WEBHOOK_URL
-// skips Slack but still sends the email; an email failure never
-// blocks the Slack post; both run concurrently via Promise.allSettled.
-// The endpoint always returns 200 with per-channel status so the
-// editor's Finish flow doesn't fail on a transient hiccup.
+// **Slack-only. This endpoint does NOT send any client-facing email.**
+// (Locked architecture 2026-05-12.) The ReadyForReview email goes out
+// only when a producer clicks Send in the Deliveries modal, which
+// POSTs to api/send-review-batch.js. Earlier drafts of this file
+// triggered a client email from here; that was reverted because
+// editors must never be the gatekeeper for client comms — too
+// granular, no human review before client sees anything.
+//
+// Returns 200 with the Slack post status so the editor's Finish flow
+// doesn't fail on a transient hiccup.
 //
 // Auth: anyone signed in (founder / lead / editor). The endpoint
 // only forwards a small composed message + a templated email to a

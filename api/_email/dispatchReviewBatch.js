@@ -98,18 +98,38 @@ function err(code, message) {
  *                                          testing.
  * @param {string} [args.subjectOverride]  Skip the auto-subject and use
  *                                          this string instead.
+ * @param {string} [args.batchId]          Optional caller-supplied idempotency
+ *                                          key suffix. Per Codex audit 2026-05-13,
+ *                                          the modal MUST mint the batchId once
+ *                                          when it opens and re-send the same
+ *                                          value on every retry / double-click,
+ *                                          so duplicate POSTs converge on one
+ *                                          lock instead of generating fresh
+ *                                          keys per request. When omitted (CLI
+ *                                          path or legacy callers) a fresh
+ *                                          server-side id is minted. Format is
+ *                                          validated: 6-40 chars, alphanumerics
+ *                                          + hyphens only, so a caller can't
+ *                                          inject a path-tampering value into
+ *                                          /emailLog.
  * @returns {Promise<{ state, reason?, messageId?, batchId, idempotencyKey, subject, to }>}
  *          The shape from send() plus the metadata the caller needs to
  *          report back (batchId for the log, subject for the UI, etc.).
  */
+const BATCH_ID_OK = /^[a-zA-Z0-9-]{6,40}$/;
+
 export async function dispatchReviewBatch({
   projectId,
   videoIds,
   producerNote = "",
   recipientOverride,
   subjectOverride,
+  batchId: callerBatchId,
 } = {}) {
   if (!projectId) throw err("missing_projectId", "projectId required");
+  if (callerBatchId != null && !BATCH_ID_OK.test(String(callerBatchId))) {
+    throw err("invalid_batchId", `batchId must match ${BATCH_ID_OK} when supplied`);
+  }
 
   // /accounts lives separately from getProjectContext. The chip
   // resolver wants the full map. (We could fold this into
@@ -152,7 +172,14 @@ export async function dispatchReviewBatch({
     videoId: v.videoId || v.id || "",
   }));
 
-  const batchId = makeBatchId();
+  // Use the caller-supplied batchId when present so a retry of the same
+  // submission (same modal open, double-click, network re-send) hits
+  // the existing /emailLog lock and short-circuits to skipped:already_sent
+  // instead of minting a new key and double-sending. Fresh modal opens
+  // mint a fresh id client-side. CLI / legacy callers fall through to
+  // server-minted ids — those paths aren't subject to the double-POST
+  // problem (one CLI invocation = one send by definition).
+  const batchId = callerBatchId || makeBatchId();
   const idempotencyKey = `${projectId}/ReadyForReview/${batchId}`;
   const to = recipientOverride || ctx.client.email;
   const subject = subjectOverride || makeSubject({ count: videos.length });

@@ -415,7 +415,10 @@ export default async function handler(req, res) {
           template: "Confirmation",
           idempotencyKey: `${projectId}/Confirmation`,
           to: clientEmail,
-          subject: "You're locked in — here's what happens next",
+          // Locked subject 2026-05-13 (Codex audit + Jeremy approval).
+          // Matches the template's headline "You're booked in". No emoji
+          // in v1 — protects deliverability from a new sender domain.
+          subject: "You're booked in",
           props: {
             client: { firstName: firstName || "there", email: clientEmail },
             project: {
