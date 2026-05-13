@@ -941,10 +941,10 @@ function VideoReviewStep({ project, onPatch }) {
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           {isApproved
             ? "Video Review approved. Move to Shortlist next."
-            : `${ticked.size} ticked · ${crossed.size} crossed · ${adList.length - ticked.size - crossed.size} unreviewed. Tick at least a few ads you'd want to script against before approving.`}
+            : `${ticked.size} ticked · ${crossed.size} crossed · ${adList.length - ticked.size - crossed.size} unreviewed.`}
         </div>
-        <button onClick={approve} disabled={ticked.size === 0}
-          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : ticked.size === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: ticked.size === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+        <button onClick={approve}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
           {isApproved ? "→ Shortlist" : "Approve Video Review"}
         </button>
       </div>
