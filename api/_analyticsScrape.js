@@ -223,9 +223,36 @@ export async function startAnalyticsApifyRun({
   return runId;
 }
 
+// Today's cost is the SUM of:
+//   - completed runs whose `completedAt` is today (use actualCostUsd)
+//   - in-flight `running` runs that started today (use expectedCostUsd)
+// Counting in-flight runs prevents overlapping manual refreshes /
+// cron fan-outs from overspending before webhooks land actual costs.
+// Stale running runs (started >24h ago without completing) are
+// ignored so a dead webhook doesn't lock the budget forever.
+function isTodayCostOf(r, todayUtc) {
+  if (!r) return false;
+  if (r.status === "completed") {
+    return !!(r.completedAt && r.completedAt.startsWith(todayUtc));
+  }
+  if (r.status === "running") {
+    if (!r.startedAt || !r.startedAt.startsWith(todayUtc)) return false;
+    // Drop stuck runs from the running tally — older than 6h = stale.
+    const ageMs = Date.now() - new Date(r.startedAt).getTime();
+    return ageMs < 6 * 3600 * 1000;
+  }
+  return false;
+}
+
+function costOf(r) {
+  // Completed → trust actualCostUsd. Running → fall back to expected.
+  if (r.status === "completed") return Number(r.actualCostUsd ?? r.expectedCostUsd ?? 0);
+  return Number(r.expectedCostUsd ?? 0);
+}
+
 /**
- * Sum the actual cost (USD) of completed runs for this client today.
- * Used by the budget guard before kicking off new runs.
+ * Sum the cost (USD) of this client's runs today — completed plus
+ * in-flight. Used by the budget guard before kicking off new runs.
  */
 export async function todayClientCostUsd(clientId) {
   const runs = (await fbGet("/analytics/runs")) || {};
@@ -233,26 +260,23 @@ export async function todayClientCostUsd(clientId) {
   let total = 0;
   for (const r of Object.values(runs)) {
     if (!r || r.clientId !== clientId) continue;
-    if (r.status !== "completed") continue;
-    if (!r.completedAt || !r.completedAt.startsWith(todayUtc)) continue;
-    total += Number(r.actualCostUsd || r.expectedCostUsd || 0);
+    if (!isTodayCostOf(r, todayUtc)) continue;
+    total += costOf(r);
   }
   return total;
 }
 
 /**
- * Sum the actual cost (USD) of all completed runs today across all
- * clients. Used by the global budget guard.
+ * Sum the cost (USD) of all runs today across all clients —
+ * completed plus in-flight. Used by the global budget guard.
  */
 export async function todayGlobalCostUsd() {
   const runs = (await fbGet("/analytics/runs")) || {};
   const todayUtc = new Date().toISOString().slice(0, 10);
   let total = 0;
   for (const r of Object.values(runs)) {
-    if (!r) continue;
-    if (r.status !== "completed") continue;
-    if (!r.completedAt || !r.completedAt.startsWith(todayUtc)) continue;
-    total += Number(r.actualCostUsd || r.expectedCostUsd || 0);
+    if (!isTodayCostOf(r, todayUtc)) continue;
+    total += costOf(r);
   }
   return total;
 }

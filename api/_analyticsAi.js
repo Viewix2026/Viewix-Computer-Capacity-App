@@ -40,10 +40,20 @@ const MODEL_TAKES    = "claude-sonnet-4-6";
 
 // Allow disabling Claude wholesale without removing the wiring.
 // Useful for pre-pilot, calibration, or budget freezes.
+//
+// Default is EXPLICIT-OPT-IN: a missing ANTHROPIC_API_KEY OR a
+// missing/false ANALYTICS_CLAUDE_ENABLED both fall back to the
+// Phase 6 heuristic. Set ANALYTICS_CLAUDE_ENABLED="true"
+// (case-insensitive) once you've hand-reviewed ~50 classifications
+// and are happy with accuracy.
+//
+// Safer than defaulting to "on" — prevents a forgotten env var from
+// quietly enabling Claude classifications + niche takes before
+// they've been calibrated.
 export function isClaudeEnabled() {
   if (!process.env.ANTHROPIC_API_KEY) return false;
-  const flag = (process.env.ANALYTICS_CLAUDE_ENABLED || "true").toLowerCase();
-  return flag !== "false" && flag !== "0";
+  const flag = (process.env.ANALYTICS_CLAUDE_ENABLED || "false").toLowerCase();
+  return flag === "true" || flag === "1";
 }
 
 // ─── fb helpers (admin-or-REST, same shape as elsewhere) ──────────
