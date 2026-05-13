@@ -209,9 +209,36 @@ async function handleScrapeAdLibrary(req, res) {
     const existing = (await fbGet(`/preproduction/metaAds/${projectId}/adLibraryResearch/ads`)) || {};
     const merged = { ...existing };
     let added = 0;
-    let skippedNoId = 0;   // normaliseScrapedAd couldn't find an ad id — most likely an actor schema drift
+    let skippedNoId = 0;       // normaliseScrapedAd couldn't find an ad id — most likely an actor schema drift
     let skippedDupe = 0;
+    let skippedWrongPage = 0;  // ad came from a page producers didn't search for — Apify's keyword search returns ads that *mention* the term too
+    const droppedPages = new Set();
+
+    // Apify's facebook-ads-library actor does a keyword search, so the
+    // result pool includes ads from any advertiser whose ad text or
+    // metadata mentions the searched name. Producers want only ads
+    // FROM the searched advertisers, so filter by matching the ad's
+    // page_name against each searched target (case-insensitive, with
+    // bidirectional substring matching to tolerate brand-name variants
+    // like "Acme" vs "Acme Co").
+    const normalisePageKey = (s) => String(s || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\/(?:www\.)?facebook\.com\//i, "")
+      .replace(/^@/, "")
+      .replace(/\/$/, "");
+    const searchTargets = pages.map(p => normalisePageKey(p.pageName || p.pageUrl)).filter(Boolean);
+
     for (const raw of items) {
+      const adPageKey = normalisePageKey(raw?.page_name || raw?.pageName || raw?.snapshot?.page_name);
+      if (searchTargets.length > 0) {
+        const matches = adPageKey && searchTargets.some(t => adPageKey.includes(t) || t.includes(adPageKey));
+        if (!matches) {
+          skippedWrongPage++;
+          if (adPageKey) droppedPages.add(adPageKey);
+          continue;
+        }
+      }
       const ad = normaliseScrapedAd(raw, null);
       if (!ad) { skippedNoId++; continue; }
       if (merged[ad.id]) { skippedDupe++; continue; }
@@ -219,13 +246,20 @@ async function handleScrapeAdLibrary(req, res) {
       added++;
     }
     await fbSet(`/preproduction/metaAds/${projectId}/adLibraryResearch/ads`, merged);
-    // Surface a warning on the record when the actor returned items we
-    // couldn't normalise — producers were previously seeing "scraped 100,
-    // added 0" with no hint why. scrapeWarning shows in the UI next to
-    // scrapeStatus: "done".
-    const warning = skippedNoId > 0
-      ? `${skippedNoId} item${skippedNoId === 1 ? "" : "s"} from Apify had no recognisable ad id — the actor may have changed its output schema. Check api/meta-ads.js:normaliseScrapedAd if you've recently updated the actor.`
-      : null;
+
+    // Surface a warning on the record when the actor returned items
+    // we couldn't normalise OR when the page-name filter dropped a
+    // bunch — both cases were previously invisible to producers,
+    // who'd just see "scraped 100, added 12" with no hint why.
+    const warningParts = [];
+    if (skippedWrongPage > 0) {
+      const sampleDropped = Array.from(droppedPages).slice(0, 5).join(", ");
+      warningParts.push(`${skippedWrongPage} ad${skippedWrongPage === 1 ? "" : "s"} dropped — came from pages outside your search (${sampleDropped}${droppedPages.size > 5 ? `, +${droppedPages.size - 5} more` : ""}). Facebook's keyword search pulls in ads that just mention the searched name; we filter those out so the pool stays on-target.`);
+    }
+    if (skippedNoId > 0) {
+      warningParts.push(`${skippedNoId} item${skippedNoId === 1 ? "" : "s"} from Apify had no recognisable ad id — the actor may have changed its output schema. Check api/meta-ads.js:normaliseScrapedAd if you've recently updated the actor.`);
+    }
+    const warning = warningParts.length > 0 ? warningParts.join(" ") : null;
     await fbPatch(`/preproduction/metaAds/${projectId}/adLibraryResearch`, {
       scrapeStatus: "done",
       scrapeFinishedAt: new Date().toISOString(),
@@ -238,6 +272,9 @@ async function handleScrapeAdLibrary(req, res) {
       scraped: items.length,
       added,
       skipped: items.length - added,
+      skippedWrongPage,
+      skippedNoId,
+      skippedDupe,
       totalInPool: Object.keys(merged).length,
     });
   } catch (e) {
