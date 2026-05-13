@@ -64,9 +64,11 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
   //      delivery object got rewritten on every keystroke (Firebase
   //      echoed stale snapshots back through the live listener, which
   //      clobbered keystrokes in flight).
-  //   3. Everything else (clientName, logoUrl, notes header, etc.)
-  //      rides on the App.jsx debounced bulk-writer, which sets
-  //      skipRead so the listener won't race it.
+  //   3. Top-level delivery fields edited in this detail view
+  //      (clientName, projectName, etc.) go through setD below, which
+  //      updates local state and writes the patched leaf directly to
+  //      Firebase — same per-leaf discipline as item 2, just at the
+  //      delivery root instead of inside a video row.
   const updateDelivery = (updated) => {
     setDeliveries(p => p.map(d => d.id === updated.id ? updated : d));
   };
@@ -211,10 +213,9 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
         )}
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
           {/* Project details */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
             <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4, display: "block" }}>Client Name</label><input value={d.clientName} onChange={e => setD({ clientName: e.target.value })} style={inputSt} /></div>
             <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4, display: "block" }}>Project Name</label><input value={d.projectName} onChange={e => setD({ projectName: e.target.value })} style={inputSt} /></div>
-            <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4, display: "block" }}>Client Logo URL</label><input value={d.logoUrl || ""} onChange={e => setD({ logoUrl: e.target.value })} placeholder="https://..." style={inputSt} /></div>
           </div>
 
           {/* Share link */}
