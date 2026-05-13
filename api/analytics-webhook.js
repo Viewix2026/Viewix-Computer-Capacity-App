@@ -291,16 +291,26 @@ export default async function handler(req, res) {
     }),
   ]);
 
-  // Respond to Apify FIRST, then kick off the recompute. The
-  // recompute is itself heavy (loads videos, scores them, writes
-  // baselines + status + momentum + insights) and was the second
-  // factor pushing webhooks past the 30s timeout. Returning 200
-  // here means Apify is satisfied regardless of recompute cost.
+  // AWAIT the recompute BEFORE responding. Earlier version replied
+  // first and ran recompute after — but Vercel's default Node runtime
+  // suspends the function once res.send fires, so anything after the
+  // response could be cut off mid-flight (which we hit in practice:
+  // baselines + scoring written, status/momentum/insights weren't).
   //
-  // The recompute is idempotent — if Vercel cuts the function off
-  // before recompute finishes, the cron at 4am Sydney will pick
-  // it up. And the next webhook from a sibling run will re-trigger
-  // it. Worst case: dashboard scoring lags by minutes-not-seconds.
+  // Now that ingest is bulk-PATCHed and recompute is bulk-PATCHed,
+  // total work is ~5 HTTP calls — comfortably inside Apify's 30s
+  // webhook budget. If something pathological pushes it past 30s
+  // anyway, Apify retries (which our run-sidecar idempotency
+  // handles cleanly) or the 4am cron picks it up.
+  let recomputeResult = null;
+  let recomputeError = null;
+  try {
+    recomputeResult = await recomputeClientAnalytics(clientId);
+  } catch (err) {
+    console.error(`[analytics-webhook] recompute failed for ${clientId}:`, err);
+    recomputeError = err.message;
+  }
+
   res.status(200).json({
     ok: true,
     outcome: "processed",
@@ -310,11 +320,6 @@ export default async function handler(req, res) {
     target,
     itemsReceived: items.length,
     written: writtenCount,
+    recompute: recomputeResult || { error: recomputeError },
   });
-
-  try {
-    await recomputeClientAnalytics(clientId);
-  } catch (err) {
-    console.error(`[analytics-webhook] recompute failed for ${clientId}:`, err);
-  }
 }
