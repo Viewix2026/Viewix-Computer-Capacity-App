@@ -526,21 +526,31 @@ export async function recomputeClientAnalytics(clientId) {
     };
   }
 
-  // ─── 5. Write baselines ──────────────────────────────────────────
-  await fbSet(`/analytics/clients/${clientId}/baselines`, baselines);
-
-  // ─── 6. Write per-video scoring + classifications (parallel) ────
-  // Two writes per video: scoring (recomputed every run) and
-  // classifications (carries the heuristic format + manual override
-  // metadata).
-  await Promise.all([
-    ...videoUpdates.map(u =>
-      fbSet(`/analytics/videos/${clientId}/${u.platform}/${u.videoId}/scoring`, u.scoring)
-    ),
-    ...videoUpdates.map(u =>
-      fbSet(`/analytics/videos/${clientId}/${u.platform}/${u.videoId}/classifications`, u.classification)
-    ),
-  ]);
+  // ─── 5+6. Bulk-write per-video scoring + classifications ────────
+  //
+  // 57 client videos × 2 writes each (scoring + classifications) was
+  // 114 separate HTTP requests over REST. With ingest already bulked
+  // by the prior fix, this was the next big slow point. Group by
+  // platform and PATCH each platform's videos in one call using
+  // slash-keyed paths — same write semantics, one HTTP round-trip
+  // per platform regardless of how many videos.
+  //
+  // Baselines also batched into the same parent PATCH on the client
+  // record (one write for baselines + status + momentum + cohort +
+  // bookkeeping — added below).
+  {
+    const byPlatform = {};
+    for (const u of videoUpdates) {
+      if (!byPlatform[u.platform]) byPlatform[u.platform] = {};
+      byPlatform[u.platform][`${u.videoId}/scoring`] = u.scoring;
+      byPlatform[u.platform][`${u.videoId}/classifications`] = u.classification;
+    }
+    await Promise.all(
+      Object.entries(byPlatform).map(([platform, batch]) =>
+        fbPatch(`/analytics/videos/${clientId}/${platform}`, batch)
+      )
+    );
+  }
 
   // ─── 7. Competitor cohort baselines (Phase 5) ──────────────────────
   // The client's saved competitors define the niche cohort (per the
@@ -556,14 +566,8 @@ export async function recomputeClientAnalytics(clientId) {
   const competitorCohort = await computeCompetitorCohorts({
     competitorsRoot, enabledPlatforms, now,
   });
-  // Write cohort summary under the client record so the frontend
-  // can read it alongside the client's own baselines.
-  await fbSet(`/analytics/clients/${clientId}/competitorCohort`, {
-    ...competitorCohort,
-    updatedAt: computedAt,
-  });
 
-  // ─── 8. Aggregate stats across platforms (v1: IG only, so this is
+  // ─── 7. Aggregate stats across platforms (v1: IG only, so this is
   //         effectively a passthrough — but keeps the door open for
   //         v2 multi-platform without rewiring). ────────────────────
   const aggregate = aggregatePlatformStats(platformStats);
@@ -584,9 +588,6 @@ export async function recomputeClientAnalytics(clientId) {
     ? (aggregate.postsPerWeekRecent - aggregate.postsPerWeekPrior) / aggregate.postsPerWeekPrior
     : null;
 
-  // competitorDelta — client's 30d engagement vs cohort median 30d
-  // engagement. Pooled across all enabled platforms (matches the
-  // status + momentum aggregation pattern).
   const cohortEngagement30d = aggregateCohortEngagement30d(competitorCohort, enabledPlatforms);
   const competitorDelta = (cohortEngagement30d && cohortEngagement30d > 0 && aggregate.engagement30d != null)
     ? (aggregate.engagement30d - cohortEngagement30d) / cohortEngagement30d
@@ -596,20 +597,26 @@ export async function recomputeClientAnalytics(clientId) {
     viewsDelta, engagementDelta, postFrequencyDelta, competitorDelta,
   });
 
-  // ─── 8. Write status + momentum (overwrite, not patch — these
-  //         records are wholly derived and should never carry
-  //         stale fields from a prior recompute). ───────────────────
-  await fbSet(`/analytics/clients/${clientId}/status`, {
-    state: status.state,
-    reason: status.reason,
-    computedAt,
-  });
-  await fbSet(`/analytics/clients/${clientId}/momentum`, {
-    score: momentum.score,
-    reasonLine: momentum.reasonLine,
-    signals: momentum.signals,
-    delta30d: viewsDelta,
-    computedAt,
+  // ─── 8. Bulk-PATCH all per-client derived state in one call ─────
+  // baselines + competitorCohort + status + momentum are all derived
+  // state living under /analytics/clients/{id}. Writing them as ONE
+  // patch is cheaper than 4 individual fbSet calls + means listeners
+  // see them all change atomically (no stale-status moment while
+  // momentum is being written).
+  // currentInsightsWeek is patched after the insights writes below,
+  // and lastRecomputeAt stays last (separate write) so it only updates
+  // after every other write has succeeded.
+  await fbPatch(`/analytics/clients/${clientId}`, {
+    baselines,
+    competitorCohort: { ...competitorCohort, updatedAt: computedAt },
+    status: { state: status.state, reason: status.reason, computedAt },
+    momentum: {
+      score: momentum.score,
+      reasonLine: momentum.reasonLine,
+      signals: momentum.signals,
+      delta30d: viewsDelta,
+      computedAt,
+    },
   });
 
   // ─── 9. Format Playbook aggregation + Next Video Recommendations
@@ -642,15 +649,34 @@ export async function recomputeClientAnalytics(clientId) {
   // v0 caveat. Otherwise keep it.
   const claudeClassifiedCount = videoUpdates.filter(u => u.classification?.source === "claude").length;
   const usingClaude = isClaudeEnabled() && claudeClassifiedCount > 0 && (claudeClassifiedCount / Math.max(1, videoUpdates.length)) > 0.5;
-  await fbSet(`/analytics/insights/${clientId}/${weekId}/formatPlaybook`, {
-    formats: formatCounts,
-    computedAt,
-    classifierSource: usingClaude ? "claude" : "heuristic",
-    accuracyCaveat: usingClaude
-      ? null
-      : "v0 heuristic — ~70% accuracy. Phase 7's Claude classifier hasn't run on these posts yet.",
-  });
-  await fbSet(`/analytics/insights/${clientId}/${weekId}/nextVideoRecs`, recs);
+
+  // Compute decay alerts up here so they land in the same bulk insights
+  // PATCH as formatPlaybook + nextVideoRecs (was a separate fbSet below).
+  const decayAlerts = computeDecayAlerts(videoUpdates, videosRoot, now);
+
+  // Bulk-PATCH the rule-based insights (formatPlaybook + nextVideoRecs
+  // + decayAlerts) in one HTTP call. Claude-gated insights
+  // (thisWeekInNiche, nichePulse, weeklySummary) stay as separate writes
+  // below because they're conditional and slow; we don't want a
+  // transient Claude failure to wipe the rule-based outputs.
+  // currentInsightsWeek piggy-backs on the same call so the client
+  // record points at the new week's bucket atomically with the writes
+  // that populated it.
+  await Promise.all([
+    fbPatch(`/analytics/insights/${clientId}/${weekId}`, {
+      formatPlaybook: {
+        formats: formatCounts,
+        computedAt,
+        classifierSource: usingClaude ? "claude" : "heuristic",
+        accuracyCaveat: usingClaude
+          ? null
+          : "v0 heuristic — ~70% accuracy. Phase 7's Claude classifier hasn't run on these posts yet.",
+      },
+      nextVideoRecs: recs,
+      decayAlerts,
+    }),
+    fbPatch(`/analytics/clients/${clientId}`, { currentInsightsWeek: weekId }),
+  ]);
 
   // ─── Phase 7: niche takes + pulse ──────────────────────────────
   // Top 3 competitor posts of the last 7d get a 2-sentence Claude take.
@@ -699,18 +725,6 @@ export async function recomputeClientAnalytics(clientId) {
       console.warn(`[analytics-scoring] Phase 7 niche generation failed for ${clientId}: ${err.message}`);
     }
   }
-
-  await fbPatch(`/analytics/clients/${clientId}`, {
-    currentInsightsWeek: weekId,
-  });
-
-  // ─── Phase 8: Content Decay alerts (rule-based, no AI) ──────────
-  // Compares current 30d format performance vs the prior 30-90d
-  // window. A decay alert fires when a format that was winning
-  // (>= 1.2x median) drops by >= 25%, with at least 3 posts in both
-  // windows so it's signal not noise.
-  const decayAlerts = computeDecayAlerts(videoUpdates, videosRoot, now);
-  await fbSet(`/analytics/insights/${clientId}/${weekId}/decayAlerts`, decayAlerts);
 
   // ─── Phase 8: Renewal Ammo (basic v1, since tracking began) ─────
   // Internal-only — surfaced to founders + leads in the dashboard
