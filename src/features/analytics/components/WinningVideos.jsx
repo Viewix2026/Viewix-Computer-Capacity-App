@@ -57,8 +57,8 @@ function EmptyState() {
       fontSize: 12,
       lineHeight: 1.6,
     }}>
-      No winning videos yet. Either the scrape hasn't completed, or the
-      client has no posts beating their median by 1.5×.
+      No winning videos yet. Either the scrape hasn't completed, or no
+      recent posts beat the client's own median by enough to surface.
     </div>
   );
 }

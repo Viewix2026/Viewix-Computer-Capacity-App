@@ -174,18 +174,29 @@ function computeRepeatability({
   ageDays,
 }) {
   // Hard-flag algorithm-spike posts as one-off.
+  // Requires POSITIVE evidence of an algorithm push: high views AND
+  // measurably-low engagement. Without engagement data we can't make
+  // that call, so the spike detector stays quiet.
   if (overperformanceScore >= OVERPERF.spikeScore
       && engagementVsBaseline != null
       && engagementVsBaseline < OVERPERF.spikeEngagementCutoff) {
     return { score: 15, label: "One-off spike — don't chase" };
   }
 
+  // Track which signals we actually have. The label rules below treat
+  // "we have no engagement data" differently from "we have engagement
+  // data and it's weak." The former leaves the post unlabelled; the
+  // latter is a real one-off-spike signal.
+  const haveEngagement = engagementVsBaseline != null;
+  const haveReach = followerNormalisedViews != null;
+  const haveAnySecondarySignal = haveEngagement || haveReach;
+
   let score = 0;
   if (overperformanceScore >= REPEAT.overperfMinForBonus) score += REPEAT.overperfBonus;
-  if (engagementVsBaseline != null && engagementVsBaseline >= REPEAT.engagementMinForBonus) {
+  if (haveEngagement && engagementVsBaseline >= REPEAT.engagementMinForBonus) {
     score += REPEAT.engagementBonus;
   }
-  if (followerNormalisedViews != null && followerNormalisedViews >= REPEAT.reachFollowerFraction) {
+  if (haveReach && followerNormalisedViews >= REPEAT.reachFollowerFraction) {
     score += REPEAT.reachBonus;
   }
 
@@ -198,7 +209,13 @@ function computeRepeatability({
 
   let label = null;
   if (score >= REPEAT.repeatableMin) label = "Likely repeatable";
-  else if (score <= REPEAT.oneOffMax) label = "One-off spike — don't chase";
+  else if (haveAnySecondarySignal && score <= REPEAT.oneOffMax) {
+    // Only call something a one-off spike if we have at least one
+    // secondary signal (engagement or reach) to back the negative
+    // judgment. Without any, we just don't render a repeatability
+    // label — overperformance alone speaks for itself.
+    label = "One-off spike — don't chase";
+  }
 
   return { score, label };
 }
