@@ -7,7 +7,12 @@
 // startDate === tomorrow (Sydney). One per shoot subtask per startDate.
 // Idempotency: /emailLog/{projectId}/ShootTomorrow/{subtaskId}/{startDate}.
 //
-// Subject (Jeremy to approve before live): "Excited to shoot tomorrow!"
+// Subject (locked 2026-05-13): "Excited to shoot tomorrow, {firstName}!"
+// (falls back to "Excited to shoot tomorrow!" when first name is missing).
+// Personalisation in the subject is Jeremy's approved exception to the
+// "no personalisation in subject" deliverability rule — the day-before-
+// shoot email is the warmest touchpoint in the lifecycle. Built in
+// api/cron/daily-09.js SUBJECTS.ShootTomorrow().
 //
 // Merge tags expected:
 //   client.firstName           ({{first_name}})

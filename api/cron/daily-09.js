@@ -54,12 +54,19 @@ import { adminGet, adminPatch, adminSet } from "../_fb-admin.js";
 import { send, newCounters, postCronSummary } from "../_email/send.js";
 import { getProjectContext, buildShootContext } from "../_email/getProjectContext.js";
 
-// Subject line drafts (Phase A). Jeremy approves before live send.
+// Subject lines (locked 2026-05-13 per Codex audit — these match the
+// template body headlines and Jeremy's approved copy):
+//   - Confirmation:    "You're booked in"
+//   - ShootTomorrow:   "Excited to shoot tomorrow, {firstName}!" (or without name if missing)
+//   - InEditSuite:     "It's in the edit suite"
+//   - ReadyForReview:  set per-send in dispatchReviewBatch.js (singular vs batch)
+// No emoji in v1 — protects deliverability from a new sender domain.
 const SUBJECTS = {
-  Confirmation: "You're locked in — here's what happens next",
-  ShootTomorrow: (firstName) => `See you tomorrow${firstName ? ", " + firstName : ""}`,
-  InEditSuite: "Your videos are in the edit suite",
-  ReadyForReview: "Your video is ready to watch",
+  Confirmation: "You're booked in",
+  ShootTomorrow: (firstName) => firstName
+    ? `Excited to shoot tomorrow, ${firstName}!`
+    : "Excited to shoot tomorrow!",
+  InEditSuite: "It's in the edit suite",
 };
 
 // Subtask status whitelists for shoot-tomorrow eligibility. `stuck`
