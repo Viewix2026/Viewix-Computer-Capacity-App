@@ -27,6 +27,7 @@ import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
 import { useSalesSync } from "./sync/useSalesSync";
 import { useProjectsSync } from "./sync/useProjectsSync";
+import { useCalendarSyncQueue } from "./sync/useCalendarSyncQueue";
 
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
@@ -158,6 +159,11 @@ export default function App(){
   // wrote /projects from the bulk loop, so this extraction is purely
   // listener relocation.
   const{projects,setProjects}=useProjectsSync();
+
+  // /calendarSyncQueue listener (founder / lead only — read rule
+  // matches in firebase-rules.json). Threaded down to Projects +
+  // TeamBoard so each shoot row can render its sync-status pill.
+  const{calendarSyncQueue}=useCalendarSyncQueue();
 
   // Buyer Journey state
   const[buyerJourney,setBuyerJourney]=useState({});
@@ -773,10 +779,10 @@ export default function App(){
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
-    {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
+    {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null}/>)}
 
     {/* Legacy direct-to-Deliveries route (kept so old bookmarks still resolve). */}
-    {tool==="deliveries"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
+    {tool==="deliveries"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null}/>)}
 
 
     {/* ═══ TRAINING ═══ */}
