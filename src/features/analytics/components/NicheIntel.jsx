@@ -10,6 +10,7 @@
 // library — see EngagementChart for the hand-rolled SVG.
 
 import { EngagementChart } from "./EngagementChart";
+import { ViewsOverTimeChart } from "./ViewsOverTimeChart";
 import { Compare } from "./Compare";
 import { CompetitorWatchlist } from "./CompetitorWatchlist";
 import { NichePulse } from "./NichePulse";
@@ -71,12 +72,32 @@ export function NicheIntel({ data, competitorsRoot }) {
             padding: "16px 18px",
           }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: "var(--fg)", marginBottom: 4 }}>
+              Views over time
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
+              Each dot is one of your recent posts (click to open). Green
+              dots beat your median view count; blue dots landed below.
+              Works without follower data — useful from the first scrape.
+            </div>
+            <ViewsOverTimeChart
+              videos={data?.videos}
+              medianViews={data?.baselines?.medianViews?.instagram}
+            />
+          </div>
+          <div style={{
+            background: "var(--card)",
+            border: "1px solid var(--border)",
+            borderRadius: 12,
+            padding: "16px 18px",
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "var(--fg)", marginBottom: 4 }}>
               Engagement rate over time
             </div>
             <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
               Each dot is one of your recent posts. The dashed line is the
               pooled median across your saved competitors — your niche
-              benchmark.
+              benchmark. Needs follower data; lights up after the next
+              profile scrape.
             </div>
             <EngagementChart
               videos={data?.videos}

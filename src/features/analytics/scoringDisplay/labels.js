@@ -20,11 +20,24 @@ export function overperformanceLabel(score) {
 
 // Map a precomputed repeatabilityScore (0–100, set by the API) to a
 // human label.
+//
+// IMPORTANT — this is a fallback for the case where the API didn't
+// populate `repeatabilityLabel` directly. It MUST stay narrower than
+// the API's labelling rules, because at display time we don't know
+// whether the API withheld the label intentionally (e.g. because
+// engagement/reach data was missing — "we can't claim spike-ness
+// without evidence"). Synthesizing "One-off spike" from score alone
+// here used to override that intentional silence and put red
+// "ONE-OFF SPIKE" pills on Winning Videos cards.
+//
+// So: only synthesize the upbeat "Likely repeatable" label from a
+// genuinely high score. Never invent "One-off spike — don't chase"
+// here — that judgment requires evidence the API has access to and
+// the display layer doesn't.
 export function repeatabilityLabel(score) {
   if (score == null || Number.isNaN(+score)) return null;
   const v = +score;
   if (v >= 70) return "Likely repeatable";
-  if (v <= 30) return "One-off spike — don't chase";
   return null;
 }
 

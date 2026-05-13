@@ -6,11 +6,19 @@
 // /analytics/videos/{id}/{platform}/{videoId}/scoring — nothing is
 // derived here.
 
+import { useState } from "react";
 import { fmtCount, fmtPct } from "../utils/displayFormatters";
 import { overperformanceLabel, repeatabilityLabel } from "../scoringDisplay/labels";
 
 export function PostCard({ video }) {
   const { post, snapshot, scoring } = video;
+
+  // IG thumbnail URLs (the displayUrl Apify returns) are CDN tokens
+  // that expire within hours. After expiry the request 403s. Track
+  // load failure in state so we render the fallback placeholder
+  // instead of leaving an empty 96x96 grey box.
+  const [thumbBroken, setThumbBroken] = useState(false);
+  const showThumb = !!post?.thumbnail && !thumbBroken;
 
   // Prefer the precomputed label (carries server-side rounding).
   // Fall back to deriving from the score for safety; both paths are
@@ -56,12 +64,12 @@ export function PostCard({ video }) {
         overflow: "hidden",
         position: "relative",
       }}>
-        {post?.thumbnail ? (
+        {showThumb ? (
           // eslint-disable-next-line jsx-a11y/img-redundant-alt
           <img
             src={post.thumbnail}
             alt=""
-            onError={e => { e.target.style.display = "none"; }}
+            onError={() => setThumbBroken(true)}
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
           />
         ) : (
