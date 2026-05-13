@@ -1401,9 +1401,17 @@ function SelectStep({ project, onPatch }) {
 function ScriptStep({ project, onPatch }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
-  // Click-to-rewrite — stores the cell currently being edited.
-  // { rowId, column, label, currentValue } | null
+  // Click-to-rewrite — stores the cell or whole row currently being edited.
+  // Cell mode: { mode: "cell", rowId, column, label, currentValue }
+  // Row mode:  { mode: "row",  rowId, label, row }
   const [rewriteTarget, setRewriteTarget] = useState(null);
+  // Project-wide feedback box — applies one instruction to every script
+  // in parallel + persists to scriptFeedback.global so future per-cell
+  // rewrites also pick it up.
+  const [globalFeedback, setGlobalFeedback] = useState("");
+  const [applyingAll, setApplyingAll] = useState(false);
+  const [applyAllError, setApplyAllError] = useState(null);
+  const [applyAllResult, setApplyAllResult] = useState(null);
   const scripts = project.scriptTable || [];
   // Tracks mount so the 30-60s Claude call doesn't call setState on
   // an unmounted component when the producer switches tabs mid-flight.
@@ -1426,6 +1434,32 @@ function ScriptStep({ project, onPatch }) {
       if (isMountedRef.current) setError(e.message);
     } finally {
       if (isMountedRef.current) setGenerating(false);
+    }
+  };
+
+  const applyToAll = async () => {
+    const text = globalFeedback.trim();
+    if (!text || applyingAll || scripts.length === 0) return;
+    if (!window.confirm(`Apply this feedback to all ${scripts.length} scripts? Each script is rewritten in parallel — takes ~30s end to end.`)) return;
+    setApplyAllError(null);
+    setApplyAllResult(null);
+    setApplyingAll(true);
+    try {
+      const r = await authFetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rewriteAllScripts", projectId: project.id, instruction: text }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      if (isMountedRef.current) {
+        setApplyAllResult(d);
+        setGlobalFeedback("");
+      }
+    } catch (e) {
+      if (isMountedRef.current) setApplyAllError(e.message);
+    } finally {
+      if (isMountedRef.current) setApplyingAll(false);
     }
   };
 
@@ -1460,8 +1494,45 @@ function ScriptStep({ project, onPatch }) {
         </div>
       ) : (
         <>
+          <div style={{ marginBottom: 14, padding: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+              Feedback on all scripts
+            </div>
+            <textarea
+              value={globalFeedback}
+              onChange={e => setGlobalFeedback(e.target.value)}
+              disabled={applyingAll}
+              placeholder="e.g. Make every hook more aggressive. Or: tighten the CTAs across all scripts."
+              rows={2}
+              style={{ ...textareaSt, marginBottom: 8 }}
+            />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", maxWidth: 560, lineHeight: 1.4 }}>
+                Rewrites all {scripts.length} scripts in parallel and saves the note to project-wide feedback, so future per-cell rewrites also see it.
+              </div>
+              <button onClick={applyToAll} disabled={!globalFeedback.trim() || applyingAll}
+                style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: !globalFeedback.trim() || applyingAll ? "#374151" : "var(--accent)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: !globalFeedback.trim() || applyingAll ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                {applyingAll ? "Applying…" : `Apply to all ${scripts.length} scripts`}
+              </button>
+            </div>
+            {applyAllError && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+                {applyAllError}
+              </div>
+            )}
+            {applyAllResult && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(34,197,94,0.08)", borderRadius: 6, border: "1px solid rgba(34,197,94,0.3)", fontSize: 11, color: "#22C55E" }}>
+                {applyAllResult.succeeded} rewritten · {applyAllResult.failed} failed · {applyAllResult.skipped} skipped
+                {applyAllResult.errors?.length > 0 && (
+                  <div style={{ marginTop: 4, fontSize: 10, color: "#EF4444" }}>
+                    {applyAllResult.errors.slice(0, 3).map(e => `${e.rowId}: ${e.error}`).join("; ")}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
-            Click any cell to rewrite it with AI. Your instruction + the row's current content + Brand Truth feed into Claude; just that field gets replaced.
+            Click any cell to rewrite it with AI. Or use the row-level button to rewrite a whole script as one cohesive update. Every instruction is remembered project-wide so the AI holds context across rewrites.
           </div>
           <div style={{ overflowX: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
             <table style={{ width: "100%", minWidth: 1400, borderCollapse: "collapse", fontSize: 12 }}>
@@ -1481,7 +1552,7 @@ function ScriptStep({ project, onPatch }) {
                   const Cell = ({ column, label, content, width, extraStyle }) => (
                     <td
                       style={{ padding: 0, borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: width, cursor: "pointer" }}
-                      onClick={() => setRewriteTarget({ rowId: row.id, column, label, currentValue: content || "" })}
+                      onClick={() => setRewriteTarget({ mode: "cell", rowId: row.id, column, label, currentValue: content || "" })}
                       title="Click to rewrite with AI"
                     >
                       <div style={{ padding: "10px 12px", minHeight: 40, ...(extraStyle || {}) }}>
@@ -1494,6 +1565,12 @@ function ScriptStep({ project, onPatch }) {
                       <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, verticalAlign: "top" }}>{String(i + 1).padStart(2, "0")}</td>
                       <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top" }}>
                         <div style={{ fontSize: 11, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{row.videoName || "—"}</div>
+                        <button
+                          onClick={() => setRewriteTarget({ mode: "row", rowId: row.id, label: `Rewrite whole script — ${row.videoName || "(unnamed)"}`, row })}
+                          title="Rewrite all seven fields of this script as one cohesive update"
+                          style={{ marginTop: 6, padding: "2px 8px", fontSize: 9, fontWeight: 700, borderRadius: 4, border: "1px solid var(--border)", background: "transparent", color: "var(--accent)", cursor: "pointer", fontFamily: "inherit", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          Rewrite whole script
+                        </button>
                       </td>
                       <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", color: "var(--muted)", fontSize: 11 }}>{row.formatName || "—"}</td>
                       <Cell column="hook"         label="Hook"            content={row.hook}         width={240} />
@@ -1524,10 +1601,16 @@ function ScriptStep({ project, onPatch }) {
   );
 }
 
-// Rewrite modal — free-text instruction → Claude rewrites that one
-// field → Firebase update → modal closes. No preview / diff view in
-// v1; producer sees the update land in the table when Firebase
-// listener rehydrates.
+// Rewrite modal — free-text instruction → Claude rewrites the cell
+// (target.mode === "cell") or all seven fields of the row (mode === "row")
+// → Firebase update → modal closes. No preview / diff view in v1;
+// producer sees the update land in the table when Firebase listener
+// rehydrates.
+const WHOLE_SCRIPT_FIELDS = [
+  ["hook", "Hook"], ["explainPain", "Explain the Pain"], ["results", "Results"],
+  ["offer", "Offer"], ["whyOffer", "Why Offer"], ["cta", "CTA"],
+  ["headline", "Headline"], ["adCopy", "Ad Copy"],
+];
 function RewriteModal({ project, target, onClose, onDone }) {
   const [instruction, setInstruction] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -1539,6 +1622,8 @@ function RewriteModal({ project, target, onClose, onDone }) {
   const inFlightRef = useRef(false);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
+  const isRow = target.mode === "row";
+
   const submit = async () => {
     if (!instruction.trim()) return;
     if (inFlightRef.current) return;
@@ -1546,17 +1631,13 @@ function RewriteModal({ project, target, onClose, onDone }) {
     setError(null);
     setSubmitting(true);
     try {
+      const body = isRow
+        ? { action: "rewriteWholeScript", projectId: project.id, rowId: target.rowId, instruction: instruction.trim() }
+        : { action: "rewriteCell", projectId: project.id, rowId: target.rowId, column: target.column, instruction: instruction.trim(), currentValue: target.currentValue };
       const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "rewriteCell",
-          projectId: project.id,
-          rowId: target.rowId,
-          column: target.column,
-          instruction: instruction.trim(),
-          currentValue: target.currentValue,
-        }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
@@ -1573,18 +1654,31 @@ function RewriteModal({ project, target, onClose, onDone }) {
     <div onClick={onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
       <div onClick={e => e.stopPropagation()}
-        style={{ background: "var(--card)", borderRadius: 12, padding: 24, maxWidth: 520, width: "100%", border: "1px solid var(--border)" }}>
+        style={{ background: "var(--card)", borderRadius: 12, padding: 24, maxWidth: isRow ? 640 : 520, width: "100%", maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
-          Rewrite with AI
+          {isRow ? "Rewrite whole script with AI" : "Rewrite with AI"}
         </div>
         <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)", marginBottom: 10 }}>
           {target.label}
         </div>
-        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", marginBottom: 14, maxHeight: 120, overflowY: "auto" }}>
+        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", marginBottom: 14, maxHeight: 220, overflowY: "auto" }}>
           <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>Current</div>
-          <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-            {target.currentValue || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>(empty)</span>}
-          </div>
+          {isRow ? (
+            <div style={{ fontSize: 11, color: "var(--fg)", lineHeight: 1.5 }}>
+              {WHOLE_SCRIPT_FIELDS.map(([key, lbl]) => (
+                <div key={key} style={{ marginBottom: 6 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>{lbl}</div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>
+                    {target.row?.[key] || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>(empty)</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+              {target.currentValue || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>(empty)</span>}
+            </div>
+          )}
         </div>
         <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>
           Instruction

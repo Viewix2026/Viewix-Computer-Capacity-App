@@ -572,6 +572,52 @@ const COLUMN_RULES = {
   formatName:   { label: "Format Name",      rule: "Must match one of the project's selectedFormats names verbatim." },
 };
 
+// Persistent producer feedback lives at /preproduction/metaAds/{id}
+// /scriptFeedback. Three scopes: global (applies to all rewrites in
+// this project), rows[rowId] (one script), cells[rowId][column] (one
+// field). Each scope is an array of { text, addedAt } so prior
+// instructions accumulate — Claude sees the full history on every
+// future rewrite. Producers manage the history through the Scripting
+// tab UI; we just append from the rewrite handlers.
+function buildPriorFeedbackBlock(project, rowId, column) {
+  const fb = project.scriptFeedback || {};
+  const globalArr = Array.isArray(fb.global) ? fb.global : [];
+  const rowArr = (rowId && Array.isArray(fb.rows?.[rowId])) ? fb.rows[rowId] : [];
+  const cellArr = (rowId && column && Array.isArray(fb.cells?.[rowId]?.[column])) ? fb.cells[rowId][column] : [];
+  const lines = [];
+  for (const e of globalArr) if (e?.text) lines.push(`- (project-wide) ${e.text}`);
+  for (const e of rowArr) if (e?.text) lines.push(`- (this script) ${e.text}`);
+  for (const e of cellArr) if (e?.text) lines.push(`- (this field, earlier) ${e.text}`);
+  if (lines.length === 0) return "";
+  return `\nPRIOR PRODUCER INSTRUCTIONS (respect these — don't undo earlier guidance unless the current instruction explicitly overrides it):\n${lines.join("\n")}\n`;
+}
+
+// Compact tonal-reference of the OTHER scripts in the table. Used by
+// every rewrite handler so Claude doesn't write each script in
+// isolation — producers were getting outputs that drifted away from
+// the table's voice. Only the load-bearing fields are included
+// (videoName, format/motivator/audience tags, hook, offer, headline)
+// to keep tokens contained.
+function buildOtherScriptsBlock(scriptTable, currentRowId) {
+  const others = (scriptTable || []).filter(r => r && r.id !== currentRowId);
+  if (others.length === 0) return "";
+  const lines = others.map((r, i) => {
+    const tags = [r.formatName, r.motivatorType, r.audienceType].filter(Boolean).join(", ");
+    return [
+      `[${String(r.videoNumber || i + 1).padStart(2, "0")}] ${r.videoName || "(unnamed)"}${tags ? ` (${tags})` : ""}`,
+      r.hook       ? `   Hook: ${r.hook}` : null,
+      r.offer      ? `   Offer: ${r.offer}` : null,
+      r.headline   ? `   Headline: ${r.headline}` : null,
+    ].filter(Boolean).join("\n");
+  });
+  return `\nOTHER SCRIPTS IN THIS TABLE (for tone consistency — don't repeat hooks, match the project's voice):\n${lines.join("\n")}\n`;
+}
+
+function appendFeedbackEntry(existing, text) {
+  const arr = Array.isArray(existing) ? existing : [];
+  return [...arr, { text, addedAt: new Date().toISOString() }];
+}
+
 async function handleRewriteCell(req, res) {
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
@@ -591,6 +637,8 @@ async function handleRewriteCell(req, res) {
   if (rowIndex < 0) return res.status(404).json({ error: "Row not found in script table" });
   const row = scriptTable[rowIndex];
   const bt = project.brandTruth?.fields || {};
+  const priorFeedback = buildPriorFeedbackBlock(project, rowId, column);
+  const otherScripts = buildOtherScriptsBlock(scriptTable, rowId);
 
   const systemPrompt = `You rewrite a single field in a Meta Ad script row. You are given the client's Brand Truth, the full existing row so you can keep voice consistent, the specific field to rewrite, and a free-text instruction from the producer. Return ONLY the rewritten field value as plain text — no JSON, no markdown, no preamble, no quotes around the value.
 
@@ -613,7 +661,7 @@ BRAND TRUTH:
 - Pain Points: ${bt.painPoints || "(none)"}
 - Desired Outcome: ${bt.desiredOutcome || "(none)"}
 - Proof Points: ${bt.proofPoints || "(none)"}
-
+${priorFeedback}
 EXISTING ROW (for voice consistency):
 - Video Name: ${row.videoName || ""}
 - Format: ${row.formatName || ""}
@@ -626,7 +674,7 @@ EXISTING ROW (for voice consistency):
 - CTA: ${row.cta || ""}
 - Headline: ${row.headline || ""}
 - Ad Copy: ${row.adCopy || ""}
-
+${otherScripts}
 CURRENT VALUE OF ${colMeta.label}:
 ${currentValue || row[column] || "(empty)"}
 
@@ -671,9 +719,197 @@ Return the rewritten ${colMeta.label} only.`;
     return res.status(409).json({ error: "Row no longer in script table — it may have been regenerated. Reopen the row and try again." });
   }
   await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${freshIndex}/${column}`, cleaned);
+  // Persist the instruction so future rewrites (cell, whole-script, or
+  // all-scripts) see the producer's accumulated guidance for this field.
+  const cellHistory = appendFeedbackEntry(project.scriptFeedback?.cells?.[rowId]?.[column], instruction);
+  await fbSet(`/preproduction/metaAds/${projectId}/scriptFeedback/cells/${rowId}/${column}`, cellHistory);
   await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
 
   return res.status(200).json({ success: true, value: cleaned });
+}
+
+// Shared whole-script rewrite. Returns { ok: true, fields } or
+// { ok: false, status, error, detail }. Both handleRewriteWholeScript
+// (single row) and handleRewriteAllScripts (looped) lean on this so
+// the prompt + parse logic stays in one place. The caller handles
+// Firebase writes — this just talks to Claude and validates output.
+const WHOLE_SCRIPT_SYSTEM_PROMPT = `You rewrite ONE Meta Ad script — all seven Hormozi blueprint fields together as a coherent unit (Hook, Explain the Pain, Results, Offer, Why the Offer, CTA, Meta Headline, Meta Ad Copy). Hold the row's identity steady (motivator, audience, format) while honouring the producer's instruction. Every field must stay internally consistent with the others.
+
+HARD CONSTRAINTS:
+- Never use em dashes. Use commas, full stops, or rewrite.
+- Use contractions.
+- Hook: One or two sentences. Confrontational, second-person, pattern-interrupt. Not soft.
+- Explain the Pain: One sentence. Metaphor or telling moment. Don't explain at length.
+- Results: One sentence. Viewer's world only — no company name, no product mention. Bridges from Pain.
+- Offer: Two sentences max. Opens with "At {company}, we..." or "Here at {company}, we've built...". Spoken natural language.
+- Why the Offer: One or two short sentences. Emotional reason to want it.
+- CTA: One short sentence. Use "tap" (never click). Tied to the pain.
+- Meta Headline: 35-character hard limit. Count before returning.
+- Meta Ad Copy: 60-120 words. One idea per ad (Pain → Insight → Outcome → Simple action). Write like a person, not a brand.
+
+OUTPUT FORMAT:
+Return STRICTLY valid JSON, no preamble, no markdown, no code fences:
+{
+  "hook": "...",
+  "explainPain": "...",
+  "results": "...",
+  "offer": "...",
+  "whyOffer": "...",
+  "cta": "...",
+  "headline": "...",
+  "adCopy": "..."
+}`;
+
+async function runWholeScriptRewrite({ project, scriptTable, row, instruction, apiKey, includeCurrentRowFeedback = true }) {
+  const bt = project.brandTruth?.fields || {};
+  const priorFeedback = buildPriorFeedbackBlock(project, includeCurrentRowFeedback ? row.id : null, null);
+  const otherScripts = buildOtherScriptsBlock(scriptTable, row.id);
+
+  const userMessage = `CLIENT: ${project.companyName}
+
+BRAND TRUTH:
+- Brand Truths: ${bt.brandTruths || "(none)"}
+- Product / Offer: ${bt.productOffer || "(none)"}
+- Unique Value Prop: ${bt.uniqueValueProp || "(none)"}
+- Target Customer: ${bt.targetCustomer || "(none)"}
+- Pain Points: ${bt.painPoints || "(none)"}
+- Desired Outcome: ${bt.desiredOutcome || "(none)"}
+- Proof Points: ${bt.proofPoints || "(none)"}
+${priorFeedback}
+CURRENT SCRIPT (you are rewriting this — all seven fields together):
+- Video Name: ${row.videoName || ""}
+- Format: ${row.formatName || ""}
+- Motivator: ${row.motivatorType || ""} · Audience: ${row.audienceType || ""}
+- Hook: ${row.hook || ""}
+- Explain the Pain: ${row.explainPain || ""}
+- Results: ${row.results || ""}
+- Offer: ${row.offer || ""}
+- Why Offer: ${row.whyOffer || ""}
+- CTA: ${row.cta || ""}
+- Headline: ${row.headline || ""}
+- Ad Copy: ${row.adCopy || ""}
+${otherScripts}
+PRODUCER'S INSTRUCTION:
+${instruction}
+
+Return the rewritten script JSON now.`;
+
+  let raw;
+  try {
+    raw = await callClaude({ model: "claude-opus-4-6", systemPrompt: WHOLE_SCRIPT_SYSTEM_PROMPT, userMessage, maxTokens: 3000, apiKey });
+  } catch (e) {
+    return { ok: false, status: 502, error: "Claude call failed", detail: e.message };
+  }
+  let parsed;
+  try { parsed = parseJSON(raw); }
+  catch (e) {
+    return { ok: false, status: 422, error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) };
+  }
+  // Headlines are the only hard-fail field — trim rather than reject so
+  // a one-character overage doesn't lose the whole rewrite.
+  const fields = {
+    hook:        typeof parsed.hook === "string" ? parsed.hook : row.hook,
+    explainPain: typeof parsed.explainPain === "string" ? parsed.explainPain : row.explainPain,
+    results:     typeof parsed.results === "string" ? parsed.results : row.results,
+    offer:       typeof parsed.offer === "string" ? parsed.offer : row.offer,
+    whyOffer:    typeof parsed.whyOffer === "string" ? parsed.whyOffer : row.whyOffer,
+    cta:         typeof parsed.cta === "string" ? parsed.cta : row.cta,
+    headline:    (typeof parsed.headline === "string" ? parsed.headline : row.headline || "").slice(0, 35),
+    adCopy:      typeof parsed.adCopy === "string" ? parsed.adCopy : row.adCopy,
+  };
+  return { ok: true, fields };
+}
+
+async function handleRewriteWholeScript(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, rowId, instruction } = req.body || {};
+  if (!projectId || !rowId || !instruction) {
+    return res.status(400).json({ error: "Missing projectId / rowId / instruction" });
+  }
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const scriptTable = Array.isArray(project.scriptTable) ? project.scriptTable : [];
+  const rowIndex = scriptTable.findIndex(r => r && r.id === rowId);
+  if (rowIndex < 0) return res.status(404).json({ error: "Row not found in script table" });
+  const row = scriptTable[rowIndex];
+
+  const result = await runWholeScriptRewrite({ project, scriptTable, row, instruction, apiKey: ANTHROPIC_KEY });
+  if (!result.ok) return res.status(result.status).json({ error: result.error, detail: result.detail, rawPreview: result.rawPreview });
+
+  // Race-safe re-read: the script table could have been regenerated
+  // during the Claude call. Refusing the write is better than silently
+  // corrupting the wrong row.
+  const freshTable = await fbGet(`/preproduction/metaAds/${projectId}/scriptTable`);
+  const freshList = Array.isArray(freshTable) ? freshTable : Object.values(freshTable || {});
+  const freshIndex = freshList.findIndex(r => r && r.id === rowId);
+  if (freshIndex < 0) {
+    return res.status(409).json({ error: "Row no longer in script table — it may have been regenerated. Reopen the row and try again." });
+  }
+  const updatedRow = { ...freshList[freshIndex], ...result.fields };
+  await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${freshIndex}`, updatedRow);
+
+  const rowHistory = appendFeedbackEntry(project.scriptFeedback?.rows?.[rowId], instruction);
+  await fbSet(`/preproduction/metaAds/${projectId}/scriptFeedback/rows/${rowId}`, rowHistory);
+  await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, row: updatedRow });
+}
+
+async function handleRewriteAllScripts(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, instruction } = req.body || {};
+  if (!projectId || !instruction) return res.status(400).json({ error: "Missing projectId / instruction" });
+
+  // Persist the project-wide note first. Even if the loop fails,
+  // future per-cell rewrites will still see the producer's guidance.
+  const projectPre = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!projectPre) return res.status(404).json({ error: "Project not found" });
+  const globalHistory = appendFeedbackEntry(projectPre.scriptFeedback?.global, instruction);
+  await fbSet(`/preproduction/metaAds/${projectId}/scriptFeedback/global`, globalHistory);
+
+  // Re-read so the saved global entry is in the project we pass to
+  // runWholeScriptRewrite — that way every rewrite sees the new note
+  // in its prior-feedback block.
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  const scriptTable = Array.isArray(project.scriptTable) ? project.scriptTable : [];
+  if (scriptTable.length === 0) return res.status(400).json({ error: "Script table is empty — generate scripts first." });
+
+  // Parallel Claude calls — each row's rewrite is independent and sees
+  // the pre-rewrite state of every other row. Anthropic Tier 1 handles
+  // 10-20 parallel requests comfortably; tables larger than ~15 rows
+  // are rare so we don't bother chunking.
+  const calls = scriptTable.map(row =>
+    runWholeScriptRewrite({ project, scriptTable, row, instruction, apiKey: ANTHROPIC_KEY, includeCurrentRowFeedback: false })
+      .then(result => ({ row, result }))
+  );
+  const results = await Promise.all(calls);
+
+  // Race-safe write loop: re-read the table once, then write each
+  // rewritten row to its fresh index. Rows that vanished mid-flight
+  // are skipped (rather than failing the whole batch).
+  const freshTable = await fbGet(`/preproduction/metaAds/${projectId}/scriptTable`);
+  const freshList = Array.isArray(freshTable) ? freshTable : Object.values(freshTable || {});
+  let succeeded = 0;
+  let failed = 0;
+  let skipped = 0;
+  const errors = [];
+  for (const { row, result } of results) {
+    if (!result.ok) { failed++; errors.push({ rowId: row.id, error: result.error, detail: result.detail }); continue; }
+    const freshIndex = freshList.findIndex(r => r && r.id === row.id);
+    if (freshIndex < 0) { skipped++; continue; }
+    const updatedRow = { ...freshList[freshIndex], ...result.fields };
+    await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${freshIndex}`, updatedRow);
+    succeeded++;
+  }
+  await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, succeeded, failed, skipped, total: results.length, errors });
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1009,7 +1245,9 @@ export default async function handler(req, res) {
       case "scrapeAdLibrary":   return await handleScrapeAdLibrary(req, res);
       case "addManualAd":       return await handleAddManualAd(req, res);
       case "scriptGenerate":    return await handleScriptGenerate(req, res);
-      case "rewriteCell":       return await handleRewriteCell(req, res);
+      case "rewriteCell":           return await handleRewriteCell(req, res);
+      case "rewriteWholeScript":    return await handleRewriteWholeScript(req, res);
+      case "rewriteAllScripts":     return await handleRewriteAllScripts(req, res);
       case "generateBrandTruth":     return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField": return await handleRewriteBrandTruthField(req, res);
       case "suggestAdLibraryInputs": return await handleSuggestAdLibraryInputs(req, res);
