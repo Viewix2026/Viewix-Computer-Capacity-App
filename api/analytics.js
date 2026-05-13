@@ -32,7 +32,8 @@ import {
   DEFAULT_PER_CLIENT_DAILY_BUDGET_USD,
   DEFAULT_GLOBAL_DAILY_BUDGET_USD,
 } from "./_analyticsScrape.js";
-import { adminGet, getAdmin } from "./_fb-admin.js";
+import { adminGet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { recomputeClientAnalytics } from "./_analyticsScoring.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -41,6 +42,16 @@ async function fbGet(path) {
   if (!err) return adminGet(path);
   const r = await fetch(`${FIREBASE_URL}${path}.json`);
   return r.json();
+}
+
+async function fbPatch(path, data) {
+  const { err } = getAdmin();
+  if (!err) return adminPatch(path, data);
+  await fetch(`${FIREBASE_URL}${path}.json`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
 }
 
 // Rough cost estimate, mirrors _analyticsScrape.buildIgScrapeInput.
@@ -57,19 +68,131 @@ export default async function handler(req, res) {
     return;
   }
 
+  let decoded;
   try {
-    await requireRole(req, ["founders", "founder", "lead"]);
+    decoded = await requireRole(req, ["founders", "founder", "lead"]);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message || "Auth error" });
     return;
   }
+  // Stash on the req so action handlers can stamp the override audit
+  // trail (manualFormatOverrideBy) without re-decoding.
+  req._decodedToken = decoded;
 
   const body = (req.body && typeof req.body === "object") ? req.body : {};
   const action = body.action;
 
   if (action === "refresh") return await handleRefresh(req, res, body);
+  if (action === "setManualFormatOverride") return await handleSetManualFormatOverride(req, res, body);
+  if (action === "clearManualFormatOverride") return await handleClearManualFormatOverride(req, res, body);
 
   res.status(400).json({ error: `Unknown action: ${action || "(none)"}` });
+}
+
+// ─── setManualFormatOverride / clearManualFormatOverride ─────────
+//
+// Founder/lead-gated (same requireRole check as the rest of the file).
+// Writes the four manual-override fields onto a video's
+// classifications record. Per the plan, manual overrides ALWAYS win
+// over the heuristic + Claude classifiers; recomputeClientAnalytics
+// preserves them on every subsequent run.
+//
+// `decoded` is the verified token payload from requireRole — its
+// `uid` is what we stamp into manualFormatOverrideBy for the audit
+// trail.
+
+const FORMAT_KEYS = [
+  "founder_talking_head", "client_proof", "behind_the_scenes",
+  "transformation", "educational_explainer", "objection_handling",
+  "trend_based", "product_service_demo", "hiring_team_culture",
+  "event_activation", "other",
+];
+
+async function handleSetManualFormatOverride(req, res, body) {
+  const { accountId, platform: platformIn, videoId, format, reason } = body;
+  if (!accountId || !videoId || !format) {
+    res.status(400).json({ error: "Missing accountId, videoId, or format" });
+    return;
+  }
+  const platform = platformIn || "instagram";
+  if (platform !== "instagram") {
+    res.status(400).json({ error: `Platform "${platform}" isn't supported in v1.` });
+    return;
+  }
+  if (!FORMAT_KEYS.includes(format)) {
+    res.status(400).json({ error: `Unknown format key "${format}". Allowed: ${FORMAT_KEYS.join(", ")}` });
+    return;
+  }
+
+  // Verify the video exists before writing — silently overriding a
+  // non-existent record would create orphan data.
+  const existing = await fbGet(`/analytics/videos/${accountId}/${platform}/${videoId}/post`);
+  if (!existing) {
+    res.status(404).json({ error: "Video not found at that path." });
+    return;
+  }
+
+  const decoded = req._decodedToken || {};
+  const overrideBy = decoded.uid || decoded.user_id || decoded.email || "unknown";
+  const overrideAt = new Date().toISOString();
+
+  // Use fbPatch to merge into the classifications subtree so we
+  // don't blow away the rest of the record (format, formatConfidence,
+  // claudeReason, etc. all stay).
+  await fbPatch(`/analytics/videos/${accountId}/${platform}/${videoId}/classifications`, {
+    manualFormatOverride: format,
+    manualFormatOverrideBy: overrideBy,
+    manualFormatOverrideAt: overrideAt,
+    manualFormatOverrideReason: reason || null,
+    // Also bump the displayed format immediately so the UI doesn't
+    // wait for the recompute pass.
+    format,
+    formatConfidence: "high",
+    source: "manual",
+  });
+
+  // Trigger a recompute so the Format Playbook + recs reflect the
+  // new label without waiting for the next scrape cycle. Done in
+  // the background — the override write is already durable.
+  try {
+    await recomputeClientAnalytics(accountId);
+  } catch (err) {
+    console.warn(`[analytics.setManualFormatOverride] recompute failed: ${err.message}`);
+  }
+
+  res.status(200).json({
+    ok: true,
+    action: "setManualFormatOverride",
+    videoId, format, reason: reason || null,
+    overrideBy, overrideAt,
+  });
+}
+
+async function handleClearManualFormatOverride(req, res, body) {
+  const { accountId, platform: platformIn, videoId } = body;
+  if (!accountId || !videoId) {
+    res.status(400).json({ error: "Missing accountId or videoId" });
+    return;
+  }
+  const platform = platformIn || "instagram";
+  if (platform !== "instagram") {
+    res.status(400).json({ error: `Platform "${platform}" isn't supported in v1.` });
+    return;
+  }
+  await fbPatch(`/analytics/videos/${accountId}/${platform}/${videoId}/classifications`, {
+    manualFormatOverride: null,
+    manualFormatOverrideBy: null,
+    manualFormatOverrideAt: null,
+    manualFormatOverrideReason: null,
+  });
+  // Recompute will rebuild format + source from the heuristic /
+  // Claude classifier on the next pass.
+  try {
+    await recomputeClientAnalytics(accountId);
+  } catch (err) {
+    console.warn(`[analytics.clearManualFormatOverride] recompute failed: ${err.message}`);
+  }
+  res.status(200).json({ ok: true, action: "clearManualFormatOverride", videoId });
 }
 
 // ─── refresh ──────────────────────────────────────────────────────

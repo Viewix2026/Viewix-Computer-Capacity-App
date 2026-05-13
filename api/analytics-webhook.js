@@ -191,9 +191,15 @@ export default async function handler(req, res) {
   // Normalise + filter to actual posts (the actor occasionally
   // returns intermediate objects without shortCodes during hashtag
   // mode — we only ingest things that look like real posts).
+  //
+  // v1 is "winning videos" — drop carousels and image-only posts so
+  // they don't pollute the median, scoring, and Format Playbook.
+  // Phase 1.1 can lift this if Jeremy decides image content should
+  // count; until then, isVideo===true is the gate.
   const normalised = items
     .map(raw => normaliseIgPost(raw, sidecarHandle))
-    .filter(n => n.post.url && n.post.handle !== "@unknown");
+    .filter(n => n.post.url && n.post.handle !== "@unknown")
+    .filter(n => n.post.isVideo === true);
 
   // Apply date filter post-ingest as the fallback per the plan —
   // if the actor's date filter dropped the ball, drop posts older

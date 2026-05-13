@@ -61,11 +61,22 @@ function estimateRunCostUsd(mode) {
 }
 
 export default async function handler(req, res) {
-  // Vercel cron auth. CRON_SECRET is auto-set by Vercel; if absent
-  // (e.g. local dev), accept the call but warn.
+  // Cron auth — FAIL CLOSED. Vercel sends `Authorization: Bearer
+  // <CRON_SECRET>` on scheduled cron invocations when CRON_SECRET is
+  // set as an env var (you set it; Vercel does NOT auto-populate it).
+  // If the env var is missing we refuse to run rather than serving
+  // the endpoint publicly — this thing fans out Apify runs and burns
+  // budget, never let it default-open.
   const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    res.status(500).json({
+      error: "CRON_SECRET not configured; refusing to run.",
+      hint: "Set CRON_SECRET in Vercel env vars + add the same value to your vercel.json cron route header configuration.",
+    });
+    return;
+  }
   const auth = req.headers.authorization || "";
-  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
+  if (auth !== `Bearer ${cronSecret}`) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }

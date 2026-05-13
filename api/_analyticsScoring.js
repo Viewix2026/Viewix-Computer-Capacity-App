@@ -475,6 +475,11 @@ export async function recomputeClientAnalytics(clientId) {
           computedAt,
         },
         classification,
+        // Stamp the source timestamp inline so it's available
+        // BEFORE buildFormatCounts runs. Without this, the
+        // "you haven't posted X in N days" silence rec never fires
+        // because lastPostedTs stays null.
+        _sourceTimestamp: v.post?.timestamp || null,
       });
     }
 
@@ -836,38 +841,68 @@ function buildClientRecInputs(videoUpdates, videosRoot) {
       scoring: u.scoring,
       classification: u.classification,
     });
-    // Stamp the source timestamp on the update for buildFormatCounts.
-    u._sourceTimestamp = src.post?.timestamp || null;
+    // _sourceTimestamp is stamped at videoUpdates.push() time
+    // (in the scoring loop) so it's available to buildFormatCounts
+    // which runs BEFORE this function.
   }
   return out;
 }
 
 // Build the competitor input map the recs builder expects.
-// Re-runs the heuristic on each competitor post so the cross-niche
-// recommendations can reason about format. (Cheap — caption-only
-// keyword test.)
+//
+// Competitor videos are NOT scored by recomputeClientAnalytics
+// (per the data model: scoring fields live only on client videos).
+// So we compute per-handle median views inline here and derive
+// each competitor video's overperformance score relative to its
+// own handle's baseline. Without this, the rec builder's
+// `v.scoring?.overperformanceLabel` filter rejects every
+// competitor video and "Competitor X is winning with Y" never
+// fires.
+//
+// Format classifier is re-run here on each competitor post (cheap —
+// caption-only heuristic match).
 function buildCompetitorRecInputs(competitorsRoot, enabledPlatforms) {
   const out = {};
   for (const platform of enabledPlatforms) {
     const handles = competitorsRoot?.[platform] || {};
     for (const [handleKey, entry] of Object.entries(handles)) {
       if (!entry?.videos) continue;
+
+      // Per-handle median for this handle's videos. Reading the
+      // latest snapshot view count per video (same shape as the
+      // client-side scoring uses).
+      const handleViews = [];
+      for (const v of Object.values(entry.videos)) {
+        const snap = latestSnapshot(v);
+        if (snap?.views != null) handleViews.push(snap.views);
+      }
+      const handleMedianViews = median(handleViews) || null;
+
       const byVideo = Object.entries(entry.videos).map(([videoId, v]) => {
         const snap = latestSnapshot(v);
-        const overperf = v.scoring?.overperformanceScore != null
-          ? {
-              overperformanceScore: v.scoring.overperformanceScore,
-              overperformanceLabel: v.scoring.overperformanceLabel || null,
-            }
-          : null;
+        // Compute overperformance against this handle's own median.
+        // Only emit a label at the 1.5x noise floor (matches the
+        // client-side overperformance threshold so the rec doesn't
+        // surface marginal posts).
+        let scoring = null;
+        if (snap?.views != null && handleMedianViews && handleMedianViews > 0) {
+          const score = +(snap.views / handleMedianViews).toFixed(2);
+          scoring = {
+            overperformanceScore: score,
+            overperformanceLabel: score >= OVERPERF.noiseFloorScore
+              ? `${score.toFixed(1)}x their usual views`
+              : null,
+          };
+        }
         return {
           videoId,
           post: v.post,
           snapshot: snap,
-          scoring: overperf,
+          scoring,
           classification: classifyFormat({ caption: v.post?.caption || "" }),
         };
       });
+
       out[handleKey] = {
         displayName: entry?.profile?.displayName || `@${handleKey}`,
         byVideo,
