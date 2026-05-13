@@ -22,9 +22,18 @@ import { PLATFORMS } from "../config/constants";
 // Default config shape for an account that hasn't been touched yet.
 // Returning a stable object means the form always has fields to
 // bind to even before the first write lands.
+//
+// v1 platforms default to ON, v2+ to OFF. Reasoning: Instagram is
+// the only platform v1 actually supports, and clicking Refresh
+// without it toggled was a real foot-gun (the refresh endpoint
+// rejects with "Platform 'instagram' isn't enabled" if false). The
+// only legitimate reason to turn IG off would be to temporarily
+// pause scraping for an account, which is what the master `enabled`
+// toggle is for. So lean default-on for v1 platforms; v2/v3
+// platforms stay off until they're actually wired.
 function emptyConfig(accountId, companyName) {
   const platforms = {};
-  PLATFORMS.forEach(p => { platforms[p.key] = false; });
+  PLATFORMS.forEach(p => { platforms[p.key] = !!p.v1; });
   return {
     accountId,
     companyName: companyName || "",
