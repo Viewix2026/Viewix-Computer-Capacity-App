@@ -78,8 +78,13 @@ async function fbSet(path, data) {
  */
 export async function decideRefreshMode(clientId, platform) {
   const runs = (await fbGet("/analytics/runs")) || {};
+  // Only post-mode runs count for the mode decision. Profile-mode runs
+  // are auxiliary (follower count) and don't represent "we've scraped
+  // posts for this client" — including them would skip the initial
+  // post scrape for a client whose only completed runs are profiles.
   const recent = Object.values(runs).filter(r =>
-    r && r.clientId === clientId && r.platform === platform && r.status === "completed"
+    r && r.clientId === clientId && r.platform === platform
+    && r.status === "completed" && r.mode !== "profile"
   );
   if (recent.length === 0) return "initial";
 
@@ -120,6 +125,22 @@ export function buildIgScrapeInput({ handle, mode }) {
   const cleanHandle = String(handle || "").replace(/^@+/, "").trim().toLowerCase();
   if (!cleanHandle) throw new Error("Missing handle");
   const baseUrl = `https://www.instagram.com/${cleanHandle}/`;
+
+  // Profile mode is a single-item scrape that returns owner profile
+  // data (including followersCount). Apify's IG post-scraper doesn't
+  // include follower count in post items, so this is the only path
+  // to populate /analytics/followers and unblock engagement rate +
+  // follower-normalised reach scoring.
+  if (mode === "profile") {
+    return {
+      directUrls: [baseUrl],
+      resultsType: "details",
+      resultsLimit: 1,
+      searchType: "user",
+      addParentData: false,
+    };
+  }
+
   const limits = {
     initial: 60,    // first-time pull: enough to find top-5 + a few months of context
     daily:   20,    // refresh of last 7d; over-fetch slightly in case the date filter is off

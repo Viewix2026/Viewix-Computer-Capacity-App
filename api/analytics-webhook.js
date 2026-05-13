@@ -86,14 +86,21 @@ function normaliseIgPost(raw, handleHint) {
   };
 }
 
-// Extract the first non-null follower count from a batch of posts.
-// IG returns the same number on every post (it's the owner's current
-// count); first non-null wins.
+// Extract the first non-null follower count from a batch of items.
+// Handles both shapes:
+//   - posts mode: each item is a post, follower count (if present)
+//     lives under ownerFollowersCount / owner.followersCount.
+//   - profile mode (resultsType:"details"): item is the profile
+//     itself, follower count lives at the top level under
+//     followersCount / edge_followed_by.count.
+// First non-null wins.
 function extractFollowerCount(items) {
   for (const item of items) {
     const f = item?.ownerFollowersCount
+      ?? item?.followersCount
       ?? item?.owner?.followersCount
       ?? item?.owner?.edge_followed_by?.count
+      ?? item?.edge_followed_by?.count
       ?? null;
     if (f != null) return f;
   }
@@ -185,6 +192,73 @@ export default async function handler(req, res) {
     // this, but defensive-check here too in case a stale sidecar
     // exists from a future schema.
     res.status(200).json({ ok: true, ignored: true, reason: "unsupported_platform" });
+    return;
+  }
+
+  // ─── Profile mode (separate scrape just for follower count) ──────
+  //
+  // The IG post scraper doesn't include followersCount in post items,
+  // so we fire a parallel `details`-mode run per handle to fetch the
+  // profile. That run lands here. Two writes only — follower snapshot
+  // + run sidecar — then recompute.
+  if (mode === "profile") {
+    const followers = extractFollowerCount(items);
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    const profileItem = items[0] || {};
+    const displayName = profileItem.fullName || profileItem.username || sidecarHandle;
+
+    if (target === "client") {
+      if (followers != null) {
+        await fbSet(
+          `/analytics/followers/${clientId}/${platform}/${todayUtc}`,
+          { count: followers },
+        );
+      }
+    } else if (target === "competitor") {
+      const profilePatch = {
+        displayName,
+        lastScrapedAt: new Date().toISOString(),
+      };
+      if (followers != null) profilePatch.followerCount = followers;
+      await fbPatch(
+        `/analytics/competitors/${clientId}/${platform}/${safeHandleKey(sidecarHandle)}/profile`,
+        profilePatch,
+      );
+    }
+
+    // Profile fetch is one item; cost is one item's worth.
+    const actualCostUsd = +(items.length * APIFY_IG_COST_PER_RESULT_USD).toFixed(4);
+    await fbPatch(`/analytics/runs/${runId}`, {
+      status: "completed",
+      completedAt: new Date().toISOString(),
+      actualItems: items.length,
+      actualCostUsd,
+      followerCount: followers,
+    });
+
+    // Trigger a recompute so the new follower count flows into
+    // engagement-rate + repeatability scoring immediately. Profile
+    // runs are cheap and follower data unlocks half the dashboard;
+    // the recompute is the whole point of firing them.
+    let recomputeResult = null;
+    let recomputeError = null;
+    try {
+      recomputeResult = await recomputeClientAnalytics(clientId);
+    } catch (err) {
+      console.error(`[analytics-webhook] profile recompute failed for ${clientId}:`, err);
+      recomputeError = err.message;
+    }
+
+    res.status(200).json({
+      ok: true,
+      outcome: "processed_profile",
+      clientId,
+      platform,
+      target,
+      handle: sidecarHandle,
+      followerCount: followers,
+      recompute: recomputeResult || { error: recomputeError },
+    });
     return;
   }
 
