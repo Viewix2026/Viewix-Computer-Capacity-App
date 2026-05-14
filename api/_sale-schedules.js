@@ -318,3 +318,31 @@ export function sumCustomSlicesExGst(customSlices) {
   const arr = Array.isArray(customSlices) ? customSlices : [];
   return round2(arr.reduce((s, x) => s + (Number(x.amountExGst) || 0), 0));
 }
+
+// ─── Day/week display helpers ──────────────────────────────────────
+//
+// offsetDays is the persisted source of truth — we never serialise
+// "weeks" to Firebase. The editor needs a unit to render against, so:
+//
+//   1. Honour an explicit `offsetUnit` on the row when set (the UI
+//      stores this row-locally so toggling the dropdown takes effect
+//      immediately, even before save).
+//   2. Otherwise, auto-detect: if offsetDays is a clean multiple of 7,
+//      show weeks; otherwise show days. This stops a 45-day offset
+//      being silently displayed as "6 wks" (= 42 days) on reopen
+//      after the server roundtrip strips the row-local unit hint.
+export function displayOffsetUnit(row) {
+  if (row?.offsetUnit === "days") return "days";
+  if (row?.offsetUnit === "weeks") return "weeks";
+  const days = Number(row?.offsetDays) || 0;
+  return days > 0 && days % 7 !== 0 ? "days" : "weeks";
+}
+
+export function displayOffsetValue(row) {
+  const days = Number(row?.offsetDays) || 0;
+  if (displayOffsetUnit(row) === "days") return Math.max(1, days);
+  // Weeks branch — caller guaranteed offsetDays is a clean multiple,
+  // either via offsetUnit==="weeks" (set by founder) or via the
+  // multiple-of-7 auto-detect above.
+  return Math.max(1, Math.round(days / 7));
+}

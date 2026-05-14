@@ -12,7 +12,7 @@ import { BTN, QUOTE_SECTIONS, DEFAULT_RATE_CARDS, TH, SALE_VIDEO_TYPES, DEFAULT_
 import {
   fmtCur, fmtCurExact, saleShareUrl, newSale, computeGst, buildSchedule,
   seedCustomSlices, validateCustomSlices, buildCustomSchedule, sumCustomSlicesExGst,
-  newSliceId, sydneyDateKey,
+  newSliceId, sydneyDateKey, displayOffsetUnit, displayOffsetValue,
 } from "../utils";
 import { scheduleForVideoType, CUSTOM_MIN_SLICES, CUSTOM_MAX_SLICES } from "../../api/_tiers";
 import { authFetch, fbSetAsync } from "../firebase";
@@ -925,21 +925,15 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation, locked
   };
 
   // Day-or-week display unit is row-local UI state. We always persist
-  // offsetDays — the unit is just how the input is shown. "Weeks" is
-  // the default; toggling to days lets the founder express e.g. 45
-  // days or "6 weeks + 3 days" without leaving the editor.
-  const displayUnit = (row) => row?.offsetUnit === "days" ? "days" : "weeks";
-  const showOffsetValue = (row) => {
-    const dDays = Number(row?.offsetDays) || 0;
-    if (displayUnit(row) === "days") return Math.max(1, dDays);
-    // Weeks: show floor(days/7) when divisible, else surface the
-    // raw days by auto-switching to days mode (handled on render).
-    return Math.max(1, Math.round(dDays / 7));
-  };
+  // offsetDays — the unit is just how the input is rendered. The
+  // helpers in api/_sale-schedules.js auto-detect "days" when the
+  // value isn't a clean multiple of 7, so a 45-day offset round-trips
+  // through the server (which strips offsetUnit) and reopens as
+  // "45 days" instead of being silently rounded to "6 wks".
   const setOffset = (idx, value) => {
     const row = rows[idx];
     if (!row) return;
-    const unit = displayUnit(row);
+    const unit = displayOffsetUnit(row);
     const n = Math.max(1, parseInt(value, 10) || 0);
     const days = unit === "days" ? n : n * 7;
     updateRow(idx, { offsetDays: days });
@@ -1043,13 +1037,13 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation, locked
                     type="number"
                     step={1}
                     min={1}
-                    value={showOffsetValue(s)}
+                    value={displayOffsetValue(s)}
                     onChange={e => setOffset(i, e.target.value)}
                     disabled={locked}
                     style={{ ...cellInputBase, width: 56, textAlign: "right", fontFamily: "'JetBrains Mono', monospace", ...lockedStyle }}
                   />
                   <select
-                    value={displayUnit(s)}
+                    value={displayOffsetUnit(s)}
                     onChange={e => setUnit(i, e.target.value)}
                     disabled={locked}
                     style={{ ...cellInputBase, padding: "8px 6px", fontSize: 11, ...lockedStyle }}

@@ -6,6 +6,8 @@ import {
   buildCustomSchedule,
   sumCustomSlicesExGst,
   sydneyDateKey,
+  displayOffsetUnit,
+  displayOffsetValue,
 } from "../api/_sale-schedules.js";
 
 // Re-export the Custom-schedule helpers so frontend code has a single
@@ -18,6 +20,8 @@ export {
   buildCustomSchedule,
   sumCustomSlicesExGst,
   sydneyDateKey,
+  displayOffsetUnit,
+  displayOffsetValue,
 };
 
 // ─── Date Helpers ───
