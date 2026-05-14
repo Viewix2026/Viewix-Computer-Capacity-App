@@ -171,7 +171,18 @@ export default async function handler(req, res) {
     const partnershipLabel = videoTypeToPartnership(videoType);
 
     if (isNew) {
-      acctId = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
+      // Derive the account id deterministically from Attio's company
+      // id when available. Two near-simultaneous Deal Won webhooks for
+      // the same company used to compute different Date.now()-based
+      // ids and both create separate /accounts records — the second
+      // patch never reached the first. With a stable id keyed off
+      // companyId, both webhooks target the same `/accounts/{id}`
+      // path and `fbSet` becomes naturally idempotent. The
+      // random-id fallback covers webhooks that arrive without a
+      // companyId (rare; Attio almost always passes it).
+      acctId = companyId
+        ? `acct-attio-${companyId}`
+        : "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
       const newAccount = {
         id: acctId,
         companyName: companyName,

@@ -136,6 +136,18 @@ export default async function handler(req, res) {
     // redirect_on_completion: 'never' (mutually exclusive).
     const descriptorBase = `Viewix — ${sale.clientName} — ${sale.videoType}/${sale.packageKey}`;
 
+    // Stripe idempotency key. Concurrent clicks (two browser tabs, a
+    // double-tap, a webhook retry) that arrive within the same 30-
+    // second window land on the same Stripe session because Stripe
+    // dedups by this key. Without it, both create() calls succeed,
+    // each minting a fresh session — only one of which gets persisted
+    // back to Firebase, leaving the other orphaned but still
+    // chargeable. The 30s bucket gives us deterministic dedup within
+    // the realistic concurrency window while still allowing a fresh
+    // session if a customer comes back hours later.
+    const idemBucket = Math.floor(Date.now() / 30_000);
+    const idempotencyKey = `checkout-${sale.id}-${idemBucket}`;
+
     let session;
 
     // ── Social Premium / Social Organic: 3-payment subscription ──
@@ -193,7 +205,7 @@ export default async function handler(req, res) {
           shortId: sale.shortId || "",
           flow: "subscription_monthly",
         },
-      });
+      }, { idempotencyKey });
     }
 
     // ── Meta Ads / one-offs: deposit + manual balance ──
@@ -238,7 +250,7 @@ export default async function handler(req, res) {
           shortId: sale.shortId || "",
           flow: "deposit_plus_manual",
         },
-      });
+      }, { idempotencyKey });
     }
 
     // ── Custom: founder-defined schedule + saved card for future slices ──
@@ -287,7 +299,7 @@ export default async function handler(req, res) {
           shortId: sale.shortId || "",
           flow: "custom",
         },
-      });
+      }, { idempotencyKey });
     }
 
     // ── Paid-in-full (not currently used but kept for completeness) ──
@@ -317,7 +329,7 @@ export default async function handler(req, res) {
           },
         },
         metadata: { saleId: sale.id, shortId: sale.shortId || "", flow: "paid_in_full" },
-      });
+      }, { idempotencyKey });
     }
 
     else {

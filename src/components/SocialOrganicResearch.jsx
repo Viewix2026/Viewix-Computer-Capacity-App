@@ -1651,8 +1651,14 @@ function VideoReviewStep({ project, onPatch }) {
     nextCrossed.delete(postId);
     if (status === "ticked") nextTicked.add(postId);
     else if (status === "crossed") nextCrossed.add(postId);
-    fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/ticked`, [...nextTicked]);
-    fbSet(`/preproduction/socialOrganic/${project.id}/videoReview/crossed`, [...nextCrossed]);
+    // Single multi-path update so ticked + crossed land atomically on
+    // the server. Two separate fbSet calls could leave a post in both
+    // arrays if the network dropped between them — a real failure mode
+    // for clients reviewing on flaky wifi.
+    fbUpdate(`/preproduction/socialOrganic/${project.id}/videoReview`, {
+      ticked: [...nextTicked],
+      crossed: [...nextCrossed],
+    });
   };
 
   const addLink = () => {

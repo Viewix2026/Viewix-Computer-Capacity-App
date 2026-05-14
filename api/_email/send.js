@@ -131,6 +131,12 @@ async function acquirePendingLock(key) {
     priorSnapshot = current;
     if (current && current.state === "sent") return; // abort
     if (current && current.state === "pending" && (now - (current.startedAt || 0)) < PENDING_TTL_MS) return; // abort
+    // Timeout-failure entries indicate the foreground bailed but the
+    // background Resend call is still in-flight reconciling. If a
+    // webhook retry arrives inside the PENDING_TTL_MS window, we'd
+    // otherwise acquire a fresh lock and trigger a duplicate send.
+    // Hold the new caller off until the background settles.
+    if (current && current.state === "failed" && current.timeout === true && (now - (current.failedAt || 0)) < PENDING_TTL_MS) return; // abort
     return { state: "pending", startedAt: now };
   });
   return {

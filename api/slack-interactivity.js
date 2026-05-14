@@ -267,34 +267,46 @@ async function applyProposal({ proposal, payload, botToken }) {
 
   if (patch.mode === "update") {
     const path = `/projects/${projectId}/subtasks/${patch.subtaskId}`;
-    const existing = await adminGet(path);
-    if (!existing) {
-      throw new Error("target subtask was deleted");
-    }
-    beforeFingerprint = fingerprintSubtask(existing);
-    if (proposal.targetFingerprint && !fingerprintsMatch(beforeFingerprint, proposal.targetFingerprint)) {
-      // Log both fingerprints so we can diagnose any future false positives.
+    // Re-check the fingerprint INSIDE the transaction so concurrent
+    // dashboard edits can't slip in between fingerprint validation and
+    // the write. The previous read-then-update sequence let a fast
+    // dashboard edit between adminGet and ref.update silently clobber
+    // the producer's just-confirmed Slack change.
+    let staleMismatch = null;
+    let deleted = false;
+    let observedPreStatus = null;
+    let observedFingerprint = null;
+    const txResult = await db.ref(path).transaction(current => {
+      if (!current) { deleted = true; return undefined; }
+      const fp = fingerprintSubtask(current);
+      if (proposal.targetFingerprint && !fingerprintsMatch(fp, proposal.targetFingerprint)) {
+        staleMismatch = { expected: proposal.targetFingerprint, actual: fp };
+        return undefined; // abort
+      }
+      observedPreStatus = current.status || null;
+      observedFingerprint = fp;
+      return {
+        ...current,
+        ...patch.fields,
+        status: nextStatusForUpdate(current.status),
+        updatedAt: nowIso,
+      };
+    });
+    if (!txResult.committed) {
+      if (deleted) throw new Error("target subtask was deleted");
       console.error("slack-interactivity STALE mismatch", {
         shortId: proposal.shortId,
         path,
-        expected: proposal.targetFingerprint,
-        actual: beforeFingerprint,
+        ...staleMismatch,
       });
       const err = new Error("target subtask changed since proposal was created");
       err.code = "STALE";
       throw err;
     }
-    preStatus = existing.status || null;
-    const update = {
-      ...patch.fields,
-      status: nextStatusForUpdate(existing.status),
-      updatedAt: nowIso,
-    };
-    // Strip nulls we explicitly want to keep (e.g. assigneeId may be null).
-    // RTDB stores null as deletion, which is exactly what we want for a
-    // cleared assignee, so no special handling needed.
-    await db.ref(path).update(update);
-    finalWrite = { path, update };
+    beforeFingerprint = observedFingerprint;
+    preStatus = observedPreStatus;
+    const after = txResult.snapshot.val();
+    finalWrite = { path, update: { ...patch.fields, status: after?.status, updatedAt: nowIso } };
   } else {
     // Create. Use push() to get an ordered key, then build the full record.
     const newRef = db.ref(`/projects/${projectId}/subtasks`).push();
