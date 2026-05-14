@@ -6,6 +6,7 @@
 import admin from "firebase-admin";
 
 const DB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
+const STORAGE_BUCKET = "viewix-capacity-tracker.firebasestorage.app";
 
 export function getAdmin() {
   if (admin.apps.length) {
@@ -20,11 +21,21 @@ export function getAdmin() {
     admin.initializeApp({
       credential: admin.credential.cert(sa),
       databaseURL: DB_URL,
+      storageBucket: STORAGE_BUCKET,
     });
     return { admin, db: admin.database(), err: null };
   } catch (e) {
     return { admin: null, db: null, err: `Failed to init firebase-admin: ${e.message}` };
   }
+}
+
+// Returns the default Storage bucket from the admin SDK (lazy-init).
+// Used by api/_analyticsThumbnails.js to upload thumbnail bytes at
+// scrape time so they survive past IG CDN expiry.
+export function getStorageBucket() {
+  const { admin: a, err } = getAdmin();
+  if (err) return null;
+  return a.storage().bucket();
 }
 
 // Convenience wrappers matching the existing fbGet/fbSet/fbPatch pattern

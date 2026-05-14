@@ -27,6 +27,7 @@
 
 import { recomputeClientAnalytics, _fb } from "./_analyticsScoring.js";
 import { APIFY_IG_COST_PER_RESULT_USD, safeHandleKey } from "./_analyticsScrape.js";
+import { persistThumbnailsBulk, isPersistedThumbnailUrl } from "./_analyticsThumbnails.js";
 
 const APIFY_BASE = "https://api.apify.com/v2";
 const { fbGet, fbSet, fbPatch } = _fb;
@@ -207,6 +208,19 @@ export default async function handler(req, res) {
     const profileItem = items[0] || {};
     const displayName = profileItem.fullName || profileItem.username || sidecarHandle;
 
+    // DIAGNOSTICS — capture what fields the actor actually returned so
+    // we can debug "follower count never landed" without re-firing a
+    // scrape. The first version of this code assumed item.followersCount
+    // would be present, but the actor's schema may have changed or vary
+    // by run; logging the top-level keys means the next failed extract
+    // tells us exactly which field to add to extractFollowerCount.
+    const profileItemKeys = Object.keys(profileItem).slice(0, 60);
+    const sampledNumericFields = {};
+    for (const k of profileItemKeys) {
+      const v = profileItem[k];
+      if (typeof v === "number" && /follow|count/i.test(k)) sampledNumericFields[k] = v;
+    }
+
     if (target === "client") {
       if (followers != null) {
         await fbSet(
@@ -234,6 +248,16 @@ export default async function handler(req, res) {
       actualItems: items.length,
       actualCostUsd,
       followerCount: followers,
+      // Diagnostics persisted on the run sidecar — readable from
+      // /analytics/runs/{runId} the next time profile runs fail to
+      // extract followers, so we can patch extractFollowerCount with
+      // certainty instead of guessing.
+      diagnostics: {
+        profileItemKeys,
+        sampledNumericFields,
+        firstItemUsername: profileItem.username || null,
+        firstItemFullName: profileItem.fullName || null,
+      },
     });
 
     // Trigger a recompute so the new follower count flows into
@@ -291,6 +315,36 @@ export default async function handler(req, res) {
     : normalised;
 
   const todayUtc = new Date().toISOString().slice(0, 10);
+
+  // ─── Persist thumbnails to Firebase Storage ──────────────────────
+  // IG CDN thumbnail URLs expire within hours. Upload bytes server-side
+  // now so the dashboard can render them indefinitely.
+  // Best-effort: any upload that fails leaves the original (expiring)
+  // URL in place — the dashboard's emoji fallback will kick in once
+  // the CDN URL eventually 403s.
+  // Concurrency capped inside persistThumbnailsBulk (8 in flight).
+  // For an "initial" 60-post scrape this adds ~2-3s wall-clock; still
+  // well inside Apify's 30s webhook budget.
+  const thumbTargets = filtered
+    .filter(n => n.post?.thumbnail && !isPersistedThumbnailUrl(n.post.thumbnail))
+    .map(n => ({ videoId: n.videoId, sourceUrl: n.post.thumbnail }));
+  let persistedUrls = {};
+  if (thumbTargets.length > 0) {
+    try {
+      persistedUrls = await persistThumbnailsBulk({
+        clientId, platform, items: thumbTargets,
+      });
+    } catch (err) {
+      console.warn(`[analytics-webhook] thumbnail persist batch failed: ${err.message}`);
+    }
+    // Rewrite each post.thumbnail to the persisted URL if upload
+    // succeeded. Failed uploads leave the original CDN URL — better
+    // than nothing for the next few hours.
+    for (const n of filtered) {
+      const persisted = persistedUrls[n.videoId];
+      if (persisted) n.post.thumbnail = persisted;
+    }
+  }
 
   // Bulk-write all posts + today's snapshots in a SINGLE Firebase
   // PATCH per platform. Doing 60+ sequential `fbSet` calls was
