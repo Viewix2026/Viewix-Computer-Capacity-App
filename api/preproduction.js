@@ -80,16 +80,35 @@ function parseJSON(raw) {
   return JSON.parse(cleaned);
 }
 
+// Tally feedback across the new (sectionFeedback / scriptFeedback) and
+// legacy (clientFeedback) shapes so notifyFeedback and submitReview
+// share a single source of truth. flavour just tags the result so the
+// caller knows which Slack copy to render.
+function feedbackSummary(project, flavour) {
+  const doc = project?.preproductionDoc || {};
+  const sections = Object.values(doc.sectionFeedback || {});
+  const approvals = sections.filter(s => s && s.verdict === "approve").length;
+  const changes   = sections.filter(s => s && s.verdict === "changes").length;
+  const scripts   = Object.values(doc.scriptFeedback || {});
+  const reactions = scripts.filter(s => s && s.reaction).length;
+  const comments  = scripts.reduce((n, s) => n + Object.keys(s?.comments || {}).length, 0);
+  const legacyCount = Object.keys(doc.clientFeedback || project?.clientFeedback || {}).length;
+  return { approvals, changes, reactions, comments, legacyCount, flavour };
+}
+
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
   setCors(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
-
   const { action } = req.body || {};
-  if (action !== "notifyFeedback") {
+  // Public actions (no role check, no Anthropic key required): clients
+  // submitting feedback or hitting the explicit submit button on the
+  // shared review link. Everything else (generate/rewrite) needs both
+  // a producer role and the ANTHROPIC_API_KEY env var, checked inside
+  // the relevant branch.
+  const PUBLIC_ACTIONS = new Set(["notifyFeedback", "submitReview"]);
+  if (!PUBLIC_ACTIONS.has(action)) {
     try {
       await requireRole(req, ["founders", "founder", "lead"]);
     } catch (e) {
@@ -100,6 +119,9 @@ export default async function handler(req, res) {
   try {
     // ─── GENERATE: Full script generation from transcript ───
     if (action === "generate") {
+      const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+      if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
       const { projectId, transcript, googleDocUrl, packageTier, companyName } = req.body;
 
       if (!projectId || !packageTier || !companyName) {
@@ -229,6 +251,9 @@ export default async function handler(req, res) {
 
     // ─── REWRITE: Targeted cell or row rewrite ───
     if (action === "rewrite") {
+      const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+      if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
       const { projectId, cellId, column, instruction, currentValue } = req.body;
 
       if (!projectId || !cellId || !column || !instruction) {
@@ -396,8 +421,10 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
 
     // ─── NOTIFY FEEDBACK: Slack notification when client leaves feedback ───
     // Covers both Meta Ads (/preproduction/metaAds) and Social Organic
-    // (/preproduction/socialOrganic with clientFeedback nested under
-    // preproductionDoc). Project lookup tries both paths.
+    // (/preproduction/socialOrganic with feedback nested under
+    // preproductionDoc). Public action: fires 2 min after the client's
+    // last keystroke via the client-side debounce. Submission of an
+    // explicit "Submit review" goes through submitReview instead.
     if (action === "notifyFeedback") {
       const { projectId, type } = req.body;
       if (!projectId) return res.status(400).json({ error: "Missing projectId" });
@@ -416,24 +443,85 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
 
       const slackUrl = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
       if (slackUrl) {
-        const feedback = flavour === "socialOrganic"
-          ? project.preproductionDoc?.clientFeedback
-          : project.clientFeedback;
-        const feedbackCount = feedback ? Object.keys(feedback).length : 0;
         const label = flavour === "socialOrganic" ? "Social Organic scripts" : "Meta Ads scripts";
+        let text;
+        if (flavour === "socialOrganic") {
+          const s = feedbackSummary(project, flavour);
+          const parts = [];
+          if (s.approvals + s.changes > 0) parts.push(`${s.approvals + s.changes} section${s.approvals + s.changes !== 1 ? "s" : ""}`);
+          if (s.reactions > 0)             parts.push(`${s.reactions} reaction${s.reactions !== 1 ? "s" : ""}`);
+          if (s.comments > 0)              parts.push(`${s.comments} comment${s.comments !== 1 ? "s" : ""}`);
+          if (s.legacyCount > 0 && parts.length === 0) parts.push(`${s.legacyCount} cell note${s.legacyCount !== 1 ? "s" : ""}`);
+          const summary = parts.length > 0 ? parts.join(" · ") : "feedback saved";
+          text = `${project.companyName} has left feedback on their ${label}: ${summary}. Review in dashboard: planner.viewix.com.au`;
+        } else {
+          // metaAds keeps the legacy per-cell count — its review page
+          // hasn't been redesigned yet, so sectionFeedback / scriptFeedback
+          // don't exist there.
+          const feedbackCount = Object.keys(project.clientFeedback || {}).length;
+          text = `${project.companyName} has left feedback on their ${label} (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}). Review in dashboard: planner.viewix.com.au`;
+        }
         await fetch(slackUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: `${project.companyName} has left feedback on their ${label} (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}). Review in dashboard: planner.viewix.com.au`,
-          }),
+          body: JSON.stringify({ text }),
         });
       }
 
       return res.status(200).json({ success: true });
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: generate, rewrite, notifyFeedback" });
+    // ─── SUBMIT REVIEW: client explicitly clicked "Submit review" ───
+    // Stamps preproductionDoc.reviewSubmittedAt so the producer can
+    // distinguish "client is still typing" from "client said they're
+    // done", and fires the Slack notification immediately (bypasses
+    // the 2-minute notifyFeedback debounce). socialOrganic only — the
+    // metaAds public page doesn't expose a submit button.
+    if (action === "submitReview") {
+      const { projectId } = req.body;
+      if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+      const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+      if (!project) return res.status(404).json({ error: "Project not found" });
+
+      const submittedAt = new Date().toISOString();
+      await fbSet(`/preproduction/socialOrganic/${projectId}/preproductionDoc/reviewSubmittedAt`, submittedAt);
+
+      const slackUrl = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
+      if (slackUrl) {
+        // Re-fetch so the freshly stamped reviewSubmittedAt and any
+        // last-second feedback are reflected in the summary.
+        const fresh = await fbGet(`/preproduction/socialOrganic/${projectId}`) || project;
+        const s = feedbackSummary(fresh, "socialOrganic");
+        const parts = [];
+        if (s.approvals > 0) parts.push(`${s.approvals} approved`);
+        if (s.changes > 0)   parts.push(`${s.changes} need${s.changes !== 1 ? "" : "s"} changes`);
+        if (s.reactions > 0) parts.push(`${s.reactions} reaction${s.reactions !== 1 ? "s" : ""}`);
+        if (s.comments > 0)  parts.push(`${s.comments} comment${s.comments !== 1 ? "s" : ""}`);
+        const summary = parts.length > 0 ? parts.join(" · ") : "no feedback left";
+        await fetch(slackUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: `✅ ${fresh.companyName} submitted their pre-production review. ${summary}. Review in dashboard: planner.viewix.com.au`,
+          }),
+        });
+      }
+
+      // Log the submission to the central feedback log so prompt
+      // refinement workflows can spot completed reviews vs in-progress.
+      await fbSet(`/preproduction/feedbackLog/sub_${Date.now()}`, {
+        type: "submitReview",
+        projectType: "socialOrganic",
+        projectId,
+        companyName: project.companyName || "",
+        timestamp: submittedAt,
+      });
+
+      return res.status(200).json({ success: true, reviewSubmittedAt: submittedAt });
+    }
+
+    return res.status(400).json({ error: "Unknown action. Use: generate, rewrite, notifyFeedback, submitReview" });
   } catch (e) {
     console.error("Preproduction API error:", e);
     return res.status(500).json({ error: e.message });

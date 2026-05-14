@@ -77,17 +77,19 @@ async function runDailyDigest({ skipPost = false } = {}) {
   const today = todaySydney();
 
   // Read everything once. Heavy day, but it's once per day.
-  const [projectsRaw, editorsRaw, weekDataRaw, timeLogsRaw] = await Promise.all([
+  const [projectsRaw, editorsRaw, weekDataRaw, timeLogsRaw, salesRaw] = await Promise.all([
     adminGet("/projects"),
     adminGet("/editors"),
     adminGet("/weekData"),
     adminGet("/timeLogs"),
+    adminGet("/sales"),
   ]);
   const projects = projectsRaw || {};
   const editorsList = Array.isArray(editorsRaw) ? editorsRaw : Object.values(editorsRaw || {});
   const editors = editorsList.filter(e => e?.id);
   const weekData = weekDataRaw || {};
   const timeLogs = timeLogsRaw || {};
+  const sales = salesRaw || {};
 
   // Compute videoTypeStats from /timeLogs and cache it. This is the
   // ONLY place that recomputes — every other surface reads the cache.
@@ -125,8 +127,12 @@ async function runDailyDigest({ skipPost = false } = {}) {
     awareness,
   });
 
+  // Custom-sale instalments due / overdue / declined today. Additive
+  // to the existing digest — doesn't gate on flags being clear.
+  const customSalesAlerts = collectCustomSalesAlerts(sales, today);
+
   const blocks = buildDigestBlocks({
-    today, flags, todayScheduled, todayUnassigned, narration,
+    today, flags, todayScheduled, todayUnassigned, narration, customSalesAlerts,
   });
 
   if (skipPost) {
@@ -188,9 +194,47 @@ function collectTodayScheduled(projects, editors, today) {
   return out;
 }
 
+// Find Custom-videoType sales with any pending/declined slice due
+// today or earlier. Returns one entry per slice, not per sale, so the
+// digest surfaces every action item.
+function collectCustomSalesAlerts(sales, today) {
+  const out = [];
+  for (const [saleId, sale] of Object.entries(sales || {})) {
+    if (!sale || typeof sale !== "object") continue;
+    if (sale.videoType !== "custom") continue;
+    const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
+    if (schedule.length === 0) continue;
+    if (schedule[0]?.status !== "paid") continue; // deposit hasn't cleared
+    for (let i = 1; i < schedule.length; i++) {
+      const s = schedule[i];
+      if (!s) continue;
+      const dueKey = s.dueDateKeySydney || "";
+      // Surface: due today / overdue / declined (any date).
+      const isDeclined = s.status === "declined";
+      const isDueToday = s.status === "pending" && dueKey === today;
+      const isOverdue = s.status === "pending" && dueKey && dueKey < today;
+      if (!isDeclined && !isDueToday && !isOverdue) continue;
+      out.push({
+        saleId,
+        clientName: sale.clientName || "(unknown client)",
+        sliceLabel: s.label || `Payment ${i + 1}`,
+        amount: Number(s.amount) || 0,
+        dueKey,
+        trigger: s.trigger,
+        state: isDeclined ? "declined" : isOverdue ? "overdue" : "due",
+      });
+    }
+  }
+  return out;
+}
+
+function fmtCurAU(amount) {
+  return Number(amount).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+}
+
 // ─── Block Kit builder ─────────────────────────────────────────────
 
-function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narration }) {
+function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narration, customSalesAlerts }) {
   const headerDate = formatHeaderDate(today);
   const blocks = [
     {
@@ -205,6 +249,8 @@ function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narr
       type: "section",
       text: { type: "mrkdwn", text: "All clear — nothing flagged today." },
     });
+    const salesBlock = buildCustomSalesBlock(customSalesAlerts);
+    if (salesBlock) blocks.push(salesBlock);
     blocks.push(linkButtonsBlock());
     return blocks;
   }
@@ -251,8 +297,27 @@ function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narr
     });
   }
 
+  const salesBlock = buildCustomSalesBlock(customSalesAlerts);
+  if (salesBlock) blocks.push(salesBlock);
+
   blocks.push(linkButtonsBlock());
   return blocks;
+}
+
+function buildCustomSalesBlock(alerts) {
+  if (!Array.isArray(alerts) || alerts.length === 0) return null;
+  const lines = alerts.slice(0, 8).map(a => {
+    const tag = a.state === "declined" ? ":no_entry: DECLINED"
+              : a.state === "overdue" ? ":rotating_light: OVERDUE"
+              : ":hourglass_flowing_sand: DUE TODAY";
+    const trig = a.trigger === "auto" ? "auto" : a.trigger === "manual" ? "manual" : a.trigger;
+    return `• ${tag} — *${a.clientName}* · ${a.sliceLabel} (${trig}) · ${fmtCurAU(a.amount)}${a.dueKey ? ` · due ${a.dueKey}` : ""}`;
+  });
+  if (alerts.length > 8) lines.push(`• +${alerts.length - 8} more`);
+  return {
+    type: "section",
+    text: { type: "mrkdwn", text: `:moneybag: *Sales — Custom instalments due*\n${lines.join("\n")}` },
+  };
 }
 
 function formatScheduledLine(s) {

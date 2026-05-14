@@ -9,8 +9,12 @@
 
 import { useState, useMemo } from "react";
 import { BTN, QUOTE_SECTIONS, DEFAULT_RATE_CARDS, TH, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING } from "../config";
-import { fmtCur, fmtCurExact, saleShareUrl, newSale, computeGst, buildSchedule } from "../utils";
-import { scheduleForVideoType } from "../../api/_tiers";
+import {
+  fmtCur, fmtCurExact, saleShareUrl, newSale, computeGst, buildSchedule,
+  seedCustomSlices, validateCustomSlices, buildCustomSchedule, sumCustomSlicesExGst,
+  newSliceId, sydneyDateKey, displayOffsetUnit, displayOffsetValue,
+} from "../utils";
+import { scheduleForVideoType, CUSTOM_MIN_SLICES, CUSTOM_MAX_SLICES } from "../../api/_tiers";
 import { authFetch, fbSetAsync } from "../firebase";
 import { QuoteCalc } from "./QuoteCalc";
 import { SalePricingEditor } from "./SalePricingEditor";
@@ -68,9 +72,46 @@ export function Sale({
   const updateForm = (patch) => {
     setForm(f => {
       const next = { ...f, ...patch };
-      if ((patch.videoType !== undefined || patch.packageKey !== undefined) && !next.totalTouched) {
+
+      // Switching INTO Custom — seed default rows, force packageKey,
+      // skip pricing-lookup branch (custom has no preset $).
+      if (patch.videoType === "custom") {
+        next.packageKey = "custom";
+        const seedTotal = Number(f.totalExGst) > 0 ? Number(f.totalExGst) : 0;
+        next.customSlices = Array.isArray(f.customSlices) && f.customSlices.length >= CUSTOM_MIN_SLICES
+          ? f.customSlices
+          : seedCustomSlices(seedTotal);
+        next.totalExGst = sumCustomSlicesExGst(next.customSlices);
+        const { gstAmount, grandTotal } = computeGst(next.totalExGst);
+        next.gstAmount = gstAmount;
+        next.grandTotal = grandTotal;
+        next.schedule = buildCustomSchedule(next.customSlices, { depositAnchorDate: new Date() });
+        return next;
+      }
+
+      // Switching OUT of Custom — clear the custom rows so they don't
+      // leak into a preset record.
+      if (patch.videoType !== undefined && patch.videoType !== "custom" && f.videoType === "custom") {
+        delete next.customSlices;
+        next.totalTouched = false;
+      }
+
+      if ((patch.videoType !== undefined || patch.packageKey !== undefined) && !next.totalTouched && next.videoType !== "custom") {
         next.totalExGst = getPackageDefault(pricing, next.videoType, next.packageKey);
       }
+
+      // Custom — recompute schedule from customSlices on every patch.
+      if (next.videoType === "custom") {
+        if (patch.customSlices) {
+          next.totalExGst = sumCustomSlicesExGst(patch.customSlices);
+        }
+        const { gstAmount, grandTotal } = computeGst(next.totalExGst || 0);
+        next.gstAmount = gstAmount;
+        next.grandTotal = grandTotal;
+        next.schedule = buildCustomSchedule(next.customSlices || [], { depositAnchorDate: new Date() });
+        return next;
+      }
+
       const { gstAmount, grandTotal } = computeGst(next.totalExGst || 0);
       next.gstAmount  = gstAmount;
       next.grandTotal = grandTotal;
@@ -103,6 +144,40 @@ export function Sale({
     }
     setSaving(true);
     setSaveError(null);
+
+    // ── Custom — POST to founder-only server endpoint ────────────────
+    // Firebase RTDB rules currently allow any signed-in role to write
+    // /sales, so founder-only enforcement lives on the server. The
+    // endpoint also re-assigns sliceIds and re-derives schedule[] so
+    // the client can't smuggle paid metadata or mismatched amounts.
+    if (record.videoType === "custom") {
+      try {
+        const r = await authFetch("/api/create-custom-sale", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientName: record.clientName,
+            logoUrl: record.logoUrl || "",
+            scopeNotes: record.scopeNotes || "",
+            totalExGst: record.totalExGst,
+            customSlices: record.customSlices || [],
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok || !d.sale) {
+          throw new Error(d.error || `Server returned ${r.status}`);
+        }
+        setSales(p => [...p, d.sale]);
+        resetForm();
+      } catch (e) {
+        console.error("Failed to create custom sale:", e);
+        setSaveError(`Couldn't save custom sale: ${e.message || e}.`);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     // Add optimistically so the row appears immediately.
     setSales(p => [...p, record]);
     try {
@@ -145,6 +220,16 @@ export function Sale({
   const packageLabel = (vt, pk) => packagesFor(vt).find(p => p.key === pk)?.label || pk;
   const videoLabel = (vt) => SALE_VIDEO_TYPES.find(t => t.key === vt)?.label || vt;
 
+  // Founder-only video-type options: Custom is hidden from non-founders
+  // in the dropdown. (Server endpoint also enforces this.)
+  const visibleVideoTypes = SALE_VIDEO_TYPES.filter(t => !t.custom || isFounders);
+
+  // Live validation for the Custom editor — runs every render so the
+  // Σ-row + Save-disable both reflect the current state.
+  const customValidation = form.videoType === "custom"
+    ? validateCustomSlices(form.customSlices || [], form.totalExGst || 0)
+    : { ok: true, errors: [] };
+
   // Compute a compact status + optional action for a sale row. Handles
   // legacy records (paid flag only, no schedule) and new records
   // (schedule[] with per-slice status).
@@ -181,6 +266,37 @@ export function Sale({
     // Partial paid, nothing cancelled / refunded — normal in-flight state
     const nextIdx = schedule.findIndex(x => x.status !== "paid");
     const nextSlice = schedule[nextIdx];
+
+    // Declined auto-slice on a Custom sale — surface a retry path
+    // through the same Charge Balance modal. Server-side
+    // charge-sale-balance allows manual retries of declined auto
+    // slices when videoType === "custom".
+    const declinedIdx = schedule.findIndex(x => x.status === "declined");
+    if (s.videoType === "custom" && declinedIdx !== -1) {
+      const declined = schedule[declinedIdx];
+      return {
+        label: `${paidCount}/${total} · DECLINED`,
+        color: "#EF4444",
+        action: { kind: "chargeBalance", sliceIdx: declinedIdx, amount: declined.amount, label: `Retry ${declined.label}` },
+      };
+    }
+
+    // Custom + due today — surface as actionable for manual slices
+    // (auto slices fire via cron). Show overdue if dueDateKey < today.
+    if (s.videoType === "custom" && nextSlice) {
+      const today = sydneyDateKey(new Date());
+      const dueKey = nextSlice.dueDateKeySydney || "";
+      const isDueToday = dueKey && dueKey === today;
+      const isOverdue = dueKey && dueKey < today;
+      if (nextSlice.trigger === "manual" && (isDueToday || isOverdue)) {
+        return {
+          label: `${paidCount}/${total} · ${isOverdue ? "OVERDUE" : "DUE TODAY"}`,
+          color: isOverdue ? "#EF4444" : "#F59E0B",
+          action: { kind: "chargeBalance", sliceIdx: nextIdx, amount: nextSlice.amount, label: nextSlice.label },
+        };
+      }
+    }
+
     const label = `${paidCount}/${total} PAID`;
     const action = nextSlice && nextSlice.trigger === "manual"
       ? { kind: "chargeBalance", sliceIdx: nextIdx, amount: nextSlice.amount, label: nextSlice.label }
@@ -211,6 +327,64 @@ export function Sale({
       setChargeLoading(false);
     }
   };
+
+  // ── Custom schedule edit modal ───────────────────────────────────
+  // Opens with the sale's current customSlices. Slices that have moved
+  // money (paid/refunded/processing) are locked at the row level; the
+  // server endpoint is the authoritative gate, but disabling controls
+  // here gives founders a clearer signal about what's editable.
+  const [editingCustomSaleId, setEditingCustomSaleId] = useState(null);
+  const [editingCustomSlices, setEditingCustomSlices] = useState([]);
+  const [editingCustomSaving, setEditingCustomSaving] = useState(false);
+  const [editingCustomResult, setEditingCustomResult] = useState(null);
+
+  const openEditCustom = (s) => {
+    const slices = Array.isArray(s.customSlices) ? s.customSlices : [];
+    setEditingCustomSaleId(s.id);
+    setEditingCustomSlices(slices.map(r => ({ ...r })));
+    setEditingCustomResult(null);
+  };
+
+  const closeEditCustom = () => {
+    setEditingCustomSaleId(null);
+    setEditingCustomSlices([]);
+    setEditingCustomResult(null);
+  };
+
+  const saveEditCustom = async () => {
+    if (!editingCustomSaleId || editingCustomSaving) return;
+    setEditingCustomSaving(true);
+    setEditingCustomResult(null);
+    try {
+      const r = await authFetch("/api/update-custom-schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          saleId: editingCustomSaleId,
+          customSlices: editingCustomSlices,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok || !d.sale) {
+        const detail = Array.isArray(d.details) && d.details.length ? ` (${d.details.slice(0,2).join("; ")})` : "";
+        throw new Error((d.error || `Server returned ${r.status}`) + detail);
+      }
+      setSales(p => p.map(x => x.id === d.sale.id ? d.sale : x));
+      setEditingCustomResult({ kind: "success", message: `Schedule updated. Version ${d.sale.customScheduleVersion || "?"}.` });
+      // Auto-close on success after a short pause so the founder sees confirmation.
+      setTimeout(() => closeEditCustom(), 900);
+    } catch (e) {
+      setEditingCustomResult({ kind: "error", message: e.message || String(e) });
+    } finally {
+      setEditingCustomSaving(false);
+    }
+  };
+
+  // Sum-of-rows for the edit modal — same helper the create form uses.
+  const editingTotalExGst = sumCustomSlicesExGst(editingCustomSlices || []);
+  const editingValidation = editingCustomSaleId
+    ? validateCustomSlices(editingCustomSlices || [], (sales.find(s => s.id === editingCustomSaleId)?.totalExGst) || 0)
+    : { ok: true, errors: [] };
 
   // Reconcile-from-Stripe — founder-only escape hatch when a webhook
   // didn't fire (signature reject, missing env var, livemode mismatch,
@@ -270,12 +444,17 @@ export function Sale({
           <div>
             <label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:6}}>Video Type</label>
             <select value={form.videoType} onChange={e=>updateForm({videoType:e.target.value,packageKey:packagesFor(e.target.value)[0]?.key||"starter"})} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,fontWeight:600,outline:"none"}}>
-              {SALE_VIDEO_TYPES.map(t=>(<option key={t.key} value={t.key}>{t.label}</option>))}
+              {visibleVideoTypes.map(t=>(<option key={t.key} value={t.key}>{t.label}</option>))}
             </select>
           </div>
           <div>
             <label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:6}}>Package</label>
-            <select value={form.packageKey} onChange={e=>updateForm({packageKey:e.target.value})} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,fontWeight:600,outline:"none"}}>
+            <select
+              value={form.packageKey}
+              onChange={e=>updateForm({packageKey:e.target.value})}
+              disabled={form.videoType === "custom"}
+              style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,fontWeight:600,outline:"none",opacity:form.videoType === "custom" ? 0.55 : 1}}
+            >
               {packagesFor(form.videoType).map(p=>(<option key={p.key} value={p.key}>{p.label}</option>))}
             </select>
           </div>
@@ -293,13 +472,22 @@ export function Sale({
           <textarea value={form.scopeNotes} onChange={e=>updateForm({scopeNotes:e.target.value})} rows={4} placeholder="What the customer is paying a deposit for — this will appear on their payment page." style={{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:13,fontFamily:"inherit",outline:"none",resize:"vertical"}}/>
         </div>
         <div style={{marginBottom:16,padding:"16px",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:10}}>
-          <label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:6}}>Total Project Amount (ex-GST)</label>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-            <span style={{fontSize:16,color:"var(--muted)"}}>$</span>
-            <input type="number" value={form.totalExGst||""} onChange={e=>updateForm({totalExGst:parseFloat(e.target.value)||0,totalTouched:true})} step={50} style={{flex:1,maxWidth:200,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",outline:"none"}}/>
-            <span style={{fontSize:11,color:"var(--muted)"}}>Default for {packageLabel(form.videoType,form.packageKey)}: {fmtCur(getPackageDefault(pricing,form.videoType,form.packageKey))} ex-GST</span>
-          </div>
-          {getPackageDefault(pricing,form.videoType,form.packageKey)===0&&(<div style={{marginBottom:12,fontSize:11,color:"#F59E0B"}}>⚠ No default set for this package. {isFounders ? "Set one in the Pricing tab." : "Ask a founder to set one in the Pricing tab."}</div>)}
+          {form.videoType === "custom" ? (
+            <CustomScheduleEditor
+              slices={form.customSlices || []}
+              onChange={(next)=>updateForm({customSlices: next})}
+              totalExGst={form.totalExGst || 0}
+              validation={customValidation}
+            />
+          ) : (<>
+            <label style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",display:"block",marginBottom:6}}>Total Project Amount (ex-GST)</label>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+              <span style={{fontSize:16,color:"var(--muted)"}}>$</span>
+              <input type="number" value={form.totalExGst||""} onChange={e=>updateForm({totalExGst:parseFloat(e.target.value)||0,totalTouched:true})} step={50} style={{flex:1,maxWidth:200,padding:"10px 12px",borderRadius:8,border:"1px solid var(--border)",background:"var(--input-bg)",color:"var(--fg)",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",outline:"none"}}/>
+              <span style={{fontSize:11,color:"var(--muted)"}}>Default for {packageLabel(form.videoType,form.packageKey)}: {fmtCur(getPackageDefault(pricing,form.videoType,form.packageKey))} ex-GST</span>
+            </div>
+            {getPackageDefault(pricing,form.videoType,form.packageKey)===0&&(<div style={{marginBottom:12,fontSize:11,color:"#F59E0B"}}>⚠ No default set for this package. {isFounders ? "Set one in the Pricing tab." : "Ask a founder to set one in the Pricing tab."}</div>)}
+          </>)}
 
           {/* Live breakdown: GST + surcharges + grand total + instalment schedule */}
           {form.totalExGst>0&&(()=>{
@@ -320,11 +508,11 @@ export function Sale({
                 </div>
               </div>
               <div>
-                <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Paid as ({scheduleForVideoType(form.videoType).kind === "deposit_plus_manual" ? "deposit + manual balance" : scheduleForVideoType(form.videoType).kind === "subscription_monthly" ? "3 auto-payments" : "paid in full"})</div>
+                <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Paid as ({(()=>{const k=scheduleForVideoType(form.videoType).kind; return k==="deposit_plus_manual"?"deposit + manual balance":k==="subscription_monthly"?"3 auto-payments":k==="custom"?"custom schedule":"paid in full";})()})</div>
                 <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
                   {(form.schedule||[]).map((s,i)=>(
-                    <div key={i} style={{display:"flex",justifyContent:"space-between",color:s.trigger==="now"?"var(--fg)":"var(--muted)"}}>
-                      <span style={{fontFamily:"inherit"}}>{s.label} · {s.trigger==="now"?"Today":s.trigger==="auto"?`${s.dueDaysOffset}d`:"Manual"}</span>
+                    <div key={s.sliceId||i} style={{display:"flex",justifyContent:"space-between",color:s.trigger==="now"?"var(--fg)":"var(--muted)"}}>
+                      <span style={{fontFamily:"inherit"}}>{s.label} · {s.trigger==="now"?"Today":s.trigger==="auto"?(s.dueLabel||`+${s.offsetDays||s.dueDaysOffset||0}d`):"Manual"}</span>
                       <span style={{fontWeight:s.trigger==="now"?700:500}}>{fmtCurExact(s.amount)}</span>
                     </div>
                   ))}
@@ -337,8 +525,23 @@ export function Sale({
         {saveError && (
           <div style={{marginBottom:12,padding:"10px 14px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,color:"#991B1B",fontSize:13}}>{saveError}</div>
         )}
+        {form.videoType === "custom" && !customValidation.ok && (
+          <div style={{marginBottom:12,padding:"10px 14px",background:"rgba(245,158,11,0.10)",border:"1px solid rgba(245,158,11,0.30)",borderRadius:8,color:"#92400E",fontSize:12,lineHeight:1.55}}>
+            <strong>Schedule needs attention:</strong>
+            <ul style={{margin:"4px 0 0 16px",padding:0}}>
+              {customValidation.errors.slice(0,3).map((err,i)=>(<li key={i}>{err}</li>))}
+              {customValidation.errors.length > 3 && <li>… and {customValidation.errors.length - 3} more.</li>}
+            </ul>
+          </div>
+        )}
         <div style={{display:"flex",gap:8}}>
-          <button onClick={saveSale} disabled={saving||!form.clientName.trim()||!form.totalExGst} style={{...BTN,background:saving?"#4B5563":(form.clientName.trim()&&form.totalExGst)?"var(--accent)":"#374151",color:"white",opacity:(saving||!form.clientName.trim()||!form.totalExGst)?0.6:1,cursor:saving?"wait":"pointer"}}>{saving?"Creating…":"Create Payment Link"}</button>
+          {(()=>{
+            const isCustom = form.videoType === "custom";
+            const blocked = saving || !form.clientName.trim() || !form.totalExGst || (isCustom && !customValidation.ok);
+            return (
+              <button onClick={saveSale} disabled={blocked} style={{...BTN,background:saving?"#4B5563":(!blocked)?"var(--accent)":"#374151",color:"white",opacity:blocked?0.6:1,cursor:saving?"wait":"pointer"}}>{saving?"Creating…":"Create Payment Link"}</button>
+            );
+          })()}
           <button onClick={resetForm} disabled={saving} style={{...BTN,background:"#374151",color:"#9CA3AF",opacity:saving?0.5:1,cursor:saving?"not-allowed":"pointer"}}>Cancel</button>
         </div>
       </div>)}
@@ -382,6 +585,19 @@ export function Sale({
                 <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
                   {showChargeBalance && (
                     <button onClick={()=>{setChargingSale(s);setChargeResult(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Charge Balance</button>
+                  )}
+                  {/* Custom-sale edit button. Founder-only; backend
+                      enforces it too. Disabled once every slice is
+                      paid — at that point the schedule is fully
+                      settled and editing would be a no-op. */}
+                  {isFounders && s.videoType === "custom" && !s.paid && (
+                    <button
+                      onClick={()=>openEditCustom(s)}
+                      title="Edit pending instalments (label, amount, offset, trigger). Paid slices are locked."
+                      style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}
+                    >
+                      Edit schedule
+                    </button>
                   )}
                   {/* Reconcile from Stripe — founder-only. Visible whenever
                       the sale is not fully paid yet so a producer can pull
@@ -464,6 +680,59 @@ export function Sale({
                     </button>
                   </>
                 )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Custom schedule edit modal ────────────────────────────── */}
+      {editingCustomSaleId && (() => {
+        const editingSale = sales.find(x => x.id === editingCustomSaleId);
+        if (!editingSale) return null;
+        const lockedIds = new Set(
+          (editingSale.schedule || [])
+            .filter(s => s && (s.status === "paid" || s.status === "refunded" || s.status === "processing" || s.stripePaymentIntentId))
+            .map(s => s.sliceId)
+            .filter(Boolean)
+        );
+        return (
+          <div style={{position:"fixed",inset:0,background:"rgba(10,18,40,0.65)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+            <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"22px 26px",maxWidth:880,width:"100%",maxHeight:"90vh",overflow:"auto"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div>
+                  <div style={{fontSize:16,fontWeight:800,color:"var(--fg)"}}>Edit custom schedule — {editingSale.clientName}</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>
+                    Paid slices are locked. Sum must still equal <strong>{fmtCurExact(editingSale.totalExGst || 0)}</strong> ex-GST.
+                  </div>
+                </div>
+                <button onClick={closeEditCustom} disabled={editingCustomSaving} style={{...BTN,background:"transparent",color:"var(--muted)",cursor:editingCustomSaving?"not-allowed":"pointer",padding:"4px 8px"}}>✕</button>
+              </div>
+              <CustomScheduleEditor
+                slices={editingCustomSlices}
+                onChange={(next)=>setEditingCustomSlices(next)}
+                totalExGst={editingSale.totalExGst || 0}
+                validation={editingValidation}
+                lockedSliceIds={lockedIds}
+              />
+              {editingCustomResult && (
+                <div style={{marginTop:12,padding:"10px 14px",borderRadius:8,fontSize:13,lineHeight:1.5,
+                  background: editingCustomResult.kind==="success"?"rgba(16,185,129,0.1)":"rgba(239,68,68,0.1)",
+                  border: `1px solid ${editingCustomResult.kind==="success"?"rgba(16,185,129,0.3)":"rgba(239,68,68,0.3)"}`,
+                  color: editingCustomResult.kind==="success"?"#065F46":"#991B1B",
+                }}>
+                  {editingCustomResult.message}
+                </div>
+              )}
+              <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+                <button onClick={closeEditCustom} disabled={editingCustomSaving} style={{...BTN,background:"#374151",color:"#9CA3AF",opacity:editingCustomSaving?0.5:1,cursor:editingCustomSaving?"not-allowed":"pointer"}}>Cancel</button>
+                <button
+                  onClick={saveEditCustom}
+                  disabled={editingCustomSaving || !editingValidation.ok}
+                  style={{...BTN,background:editingCustomSaving?"#4B5563":(editingValidation.ok?"var(--accent)":"#374151"),color:"white",opacity:(editingCustomSaving||!editingValidation.ok)?0.6:1,cursor:editingCustomSaving?"wait":"pointer"}}
+                >
+                  {editingCustomSaving ? "Saving…" : "Save changes"}
+                </button>
               </div>
             </div>
           </div>
@@ -608,4 +877,238 @@ export function Sale({
 
     </div>
   </>);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// CustomScheduleEditor — repeatable rows for the Custom video type.
+//
+// Source of truth is the `slices` prop (an array of customSlices rows).
+// Every change calls onChange(nextSlices); the parent's updateForm()
+// reruns validation and rebuilds schedule[] for the breakdown preview.
+//
+// Row 0 is locked to trigger "now" + offset 0 (deposit at checkout).
+// The founder can still edit its label and amount. Rows 1..N hold
+// label + amount + offset (days/weeks) + trigger (auto/manual).
+//
+// Validation runs in the parent via validateCustomSlices() — this
+// component only displays the live Σ amount + the count limits.
+function CustomScheduleEditor({ slices, onChange, totalExGst, validation, lockedSliceIds }) {
+  const rows = Array.isArray(slices) && slices.length > 0 ? slices : [];
+  const locks = lockedSliceIds instanceof Set ? lockedSliceIds : null;
+  const isLocked = (sliceId) => !!(locks && sliceId && locks.has(sliceId));
+
+  const updateRow = (idx, patch) => {
+    const target = rows[idx];
+    if (!target) return;
+    if (isLocked(target.sliceId)) return; // server will reject; UI matches
+    const next = rows.map((r, i) => (i === idx ? { ...r, ...patch } : r));
+    onChange(next);
+  };
+  const addRow = () => {
+    if (rows.length >= CUSTOM_MAX_SLICES) return;
+    const lastOffset = rows[rows.length - 1]?.offsetDays || 0;
+    onChange([...rows, {
+      sliceId: newSliceId(),
+      label: `Payment ${rows.length + 1}`,
+      amountExGst: 0,
+      offsetDays: lastOffset + 28,
+      offsetUnit: "weeks",
+      trigger: "auto",
+    }]);
+  };
+  const removeRow = (idx) => {
+    if (idx === 0) return;
+    if (rows.length <= CUSTOM_MIN_SLICES) return;
+    const target = rows[idx];
+    if (isLocked(target?.sliceId)) return;
+    onChange(rows.filter((_, i) => i !== idx));
+  };
+
+  // Day-or-week display unit is row-local UI state. We always persist
+  // offsetDays — the unit is just how the input is rendered. The
+  // helpers in api/_sale-schedules.js auto-detect "days" when the
+  // value isn't a clean multiple of 7, so a 45-day offset round-trips
+  // through the server (which strips offsetUnit) and reopens as
+  // "45 days" instead of being silently rounded to "6 wks".
+  const setOffset = (idx, value) => {
+    const row = rows[idx];
+    if (!row) return;
+    const unit = displayOffsetUnit(row);
+    const n = Math.max(1, parseInt(value, 10) || 0);
+    const days = unit === "days" ? n : n * 7;
+    updateRow(idx, { offsetDays: days });
+  };
+  const setUnit = (idx, unit) => {
+    const row = rows[idx];
+    if (!row) return;
+    // If switching to weeks but current offset isn't a whole number of
+    // weeks, snap to the nearest whole week so the value displayed
+    // stays correct. Reverse case is identity (days can express any
+    // current value).
+    let nextOffsetDays = row.offsetDays;
+    if (unit === "weeks" && (Number(row.offsetDays) || 0) % 7 !== 0) {
+      nextOffsetDays = Math.round((row.offsetDays || 0) / 7) * 7;
+    }
+    updateRow(idx, { offsetUnit: unit, offsetDays: nextOffsetDays });
+  };
+
+  // Total of the rows — derived. We no longer compare against a separate
+  // "target" totalExGst because the same value is also derived from
+  // these rows everywhere it's used (form state + server endpoint), so
+  // a comparison of `sum vs target` would just be `sum vs sum`. Show
+  // the honest total instead; validation surfaces any real errors.
+  const sumRows = sumCustomSlicesExGst(rows);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Custom Schedule ({rows.length}/{CUSTOM_MAX_SLICES} instalments · ex-GST)
+        </label>
+        <button
+          onClick={addRow}
+          disabled={rows.length >= CUSTOM_MAX_SLICES}
+          style={{
+            ...BTN,
+            background: rows.length >= CUSTOM_MAX_SLICES ? "#374151" : "var(--accent)",
+            color: rows.length >= CUSTOM_MAX_SLICES ? "#9CA3AF" : "white",
+            opacity: rows.length >= CUSTOM_MAX_SLICES ? 0.5 : 1,
+            cursor: rows.length >= CUSTOM_MAX_SLICES ? "not-allowed" : "pointer",
+          }}
+        >
+          + Add instalment
+        </button>
+      </div>
+
+      <div style={{ display: "grid", gap: 8 }}>
+        {rows.map((s, i) => {
+          const isDeposit = i === 0;
+          const locked = isLocked(s.sliceId);
+          const cellInputBase = {
+            padding: "8px 10px", borderRadius: 6, border: "1px solid var(--border)",
+            background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none",
+          };
+          const lockedStyle = locked ? { opacity: 0.55, cursor: "not-allowed" } : {};
+          return (
+            <div key={s.sliceId || i} style={{
+              display: "grid",
+              gridTemplateColumns: "auto 1.4fr 1fr 1.3fr 1.2fr auto",
+              gap: 8,
+              alignItems: "center",
+              padding: "10px 12px",
+              background: "var(--card)",
+              border: `1px solid ${locked ? "#10B98155" : isDeposit ? "var(--accent)" : "var(--border)"}`,
+              borderRadius: 8,
+            }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace", minWidth: 22, textAlign: "center" }}>
+                #{i + 1}
+                {locked && (
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "#10B981", marginTop: 2 }}>PAID</div>
+                )}
+              </span>
+              <input
+                type="text"
+                value={s.label || ""}
+                onChange={e => updateRow(i, { label: e.target.value })}
+                placeholder={isDeposit ? "Deposit" : `Payment ${i + 1}`}
+                disabled={locked}
+                style={{ ...cellInputBase, fontWeight: 600, ...lockedStyle }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ fontSize: 13, color: "var(--muted)" }}>$</span>
+                <input
+                  type="number"
+                  step={50}
+                  min={0}
+                  value={s.amountExGst || ""}
+                  onChange={e => updateRow(i, { amountExGst: parseFloat(e.target.value) || 0 })}
+                  disabled={locked}
+                  style={{ ...cellInputBase, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, width: "100%", ...lockedStyle }}
+                />
+              </div>
+              {isDeposit ? (
+                <span style={{ fontSize: 11, color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace", textAlign: "center" }}>
+                  Today
+                </span>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ fontSize: 11, color: "var(--muted)" }}>+</span>
+                  <input
+                    type="number"
+                    step={1}
+                    min={1}
+                    value={displayOffsetValue(s)}
+                    onChange={e => setOffset(i, e.target.value)}
+                    disabled={locked}
+                    style={{ ...cellInputBase, width: 56, textAlign: "right", fontFamily: "'JetBrains Mono', monospace", ...lockedStyle }}
+                  />
+                  <select
+                    value={displayOffsetUnit(s)}
+                    onChange={e => setUnit(i, e.target.value)}
+                    disabled={locked}
+                    style={{ ...cellInputBase, padding: "8px 6px", fontSize: 11, ...lockedStyle }}
+                  >
+                    <option value="weeks">wks</option>
+                    <option value="days">days</option>
+                  </select>
+                </div>
+              )}
+              {isDeposit ? (
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em", textAlign: "center" }}>
+                  At checkout
+                </span>
+              ) : (
+                <select
+                  value={s.trigger || "auto"}
+                  onChange={e => updateRow(i, { trigger: e.target.value })}
+                  disabled={locked}
+                  style={{ ...cellInputBase, fontWeight: 600, ...lockedStyle }}
+                >
+                  <option value="auto">Auto-charge</option>
+                  <option value="manual">Manual</option>
+                </select>
+              )}
+              <button
+                onClick={() => removeRow(i)}
+                disabled={isDeposit || rows.length <= CUSTOM_MIN_SLICES || locked}
+                title={
+                  locked ? "Paid slice — locked"
+                  : isDeposit ? "Deposit row can't be removed"
+                  : rows.length <= CUSTOM_MIN_SLICES ? `Minimum ${CUSTOM_MIN_SLICES} rows`
+                  : "Remove this instalment"
+                }
+                style={{
+                  ...BTN,
+                  background: "transparent",
+                  color: (isDeposit || rows.length <= CUSTOM_MIN_SLICES || locked) ? "#374151" : "#EF4444",
+                  cursor: (isDeposit || rows.length <= CUSTOM_MIN_SLICES || locked) ? "not-allowed" : "pointer",
+                  padding: "6px 8px",
+                }}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Total + offset-from-deposit reminder. No fake "Σ / target"
+          comparison — totalExGst is derived from rows in both the form
+          and the server endpoint, so the comparison would always show
+          sum vs itself. Show the honest sum and let validation surface
+          real problems. */}
+      <div style={{
+        marginTop: 12, paddingTop: 12, borderTop: "1px dashed var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+      }}>
+        <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>
+          Offsets are counted from <strong>when the deposit clears</strong>, not today. If the deposit pays late, instalment dates shift with it.
+        </div>
+        <div style={{ fontSize: 13, fontFamily: "'JetBrains Mono', monospace", color: (validation && validation.ok) ? "var(--fg)" : "#F59E0B" }}>
+          Total ex-GST: <strong>{fmtCurExact(sumRows)}</strong>
+          {validation && !validation.ok && <span style={{ marginLeft: 6 }}>⚠</span>}
+        </div>
+      </div>
+    </div>
+  );
 }

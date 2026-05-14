@@ -34,6 +34,7 @@ export function SalePricingEditor({ salePricing, setSalePricing, canEdit = true 
     if (cfg.kind === "deposit_plus_manual")  return "50% deposit + 50% on project completion";
     if (cfg.kind === "subscription_monthly") return "3 equal payments (today, +30d, +60d auto)";
     if (cfg.kind === "paid_in_full")          return "Paid in full at checkout";
+    if (cfg.kind === "custom")                return "Configured per payment link";
     return "";
   };
 
@@ -57,7 +58,25 @@ export function SalePricingEditor({ salePricing, setSalePricing, canEdit = true 
       </div>
 
       <div style={{ display: "grid", gap: 16 }}>
-        {SALE_VIDEO_TYPES.map(vt => (
+        {SALE_VIDEO_TYPES.map(vt => {
+          // Custom has no fixed pricing — the founder configures every
+          // dollar at payment-link creation time. Render a single
+          // read-only row instead of running buildSchedule() (which
+          // would throw) or treating "custom" like a preset.
+          if (vt.custom) {
+            return (
+              <div key={vt.key} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 24px" }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{vt.label}</div>
+                  <div style={{ fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>Configured per payment link</div>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
+                  Custom sales let you set bespoke instalment amounts, dates, and triggers per client when you create the link. There's no shared price to set here.
+                </div>
+              </div>
+            );
+          }
+          return (
           <div key={vt.key} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: "20px 24px" }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 14 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>{vt.label}</div>
@@ -146,7 +165,8 @@ export function SalePricingEditor({ salePricing, setSalePricing, canEdit = true 
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {canEdit && (

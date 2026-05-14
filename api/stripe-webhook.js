@@ -35,6 +35,7 @@
 
 import Stripe from "stripe";
 import { adminGet, adminPatch } from "./_fb-admin.js";
+import { buildCustomSchedule } from "./_sale-schedules.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -44,38 +45,82 @@ async function readRawBody(req) {
   return Buffer.concat(chunks);
 }
 
-// Mark a specific slice paid on the sale record. Keeps the schedule
-// array immutable-ish (returns a new copy with the matched slice
-// flipped), and sets top-level `paid: true` iff every slice is paid.
-async function markSlicePaid(saleId, sliceIdx, patch = {}) {
+// Mark a specific slice paid on the sale record. Resolves the target
+// slice by `sliceId` first (Custom sales use it as stable identity),
+// falling back to `sliceIdx` for legacy preset sales whose Stripe
+// metadata predates sliceId. Keeps the schedule array immutable-ish
+// and sets top-level `paid: true` iff every slice is paid.
+//
+// For Custom slice 0 (deposit), also re-anchor the rest of the
+// schedule to the actual paid timestamp so future dueAt values reflect
+// when the deposit truly cleared (clients sometimes pay days late).
+async function markSlicePaid(saleId, { sliceId, sliceIdx } = {}, patch = {}) {
   const sale = await adminGet(`/sales/${saleId}`);
   if (!sale) {
     console.warn("markSlicePaid: sale not found:", saleId);
     return;
   }
   const schedule = Array.isArray(sale.schedule) ? [...sale.schedule] : [];
-  if (!schedule[sliceIdx]) {
-    console.warn(`markSlicePaid: sliceIdx ${sliceIdx} out of range on sale ${saleId}`);
+
+  // Resolve target row: sliceId is stable identity; sliceIdx is fallback.
+  let targetIdx = -1;
+  if (sliceId) {
+    targetIdx = schedule.findIndex(s => s && s.sliceId === sliceId);
+  }
+  if (targetIdx === -1 && sliceIdx !== undefined && sliceIdx !== null) {
+    const n = Number(sliceIdx);
+    if (Number.isInteger(n) && n >= 0 && schedule[n]) targetIdx = n;
+  }
+  if (targetIdx === -1) {
+    console.warn(`markSlicePaid: no matching slice on sale ${saleId} (sliceId=${sliceId}, sliceIdx=${sliceIdx})`);
     return;
   }
-  // Idempotency — if the slice is already paid, skip. Stripe retries
-  // webhook deliveries; we must not double-count.
-  if (schedule[sliceIdx].status === "paid") {
-    return;
+
+  // Idempotency — Stripe retries webhook deliveries; never double-count.
+  if (schedule[targetIdx].status === "paid") {
+    return { allPaid: schedule.every(s => s.status === "paid"), slice: schedule[targetIdx] };
   }
-  schedule[sliceIdx] = {
-    ...schedule[sliceIdx],
+
+  schedule[targetIdx] = {
+    ...schedule[targetIdx],
     status: "paid",
     paidAt: new Date().toISOString(),
     ...patch,
   };
-  const allPaid = schedule.every(s => s.status === "paid");
+
+  // Custom: when the deposit (idx 0) clears, re-anchor the rest of the
+  // schedule to depositPaidAt. mergeScheduleState() inside buildCustomSchedule
+  // preserves the just-paid deposit row verbatim, so we never lose
+  // receiptUrl or stripePaymentIntentId.
+  const isCustom = sale.videoType === "custom";
+  const isDeposit = targetIdx === 0;
+  let nextSchedule = schedule;
+  let extraPatch = {};
+  if (isCustom && isDeposit) {
+    const depositPaidAt = schedule[0].paidAt;
+    extraPatch.depositPaidAt = depositPaidAt;
+    try {
+      nextSchedule = buildCustomSchedule(sale.customSlices || [], {
+        depositAnchorDate: depositPaidAt,
+        existingSchedule: schedule,
+      });
+    } catch (e) {
+      console.error("Custom re-anchor failed:", e.message);
+      // Keep the original schedule with the just-paid deposit; don't fail the webhook.
+      nextSchedule = schedule;
+    }
+  }
+
+  const allPaid = nextSchedule.every(s => s.status === "paid");
   await adminPatch(`/sales/${saleId}`, {
-    schedule,
+    schedule: nextSchedule,
     paid: allPaid,
     ...(allPaid ? { paidAt: new Date().toISOString() } : {}),
+    ...extraPatch,
   });
-  return { allPaid, slice: schedule[sliceIdx] };
+  // Return the slice from the schedule we actually wrote back.
+  const writtenSlice = nextSchedule.find(s => s.sliceId === schedule[targetIdx].sliceId) || schedule[targetIdx];
+  return { allPaid, slice: writtenSlice };
 }
 
 async function slackNotify(text) {
@@ -217,9 +262,10 @@ export default async function handler(req, res) {
       const intent = event.data.object;
       const saleId  = intent.metadata?.saleId;
       const sliceIdx = intent.metadata?.sliceIdx;
-      if (!saleId || sliceIdx === undefined) {
+      const sliceId  = intent.metadata?.sliceId;
+      if (!saleId || (sliceIdx === undefined && !sliceId)) {
         // Subscription invoice PIs land here too — ignore.
-        return res.status(200).json({ received: true, ignored: "no sliceIdx metadata" });
+        return res.status(200).json({ received: true, ignored: "no sliceIdx/sliceId metadata" });
       }
 
       // Receipt URL lives on the Charge, not the PaymentIntent. Stripe
@@ -236,7 +282,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const result = await markSlicePaid(saleId, Number(sliceIdx), {
+      const result = await markSlicePaid(saleId, { sliceId, sliceIdx }, {
         stripePaymentIntentId: intent.id,
         amountPaid: intent.amount_received / 100,
         receiptUrl,
@@ -296,7 +342,7 @@ export default async function handler(req, res) {
       // Prefer invoice_pdf so Download Receipt opens straight to the
       // PDF; fall back to hosted_invoice_url for older invoices where
       // the PDF isn't ready yet.
-      const result = await markSlicePaid(saleId, sliceIdx, {
+      const result = await markSlicePaid(saleId, { sliceIdx }, {
         stripeInvoiceId: invoice.id,
         amountPaid: invoice.amount_paid / 100,
         receiptUrl: invoice.invoice_pdf || invoice.hosted_invoice_url || null,
@@ -380,21 +426,24 @@ export default async function handler(req, res) {
       const charge = event.data.object;
       const saleId = charge.metadata?.saleId;
       const sliceIdx = charge.metadata?.sliceIdx;
+      const sliceId  = charge.metadata?.sliceId;
       // Refund metadata may live on the charge OR on the underlying
       // PaymentIntent. Subscription invoice charges put metadata on
       // the invoice, not the charge — try the PI as a fallback.
       let resolvedSaleId = saleId;
       let resolvedSliceIdx = sliceIdx;
-      if ((!resolvedSaleId || resolvedSliceIdx === undefined) && charge.payment_intent) {
+      let resolvedSliceId  = sliceId;
+      if ((!resolvedSaleId || (resolvedSliceIdx === undefined && !resolvedSliceId)) && charge.payment_intent) {
         try {
           const pi = await stripe.paymentIntents.retrieve(charge.payment_intent);
           resolvedSaleId = resolvedSaleId || pi.metadata?.saleId;
           resolvedSliceIdx = resolvedSliceIdx !== undefined ? resolvedSliceIdx : pi.metadata?.sliceIdx;
+          resolvedSliceId = resolvedSliceId || pi.metadata?.sliceId;
         } catch (e) {
           console.error("charge.refunded: failed to load PI:", e.message);
         }
       }
-      if (!resolvedSaleId || resolvedSliceIdx === undefined) {
+      if (!resolvedSaleId || (resolvedSliceIdx === undefined && !resolvedSliceId)) {
         return res.status(200).json({ received: true, ignored: "no saleId/sliceIdx on refund" });
       }
       const existing = await adminGet(`/sales/${resolvedSaleId}`);
@@ -402,9 +451,14 @@ export default async function handler(req, res) {
         return res.status(200).json({ received: true, ignored: "sale deleted" });
       }
       const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
-      const idx = Number(resolvedSliceIdx);
-      if (!schedule[idx]) {
-        return res.status(200).json({ received: true, ignored: "sliceIdx out of range" });
+      let idx = -1;
+      if (resolvedSliceId) idx = schedule.findIndex(s => s && s.sliceId === resolvedSliceId);
+      if (idx === -1 && resolvedSliceIdx !== undefined) {
+        const n = Number(resolvedSliceIdx);
+        if (Number.isInteger(n) && n >= 0 && schedule[n]) idx = n;
+      }
+      if (idx === -1) {
+        return res.status(200).json({ received: true, ignored: "no slice match" });
       }
       // Idempotent — if already marked refunded, skip.
       if (schedule[idx].status === "refunded") {
@@ -425,6 +479,48 @@ export default async function handler(req, res) {
       const amount = ((charge.amount_refunded || 0) / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
       const clientName = existing.clientName || "a customer";
       await slackNotify(`:rewind: *Refund issued* — ${clientName} · ${amount} for ${schedule[idx].label || `slice ${idx}`}. Sale row updated.`);
+    }
+
+    // ─── payment_intent.payment_failed ─────────────────────────────
+    // Off-session PaymentIntents (cron auto-charge, founder retry)
+    // raise this event when Stripe processes the charge async and it
+    // fails. Note: many off-session failures throw SYNCHRONOUSLY from
+    // paymentIntents.create() — cron and charge-sale-balance write
+    // decline state directly on those, so this webhook is a secondary
+    // path that catches async failures only.
+    if (event.type === "payment_intent.payment_failed") {
+      const intent = event.data.object;
+      const saleId = intent.metadata?.saleId;
+      const sliceId = intent.metadata?.sliceId;
+      const sliceIdx = intent.metadata?.sliceIdx;
+      if (saleId && (sliceId || sliceIdx !== undefined)) {
+        const existing = await adminGet(`/sales/${saleId}`);
+        if (existing) {
+          const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
+          let idx = -1;
+          if (sliceId) idx = schedule.findIndex(s => s && s.sliceId === sliceId);
+          if (idx === -1 && sliceIdx !== undefined) {
+            const n = Number(sliceIdx);
+            if (Number.isInteger(n) && n >= 0 && schedule[n]) idx = n;
+          }
+          if (idx !== -1 && schedule[idx].status !== "paid" && schedule[idx].status !== "refunded") {
+            schedule[idx] = {
+              ...schedule[idx],
+              status: "declined",
+              lastDeclineAt: new Date().toISOString(),
+              lastDeclineMessage: intent.last_payment_error?.message || "Payment failed",
+              stripePaymentIntentId: intent.id,
+              // Clear the in-flight attempt key so retries are clean.
+              autoAttemptKey: null,
+            };
+            await adminPatch(`/sales/${saleId}`, { schedule });
+            const amount = ((intent.amount || 0) / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+            const clientName = existing.clientName || "a customer";
+            const label = schedule[idx].label || `slice ${idx}`;
+            await slackNotify(`:no_entry: *Off-session charge failed* — ${clientName} · ${label} ${amount}. Card declined or auth required. Use 'Charge' / 'Retry' in the Sales tab once it's resolved.`);
+          }
+        }
+      }
     }
 
     // ─── invoice.payment_failed ────────────────────────────────────

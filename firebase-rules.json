@@ -8,6 +8,8 @@
     "quotes": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
     "clientRateCards": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
     "clients": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "sherpaCache":     { ".read": false, ".write": false },
+    "sherpaCacheMeta": { ".read": "auth != null && auth.token.role != null", ".write": false },
     "training": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
     "trainingSuggestions": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
     "todos": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
@@ -58,7 +60,10 @@
         "$projectId": {
           ".read": "auth != null",
           "preproductionDoc": {
-            "clientFeedback": { ".write": "auth != null" }
+            "clientFeedback":    { ".write": "auth != null" },
+            "sectionFeedback":   { ".write": "auth != null" },
+            "scriptFeedback":    { ".write": "auth != null" },
+            "reviewSubmittedAt": { ".write": "auth != null" }
           }
         }
       },

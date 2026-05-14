@@ -16,6 +16,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { PACKAGE_CONFIGS } from "./_tiers.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { loadSherpaContext, buildSherpaPromptBlock } from "./_sherpa.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -537,6 +538,20 @@ async function handleScriptGenerate(req, res) {
   const pkg = PACKAGE_CONFIGS[project.packageTier] || PACKAGE_CONFIGS.standard;
   const bt = project.brandTruth?.fields || {};
 
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+  if (process.env.DEBUG_SHERPA === "1") {
+    console.log("sherpa[meta-ads.script]", {
+      source: sherpaCtx.source,
+      length: sherpaCtx.text?.length || 0,
+      clientId: sherpaCtx.clientId || null,
+      errorCode: sherpaCtx.error?.code || null,
+    });
+  }
+
   const formatsBlock = selectedFormatObjects.map((f, i) => {
     const count = f.videoCount != null ? `Count: ${f.videoCount}` : `Count: (not set — distribute evenly over remaining rows)`;
     const hormoziRule = f.isHormozi
@@ -554,7 +569,7 @@ async function handleScriptGenerate(req, res) {
   const userMessage = `CLIENT: ${project.companyName}
 PACKAGE TIER: ${project.packageTier || "(not set)"}
 TOTAL ADS TO PRODUCE: ${totalAds}
-
+${sherpaBlock}
 BRAND TRUTH:
 - Brand Truths: ${bt.brandTruths || "(none)"}
 - Product / Offer: ${bt.productOffer || "(none)"}
@@ -737,6 +752,11 @@ async function handleRewriteCell(req, res) {
   const priorFeedback = buildPriorFeedbackBlock(project, rowId, column);
   const otherScripts = buildOtherScriptsBlock(scriptTable, rowId);
   const formatGuidance = await loadFormatGuidanceBlock(project, row);
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
 
   const systemPrompt = `You rewrite a single field in a Meta Ad script row. You are given the client's Brand Truth, the row's format-specific structural guidance, the full existing row so you can keep voice consistent, the specific field to rewrite, and a free-text instruction from the producer. The field's content must match what that format expects in that section, not generic defaults. Return ONLY the rewritten field value as plain text — no JSON, no markdown, no preamble, no quotes around the value.
 
@@ -750,7 +770,7 @@ HARD CONSTRAINTS:
 - Respect the field rule above — if it says one sentence, write one sentence.`;
 
   const userMessage = `CLIENT: ${project.companyName}
-
+${sherpaBlock}
 BRAND TRUTH:
 - Brand Truths: ${bt.brandTruths || "(none)"}
 - Product / Offer: ${bt.productOffer || "(none)"}
@@ -1279,9 +1299,26 @@ async function handleGenerateBrandTruth(req, res) {
     processingAt: new Date().toISOString(),
   });
 
-  // Pull Sherpa / account-level context so Claude has the client
-  // background to ground the truths. Mirrors Social Organic's pattern.
-  let sherpaBlock = "";
+  // Pull the full Client Sherpa Google Doc + the thin Attio-cache scraps
+  // so Claude grounds the brand truths in the rich brand brief instead
+  // of inferring everything from the transcript alone. Sherpa doc goes
+  // first (authoritative anchor), Attio account context second (saved
+  // reinforcement), transcript/notes last for recency.
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+  if (process.env.DEBUG_SHERPA === "1") {
+    console.log("sherpa[meta-ads.brandtruth]", {
+      source: sherpaCtx.source,
+      length: sherpaCtx.text?.length || 0,
+      clientId: sherpaCtx.clientId || null,
+      errorCode: sherpaCtx.error?.code || null,
+    });
+  }
+
+  let attioBlock = "";
   if (project.attioCompanyId) {
     const accounts = await fbGet("/accounts");
     if (accounts) {
@@ -1291,7 +1328,7 @@ async function handleGenerateBrandTruth(req, res) {
         if (acct.industry) bits.push(`Industry: ${acct.industry}`);
         if (acct.websiteUrl) bits.push(`Website: ${acct.websiteUrl}`);
         if (acct.notes) bits.push(`Notes: ${acct.notes}`);
-        if (bits.length) sherpaBlock = `\nSHERPA (saved client context):\n${bits.join("\n")}\n`;
+        if (bits.length) attioBlock = `\nSHERPA (saved Attio context):\n${bits.join("\n")}\n`;
       }
     }
   }
@@ -1299,7 +1336,7 @@ async function handleGenerateBrandTruth(req, res) {
   const systemPrompt = await getBrandTruthPromptOverride();
   const userMessage = `CLIENT: ${project.companyName}
 ${project.packageTier ? `PACKAGE: ${project.packageTier}` : ""}
-${sherpaBlock}
+${sherpaBlock}${attioBlock}
 PRE-PRODUCTION MEETING TRANSCRIPT:
 """
 ${transcript.slice(0, 12000)}
@@ -1397,6 +1434,12 @@ async function handleRewriteBrandTruthField(req, res) {
     .map(([k, v]) => `${fieldLabelMap[k] || k}:\n${v}`)
     .join("\n\n");
 
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+
   const systemPrompt = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. You're editing ONE field of a client's Brand Truth block used to drive Meta ad scripts.
 
 RULES:
@@ -1409,7 +1452,7 @@ RULES:
 
   const userMessage = `CLIENT: ${project.companyName}
 ${project.packageTier ? `PACKAGE: ${project.packageTier}` : ""}
-
+${sherpaBlock}
 OTHER BRAND FIELDS (for context — do NOT modify):
 ${contextBits || "(no other fields filled yet)"}
 
@@ -1447,6 +1490,39 @@ Return the new value for the "${targetLabel}" field now.`;
   await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
 
   return res.status(200).json({ ok: true, value: cleaned });
+}
+
+// Manual force-refresh of a project's cached Client Sherpa Google Doc.
+// Triggered by the "Refresh Sherpa" button on the Brand Truth tab. The
+// regular AI handlers auto-fetch on first run, so this is only needed
+// when the producer edits the underlying Google Doc and wants the
+// dashboard to pick up the new content before regenerating.
+async function handleRefreshSherpa(req, res) {
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const ctx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+    forceRefresh: true,
+  });
+  if (ctx.error) {
+    return res.status(200).json({
+      ok: false,
+      source: ctx.source,
+      clientId: ctx.clientId || null,
+      error: ctx.error,
+    });
+  }
+  return res.status(200).json({
+    ok: true,
+    source: ctx.source,
+    clientId: ctx.clientId || null,
+    fetchedAt: ctx.fetchedAt || null,
+  });
 }
 
 // Suggest Facebook Ad Library scrape inputs from the brand truth.
@@ -1561,6 +1637,7 @@ export default async function handler(req, res) {
       case "pushToRunsheet":        return await handlePushToRunsheet(req, res);
       case "generateBrandTruth":     return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField": return await handleRewriteBrandTruthField(req, res);
+      case "refreshSherpa":          return await handleRefreshSherpa(req, res);
       case "suggestAdLibraryInputs": return await handleSuggestAdLibraryInputs(req, res);
       default:                       return res.status(400).json({ error: `Unknown action: ${action}` });
     }

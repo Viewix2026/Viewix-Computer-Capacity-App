@@ -17,7 +17,8 @@
 import { useState, useEffect, useRef } from "react";
 import { authFetch, fbSet, fbUpdate, fbListenSafe } from "../firebase";
 import { CellRewriteModal, EditableField } from "./shared/CellRewriteModal";
-import { preproductionShareUrl } from "../utils";
+import { SherpaStatusRow } from "./shared/SherpaStatusRow";
+import { matchSherpaClientRecord, preproductionShareUrl } from "../utils";
 
 // Tab registry — edit this list + a switch arm below to add/rename
 // tabs. Each entry has a key (matches project.tab), label (shown in
@@ -36,9 +37,19 @@ function effectiveTab(project) {
   return project?.tab || "brandTruth";
 }
 
-export function MetaAdsResearch({ project, onBack, onPatch, onDelete }) {
+export function MetaAdsResearch({ project, accounts, clients, sherpaCacheMeta, onBack, onPatch, onDelete }) {
   const tab = effectiveTab(project);
   const approvals = project?.approvals || {};
+  // Resolve the /clients record that owns this project's Sherpa Google Doc.
+  // Mirrors api/_sherpa.js matchSherpaClient (attioId exact match → fuzzy
+  // name fallback) so the status row reflects the same client record the
+  // AI handlers will read from.
+  const linkedClient = matchSherpaClientRecord({
+    companyName: project?.companyName,
+    attioCompanyId: project?.attioCompanyId,
+    clients,
+  });
+  const sherpaMeta = linkedClient ? (sherpaCacheMeta?.[linkedClient.id] || null) : null;
 
   const btn = (key) => {
     const t = META_TABS.find(x => x.key === key);
@@ -104,7 +115,12 @@ export function MetaAdsResearch({ project, onBack, onPatch, onDelete }) {
       </div>
 
       {tab === "brandTruth" && (
-        <BrandTruthStep project={project} onPatch={onPatch} />
+        <BrandTruthStep
+          project={project}
+          linkedClient={linkedClient}
+          sherpaMeta={sherpaMeta}
+          onPatch={onPatch}
+        />
       )}
       {tab === "research" && (
         <ResearchStep project={project} onPatch={onPatch} />
@@ -144,7 +160,7 @@ const META_BRAND_TRUTH_FIELDS = [
   { key: "competitors",     label: "Competitors / Category",   hint: "Who are they up against? What does the prospect's feed look like filled with competitor content?" },
 ];
 
-function BrandTruthStep({ project, onPatch }) {
+function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
   const bt = project?.brandTruth || {};
   const fields = bt.fields || {};
   const [transcript, setTranscript] = useState(bt.transcript || "");
@@ -160,6 +176,30 @@ function BrandTruthStep({ project, onPatch }) {
   const processing = !!processingAt && (Date.now() - new Date(processingAt).getTime() < 5 * 60 * 1000);
   const [localProcError, setLocalProcError] = useState(null);
   const [rewriteTarget, setRewriteTarget] = useState(null);
+  const [refreshingSherpa, setRefreshingSherpa] = useState(false);
+  const [sherpaRefreshError, setSherpaRefreshError] = useState(null);
+
+  const refreshSherpa = async () => {
+    setSherpaRefreshError(null);
+    setRefreshingSherpa(true);
+    try {
+      const r = await authFetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refreshSherpa", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      if (d.ok === false && d.error) {
+        throw new Error(d.error.message || d.error.code || "Sherpa fetch failed");
+      }
+      // Firebase listener on /sherpaCacheMeta rehydrates the status row.
+    } catch (e) {
+      setSherpaRefreshError(e.message);
+    } finally {
+      setRefreshingSherpa(false);
+    }
+  };
 
   // Debounced writes for transcript + notes so the producer can type
   // without fighting the network. 500ms matches Social Organic.
@@ -241,6 +281,13 @@ function BrandTruthStep({ project, onPatch }) {
 
       {/* Input card: transcript + notes + Begin Processing */}
       <div style={{ marginBottom: 20, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 18 }}>
+        <SherpaStatusRow
+          linkedClient={linkedClient}
+          meta={sherpaMeta}
+          refreshing={refreshingSherpa}
+          refreshError={sherpaRefreshError}
+          onRefresh={refreshSherpa}
+        />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
           <FieldBox label="Pre-production transcript" hint="Paste the Fathom / meeting transcript from the client kickoff. Required.">
             <textarea value={transcript} onChange={e => setTranscript(e.target.value)} rows={8} placeholder="Paste the full transcript here..."

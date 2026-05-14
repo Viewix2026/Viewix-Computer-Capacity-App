@@ -1,4 +1,28 @@
 import { GST_RATE, scheduleForVideoType, computeStripeSurcharge } from "../api/_tiers.js";
+import {
+  newSliceId,
+  seedCustomSlices,
+  validateCustomSlices,
+  buildCustomSchedule,
+  sumCustomSlicesExGst,
+  sydneyDateKey,
+  displayOffsetUnit,
+  displayOffsetValue,
+} from "../api/_sale-schedules.js";
+
+// Re-export the Custom-schedule helpers so frontend code has a single
+// import surface. Server endpoints import from api/_sale-schedules.js
+// directly.
+export {
+  newSliceId,
+  seedCustomSlices,
+  validateCustomSlices,
+  buildCustomSchedule,
+  sumCustomSlicesExGst,
+  sydneyDateKey,
+  displayOffsetUnit,
+  displayOffsetValue,
+};
 
 // ─── Date Helpers ───
 export function todayKey() {
@@ -342,6 +366,12 @@ export function computeGst(totalExGst) {
 // status is "pending" for every slice at build time — the webhook
 // flips it to "paid" with paidAt + stripe refs as Stripe fires events.
 export function buildSchedule(videoType, totalExGst, depositDate) {
+  // Custom sales derive their schedule from sale.customSlices[] via
+  // buildCustomSchedule() — refuse to handle them through the preset
+  // path so a forgotten branch can't silently produce a 50/50 default.
+  if (videoType === "custom") {
+    throw new Error("buildSchedule: videoType 'custom' must use buildCustomSchedule(sale.customSlices, …)");
+  }
   const { grandTotal } = computeGst(totalExGst);
   const cfg = scheduleForVideoType(videoType);
   const anchor = depositDate ? new Date(depositDate) : new Date();
@@ -488,6 +518,22 @@ export function matchSherpaForName(targetName, clients) {
   });
   if (fwMatches.length === 1) return fwMatches[0];
   return null;
+}
+
+// Mirrors api/_sherpa.js matchSherpaClient so the Brand Truth status row
+// resolves the same /clients record the server will read from. Without
+// this, a client whose attioId hits an exact backend match but whose
+// name has multiple ambiguous fuzzy matches would surface the wrong (or
+// no) cache state on the UI while the AI uses the attio-matched record.
+// Preference: attioId exact → fuzzy name (delegated to matchSherpaForName
+// so the 3-tier name logic stays single-sourced).
+export function matchSherpaClientRecord({ companyName, attioCompanyId, clients }) {
+  const list = Array.isArray(clients) ? clients : Object.values(clients || {}).filter(Boolean);
+  if (attioCompanyId) {
+    const byAttio = list.find(c => c?.attioId && c.attioId === attioCompanyId);
+    if (byAttio) return byAttio;
+  }
+  return matchSherpaForName(companyName, list);
 }
 
 // ─── Delivery Helpers ───
