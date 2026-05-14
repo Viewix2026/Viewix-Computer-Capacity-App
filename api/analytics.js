@@ -367,6 +367,9 @@ async function handleRefresh(req, res, body) {
   }
 
   const competitors = config.competitors?.[platform] || [];
+  const competitorHandlesSeen = competitors
+    .map(c => c?.handle)
+    .filter(Boolean);
   let runningClientCost = perClientCost
     + (runIds.client ? clientRunCost : 0)
     + (runIds.clientProfile ? profileRunCost : 0);
@@ -432,6 +435,16 @@ async function handleRefresh(req, res, body) {
     mode,
     runIds,
     errors,
+    diagnostics: {
+      competitorsConfigured: competitorHandlesSeen.length,
+      competitorHandlesSeen,
+      estimatedClientRunCostUsd: +clientRunCost.toFixed(4),
+      estimatedTotalCostUsd: +runningGlobalCost.toFixed(4),
+      perClientCostBeforeUsd: +perClientCost.toFixed(4),
+      globalCostBeforeUsd: +globalCost.toFixed(4),
+      perClientCapUsd: perClientCap,
+      globalCapUsd: globalCap,
+    },
     message: `Started ${totalStarted} Apify run(s). Results land in /analytics/videos/${accountId}/ via webhook.`,
   });
 }
