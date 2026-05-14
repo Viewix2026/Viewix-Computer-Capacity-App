@@ -655,6 +655,29 @@ function appendFeedbackEntry(existing, text) {
   return [...arr, { text, addedAt: new Date().toISOString() }];
 }
 
+// Pull the format's own structural guidance from the FormatLibrary so
+// per-section rewrites understand what each box is supposed to contain
+// for THIS format. Without it, Claude treats every Hook the same way
+// regardless of whether the row's format is Hormozi, Contrarian Hooks,
+// Day in the Life, etc. The format's `videoAnalysis` is the free-text
+// description producers already write when saving a library entry —
+// reusing it avoids new fields and re-authoring of existing formats.
+async function loadFormatGuidanceBlock(project, row) {
+  if (!row || !row.formatName) return "";
+  const wanted = String(row.formatName).trim().toLowerCase();
+  if (!wanted) return "";
+  const selected = Array.isArray(project?.selectedFormats) ? project.selectedFormats : [];
+  const match = selected.find(s => String(s.formatName || "").trim().toLowerCase() === wanted);
+  if (!match || !match.formatLibraryId) return "";
+  const fmt = await fbGet(`/formatLibrary/${match.formatLibraryId}`);
+  if (!fmt) return "";
+  const parts = [];
+  if (fmt.videoAnalysis) parts.push(`Video analysis:\n${fmt.videoAnalysis}`);
+  if (fmt.structureInstructions) parts.push(`Structural instructions:\n${fmt.structureInstructions}`);
+  if (parts.length === 0) return "";
+  return `\nFORMAT GUIDANCE — "${fmt.name || row.formatName}" (each section of this script must follow these patterns, not generic Hormozi defaults):\n${parts.join("\n\n")}\n`;
+}
+
 async function handleRewriteCell(req, res) {
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
@@ -676,8 +699,9 @@ async function handleRewriteCell(req, res) {
   const bt = project.brandTruth?.fields || {};
   const priorFeedback = buildPriorFeedbackBlock(project, rowId, column);
   const otherScripts = buildOtherScriptsBlock(scriptTable, rowId);
+  const formatGuidance = await loadFormatGuidanceBlock(project, row);
 
-  const systemPrompt = `You rewrite a single field in a Meta Ad script row. You are given the client's Brand Truth, the full existing row so you can keep voice consistent, the specific field to rewrite, and a free-text instruction from the producer. Return ONLY the rewritten field value as plain text — no JSON, no markdown, no preamble, no quotes around the value.
+  const systemPrompt = `You rewrite a single field in a Meta Ad script row. You are given the client's Brand Truth, the row's format-specific structural guidance, the full existing row so you can keep voice consistent, the specific field to rewrite, and a free-text instruction from the producer. The field's content must match what that format expects in that section, not generic defaults. Return ONLY the rewritten field value as plain text — no JSON, no markdown, no preamble, no quotes around the value.
 
 FIELD: ${colMeta.label}
 FIELD RULE: ${colMeta.rule}
@@ -698,7 +722,7 @@ BRAND TRUTH:
 - Pain Points: ${bt.painPoints || "(none)"}
 - Desired Outcome: ${bt.desiredOutcome || "(none)"}
 - Proof Points: ${bt.proofPoints || "(none)"}
-${priorFeedback}
+${formatGuidance}${priorFeedback}
 EXISTING ROW (for voice consistency):
 - Video Name: ${row.videoName || ""}
 - Format: ${row.formatName || ""}
@@ -801,6 +825,7 @@ async function runWholeScriptRewrite({ project, scriptTable, row, instruction, a
   const bt = project.brandTruth?.fields || {};
   const priorFeedback = buildPriorFeedbackBlock(project, includeCurrentRowFeedback ? row.id : null, null);
   const otherScripts = buildOtherScriptsBlock(scriptTable, row.id);
+  const formatGuidance = await loadFormatGuidanceBlock(project, row);
 
   const userMessage = `CLIENT: ${project.companyName}
 
@@ -812,7 +837,7 @@ BRAND TRUTH:
 - Pain Points: ${bt.painPoints || "(none)"}
 - Desired Outcome: ${bt.desiredOutcome || "(none)"}
 - Proof Points: ${bt.proofPoints || "(none)"}
-${priorFeedback}
+${formatGuidance}${priorFeedback}
 CURRENT SCRIPT (you are rewriting this — all seven fields together):
 - Video Name: ${row.videoName || ""}
 - Format: ${row.formatName || ""}
@@ -947,6 +972,146 @@ async function handleRewriteAllScripts(req, res) {
   await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
 
   return res.status(200).json({ success: true, succeeded, failed, skipped, total: results.length, errors });
+}
+
+// ────────────────────────────────────────────────────────────────
+// Push to Runsheets — mirrors the Social Organic pattern at
+// api/social-organic.js:handlePushToRunsheet, adapted for Meta Ads.
+// Same destination (/runsheets/{id}) so the Runsheets UI lights up
+// regardless of which preproduction flow seeded it.
+// ────────────────────────────────────────────────────────────────
+
+async function handlePushToRunsheet(req, res) {
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const scriptTable = Array.isArray(project.scriptTable) ? project.scriptTable : [];
+  if (scriptTable.length === 0) {
+    return res.status(400).json({ error: "No script rows — generate the scripts first" });
+  }
+
+  // Server-side guard — UI also disables the button when runsheetHandoff
+  // is set but a double-click in the gap between Firebase listener
+  // updates would otherwise create a duplicate runsheet.
+  if (project.runsheetHandoff?.runsheetId) {
+    return res.status(409).json({ error: "Already pushed to Runsheets", runsheetId: project.runsheetHandoff.runsheetId });
+  }
+
+  const runsheetId = `rs-${Date.now()}`;
+  const now = new Date().toISOString();
+
+  // Map Meta Ads scriptTable rows onto the Runsheets video shape.
+  // Meta Ads carries the producer-typed videoName ("01_TM_PipelineCertainty_PA")
+  // so we lead with that and fall back to "Video N" only for legacy
+  // rows missing the field. The seven Hormozi-blueprint columns map
+  // 1:1 onto the Runsheet schema; the SO-only fields (textHook,
+  // visualHook, scriptNotes, props, contentStyle) stay empty.
+  const videos = scriptTable.map((row, i) => ({
+    id: `v-${Date.now()}-${i}`,
+    videoName: row.videoName || `Video ${i + 1}`,
+    formatName: row.formatName || "",
+    contentStyle: "",
+    hook: row.hook || "",
+    textHook: "",
+    visualHook: "",
+    scriptNotes: "",
+    props: "",
+    people: "",
+    explainThePain: row.explainPain || "",
+    results: row.results || "",
+    theOffer: row.offer || "",
+    whyTheOffer: row.whyOffer || "",
+    cta: row.cta || "",
+    metaAdHeadline: row.headline || "",
+    metaAdCopy: row.adCopy || "",
+    motivatorType: row.motivatorType || "",
+    audienceType: row.audienceType || "",
+  }));
+
+  // Default shoot day template — same five-slot AU-production timings
+  // as the SO handler. Producers tweak / extend on the day; this just
+  // saves them the blank-state setup.
+  const tsBase = Date.now();
+  const shootDays = [{
+    id: `sd-${tsBase}-0`,
+    label: "Shoot 1",
+    date: "",
+    location: "",
+    startTime: "09:00",
+    endTime: "16:00",
+    timeSlots: [
+      { id: `ts-${tsBase}-0`, startTime: "09:00", endTime: "10:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${tsBase}-1`, startTime: "10:30", endTime: "12:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${tsBase}-2`, startTime: "12:00", endTime: "13:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "Lunch", isBreak: true },
+      { id: `ts-${tsBase}-3`, startTime: "13:00", endTime: "14:30", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+      { id: `ts-${tsBase}-4`, startTime: "14:30", endTime: "16:00", sceneType: "", videoIds: [], sceneElements: [], location: "", props: "", people: "", notes: "" },
+    ],
+  }];
+
+  const runsheet = {
+    id: runsheetId,
+    projectId,
+    projectType: "metaAds",
+    companyName: project.companyName || "",
+    status: "draft",
+    producerId: "",
+    directorId: "",
+    clientContacts: [],
+    shootDays,
+    videos,
+    createdAt: now,
+    updatedAt: now,
+    sourceType: "metaAds",
+    sourceProjectId: projectId,
+  };
+
+  await fbSet(`/runsheets/${runsheetId}`, runsheet);
+  // Meta Ads META_TABS tops out at "script" — staying on that tab lets
+  // the producer see the "✓ Pushed" indicator without dropping into a
+  // tab key the UI can't render. Only the status + approval flip here.
+  await fbPatch(`/preproduction/metaAds/${projectId}`, {
+    runsheetHandoff: { runsheetId, pushedAt: now },
+    status: "exported",
+    updatedAt: now,
+  });
+  await fbSet(`/preproduction/metaAds/${projectId}/approvals/script`, now);
+
+  // Seed video-name subtasks on the linked /projects/{id} record, same
+  // pattern as Social Organic — each script row becomes a subtask under
+  // the parent project so producers see the videos in the Projects tab.
+  // Best-effort: failures are logged but don't fail the runsheet push.
+  try {
+    const allProjects = (await fbGet(`/projects`)) || {};
+    const linkedEntry = Object.entries(allProjects).find(([, pr]) => (pr?.links || {}).preprodId === projectId);
+    if (linkedEntry) {
+      const [parentId, parent] = linkedEntry;
+      const existingCount = Object.keys(parent.subtasks || {}).length;
+      for (let i = 0; i < scriptTable.length; i++) {
+        const row = scriptTable[i];
+        const stId = `st-vid-${Date.now()}-${i}`;
+        const videoName = (row.videoName || "").trim() || (row.formatName || "").trim() || `Video ${i + 1}`;
+        await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
+          id: stId,
+          name: videoName,
+          status: "stuck",
+          stage: "edit",
+          startDate: null, endDate: null, startTime: null, endTime: null,
+          assigneeIds: [],
+          assigneeId: null,
+          source: "video",
+          order: existingCount + i,
+          createdAt: now, updatedAt: now,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("Failed to seed video subtasks on project:", e);
+  }
+
+  return res.status(200).json({ success: true, runsheetId, videoCount: videos.length });
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1285,6 +1450,7 @@ export default async function handler(req, res) {
       case "rewriteCell":           return await handleRewriteCell(req, res);
       case "rewriteWholeScript":    return await handleRewriteWholeScript(req, res);
       case "rewriteAllScripts":     return await handleRewriteAllScripts(req, res);
+      case "pushToRunsheet":        return await handlePushToRunsheet(req, res);
       case "generateBrandTruth":     return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField": return await handleRewriteBrandTruthField(req, res);
       case "suggestAdLibraryInputs": return await handleSuggestAdLibraryInputs(req, res);
