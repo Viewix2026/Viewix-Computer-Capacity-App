@@ -10,12 +10,13 @@
 
 import { useState, useEffect, useRef, memo } from "react";
 import { authFetch, fbSet, fbSetAsync, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
-import { logoBg, makeShortId, preproductionShareUrl } from "../utils";
+import { logoBg, makeShortId, matchSherpaForName, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
 import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewriteModal";
 import { DescriptionField } from "./shared/DescriptionField";
 import { ReelPreview } from "./shared/ReelPreview";
+import { SherpaStatusRow } from "./shared/SherpaStatusRow";
 
 // Read a fetch Response as JSON, but fall back gracefully when the
 // body isn't actually JSON. Vercel timeout pages, gateway 502/504
@@ -129,7 +130,7 @@ function defaultRange(days = DEFAULTS.dateRangeDays) {
 // button can live in the top header (matching the Meta Ads layout).
 // When they're omitted the component falls back to local state so this
 // file stays standalone-usable.
-export function SocialOrganicResearch({ accounts, creating: creatingProp, onCreatingChange, deepLinkProjectId }) {
+export function SocialOrganicResearch({ accounts, clients, sherpaCacheMeta, creating: creatingProp, onCreatingChange, deepLinkProjectId }) {
   const [projects, setProjects] = useState({});
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [creatingLocal, setCreatingLocal] = useState(false);
@@ -197,6 +198,8 @@ export function SocialOrganicResearch({ accounts, creating: creatingProp, onCrea
       <ResearchDetail
         project={activeProject}
         accounts={accounts}
+        clients={clients}
+        sherpaCacheMeta={sherpaCacheMeta}
         findAccount={findAccount}
         getAccountLogo={getAccountLogo}
         getAccountLogoBg={getAccountLogoBg}
@@ -415,10 +418,15 @@ function CreateProjectModal({ accounts, onCancel, onCreate }) {
 // ═══════════════════════════════════════════
 // DETAIL VIEW
 // ═══════════════════════════════════════════
-function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAccountLogoBg, onBack, onPatch, onDelete }) {
+function ResearchDetail({ project, accounts, clients, sherpaCacheMeta, findAccount, getAccountLogo, getAccountLogoBg, onBack, onPatch, onDelete }) {
   const logo = getAccountLogo(project.companyName, project.attioCompanyId);
   const lbg = logoBg(getAccountLogoBg(project.companyName, project.attioCompanyId));
   const linkedAccount = findAccount(project.companyName, project.attioCompanyId);
+  // Resolve the /clients record that owns this project's Sherpa Google Doc.
+  // Same fuzzy-match logic the server uses, so the status row reflects the
+  // same client record the AI handlers will read from.
+  const linkedClient = matchSherpaForName(project.companyName, clients);
+  const sherpaMeta = linkedClient ? (sherpaCacheMeta?.[linkedClient.id] || null) : null;
   const [scraping, setScraping] = useState(false);
   const [scrapeError, setScrapeError] = useState(null);
 
@@ -545,7 +553,13 @@ function ResearchDetail({ project, accounts, findAccount, getAccountLogo, getAcc
       <TabBar project={project} onChange={(nextTab) => onPatch({ tab: nextTab })} />
 
       {tab === "brandTruth" && (
-        <BrandTruthStep project={project} linkedAccount={linkedAccount} onPatch={onPatch} />
+        <BrandTruthStep
+          project={project}
+          linkedAccount={linkedAccount}
+          linkedClient={linkedClient}
+          sherpaMeta={sherpaMeta}
+          onPatch={onPatch}
+        />
       )}
       {tab === "research" && (
         <ResearchStep project={project} linkedAccount={linkedAccount} onPatch={onPatch} />
@@ -3181,7 +3195,7 @@ const BRAND_TRUTH_FIELDS = [
   { key: "language",                label: "Language",                 multi: true },
 ];
 
-function BrandTruthStep({ project, linkedAccount, onPatch }) {
+function BrandTruthStep({ project, linkedAccount, linkedClient, sherpaMeta, onPatch }) {
   const bt = project.brandTruth || {};
   const fields = bt.fields || {};
   const [transcript, setTranscript] = useState(bt.transcript || "");
@@ -3189,6 +3203,30 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const [rewriteTarget, setRewriteTarget] = useState(null);
+  const [refreshingSherpa, setRefreshingSherpa] = useState(false);
+  const [sherpaRefreshError, setSherpaRefreshError] = useState(null);
+
+  const refreshSherpa = async () => {
+    setSherpaRefreshError(null);
+    setRefreshingSherpa(true);
+    try {
+      const r = await authFetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refreshSherpa", projectId: project.id }),
+      });
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      if (d.ok === false && d.error) {
+        throw new Error(d.error.message || d.error.code || "Sherpa fetch failed");
+      }
+      // Firebase listener on /sherpaCacheMeta rehydrates the status row.
+    } catch (e) {
+      setSherpaRefreshError(e.message);
+    } finally {
+      setRefreshingSherpa(false);
+    }
+  };
 
   // Debounced writes for transcript + notes so the producer can leave and
   // return. 500ms is comfortable — no perceptible typing lag.
@@ -3266,7 +3304,7 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)" }}>Inputs</div>
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-              Paste the preproduction meeting transcript. Add notes on anything the client emphasised. Claude reads both plus the Sherpa-saved account context.
+              Paste the preproduction meeting transcript. Add notes on anything the client emphasised. Claude reads both plus the Client Sherpa Google Doc.
               {linkedAccount && ` Sherpa linked to "${linkedAccount.companyName}".`}
             </div>
           </div>
@@ -3276,6 +3314,14 @@ function BrandTruthStep({ project, linkedAccount, onPatch }) {
             {generating ? "Generating…" : bt.generatedAt ? "Regenerate" : "Generate Brand Truth"}
           </button>
         </div>
+
+        <SherpaStatusRow
+          linkedClient={linkedClient}
+          meta={sherpaMeta}
+          refreshing={refreshingSherpa}
+          refreshError={sherpaRefreshError}
+          onRefresh={refreshSherpa}
+        />
 
         <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 5 }}>
           Preproduction meeting transcript

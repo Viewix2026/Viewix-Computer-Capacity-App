@@ -21,6 +21,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { processApifyRun } from "./_apifyProcess.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { loadSherpaContext, buildSherpaPromptBlock } from "./_sherpa.js";
 import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -1075,7 +1076,7 @@ function chunkSelectedFormatsForScripting(formats, batchSize) {
   return batches;
 }
 
-function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample }) {
+function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample, sherpaBlock = "" }) {
   // New schema sources — Brand Truth and client research are already approved.
   const bt = project.brandTruth?.fields || {};
   const competitorPosts = Array.isArray(project.competitorScrape?.posts) ? project.competitorScrape.posts : [];
@@ -1125,7 +1126,7 @@ function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExamp
   return `CLIENT: ${project.companyName}
 ${project.videoType ? `DEAL TYPE: ${project.videoType}` : ""}
 ${project.numberOfVideos ? `TOTAL VIDEOS TO SHOOT THIS ROUND: ${project.numberOfVideos}` : ""}
-
+${sherpaBlock}
 APPROVED BRAND TRUTH (from Tab 1):
 - Brand Truths: ${bt.brandTruths || "(none)"}
 - Brand Ambitions: ${bt.brandAmbitions || "(none)"}
@@ -1371,10 +1372,26 @@ async function handleGenerateScript(req, res) {
 
   const batches = chunkSelectedFormatsForScripting(selectedFormatObjects, BATCH_SIZE);
 
+  // Load the Client Sherpa ONCE before fanning out — otherwise every
+  // batch's call to buildScriptUserMessage would re-fetch the same doc
+  // on a cold cache. With 4+ parallel batches that's wasted bandwidth
+  // and risks a 429 from Google.
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+  console.log("sherpa[social-organic.script]", {
+    source: sherpaCtx.source,
+    length: sherpaCtx.text?.length || 0,
+    clientId: sherpaCtx.clientId || null,
+    errorCode: sherpaCtx.error?.code || null,
+  });
+
   let allRows;
   try {
     const responses = await Promise.all(batches.map(batch => {
-      const userMessage = buildScriptUserMessage({ project, selectedFormatObjects: batch, fantasticExample });
+      const userMessage = buildScriptUserMessage({ project, selectedFormatObjects: batch, fantasticExample, sherpaBlock });
       return callClaude({
         model: SCRIPT_MODEL,
         systemPrompt,
@@ -1480,10 +1497,16 @@ async function handleRewriteScriptSection(req, res) {
   const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
   if (!project) return res.status(404).json({ error: "Project not found" });
 
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+
   const systemPrompt = `You rewrite a single field of a social video preproduction doc for Viewix. Return ONLY the rewritten value as plain text. No markdown, no preamble, no code fences. Never use em dashes; use commas or full stops instead. Keep length comparable to the current value unless the instruction asks otherwise.`;
 
   const userMessage = `CLIENT: ${project.companyName}
-FIELD PATH: ${path}
+${sherpaBlock}FIELD PATH: ${path}
 
 CURRENT VALUE:
 """
@@ -1555,6 +1578,12 @@ async function handleRewriteScriptRow(req, res) {
   const bt = project.brandTruth?.fields || {};
   const btBlock = Object.entries(bt).filter(([, v]) => v && v.trim()).map(([k, v]) => `${k}:\n${v}`).join("\n\n");
 
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+
   const systemPrompt = `You rewrite a single row of a social video script table for Viewix. The producer has asked for specific changes to this whole video idea. Rewrite every editable field (contentStyle, hook, textHook, visualHook, scriptNotes, props) as one coherent idea. Keep the formatName unchanged — format is locked. Follow the producer's instruction literally.
 
 RULES:
@@ -1577,7 +1606,7 @@ RULES:
 }`;
 
   const userMessage = `CLIENT: ${project.companyName}
-
+${sherpaBlock}
 BRAND TRUTH CONTEXT:
 ${btBlock || "(not filled)"}
 
@@ -1697,10 +1726,24 @@ async function handleGenerateBrandTruth(req, res) {
     return res.status(400).json({ error: "Paste a transcript or producer notes before generating." });
   }
 
-  // Pull Sherpa / account-level context so Claude has the client background
-  // it needs to ground the truths. We read the linked account record if the
-  // webhook stored an attioCompanyId; otherwise we skip Sherpa.
-  let sherpaBlock = "";
+  // Pull the full Client Sherpa Google Doc + the thin Attio-cache scraps
+  // so Claude grounds the brand truths in the rich brand brief instead
+  // of inferring everything from the transcript alone. Sherpa doc goes
+  // first (authoritative anchor), Attio account context second (saved
+  // reinforcement), transcript/notes last for recency.
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+  console.log("sherpa[social-organic.brandtruth]", {
+    source: sherpaCtx.source,
+    length: sherpaCtx.text?.length || 0,
+    clientId: sherpaCtx.clientId || null,
+    errorCode: sherpaCtx.error?.code || null,
+  });
+
+  let attioBlock = "";
   if (project.attioCompanyId) {
     const accounts = await fbGet("/accounts");
     if (accounts) {
@@ -1713,7 +1756,7 @@ async function handleGenerateBrandTruth(req, res) {
         if (Array.isArray(acct.competitors) && acct.competitors.length) {
           bits.push(`Saved competitors: ${acct.competitors.map(c => c.handle || c.displayName).filter(Boolean).join(", ")}`);
         }
-        if (bits.length) sherpaBlock = `\nSHERPA (saved client context):\n${bits.join("\n")}\n`;
+        if (bits.length) attioBlock = `\nSHERPA (saved Attio context):\n${bits.join("\n")}\n`;
       }
     }
   }
@@ -1722,7 +1765,7 @@ async function handleGenerateBrandTruth(req, res) {
   const userMessage = `CLIENT: ${project.companyName}
 ${project.videoType ? `DEAL TYPE: ${project.videoType}` : ""}
 ${project.numberOfVideos ? `TOTAL VIDEOS THIS ROUND: ${project.numberOfVideos}` : ""}
-${sherpaBlock}
+${sherpaBlock}${attioBlock}
 PREPRODUCTION MEETING TRANSCRIPT:
 """
 ${transcript.slice(0, 12000) || "(none)"}
@@ -1806,10 +1849,16 @@ async function handleRewriteBrandTruthField(req, res) {
   const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
   if (!project) return res.status(404).json({ error: "Project not found" });
 
+  const sherpaCtx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+  });
+  const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
+
   const systemPrompt = `You rewrite a single field of a Brand Truth doc for Viewix. Return ONLY the rewritten value as plain text. No markdown, no preamble, no code fences. Never use em dashes; use commas or full stops instead. Keep length comparable to the current value unless the instruction asks otherwise.`;
 
   const userMessage = `CLIENT: ${project.companyName}
-FIELD: ${path}
+${sherpaBlock}FIELD: ${path}
 
 CURRENT VALUE:
 """
@@ -1854,6 +1903,39 @@ Return only the rewritten value.`;
   await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
 
   return res.status(200).json({ success: true, newValue });
+}
+
+// Manual force-refresh of a project's cached Client Sherpa Google Doc.
+// Triggered by the "Refresh Sherpa" button on the Brand Truth tab. The
+// regular AI handlers auto-fetch on first run, so this is only needed
+// when the producer edits the underlying Google Doc and wants the
+// dashboard to pick up the new content before regenerating.
+async function handleRefreshSherpa(req, res) {
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const ctx = await loadSherpaContext({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+    forceRefresh: true,
+  });
+  if (ctx.error) {
+    return res.status(200).json({
+      ok: false,
+      source: ctx.source,
+      clientId: ctx.clientId || null,
+      error: ctx.error,
+    });
+  }
+  return res.status(200).json({
+    ok: true,
+    source: ctx.source,
+    clientId: ctx.clientId || null,
+    fetchedAt: ctx.fetchedAt || null,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3082,6 +3164,8 @@ export default async function handler(req, res) {
         return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField":
         return await handleRewriteBrandTruthField(req, res);
+      case "refreshSherpa":
+        return await handleRefreshSherpa(req, res);
       case "startClientScrape":
         return await handleStartClientScrape(req, res);
       case "startCompetitorScrape":
