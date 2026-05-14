@@ -1422,7 +1422,16 @@ async function handleGenerateScript(req, res) {
     // Renumber video rows sequentially across batches — each batch
     // numbers its own scriptTable starting from 1, so without this
     // a 24-idea generation would produce 1,2,...,12,1,2,...,12.
-    allRows.forEach((row, i) => { row.videoNumber = i + 1; });
+    //
+    // Each row also gets a stable `reviewId` so the client-side review
+    // page can attach feedback (reactions, comments) to a row identity
+    // that survives reorders, regenerations, and partial row deletes —
+    // array indices alone would silently rebind feedback to the wrong
+    // script the moment rows shift.
+    allRows.forEach((row, i) => {
+      row.videoNumber = i + 1;
+      if (!row.reviewId) row.reviewId = `rv_${crypto.randomBytes(6).toString("hex")}`;
+    });
   } catch (e) {
     return res.status(502).json({ error: "Claude call failed", detail: e.message });
   }
@@ -1446,15 +1455,51 @@ async function handleGenerateScript(req, res) {
   // New 7-tab schema: clientContext / socialSnapshot / targetViewer are all
   // owned by Tab 1 (project.brandTruth.fields). Tab 7's preproductionDoc is
   // just formats + scriptTable, keeping the doc focused on what clients see.
+  // Regeneration: anything tied to row identity (scriptFeedback) or to
+  // the previous slate of scripts (sectionFeedback.scripts,
+  // reviewSubmittedAt) gets snapshotted under feedbackArchive/{prevRunId}
+  // rather than carried forward, because the new rows have fresh
+  // reviewIds and the new slate is a different artefact. Brand and
+  // formats section verdicts carry forward because their referents
+  // (brand truth fields, formats rebuilt from the library) are stable
+  // across regen. The legacy per-cell clientFeedback also carries
+  // forward unchanged — it's stored under array indices and existing
+  // behaviour preserves it.
+  const prevDoc = project.preproductionDoc || {};
+  const prevRunId = prevDoc.runId || `legacy_${Date.now()}`;
+  const hasScriptArchivable =
+    Object.keys(prevDoc.scriptFeedback || {}).length > 0
+    || prevDoc.sectionFeedback?.scripts
+    || prevDoc.reviewSubmittedAt;
+
+  // Strip the "scripts" verdict out of the carried-forward sectionFeedback.
+  const carriedSections = { ...(prevDoc.sectionFeedback || {}) };
+  delete carriedSections.scripts;
+
   const preproductionDoc = {
     formats: formatsSection,
     scriptTable: Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [],
     generatedAt: new Date().toISOString(),
     modelUsed: SCRIPT_MODEL,
     runId,
-    rewriteHistory: project.preproductionDoc?.rewriteHistory || [],
-    clientFeedback: project.preproductionDoc?.clientFeedback || {},
+    rewriteHistory:    prevDoc.rewriteHistory    || [],
+    clientFeedback:    prevDoc.clientFeedback    || {},
+    sectionFeedback:   carriedSections,
+    scriptFeedback:    {},
+    reviewSubmittedAt: null,
+    feedbackArchive:   prevDoc.feedbackArchive   || {},
   };
+
+  if (hasScriptArchivable) {
+    preproductionDoc.feedbackArchive[prevRunId] = {
+      scriptFeedback:         prevDoc.scriptFeedback         || {},
+      sectionFeedbackScripts: prevDoc.sectionFeedback?.scripts || null,
+      reviewSubmittedAt:      prevDoc.reviewSubmittedAt      || null,
+      scriptTableSnapshot:    Array.isArray(prevDoc.scriptTable) ? prevDoc.scriptTable : [],
+      archivedAt:             new Date().toISOString(),
+      archivedFrom:           prevRunId,
+    };
+  }
 
   await fbPatch(`/preproduction/socialOrganic/${projectId}`, {
     preproductionDoc,

@@ -2956,11 +2956,17 @@ function ScriptStep({ project, onPatch }) {
         )}
       </SectionCard>
 
-      {/* Client feedback queue — mirrors the Meta Ads producer view. Every
-          left-by-client feedback entry is listed here with a checkbox the
-          producer can tick once resolved (same checkbox pattern Meta Ads
-          uses). Entries written by the public view land at
-          preproductionDoc.clientFeedback.{cellKey_underscored}. */}
+      {/* Section verdicts + per-script reactions/comments — written by
+          the redesigned client review page (preproductionDoc.sectionFeedback
+          and preproductionDoc.scriptFeedback). Comments expose a resolve
+          toggle so the producer can work through them the same way they
+          work through the legacy per-cell list below. */}
+      <ClientReviewFeedback project={project} />
+
+      {/* Legacy per-cell feedback queue — kept readable for projects
+          reviewed under the old layout. New reviews use the section /
+          script feedback shapes above; this block stays so historical
+          comments still surface. */}
       {doc.clientFeedback && Object.keys(doc.clientFeedback).length > 0 && (
         <SectionCard title={`Client Feedback (${Object.values(doc.clientFeedback).filter(f => f && !f.resolved).length} outstanding)`}>
           <div style={{ display: "grid", gap: 6 }}>
@@ -4576,15 +4582,170 @@ function ScriptToolbar({ project, onRegenerate, onPatch }) {
 // Producers should be able to tell at a glance "has the client replied yet?"
 // without spelunking through each cell.
 function ClientFeedbackSummary({ project }) {
-  const feedback = project.preproductionDoc?.clientFeedback || {};
-  const entries = Object.entries(feedback || {}).filter(([, v]) => v && v.text);
-  if (entries.length === 0) return null;
-  const newest = entries.sort((a, b) => (b[1].submittedAt || "").localeCompare(a[1].submittedAt || ""))[0];
+  const doc = project.preproductionDoc || {};
+  // Legacy per-cell shape (still readable for older projects)
+  const cellEntries = Object.entries(doc.clientFeedback || {}).filter(([, v]) => v && v.text);
+  // New shapes from the redesigned public review page
+  const sectionEntries = Object.values(doc.sectionFeedback || {}).filter(Boolean);
+  const scriptEntries = Object.values(doc.scriptFeedback || {}).filter(Boolean);
+  const reactionCount = scriptEntries.filter(s => s.reaction).length;
+  const commentCount  = scriptEntries.reduce((n, s) => n + Object.keys(s.comments || {}).length, 0);
+  const submittedAt = doc.reviewSubmittedAt || null;
+  if (cellEntries.length === 0 && sectionEntries.length === 0 && reactionCount === 0 && commentCount === 0 && !submittedAt) return null;
+
+  // Newest activity across all shapes — drives the "latest" timestamp.
+  const allStamps = [
+    ...cellEntries.map(([, v]) => v.submittedAt || ""),
+    ...sectionEntries.map(s => s.submittedAt || ""),
+    ...scriptEntries.map(s => s.updatedAt || ""),
+  ].filter(Boolean);
+  const newest = allStamps.sort().pop();
+
+  const parts = [];
+  if (sectionEntries.length > 0) parts.push(`${sectionEntries.length} section${sectionEntries.length === 1 ? "" : "s"}`);
+  if (reactionCount > 0)         parts.push(`${reactionCount} reaction${reactionCount === 1 ? "" : "s"}`);
+  if (commentCount > 0)          parts.push(`${commentCount} comment${commentCount === 1 ? "" : "s"}`);
+  if (cellEntries.length > 0)    parts.push(`${cellEntries.length} cell note${cellEntries.length === 1 ? "" : "s"}`);
+
+  const isSubmitted = !!submittedAt;
+  const bg = isSubmitted ? "rgba(34,197,94,0.08)" : "rgba(245,158,11,0.08)";
+  const border = isSubmitted ? "rgba(34,197,94,0.3)" : "rgba(245,158,11,0.3)";
+  const color = isSubmitted ? "#22C55E" : "#F59E0B";
+
   return (
-    <div style={{ padding: 14, marginBottom: 14, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 8, fontSize: 12, color: "#F59E0B" }}>
-      <strong>{entries.length} client comment{entries.length === 1 ? "" : "s"}</strong>
-      {newest?.[1]?.submittedAt && ` · latest ${new Date(newest[1].submittedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}`}
-      . Cells with feedback show an amber dot.
+    <div style={{ padding: 14, marginBottom: 14, background: bg, border: `1px solid ${border}`, borderRadius: 8, fontSize: 12, color }}>
+      <strong>{isSubmitted ? "Client submitted their review" : "Client has left feedback"}</strong>
+      {parts.length > 0 && ` · ${parts.join(" · ")}`}
+      {submittedAt && ` · submitted ${new Date(submittedAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}`}
+      {!submittedAt && newest && ` · latest ${new Date(newest).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}`}
     </div>
+  );
+}
+
+// Producer-side renderer for the new feedback shapes (section verdicts
+// + per-script reactions + threaded comments) written by the redesigned
+// client review page. Comments expose a resolve toggle so the producer
+// works through them the same way the legacy per-cell list works.
+function ClientReviewFeedback({ project }) {
+  const doc = project.preproductionDoc || {};
+  const sections = doc.sectionFeedback || {};
+  const scripts = doc.scriptFeedback || {};
+  const scriptRows = doc.scriptTable || [];
+  const sectionIds = Object.keys(sections);
+  const scriptIds  = Object.keys(scripts);
+  if (sectionIds.length === 0 && scriptIds.length === 0) return null;
+
+  const SECTION_LABELS = { brand: "Brand truth", formats: "Formats", scripts: "Scripts overall" };
+  const REACTION_META = {
+    love:  { label: "Love",  color: "#22C55E", bg: "rgba(34,197,94,0.1)" },
+    tweak: { label: "Tweak", color: "#F59E0B", bg: "rgba(245,158,11,0.1)" },
+    cut:   { label: "Cut",   color: "#EF4444", bg: "rgba(239,68,68,0.1)" },
+  };
+
+  // reviewId → human row number; falls back to "row_<i>" if the
+  // public view wrote feedback under that key (legacy rows without a
+  // reviewId stamp).
+  const rowLabelFor = (key) => {
+    const byId = scriptRows.findIndex(r => r && r.reviewId === key);
+    if (byId !== -1) return `Video ${scriptRows[byId].videoNumber || byId + 1}`;
+    const idx = key.startsWith("row_") ? Number(key.slice(4)) : NaN;
+    if (Number.isInteger(idx) && scriptRows[idx]) return `Video ${scriptRows[idx].videoNumber || idx + 1}`;
+    return `Video ${key.slice(-4)}`;
+  };
+
+  const unresolvedComments = scriptIds.reduce((n, key) => {
+    const cs = scripts[key]?.comments || {};
+    return n + Object.values(cs).filter(c => c && !c.resolved).length;
+  }, 0);
+  const sectionsWithChanges = sectionIds.filter(id => sections[id]?.verdict === "changes").length;
+
+  return (
+    <SectionCard title={`Client review (${sectionsWithChanges + unresolvedComments} to action)`}>
+      {sectionIds.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Section verdicts</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {sectionIds.map(id => {
+              const s = sections[id];
+              if (!s) return null;
+              const isApprove = s.verdict === "approve";
+              const isChanges = s.verdict === "changes";
+              return (
+                <div key={id} style={{ padding: "10px 14px", background: "var(--card)", border: `1px solid ${isChanges ? "rgba(245,158,11,0.4)" : isApprove ? "rgba(34,197,94,0.3)" : "var(--border)"}`, borderRadius: 8, display: "grid", gridTemplateColumns: "150px 1fr auto", gap: 14, alignItems: "start" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ padding: "4px 9px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", background: isApprove ? "rgba(34,197,94,0.15)" : isChanges ? "rgba(245,158,11,0.15)" : "var(--bg)", color: isApprove ? "#22C55E" : isChanges ? "#F59E0B" : "var(--muted)" }}>
+                      {isApprove ? "Approved" : isChanges ? "Changes" : "Saved"}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>{SECTION_LABELS[id] || id}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                    {s.text || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>No note left.</span>}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                    {s.submittedAt ? new Date(s.submittedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {scriptIds.length > 0 && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
+            Per-script feedback {unresolvedComments > 0 && <span style={{ marginLeft: 6, color: "#F59E0B" }}>· {unresolvedComments} unresolved</span>}
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {scriptIds.map(key => {
+              const s = scripts[key];
+              if (!s) return null;
+              const rMeta = s.reaction ? REACTION_META[s.reaction] : null;
+              const comments = Object.entries(s.comments || {})
+                .map(([cid, c]) => ({ cid, ...c }))
+                .sort((a, b) => (a.at || 0) - (b.at || 0));
+              if (!rMeta && comments.length === 0) return null;
+              return (
+                <div key={key} style={{ padding: "12px 14px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: comments.length > 0 ? 10 : 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{rowLabelFor(key)}</span>
+                    {rMeta && (
+                      <span style={{ padding: "3px 9px", borderRadius: 999, fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", background: rMeta.bg, color: rMeta.color }}>
+                        {rMeta.label} it
+                      </span>
+                    )}
+                    {s.updatedAt && <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--muted)" }}>{new Date(s.updatedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>}
+                  </div>
+                  {comments.length > 0 && (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {comments.map(c => {
+                        const basePath = `/preproduction/socialOrganic/${project.id}/preproductionDoc/scriptFeedback/${key}/comments/${c.cid}`;
+                        return (
+                          <div key={c.cid} style={{ display: "grid", gridTemplateColumns: "20px 1fr auto", gap: 8, alignItems: "start", padding: "8px 10px", background: c.resolved ? "var(--bg)" : "transparent", border: `1px solid ${c.resolved ? "var(--border)" : "rgba(245,158,11,0.25)"}`, borderRadius: 6, opacity: c.resolved ? 0.6 : 1 }}>
+                            <input
+                              type="checkbox"
+                              checked={!!c.resolved}
+                              onChange={(e) => {
+                                fbSet(`${basePath}/resolved`, e.target.checked);
+                                fbSet(`${basePath}/resolvedAt`, e.target.checked ? new Date().toISOString() : null);
+                              }}
+                              style={{ marginTop: 3, cursor: "pointer", accentColor: "var(--accent)" }}
+                            />
+                            <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, textDecoration: c.resolved ? "line-through" : "none", whiteSpace: "pre-wrap" }}>{c.text}</div>
+                            <div style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                              {c.at ? new Date(c.at).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : ""}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </SectionCard>
   );
 }

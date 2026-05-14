@@ -60,7 +60,10 @@
         "$projectId": {
           ".read": "auth != null",
           "preproductionDoc": {
-            "clientFeedback": { ".write": "auth != null" }
+            "clientFeedback":    { ".write": "auth != null" },
+            "sectionFeedback":   { ".write": "auth != null" },
+            "scriptFeedback":    { ".write": "auth != null" },
+            "reviewSubmittedAt": { ".write": "auth != null" }
           }
         }
       },
