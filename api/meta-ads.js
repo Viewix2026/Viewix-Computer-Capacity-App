@@ -352,10 +352,47 @@ async function callClaude({ model, systemPrompt, userMessage, maxTokens, apiKey 
   const d = await r.json();
   return d.content?.[0]?.text || "";
 }
+// Robust JSON extractor for Claude responses. The system prompts all
+// say "no preamble / no commentary", but Opus occasionally pads the
+// output with a "Here you go:" intro or a trailing "Let me know..."
+// which trips the raw JSON.parse — producers were hitting it with
+// "Unexpected non-whitespace character after JSON at position N".
+// Strategy: try a strict parse first (fast path for well-behaved
+// responses), then fall back to extracting the first balanced object
+// or array with string-awareness so braces inside quoted strings
+// don't throw the counter off.
 function parseJSON(raw) {
   let cleaned = (raw || "").trim();
-  if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
-  return JSON.parse(cleaned);
+  // Strip markdown code fences ("```json ... ```" or plain "``` ... ```").
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch (firstErr) {
+    const start = cleaned.search(/[{\[]/);
+    if (start < 0) throw firstErr;
+    const openChar = cleaned[start];
+    const closeChar = openChar === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (escape) { escape = false; continue; }
+      if (ch === "\\") { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === openChar) depth++;
+      else if (ch === closeChar) {
+        depth--;
+        if (depth === 0) {
+          return JSON.parse(cleaned.slice(start, i + 1));
+        }
+      }
+    }
+    throw firstErr;
+  }
 }
 
 const META_ADS_SCRIPT_PROMPT = `You are a senior Meta ad script writer at Viewix, a Sydney-based video production agency. You produce direct-response Meta ad scripts designed to run on Facebook and Instagram, built around Alex Hormozi's motivator framework (Toward / Away From / Tried Before) and audience-awareness targeting (Problem Aware / Problem Unaware).
