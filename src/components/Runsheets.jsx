@@ -218,6 +218,7 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
     }
     const projectType = isOrganic ? "organic" : "metaAds";
 
+    const metaField = (row, legacyKey, currentKey) => row[legacyKey] || row[currentKey] || "";
     const videos = scriptRows.map((v, i) => isOrganic ? {
       // Social Organic shape — keep videoName as "Video N" + formatName
       // as the format type, so the Runsheet chip can display both.
@@ -236,12 +237,14 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
       cta: "", metaAdHeadline: "", metaAdCopy: "",
       motivatorType: "", audienceType: "",
     } : {
-      // Meta Ads shape (existing)
+      // Meta Ads shape. New tab-based projects store script columns
+      // as explainPain/offer/headline/adCopy, while legacy projects
+      // used explainThePain/theOffer/metaAdHeadline/metaAdCopy.
       id: v.id, videoName: v.videoName || "", hook: v.hook || "",
-      explainThePain: v.explainThePain || "", results: v.results || "",
-      theOffer: v.theOffer || "", whyTheOffer: v.whyTheOffer || "",
-      cta: v.cta || "", metaAdHeadline: v.metaAdHeadline || "",
-      metaAdCopy: v.metaAdCopy || "", motivatorType: v.motivatorType || "",
+      explainThePain: metaField(v, "explainThePain", "explainPain"), results: v.results || "",
+      theOffer: metaField(v, "theOffer", "offer"), whyTheOffer: v.whyTheOffer || "",
+      cta: v.cta || "", metaAdHeadline: metaField(v, "metaAdHeadline", "headline"),
+      metaAdCopy: metaField(v, "metaAdCopy", "adCopy"), motivatorType: v.motivatorType || "",
       audienceType: v.audienceType || "", props: "", people: "", contentStyle: "",
     });
 
