@@ -128,6 +128,16 @@ export function fbUpdate(p, v) {
 // an error handler, rules denials would silently never fire cb at all,
 // leaving callers hanging on "Loading…" forever (what we saw on
 // DeliveryPublicView when anonymous auth was blocked).
+// One-shot read using the SDK's `.once("value")`. Returns the snapshot
+// value, or rejects on rules denial. Used by public views to probe
+// which of several candidate paths owns a given id when the per-record
+// `.read` rule permits anonymous reads but the collection root does
+// not (post-PR-1 model). Prefer fbListen for live updates.
+export function fbGetOnce(p) {
+  if (!db) return Promise.reject(new Error("Firebase not initialised"));
+  return db.ref(p).once("value").then(s => s.val());
+}
+
 export function fbListen(p, cb, onError) {
   if (!db) return () => {};
   const r = db.ref(p);

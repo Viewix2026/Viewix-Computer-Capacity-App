@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { initFB, onFB, fbSet, fbListen, signInAnonymouslyForPublic } from "../firebase";
+import { initFB, onFB, fbSet, fbListen, fbGetOnce, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 import { logoBg } from "../utils";
 import { ClientReview } from "./preproduction/ClientReview";
@@ -62,39 +62,74 @@ export function PreproductionPublicView() {
     // memory for the life of the tab.
     const unsubs = [];
     let cancelled = false;
-    let foundAny = false;
     let fallbackTimer = null;
     onFB(async () => {
       try { await signInAnonymouslyForPublic(); }
       catch (e) { console.warn("Anonymous auth failed, continuing:", e.message); }
       if (cancelled) return;
 
+      // Single per-record listener — the preproduction collections now
+      // require a role claim at the root, so we resolve via
+      // /api/resolve-short-id (returns {id, type}) and attach exactly
+      // one listener at the resolved path. The previous dual-listener
+      // pattern could flip projectType under us if a shortId existed in
+      // both collections; this resolves that asymmetry too.
+      const attachPerRecordListener = (type, id) => {
+        unsubs.push(fbListen(`/preproduction/${type}/${id}`, (data) => {
+          if (data) { setProject(data); setProjectType(type); setLoading(false); }
+        }));
+      };
+
       if (projectId) {
-        unsubs.push(fbListen(`/preproduction/metaAds/${projectId}`, (data) => {
-          if (data) { setProject(data); setProjectType("metaAds"); foundAny = true; setLoading(false); }
-        }));
-        unsubs.push(fbListen(`/preproduction/socialOrganic/${projectId}`, (data) => {
-          if (data && !foundAny) { setProject(data); setProjectType("socialOrganic"); foundAny = true; setLoading(false); }
-        }));
+        // Caller knows the id but not the type — probe metaAds, then
+        // socialOrganic. Per-record reads are role-free under the new
+        // rules, so this works for anonymous clients. fbGetOnce gives
+        // us a clean Promise-based probe (no listener-then-off dance).
+        for (const t of ["metaAds", "socialOrganic"]) {
+          if (cancelled) return;
+          let snap = null;
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            snap = await fbGetOnce(`/preproduction/${t}/${projectId}`);
+          } catch { /* rules denial / network — try next type */ }
+          if (snap) {
+            if (cancelled) return;
+            attachPerRecordListener(t, projectId);
+            break;
+          }
+        }
       } else if (shortId) {
-        unsubs.push(fbListen(`/preproduction/metaAds`, (allProjects) => {
-          if (!allProjects) return;
-          const match = Object.values(allProjects).find(p => p && p.shortId && p.shortId.toLowerCase() === shortId);
-          if (match) { setProject(match); setProjectType("metaAds"); foundAny = true; setLoading(false); }
-        }));
-        unsubs.push(fbListen(`/preproduction/socialOrganic`, (allProjects) => {
-          if (!allProjects) return;
-          const match = Object.values(allProjects).find(p => p && p.shortId && p.shortId.toLowerCase() === shortId);
-          if (match && !foundAny) { setProject(match); setProjectType("socialOrganic"); foundAny = true; setLoading(false); }
-        }));
+        try {
+          const r = await fetch(`/api/resolve-short-id?type=preproduction&shortId=${encodeURIComponent(shortId)}`);
+          if (cancelled) return;
+          if (!r.ok) {
+            // 404 falls through to the loading-timeout path which
+            // surfaces the "not found" error state.
+            setLoading(false);
+            return;
+          }
+          const { id, type } = await r.json();
+          if (cancelled || !id || !type) { setLoading(false); return; }
+          attachPerRecordListener(type, id);
+        } catch (e) {
+          console.warn("resolve-short-id failed:", e.message);
+          setLoading(false);
+        }
       }
-      // Loading timeout — 3s should be more than enough to see if either
-      // path has data. After that, show the "not found" error state.
-      fallbackTimer = setTimeout(() => { if (!foundAny) setLoading(false); }, 3000);
+      // Loading timeout — 3s should be more than enough to see if the
+      // resolved listener has data. After that, show the "not found"
+      // error state. Cleared inline once any path resolves.
+      fallbackTimer = setTimeout(() => { setLoading(false); }, 3000);
     });
     return () => {
       cancelled = true;
       if (fallbackTimer) clearTimeout(fallbackTimer);
+      // notifyTimer fires 2 minutes after the last feedback submit to
+      // ping /api/preproduction. Without this clear, a client who
+      // submits then closes the tab triggers a stray network call
+      // against a stale project — and the closure still holds the
+      // project ref, so it isn't even safely a no-op.
+      if (notifyTimer.current) { clearTimeout(notifyTimer.current); notifyTimer.current = null; }
       unsubs.forEach(u => { try { u(); } catch {} });
     };
   }, [projectId, shortId]);
