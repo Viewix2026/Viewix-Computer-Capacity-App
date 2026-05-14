@@ -119,6 +119,16 @@ export const _fb = { fbGet, fbSet, fbPatch };
 
 // ─── Math helpers (pure) ──────────────────────────────────────────
 
+// Coerce to a finite number, otherwise return the fallback.
+// NaN propagation through scoring used to blank entire client
+// dashboards: one undefined `likes` upstream → NaN engagementRate →
+// NaN engagementVsBaseline → JSON.stringify writes `null`, the UI
+// renders the empty state, and producers had no signal why.
+// Every score input flows through this helper now.
+function safeNumber(x, fallback = null) {
+  return typeof x === "number" && Number.isFinite(x) ? x : fallback;
+}
+
 function median(arr) {
   if (!arr || arr.length === 0) return 0;
   const sorted = [...arr].filter(v => v != null && !Number.isNaN(+v)).sort((a, b) => a - b);
@@ -150,21 +160,29 @@ function latestFollowerCount(followers) {
 // ─── Scoring computations (pure, given precomputed inputs) ────────
 
 function computeOverperformance({ views, medianViews }) {
-  if (!views || !medianViews) return { score: null, label: null };
-  const score = +(views / medianViews).toFixed(2);
+  const v = safeNumber(views);
+  const m = safeNumber(medianViews);
+  if (!v || !m) return { score: null, label: null };
+  const raw = v / m;
+  const score = safeNumber(+raw.toFixed(2));
+  if (score == null) return { score: null, label: null };
   let label = null;
   if (score >= OVERPERF.noiseFloorScore) label = `${score.toFixed(1)}x usual views`;
   return { score, label };
 }
 
 function computeEngagementVsBaseline({ engagementRate, medianEngagementRate }) {
-  if (engagementRate == null || !medianEngagementRate) return null;
-  return +(engagementRate / medianEngagementRate).toFixed(2);
+  const e = safeNumber(engagementRate);
+  const m = safeNumber(medianEngagementRate);
+  if (e == null || !m) return null;
+  return safeNumber(+(e / m).toFixed(2));
 }
 
 function computeFollowerNormalisedViews({ views, followerCount }) {
-  if (!views || !followerCount) return null;
-  return +(views / followerCount).toFixed(3);
+  const v = safeNumber(views);
+  const f = safeNumber(followerCount);
+  if (!v || !f) return null;
+  return safeNumber(+(v / f).toFixed(3));
 }
 
 function computeRepeatability({
@@ -417,10 +435,14 @@ export async function recomputeClientAnalytics(clientId) {
       });
       const followerNormalisedViews = computeFollowerNormalisedViews({ views, followerCount });
       const repeatability = computeRepeatability({
-        overperformanceScore: overperf.score ?? 0,
-        engagementVsBaseline,
-        followerNormalisedViews,
-        ageDays,
+        // `?? 0` doesn't catch NaN — use safeNumber so a poisoned
+        // upstream value collapses to 0 instead of contaminating the
+        // repeatability comparisons (which all silently evaluate false
+        // against NaN, giving a real bug an honest 0 instead).
+        overperformanceScore: safeNumber(overperf.score, 0),
+        engagementVsBaseline: safeNumber(engagementVsBaseline),
+        followerNormalisedViews: safeNumber(followerNormalisedViews),
+        ageDays: safeNumber(ageDays),
       });
       const tags = computeTags({
         overperformanceScore: overperf.score,
@@ -482,12 +504,16 @@ export async function recomputeClientAnalytics(clientId) {
         platform,
         videoId: v.videoId,
         scoring: {
-          overperformanceScore: overperf.score,
+          // Final boundary: every score field that lands in Firebase
+          // is either a finite number or explicit null. Prevents the
+          // "NaN serialises as null" mode where a single bad input
+          // silently blanks the entire dashboard.
+          overperformanceScore: safeNumber(overperf.score),
           overperformanceLabel: overperf.label,
-          repeatabilityScore: repeatability.score,
+          repeatabilityScore: safeNumber(repeatability.score),
           repeatabilityLabel: repeatability.label,
-          engagementVsBaseline,
-          followerNormalisedViews,
+          engagementVsBaseline: safeNumber(engagementVsBaseline),
+          followerNormalisedViews: safeNumber(followerNormalisedViews),
           tags,
           computedAt,
         },

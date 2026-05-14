@@ -54,12 +54,20 @@ function normaliseIgPost(raw, handleHint) {
   const videoId = shortCode ? `ig_${shortCode}` : `ig_${Math.random().toString(36).slice(2, 10)}`;
   const owner = (raw.ownerUsername || raw.owner?.username || handleHint || "unknown").toLowerCase();
   const isVideo = raw.isVideo ?? (raw.type === "Video") ?? false;
-  const views = raw.videoViewCount ?? raw.videoPlayCount ?? null;
-  const likes = raw.likesCount ?? 0;
-  const comments = raw.commentsCount ?? 0;
-  const followers = raw.ownerFollowersCount ?? raw.owner?.followersCount ?? null;
+  // Coerce every numeric field to a finite number or null at this
+  // boundary. Apify occasionally returns non-numeric "0" strings, or
+  // omits a field entirely; without the coercion, `likes + comments`
+  // can produce NaN and contaminate every downstream score.
+  const safeNum = (x) => {
+    const n = typeof x === "number" ? x : (x == null ? NaN : Number(x));
+    return Number.isFinite(n) ? n : null;
+  };
+  const views = safeNum(raw.videoViewCount ?? raw.videoPlayCount);
+  const likes = safeNum(raw.likesCount) ?? 0;
+  const comments = safeNum(raw.commentsCount) ?? 0;
+  const followers = safeNum(raw.ownerFollowersCount ?? raw.owner?.followersCount);
   const engagementRate = followers && followers > 0
-    ? +(((likes + comments) / followers) * 100).toFixed(3)
+    ? safeNum(+(((likes + comments) / followers) * 100).toFixed(3))
     : null;
   return {
     videoId,
@@ -414,12 +422,35 @@ export default async function handler(req, res) {
     recomputeResult = await recomputeClientAnalytics(clientId);
   } catch (err) {
     console.error(`[analytics-webhook] recompute failed for ${clientId}:`, err);
-    recomputeError = err.message;
+    recomputeError = err.message || String(err);
+    // Persist a durable record so we can surface this in the UI and
+    // so it doesn't get lost if Apify's retry budget runs out.
+    try {
+      await fbPatch(`/analytics/recomputeErrors/${clientId}`, {
+        [Date.now()]: {
+          message: recomputeError,
+          platform,
+          mode,
+          target,
+          at: new Date().toISOString(),
+        },
+      });
+    } catch (logErr) {
+      console.error(`[analytics-webhook] failed to persist recompute error:`, logErr);
+    }
   }
 
-  res.status(200).json({
-    ok: true,
-    outcome: "processed",
+  // Recompute failure must surface as 5xx — Apify retries on non-2xx
+  // (configurable but the default policy is exactly what we want
+  // here). Previously this returned 200 with the error inside the
+  // body, so the upstream caller treated a half-finished run as
+  // success and never retried. Producers saw "scrape complete" with
+  // no scoring and no signal. Ingest itself succeeded, so the retry
+  // is cheap — it'll bail out at the run-sidecar idempotency check.
+  const responseStatus = recomputeError ? 502 : 200;
+  res.status(responseStatus).json({
+    ok: !recomputeError,
+    outcome: recomputeError ? "ingested-recompute-failed" : "processed",
     clientId,
     platform,
     mode,
