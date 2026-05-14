@@ -402,16 +402,12 @@ function StudioTotals({ sale }) {
 
 function StudioSchedule({ sale, cfg }) {
   const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
-  const futureSlices = schedule.slice(1);
-  const allAuto = futureSlices.length > 0 && futureSlices.every(s => s.trigger === "auto");
   const hint = cfg.kind === "subscription_monthly"
     ? "Payments 2 and 3 are auto-charged to the card you enter today."
     : cfg.kind === "deposit_plus_manual"
       ? "The balance is charged manually when your project wraps — no auto-charge."
       : cfg.kind === "custom"
-        ? (allAuto
-            ? "Future instalments are auto-charged to the card you enter today on the dates shown."
-            : "Future instalments are charged on the dates shown — auto from the card on file unless your project wraps sooner.")
+        ? "Future instalments are charged to the card you enter today on the dates shown."
         : "";
 
   return (
@@ -438,9 +434,20 @@ function StudioSchedule({ sale, cfg }) {
                 {s.label} · <span style={{ fontWeight: 500, color: "var(--muted)" }}>{s.dueLabel}</span>
               </div>
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                {s.trigger === "now" && "Charged on submit"}
-                {s.trigger === "auto" && (cfg.kind === "custom" ? "Auto-charged on the date above" : "Auto-charged to card on file")}
-                {s.trigger === "manual" && (cfg.kind === "custom" ? "Charged from the card on file on the date above" : "Viewix will charge this manually when the project concludes")}
+                {/* For Custom sales we deliberately hide the
+                    auto-vs-manual distinction from the customer — they
+                    only need to know the amount and the date. The
+                    mandate copy below covers authorisation for every
+                    future card-on-file charge regardless of trigger. */}
+                {cfg.kind === "custom"
+                  ? (s.trigger === "now" ? "Charged on submit" : null)
+                  : (
+                    <>
+                      {s.trigger === "now" && "Charged on submit"}
+                      {s.trigger === "auto" && "Auto-charged to card on file"}
+                      {s.trigger === "manual" && "Viewix will charge this manually when the project concludes"}
+                    </>
+                  )}
               </div>
             </div>
             <div style={{ textAlign: "right" }}>

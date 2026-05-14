@@ -86,6 +86,21 @@ export default async function handler(req, res) {
       if (s && s.sliceId) existingCustomById.set(s.sliceId, s);
     }
 
+    // BEFORE everything else: ensure no terminal slice has been DELETED.
+    // The previous version only validated terminal slices that were
+    // PRESENT in the incoming payload — a malicious or buggy client
+    // could omit a paid slice entirely, and buildCustomSchedule()
+    // would happily rebuild without it (merge only preserves matching
+    // sliceIds). Catch this here, before we touch anything.
+    const incomingIds = new Set(incomingSlices.map(s => String(s.sliceId || "").trim()).filter(Boolean));
+    for (const [sliceId, existingSched] of existingScheduleById) {
+      if (isTerminal(existingSched) && !incomingIds.has(sliceId)) {
+        return res.status(400).json({
+          error: `Slice "${existingSched.label || sliceId}" has already moved money (status=${existingSched.status}). It cannot be removed.`,
+        });
+      }
+    }
+
     // Normalise incoming rows (preserve sliceIds — they're the merge key).
     const customSlices = incomingSlices.map((s) => ({
       sliceId: String(s.sliceId || "").trim(),

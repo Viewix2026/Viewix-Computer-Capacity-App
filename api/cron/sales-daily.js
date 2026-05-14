@@ -132,53 +132,75 @@ export default async function handler(req, res) {
       }
 
       // ── Atomic claim via RTDB transaction ──────────────────────────
-      // Only one writer can win the pending → processing flip; everyone
-      // else falls through with `committed: false` and we skip them.
+      //
+      // The transaction is the only place we can trust the slice state.
+      // The `slice` variable above came from a non-transactional read
+      // and may be stale (founder edited the row, paid manually, deleted
+      // it, etc). Re-validate EVERYTHING that could affect what we
+      // charge inside the transaction, and capture the committed
+      // snapshot for the actual Stripe call.
       const sliceId = slice.sliceId;
       const nowIso = new Date().toISOString();
       const autoAttemptKey = `${saleId}:${sliceId || `idx-${i}`}:${nowIso}`;
 
-      let claimed = false;
+      let claimedSnapshot = null;
+      let txAbortReason = null;
       try {
         const result = await runRtdbTransaction(`/sales/${saleId}/schedule`, (current) => {
-          if (!Array.isArray(current)) return undefined;
+          if (!Array.isArray(current)) { txAbortReason = "schedule-missing"; return undefined; }
           const idx = sliceId
             ? current.findIndex(s => s && s.sliceId === sliceId)
             : i;
-          if (idx === -1 || !current[idx]) return undefined;
-          if (current[idx].status !== "pending") return undefined; // someone else won
+          if (idx === -1 || !current[idx]) { txAbortReason = "slice-missing"; return undefined; }
+          const cur = current[idx];
+          if (cur.status !== "pending")              { txAbortReason = `status:${cur.status}`; return undefined; }
+          if (cur.trigger !== "auto")                { txAbortReason = `trigger:${cur.trigger}`; return undefined; }
+          const dueKey = cur.dueDateKeySydney || "";
+          if (!dueKey || dueKey > today)             { txAbortReason = `due:${dueKey || "missing"}`; return undefined; }
+          const amountCents = Math.round(Number(cur.amount) * 100);
+          if (!amountCents || amountCents <= 0)      { txAbortReason = "bad-amount"; return undefined; }
           const next = current.slice();
           next[idx] = {
-            ...next[idx],
+            ...cur,
             status: "processing",
             autoAttemptKey,
             processingStartedAt: nowIso,
           };
           return next;
         });
-        claimed = !!result.committed;
+        if (result.committed && Array.isArray(result.snapshot)) {
+          const committedIdx = sliceId
+            ? result.snapshot.findIndex(s => s && s.sliceId === sliceId)
+            : i;
+          if (committedIdx !== -1) {
+            claimedSnapshot = result.snapshot[committedIdx];
+          }
+        }
       } catch (txErr) {
         console.error(`sales-daily: claim transaction failed for ${saleId} slice ${sliceId || i}:`, txErr.message);
         continue;
       }
-      if (!claimed) {
+      if (!claimedSnapshot) {
         summary.skipped++;
         continue;
       }
       summary.claimed++;
 
       // ── Charge off-session ─────────────────────────────────────────
+      // Use the COMMITTED snapshot, not the stale `slice` from the
+      // initial read. amount/label/sliceId all come from what the
+      // transaction wrote — i.e. the values that were `pending +
+      // auto + due today` at the moment we locked the row.
       const customerId = sale.stripeCustomerId;
       const paymentMethodId = sale.stripePaymentMethodId;
       if (!customerId || !paymentMethodId) {
-        // Revert the claim — there's no card to charge.
         await revertClaim(saleId, sliceId, i, autoAttemptKey, "No saved card on customer", null);
-        await slackNotify(`:warning: *Custom auto-charge skipped* — ${sale.clientName || saleId} · ${slice.label}: no saved card on Stripe customer. Send a new payment link.`);
+        await slackNotify(`:warning: *Custom auto-charge skipped* — ${sale.clientName || saleId} · ${claimedSnapshot.label}: no saved card on Stripe customer. Send a new payment link.`);
         summary.declined++;
         continue;
       }
 
-      const amountCents = Math.round(Number(slice.amount) * 100);
+      const amountCents = Math.round(Number(claimedSnapshot.amount) * 100);
       if (!amountCents || amountCents <= 0) {
         await revertClaim(saleId, sliceId, i, autoAttemptKey, "Invalid slice amount", null);
         summary.declined++;
@@ -195,7 +217,7 @@ export default async function handler(req, res) {
           payment_method: paymentMethodId,
           off_session: true,
           confirm: true,
-          description: `${descriptorBase} — ${slice.label || `Slice ${i}`}`,
+          description: `${descriptorBase} — ${claimedSnapshot.label || `Slice ${i}`}`,
           metadata: {
             saleId,
             shortId: sale.shortId || "",
@@ -218,7 +240,7 @@ export default async function handler(req, res) {
           // SCA — record as declined-with-auth-required so the
           // dashboard surfaces a retry that prompts an email.
           await revertClaim(saleId, sliceId, i, autoAttemptKey, "Authentication required (3DS)", pi.id);
-          await slackNotify(`:lock: *Custom auto-charge needs SCA* — ${sale.clientName || saleId} · ${slice.label}: customer's bank wants 3DS re-auth. Email them and retry from the dashboard.`);
+          await slackNotify(`:lock: *Custom auto-charge needs SCA* — ${sale.clientName || saleId} · ${claimedSnapshot.label}: customer's bank wants 3DS re-auth. Email them and retry from the dashboard.`);
           summary.declined++;
         } else {
           await revertClaim(saleId, sliceId, i, autoAttemptKey, `Unexpected PI status: ${pi.status}`, pi.id);
@@ -230,7 +252,7 @@ export default async function handler(req, res) {
         const piId = stripeErr?.raw?.payment_intent?.id || stripeErr?.payment_intent?.id || null;
         await revertClaim(saleId, sliceId, i, autoAttemptKey, stripeErr?.message || String(stripeErr), piId);
         const amountDisp = (amountCents / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
-        await slackNotify(`:no_entry: *Custom auto-charge declined* — ${sale.clientName || saleId} · ${slice.label} (${amountDisp}): ${stripeErr?.message || stripeErr}. Retry from the dashboard once resolved.`);
+        await slackNotify(`:no_entry: *Custom auto-charge declined* — ${sale.clientName || saleId} · ${claimedSnapshot.label} (${amountDisp}): ${stripeErr?.message || stripeErr}. Retry from the dashboard once resolved.`);
         summary.declined++;
       }
     }

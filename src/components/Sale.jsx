@@ -328,6 +328,64 @@ export function Sale({
     }
   };
 
+  // ── Custom schedule edit modal ───────────────────────────────────
+  // Opens with the sale's current customSlices. Slices that have moved
+  // money (paid/refunded/processing) are locked at the row level; the
+  // server endpoint is the authoritative gate, but disabling controls
+  // here gives founders a clearer signal about what's editable.
+  const [editingCustomSaleId, setEditingCustomSaleId] = useState(null);
+  const [editingCustomSlices, setEditingCustomSlices] = useState([]);
+  const [editingCustomSaving, setEditingCustomSaving] = useState(false);
+  const [editingCustomResult, setEditingCustomResult] = useState(null);
+
+  const openEditCustom = (s) => {
+    const slices = Array.isArray(s.customSlices) ? s.customSlices : [];
+    setEditingCustomSaleId(s.id);
+    setEditingCustomSlices(slices.map(r => ({ ...r })));
+    setEditingCustomResult(null);
+  };
+
+  const closeEditCustom = () => {
+    setEditingCustomSaleId(null);
+    setEditingCustomSlices([]);
+    setEditingCustomResult(null);
+  };
+
+  const saveEditCustom = async () => {
+    if (!editingCustomSaleId || editingCustomSaving) return;
+    setEditingCustomSaving(true);
+    setEditingCustomResult(null);
+    try {
+      const r = await authFetch("/api/update-custom-schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          saleId: editingCustomSaleId,
+          customSlices: editingCustomSlices,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok || !d.sale) {
+        const detail = Array.isArray(d.details) && d.details.length ? ` (${d.details.slice(0,2).join("; ")})` : "";
+        throw new Error((d.error || `Server returned ${r.status}`) + detail);
+      }
+      setSales(p => p.map(x => x.id === d.sale.id ? d.sale : x));
+      setEditingCustomResult({ kind: "success", message: `Schedule updated. Version ${d.sale.customScheduleVersion || "?"}.` });
+      // Auto-close on success after a short pause so the founder sees confirmation.
+      setTimeout(() => closeEditCustom(), 900);
+    } catch (e) {
+      setEditingCustomResult({ kind: "error", message: e.message || String(e) });
+    } finally {
+      setEditingCustomSaving(false);
+    }
+  };
+
+  // Sum-of-rows for the edit modal — same helper the create form uses.
+  const editingTotalExGst = sumCustomSlicesExGst(editingCustomSlices || []);
+  const editingValidation = editingCustomSaleId
+    ? validateCustomSlices(editingCustomSlices || [], (sales.find(s => s.id === editingCustomSaleId)?.totalExGst) || 0)
+    : { ok: true, errors: [] };
+
   // Reconcile-from-Stripe — founder-only escape hatch when a webhook
   // didn't fire (signature reject, missing env var, livemode mismatch,
   // network glitch). Calls the server endpoint which lists the sale's
@@ -528,6 +586,19 @@ export function Sale({
                   {showChargeBalance && (
                     <button onClick={()=>{setChargingSale(s);setChargeResult(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Charge Balance</button>
                   )}
+                  {/* Custom-sale edit button. Founder-only; backend
+                      enforces it too. Disabled once every slice is
+                      paid — at that point the schedule is fully
+                      settled and editing would be a no-op. */}
+                  {isFounders && s.videoType === "custom" && !s.paid && (
+                    <button
+                      onClick={()=>openEditCustom(s)}
+                      title="Edit pending instalments (label, amount, offset, trigger). Paid slices are locked."
+                      style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)"}}
+                    >
+                      Edit schedule
+                    </button>
+                  )}
                   {/* Reconcile from Stripe — founder-only. Visible whenever
                       the sale is not fully paid yet so a producer can pull
                       truth from Stripe directly (subscription invoices +
@@ -609,6 +680,59 @@ export function Sale({
                     </button>
                   </>
                 )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Custom schedule edit modal ────────────────────────────── */}
+      {editingCustomSaleId && (() => {
+        const editingSale = sales.find(x => x.id === editingCustomSaleId);
+        if (!editingSale) return null;
+        const lockedIds = new Set(
+          (editingSale.schedule || [])
+            .filter(s => s && (s.status === "paid" || s.status === "refunded" || s.status === "processing" || s.stripePaymentIntentId))
+            .map(s => s.sliceId)
+            .filter(Boolean)
+        );
+        return (
+          <div style={{position:"fixed",inset:0,background:"rgba(10,18,40,0.65)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+            <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"22px 26px",maxWidth:880,width:"100%",maxHeight:"90vh",overflow:"auto"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div>
+                  <div style={{fontSize:16,fontWeight:800,color:"var(--fg)"}}>Edit custom schedule — {editingSale.clientName}</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>
+                    Paid slices are locked. Sum must still equal <strong>{fmtCurExact(editingSale.totalExGst || 0)}</strong> ex-GST.
+                  </div>
+                </div>
+                <button onClick={closeEditCustom} disabled={editingCustomSaving} style={{...BTN,background:"transparent",color:"var(--muted)",cursor:editingCustomSaving?"not-allowed":"pointer",padding:"4px 8px"}}>✕</button>
+              </div>
+              <CustomScheduleEditor
+                slices={editingCustomSlices}
+                onChange={(next)=>setEditingCustomSlices(next)}
+                totalExGst={editingSale.totalExGst || 0}
+                validation={editingValidation}
+                lockedSliceIds={lockedIds}
+              />
+              {editingCustomResult && (
+                <div style={{marginTop:12,padding:"10px 14px",borderRadius:8,fontSize:13,lineHeight:1.5,
+                  background: editingCustomResult.kind==="success"?"rgba(16,185,129,0.1)":"rgba(239,68,68,0.1)",
+                  border: `1px solid ${editingCustomResult.kind==="success"?"rgba(16,185,129,0.3)":"rgba(239,68,68,0.3)"}`,
+                  color: editingCustomResult.kind==="success"?"#065F46":"#991B1B",
+                }}>
+                  {editingCustomResult.message}
+                </div>
+              )}
+              <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+                <button onClick={closeEditCustom} disabled={editingCustomSaving} style={{...BTN,background:"#374151",color:"#9CA3AF",opacity:editingCustomSaving?0.5:1,cursor:editingCustomSaving?"not-allowed":"pointer"}}>Cancel</button>
+                <button
+                  onClick={saveEditCustom}
+                  disabled={editingCustomSaving || !editingValidation.ok}
+                  style={{...BTN,background:editingCustomSaving?"#4B5563":(editingValidation.ok?"var(--accent)":"#374151"),color:"white",opacity:(editingCustomSaving||!editingValidation.ok)?0.6:1,cursor:editingCustomSaving?"wait":"pointer"}}
+                >
+                  {editingCustomSaving ? "Saving…" : "Save changes"}
+                </button>
               </div>
             </div>
           </div>
@@ -768,9 +892,15 @@ export function Sale({
 //
 // Validation runs in the parent via validateCustomSlices() — this
 // component only displays the live Σ amount + the count limits.
-function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
+function CustomScheduleEditor({ slices, onChange, totalExGst, validation, lockedSliceIds }) {
   const rows = Array.isArray(slices) && slices.length > 0 ? slices : [];
+  const locks = lockedSliceIds instanceof Set ? lockedSliceIds : null;
+  const isLocked = (sliceId) => !!(locks && sliceId && locks.has(sliceId));
+
   const updateRow = (idx, patch) => {
+    const target = rows[idx];
+    if (!target) return;
+    if (isLocked(target.sliceId)) return; // server will reject; UI matches
     const next = rows.map((r, i) => (i === idx ? { ...r, ...patch } : r));
     onChange(next);
   };
@@ -782,14 +912,58 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
       label: `Payment ${rows.length + 1}`,
       amountExGst: 0,
       offsetDays: lastOffset + 28,
+      offsetUnit: "weeks",
       trigger: "auto",
     }]);
   };
   const removeRow = (idx) => {
     if (idx === 0) return;
     if (rows.length <= CUSTOM_MIN_SLICES) return;
+    const target = rows[idx];
+    if (isLocked(target?.sliceId)) return;
     onChange(rows.filter((_, i) => i !== idx));
   };
+
+  // Day-or-week display unit is row-local UI state. We always persist
+  // offsetDays — the unit is just how the input is shown. "Weeks" is
+  // the default; toggling to days lets the founder express e.g. 45
+  // days or "6 weeks + 3 days" without leaving the editor.
+  const displayUnit = (row) => row?.offsetUnit === "days" ? "days" : "weeks";
+  const showOffsetValue = (row) => {
+    const dDays = Number(row?.offsetDays) || 0;
+    if (displayUnit(row) === "days") return Math.max(1, dDays);
+    // Weeks: show floor(days/7) when divisible, else surface the
+    // raw days by auto-switching to days mode (handled on render).
+    return Math.max(1, Math.round(dDays / 7));
+  };
+  const setOffset = (idx, value) => {
+    const row = rows[idx];
+    if (!row) return;
+    const unit = displayUnit(row);
+    const n = Math.max(1, parseInt(value, 10) || 0);
+    const days = unit === "days" ? n : n * 7;
+    updateRow(idx, { offsetDays: days });
+  };
+  const setUnit = (idx, unit) => {
+    const row = rows[idx];
+    if (!row) return;
+    // If switching to weeks but current offset isn't a whole number of
+    // weeks, snap to the nearest whole week so the value displayed
+    // stays correct. Reverse case is identity (days can express any
+    // current value).
+    let nextOffsetDays = row.offsetDays;
+    if (unit === "weeks" && (Number(row.offsetDays) || 0) % 7 !== 0) {
+      nextOffsetDays = Math.round((row.offsetDays || 0) / 7) * 7;
+    }
+    updateRow(idx, { offsetUnit: unit, offsetDays: nextOffsetDays });
+  };
+
+  // Total of the rows — derived. We no longer compare against a separate
+  // "target" totalExGst because the same value is also derived from
+  // these rows everywhere it's used (form state + server endpoint), so
+  // a comparison of `sum vs target` would just be `sum vs sum`. Show
+  // the honest total instead; validation surfaces any real errors.
+  const sumRows = sumCustomSlicesExGst(rows);
 
   return (
     <div>
@@ -815,30 +989,36 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
       <div style={{ display: "grid", gap: 8 }}>
         {rows.map((s, i) => {
           const isDeposit = i === 0;
+          const locked = isLocked(s.sliceId);
           const cellInputBase = {
             padding: "8px 10px", borderRadius: 6, border: "1px solid var(--border)",
             background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none",
           };
+          const lockedStyle = locked ? { opacity: 0.55, cursor: "not-allowed" } : {};
           return (
             <div key={s.sliceId || i} style={{
               display: "grid",
-              gridTemplateColumns: "auto 1.4fr 1fr 1.1fr 1.2fr auto",
+              gridTemplateColumns: "auto 1.4fr 1fr 1.3fr 1.2fr auto",
               gap: 8,
               alignItems: "center",
               padding: "10px 12px",
               background: "var(--card)",
-              border: `1px solid ${isDeposit ? "var(--accent)" : "var(--border)"}`,
+              border: `1px solid ${locked ? "#10B98155" : isDeposit ? "var(--accent)" : "var(--border)"}`,
               borderRadius: 8,
             }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace", minWidth: 22, textAlign: "center" }}>
                 #{i + 1}
+                {locked && (
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "#10B981", marginTop: 2 }}>PAID</div>
+                )}
               </span>
               <input
                 type="text"
                 value={s.label || ""}
                 onChange={e => updateRow(i, { label: e.target.value })}
                 placeholder={isDeposit ? "Deposit" : `Payment ${i + 1}`}
-                style={{ ...cellInputBase, fontWeight: 600 }}
+                disabled={locked}
+                style={{ ...cellInputBase, fontWeight: 600, ...lockedStyle }}
               />
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>$</span>
@@ -848,7 +1028,8 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
                   min={0}
                   value={s.amountExGst || ""}
                   onChange={e => updateRow(i, { amountExGst: parseFloat(e.target.value) || 0 })}
-                  style={{ ...cellInputBase, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, width: "100%" }}
+                  disabled={locked}
+                  style={{ ...cellInputBase, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, width: "100%", ...lockedStyle }}
                 />
               </div>
               {isDeposit ? (
@@ -862,11 +1043,20 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
                     type="number"
                     step={1}
                     min={1}
-                    value={Math.max(1, Math.floor((s.offsetDays || 0) / 7))}
-                    onChange={e => updateRow(i, { offsetDays: Math.max(1, parseInt(e.target.value, 10) || 0) * 7 })}
-                    style={{ ...cellInputBase, width: 56, textAlign: "right", fontFamily: "'JetBrains Mono', monospace" }}
+                    value={showOffsetValue(s)}
+                    onChange={e => setOffset(i, e.target.value)}
+                    disabled={locked}
+                    style={{ ...cellInputBase, width: 56, textAlign: "right", fontFamily: "'JetBrains Mono', monospace", ...lockedStyle }}
                   />
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>wks</span>
+                  <select
+                    value={displayUnit(s)}
+                    onChange={e => setUnit(i, e.target.value)}
+                    disabled={locked}
+                    style={{ ...cellInputBase, padding: "8px 6px", fontSize: 11, ...lockedStyle }}
+                  >
+                    <option value="weeks">wks</option>
+                    <option value="days">days</option>
+                  </select>
                 </div>
               )}
               {isDeposit ? (
@@ -877,7 +1067,8 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
                 <select
                   value={s.trigger || "auto"}
                   onChange={e => updateRow(i, { trigger: e.target.value })}
-                  style={{ ...cellInputBase, fontWeight: 600 }}
+                  disabled={locked}
+                  style={{ ...cellInputBase, fontWeight: 600, ...lockedStyle }}
                 >
                   <option value="auto">Auto-charge</option>
                   <option value="manual">Manual</option>
@@ -885,13 +1076,18 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
               )}
               <button
                 onClick={() => removeRow(i)}
-                disabled={isDeposit || rows.length <= CUSTOM_MIN_SLICES}
-                title={isDeposit ? "Deposit row can't be removed" : rows.length <= CUSTOM_MIN_SLICES ? `Minimum ${CUSTOM_MIN_SLICES} rows` : "Remove this instalment"}
+                disabled={isDeposit || rows.length <= CUSTOM_MIN_SLICES || locked}
+                title={
+                  locked ? "Paid slice — locked"
+                  : isDeposit ? "Deposit row can't be removed"
+                  : rows.length <= CUSTOM_MIN_SLICES ? `Minimum ${CUSTOM_MIN_SLICES} rows`
+                  : "Remove this instalment"
+                }
                 style={{
                   ...BTN,
                   background: "transparent",
-                  color: isDeposit || rows.length <= CUSTOM_MIN_SLICES ? "#374151" : "#EF4444",
-                  cursor: isDeposit || rows.length <= CUSTOM_MIN_SLICES ? "not-allowed" : "pointer",
+                  color: (isDeposit || rows.length <= CUSTOM_MIN_SLICES || locked) ? "#374151" : "#EF4444",
+                  cursor: (isDeposit || rows.length <= CUSTOM_MIN_SLICES || locked) ? "not-allowed" : "pointer",
                   padding: "6px 8px",
                 }}
               >
@@ -902,17 +1098,21 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation }) {
         })}
       </div>
 
-      {/* Sum indicator + offset-from-deposit reminder */}
+      {/* Total + offset-from-deposit reminder. No fake "Σ / target"
+          comparison — totalExGst is derived from rows in both the form
+          and the server endpoint, so the comparison would always show
+          sum vs itself. Show the honest sum and let validation surface
+          real problems. */}
       <div style={{
         marginTop: 12, paddingTop: 12, borderTop: "1px dashed var(--border)",
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
       }}>
         <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>
-          Weeks are counted from <strong>when the deposit clears</strong>, not today. If the deposit pays late, instalment dates shift with it.
+          Offsets are counted from <strong>when the deposit clears</strong>, not today. If the deposit pays late, instalment dates shift with it.
         </div>
-        <div style={{ fontSize: 13, fontFamily: "'JetBrains Mono', monospace", color: validation && validation.ok ? "#10B981" : "#F59E0B" }}>
-          Σ slices: <strong>{fmtCurExact(sumCustomSlicesExGst(rows))}</strong> / <strong>{fmtCurExact(totalExGst || 0)}</strong>
-          {validation && validation.ok ? " ✓" : " ⚠"}
+        <div style={{ fontSize: 13, fontFamily: "'JetBrains Mono', monospace", color: (validation && validation.ok) ? "var(--fg)" : "#F59E0B" }}>
+          Total ex-GST: <strong>{fmtCurExact(sumRows)}</strong>
+          {validation && !validation.ok && <span style={{ marginLeft: 6 }}>⚠</span>}
         </div>
       </div>
     </div>
