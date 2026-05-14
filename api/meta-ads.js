@@ -543,12 +543,14 @@ async function handleScriptGenerate(req, res) {
     attioCompanyId: project.attioCompanyId,
   });
   const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
-  console.log("sherpa[meta-ads.script]", {
-    source: sherpaCtx.source,
-    length: sherpaCtx.text?.length || 0,
-    clientId: sherpaCtx.clientId || null,
-    errorCode: sherpaCtx.error?.code || null,
-  });
+  if (process.env.DEBUG_SHERPA === "1") {
+    console.log("sherpa[meta-ads.script]", {
+      source: sherpaCtx.source,
+      length: sherpaCtx.text?.length || 0,
+      clientId: sherpaCtx.clientId || null,
+      errorCode: sherpaCtx.error?.code || null,
+    });
+  }
 
   const formatsBlock = selectedFormatObjects.map((f, i) => {
     const count = f.videoCount != null ? `Count: ${f.videoCount}` : `Count: (not set — distribute evenly over remaining rows)`;
@@ -1307,12 +1309,14 @@ async function handleGenerateBrandTruth(req, res) {
     attioCompanyId: project.attioCompanyId,
   });
   const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
-  console.log("sherpa[meta-ads.brandtruth]", {
-    source: sherpaCtx.source,
-    length: sherpaCtx.text?.length || 0,
-    clientId: sherpaCtx.clientId || null,
-    errorCode: sherpaCtx.error?.code || null,
-  });
+  if (process.env.DEBUG_SHERPA === "1") {
+    console.log("sherpa[meta-ads.brandtruth]", {
+      source: sherpaCtx.source,
+      length: sherpaCtx.text?.length || 0,
+      clientId: sherpaCtx.clientId || null,
+      errorCode: sherpaCtx.error?.code || null,
+    });
+  }
 
   let attioBlock = "";
   if (project.attioCompanyId) {
