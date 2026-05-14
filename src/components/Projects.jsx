@@ -43,8 +43,10 @@ import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } 
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 
 // Monday.com-style status values — matches the screenshot Jeremy shared.
-// Legacy records stored "active" / "onHold" — see normaliseStatus() below
-// which maps those onto the new keys so nothing becomes unreadable.
+// Status keys + legacy mapping + normaliseStatus() now live in
+// shared/projects/status.js so the cron + Capacity helpers can use the
+// same source of truth. Only the UI-specific colours/labels stay here.
+import { normaliseStatus } from "../../shared/projects/status.js";
 const STATUS_OPTIONS = [
   { key: "notStarted",    label: "Not Started",       color: "#6B7280" },
   { key: "inProgress",    label: "In Progress",       color: "#F97316" },
@@ -55,12 +57,6 @@ const STATUS_OPTIONS = [
   { key: "archived",      label: "Archived",          color: "#475569" },
 ];
 const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map(s => [s.key, s]));
-// Legacy → new keys so pre-refactor records still render a sensible pill.
-const LEGACY_STATUS = { active: "inProgress", onHold: "waitingClient" };
-function normaliseStatus(raw) {
-  const key = LEGACY_STATUS[raw] || raw || "notStarted";
-  return STATUS_MAP[key] ? key : "notStarted";
-}
 
 // ─── Subtask taxonomy ──────────────────────────────────────────────
 // Subtasks have a slightly different status set than their parent
