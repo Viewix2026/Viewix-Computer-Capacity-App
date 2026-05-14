@@ -27,7 +27,6 @@
 
 import { recomputeClientAnalytics, _fb } from "./_analyticsScoring.js";
 import { APIFY_IG_COST_PER_RESULT_USD, safeHandleKey } from "./_analyticsScrape.js";
-import { persistThumbnailsBulk, isPersistedThumbnailUrl } from "./_analyticsThumbnails.js";
 
 const APIFY_BASE = "https://api.apify.com/v2";
 const { fbGet, fbSet, fbPatch } = _fb;
@@ -316,35 +315,14 @@ export default async function handler(req, res) {
 
   const todayUtc = new Date().toISOString().slice(0, 10);
 
-  // ─── Persist thumbnails to Firebase Storage ──────────────────────
-  // IG CDN thumbnail URLs expire within hours. Upload bytes server-side
-  // now so the dashboard can render them indefinitely.
-  // Best-effort: any upload that fails leaves the original (expiring)
-  // URL in place — the dashboard's emoji fallback will kick in once
-  // the CDN URL eventually 403s.
-  // Concurrency capped inside persistThumbnailsBulk (8 in flight).
-  // For an "initial" 60-post scrape this adds ~2-3s wall-clock; still
-  // well inside Apify's 30s webhook budget.
-  const thumbTargets = filtered
-    .filter(n => n.post?.thumbnail && !isPersistedThumbnailUrl(n.post.thumbnail))
-    .map(n => ({ videoId: n.videoId, sourceUrl: n.post.thumbnail }));
-  let persistedUrls = {};
-  if (thumbTargets.length > 0) {
-    try {
-      persistedUrls = await persistThumbnailsBulk({
-        clientId, platform, items: thumbTargets,
-      });
-    } catch (err) {
-      console.warn(`[analytics-webhook] thumbnail persist batch failed: ${err.message}`);
-    }
-    // Rewrite each post.thumbnail to the persisted URL if upload
-    // succeeded. Failed uploads leave the original CDN URL — better
-    // than nothing for the next few hours.
-    for (const n of filtered) {
-      const persisted = persistedUrls[n.videoId];
-      if (persisted) n.post.thumbnail = persisted;
-    }
-  }
+  // Note: we used to upload thumbnail bytes to Firebase Storage here
+  // to dodge IG CDN URL expiry. That required Blaze plan + Storage
+  // setup. Switched to the simpler approach used by the Preproduction
+  // tab — the dashboard PostCard renders an IG-branded gradient
+  // placeholder underneath the (possibly-expired) thumbnail, so once
+  // the CDN URL 403s the tile still looks intentional. See
+  // src/features/analytics/components/PostCard.jsx for the rendering
+  // pattern. The expiring thumbnail URL is stored as-is on post.thumbnail.
 
   // Bulk-write all posts + today's snapshots in a SINGLE Firebase
   // PATCH per platform. Doing 60+ sequential `fbSet` calls was

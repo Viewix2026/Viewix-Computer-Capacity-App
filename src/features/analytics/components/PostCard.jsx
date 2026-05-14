@@ -1,24 +1,23 @@
 // PostCard — shared post visual. Renders one video with its
-// thumbnail, caption excerpt, metrics, and the scoring labels the
+// preview, caption excerpt, metrics, and the scoring labels the
 // API precomputed.
 //
 // Pure display. Every number it shows came from
 // /analytics/videos/{id}/{platform}/{videoId}/scoring — nothing is
 // derived here.
+//
+// Preview tiles use the same pattern as the Preproduction tab's
+// ReelPreview compact mode: gradient + play icon as the always-present
+// background, with the scraped IG thumbnail overlaid only if it still
+// loads. IG CDN URLs expire within hours; the gradient stays. No
+// reliance on storing thumbnail bytes server-side. Click-through
+// opens the real IG URL.
 
-import { useState } from "react";
 import { fmtCount, fmtPct } from "../utils/displayFormatters";
 import { overperformanceLabel, repeatabilityLabel } from "../scoringDisplay/labels";
 
 export function PostCard({ video }) {
   const { post, snapshot, scoring } = video;
-
-  // IG thumbnail URLs (the displayUrl Apify returns) are CDN tokens
-  // that expire within hours. After expiry the request 403s. Track
-  // load failure in state so we render the fallback placeholder
-  // instead of leaving an empty 96x96 grey box.
-  const [thumbBroken, setThumbBroken] = useState(false);
-  const showThumb = !!post?.thumbnail && !thumbBroken;
 
   // Prefer the precomputed label (carries server-side rounding).
   // Fall back to deriving from the score for safety; both paths are
@@ -55,30 +54,47 @@ export function PostCard({ video }) {
         boxShadow: isRepeatable ? "0 0 14px rgba(16,185,129,0.18)" : "none",
         transition: "border-color 0.15s",
       }}>
-      {/* Thumbnail */}
+      {/* Preview tile — IG-branded gradient as the always-present
+          background, with the scraped thumbnail layered on top if it
+          still loads. IG CDN URLs expire within hours; the gradient
+          stays. Click-through (outer card) opens the real IG URL.
+          Matches Preproduction's ReelPreview compact pattern. */}
       <div style={{
         flexShrink: 0,
         width: 96, height: 96,
         borderRadius: 8,
-        background: "var(--bg)",
         overflow: "hidden",
         position: "relative",
+        background: "linear-gradient(135deg, #833AB4 0%, #C13584 35%, #FD1D1D 65%, #FCB045 100%)",
       }}>
-        {showThumb ? (
+        {post?.thumbnail && (
           // eslint-disable-next-line jsx-a11y/img-redundant-alt
           <img
             src={post.thumbnail}
             alt=""
-            onError={() => setThumbBroken(true)}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            loading="lazy"
+            onError={e => { e.target.style.display = "none"; }}
+            style={{
+              position: "absolute", inset: 0,
+              width: "100%", height: "100%", objectFit: "cover",
+            }}
           />
-        ) : (
-          <div style={{
-            width: "100%", height: "100%",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 24, opacity: 0.4,
-          }}>🎬</div>
         )}
+        {/* Play icon always renders as overlay so it's visible even
+            when the thumbnail loads (and if it fails, the icon + gradient
+            are the fallback). */}
+        <div style={{
+          position: "absolute", inset: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          pointerEvents: "none",
+        }}>
+          <div style={{
+            width: 26, height: 26, borderRadius: "50%",
+            background: "rgba(0,0,0,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            color: "#fff", fontSize: 11,
+          }}>▶</div>
+        </div>
       </div>
 
       {/* Body */}
