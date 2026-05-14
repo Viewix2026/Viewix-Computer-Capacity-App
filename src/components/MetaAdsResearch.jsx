@@ -18,7 +18,7 @@ import { useState, useEffect, useRef } from "react";
 import { authFetch, fbSet, fbUpdate, fbListenSafe } from "../firebase";
 import { CellRewriteModal, EditableField } from "./shared/CellRewriteModal";
 import { SherpaStatusRow } from "./shared/SherpaStatusRow";
-import { matchSherpaForName, preproductionShareUrl } from "../utils";
+import { matchSherpaClientRecord, preproductionShareUrl } from "../utils";
 
 // Tab registry — edit this list + a switch arm below to add/rename
 // tabs. Each entry has a key (matches project.tab), label (shown in
@@ -41,9 +41,14 @@ export function MetaAdsResearch({ project, accounts, clients, sherpaCacheMeta, o
   const tab = effectiveTab(project);
   const approvals = project?.approvals || {};
   // Resolve the /clients record that owns this project's Sherpa Google Doc.
-  // Same fuzzy-match logic the server uses, so the status row reflects the
-  // same client record the AI handlers will read from.
-  const linkedClient = matchSherpaForName(project?.companyName, clients);
+  // Mirrors api/_sherpa.js matchSherpaClient (attioId exact match → fuzzy
+  // name fallback) so the status row reflects the same client record the
+  // AI handlers will read from.
+  const linkedClient = matchSherpaClientRecord({
+    companyName: project?.companyName,
+    attioCompanyId: project?.attioCompanyId,
+    clients,
+  });
   const sherpaMeta = linkedClient ? (sherpaCacheMeta?.[linkedClient.id] || null) : null;
 
   const btn = (key) => {

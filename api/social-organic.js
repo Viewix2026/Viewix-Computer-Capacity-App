@@ -1381,12 +1381,14 @@ async function handleGenerateScript(req, res) {
     attioCompanyId: project.attioCompanyId,
   });
   const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
-  console.log("sherpa[social-organic.script]", {
-    source: sherpaCtx.source,
-    length: sherpaCtx.text?.length || 0,
-    clientId: sherpaCtx.clientId || null,
-    errorCode: sherpaCtx.error?.code || null,
-  });
+  if (process.env.DEBUG_SHERPA === "1") {
+    console.log("sherpa[social-organic.script]", {
+      source: sherpaCtx.source,
+      length: sherpaCtx.text?.length || 0,
+      clientId: sherpaCtx.clientId || null,
+      errorCode: sherpaCtx.error?.code || null,
+    });
+  }
 
   let allRows;
   try {
@@ -1736,12 +1738,14 @@ async function handleGenerateBrandTruth(req, res) {
     attioCompanyId: project.attioCompanyId,
   });
   const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
-  console.log("sherpa[social-organic.brandtruth]", {
-    source: sherpaCtx.source,
-    length: sherpaCtx.text?.length || 0,
-    clientId: sherpaCtx.clientId || null,
-    errorCode: sherpaCtx.error?.code || null,
-  });
+  if (process.env.DEBUG_SHERPA === "1") {
+    console.log("sherpa[social-organic.brandtruth]", {
+      source: sherpaCtx.source,
+      length: sherpaCtx.text?.length || 0,
+      clientId: sherpaCtx.clientId || null,
+      errorCode: sherpaCtx.error?.code || null,
+    });
+  }
 
   let attioBlock = "";
   if (project.attioCompanyId) {

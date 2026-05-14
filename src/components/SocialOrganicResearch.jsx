@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useRef, memo } from "react";
 import { authFetch, fbSet, fbSetAsync, fbUpdate, fbListenSafe, getCurrentRole } from "../firebase";
-import { logoBg, makeShortId, matchSherpaForName, preproductionShareUrl } from "../utils";
+import { logoBg, makeShortId, matchSherpaClientRecord, preproductionShareUrl } from "../utils";
 import { useAudioRecorder } from "../hooks/useAudioRecorder";
 import { SocialOrganicSelect } from "./SocialOrganicSelect";
 import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewriteModal";
@@ -423,9 +423,16 @@ function ResearchDetail({ project, accounts, clients, sherpaCacheMeta, findAccou
   const lbg = logoBg(getAccountLogoBg(project.companyName, project.attioCompanyId));
   const linkedAccount = findAccount(project.companyName, project.attioCompanyId);
   // Resolve the /clients record that owns this project's Sherpa Google Doc.
-  // Same fuzzy-match logic the server uses, so the status row reflects the
-  // same client record the AI handlers will read from.
-  const linkedClient = matchSherpaForName(project.companyName, clients);
+  // Mirrors api/_sherpa.js matchSherpaClient (attioId exact match → fuzzy
+  // name fallback) so the status row reflects the same client record the
+  // AI handlers will read from. Name-only matching here would diverge when
+  // a project's attioCompanyId pins one record but the company name fuzzy-
+  // matches another.
+  const linkedClient = matchSherpaClientRecord({
+    companyName: project.companyName,
+    attioCompanyId: project.attioCompanyId,
+    clients,
+  });
   const sherpaMeta = linkedClient ? (sherpaCacheMeta?.[linkedClient.id] || null) : null;
   const [scraping, setScraping] = useState(false);
   const [scrapeError, setScrapeError] = useState(null);

@@ -490,6 +490,22 @@ export function matchSherpaForName(targetName, clients) {
   return null;
 }
 
+// Mirrors api/_sherpa.js matchSherpaClient so the Brand Truth status row
+// resolves the same /clients record the server will read from. Without
+// this, a client whose attioId hits an exact backend match but whose
+// name has multiple ambiguous fuzzy matches would surface the wrong (or
+// no) cache state on the UI while the AI uses the attio-matched record.
+// Preference: attioId exact → fuzzy name (delegated to matchSherpaForName
+// so the 3-tier name logic stays single-sourced).
+export function matchSherpaClientRecord({ companyName, attioCompanyId, clients }) {
+  const list = Array.isArray(clients) ? clients : Object.values(clients || {}).filter(Boolean);
+  if (attioCompanyId) {
+    const byAttio = list.find(c => c?.attioId && c.attioId === attioCompanyId);
+    if (byAttio) return byAttio;
+  }
+  return matchSherpaForName(companyName, list);
+}
+
 // ─── Delivery Helpers ───
 export function newDelivery(clientName, projectName) {
   return { id: `del-${Date.now()}`, shortId: makeShortId(), clientName: clientName || "", projectName: projectName || "", logoUrl: "", videos: [], createdAt: new Date().toISOString() };

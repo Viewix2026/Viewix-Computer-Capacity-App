@@ -24,6 +24,18 @@ const TAIL_KEEP = 5_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const RETRY_TTL_MS = 60_000;
 
+// Cache writes are not load-bearing — if Firebase admin hiccups we'd
+// rather degrade to "generate without Sherpa" than 500 the AI request.
+// loadSherpaContext's contract is "never throws"; this preserves it
+// across every admin write site, including the two inside writeError.
+async function safeWrite(label, fn) {
+  try {
+    await fn();
+  } catch (e) {
+    console.warn(`sherpa: ${label} write failed:`, e?.message || e);
+  }
+}
+
 // ─── docId extraction ─────────────────────────────────────────────
 // Google Doc URLs are docs.google.com/document/d/{ID}/{anything}
 // where ID is [A-Za-z0-9_-]+. Anything else is malformed.
@@ -157,7 +169,7 @@ export async function loadSherpaContext({ companyName, attioCompanyId, forceRefr
   const docId = extractDocId(client.docUrl);
   if (!docId) {
     const err = { code: "malformed_url", message: "Sherpa docUrl is not a recognisable Google Docs URL", at: new Date().toISOString() };
-    await writeError(client.id, client.docUrl, null, err);
+    await safeWrite("malformed_url meta", () => writeError(client.id, client.docUrl, null, err));
     return { text: "", source: "none", clientId: client.id, error: err };
   }
 
@@ -208,10 +220,10 @@ export async function loadSherpaContext({ companyName, attioCompanyId, forceRefr
     const transient = errRecord.code === "timeout" || errRecord.code === "rate_limited" || errRecord.code === "fetch_failed";
     if (transient && cacheText && cacheMeta?.docId === docId) {
       // Preserve prior good text, only update meta.
-      await adminPatch(`/sherpaCacheMeta/${client.id}`, {
+      await safeWrite("transient-error meta patch", () => adminPatch(`/sherpaCacheMeta/${client.id}`, {
         error: errRecord,
         lastRetryAt: new Date().toISOString(),
-      });
+      }));
       return {
         text: cacheText,
         source: "stale",
@@ -221,16 +233,18 @@ export async function loadSherpaContext({ companyName, attioCompanyId, forceRefr
       };
     }
     // Terminal: blank cache, surface error.
-    await writeError(client.id, client.docUrl, docId, errRecord);
+    await safeWrite("terminal-error meta", () => writeError(client.id, client.docUrl, docId, errRecord));
     return { text: "", source: "none", clientId: client.id, error: errRecord };
   }
 
   const fetchedAt = new Date().toISOString();
   // Write both paths. Sequential is fine — meta is the watched record so
   // the UI updates when it lands, and text being written first means a
-  // simultaneous reader can't see stale meta paired with new text.
-  await adminSet(`/sherpaCache/${client.id}`, { text: fetched.text });
-  await adminSet(`/sherpaCacheMeta/${client.id}`, {
+  // simultaneous reader can't see stale meta paired with new text. If
+  // either write fails the producer still gets the fresh text in this
+  // response; the next request will re-fetch.
+  await safeWrite("fresh text", () => adminSet(`/sherpaCache/${client.id}`, { text: fetched.text }));
+  await safeWrite("fresh meta", () => adminSet(`/sherpaCacheMeta/${client.id}`, {
     clientId: client.id,
     fetchedAt,
     sourceUrl: client.docUrl,
@@ -239,7 +253,7 @@ export async function loadSherpaContext({ companyName, attioCompanyId, forceRefr
     truncated: fetched.truncated,
     lastRetryAt: null,
     error: null,
-  });
+  }));
 
   return {
     text: fetched.text,
@@ -250,8 +264,12 @@ export async function loadSherpaContext({ companyName, attioCompanyId, forceRefr
 }
 
 async function writeError(clientId, sourceUrl, docId, errRecord) {
-  await adminSet(`/sherpaCache/${clientId}`, { text: "" });
-  await adminSet(`/sherpaCacheMeta/${clientId}`, {
+  // Both writes wrapped — callers via safeWrite already swallow throws,
+  // but inlining safeWrite here means each write fails independently
+  // so a meta-write failure doesn't suppress the text blank, and vice
+  // versa.
+  await safeWrite("error text blank", () => adminSet(`/sherpaCache/${clientId}`, { text: "" }));
+  await safeWrite("error meta", () => adminSet(`/sherpaCacheMeta/${clientId}`, {
     clientId,
     fetchedAt: null,
     sourceUrl: sourceUrl || null,
@@ -260,7 +278,7 @@ async function writeError(clientId, sourceUrl, docId, errRecord) {
     truncated: false,
     lastRetryAt: new Date().toISOString(),
     error: errRecord,
-  });
+  }));
 }
 
 // ─── Prompt block helper ──────────────────────────────────────────
