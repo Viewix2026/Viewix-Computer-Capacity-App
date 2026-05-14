@@ -35,6 +35,14 @@ const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: t
 import { BTN } from "../config";
 import { fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
 import { fbSet, fbUpdate } from "../firebase";
+import {
+  CalendarSyncContext,
+  CALENDAR_SYNC_DEBOUNCE_MS,
+  CALENDAR_RELEVANT_FIELDS,
+  enqueueCalendarSync,
+  fanOutCalendarSync,
+  deleteSubtaskWithCalendarCleanup,
+} from "../calendar-sync";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
 import { ClientGoalPill } from "./ClientGoalPill";
@@ -928,8 +936,256 @@ function MultiAssigneePicker({ value, editors, onChange }) {
   );
 }
 
+// Persist a syncToCalendar toggle change. Three branches:
+//   - turning ON              → simple persist, debounced sync entry
+//   - turning OFF, no event   → simple persist, debounced delete
+//   - turning OFF, has event  → atomic multi-path (subtask + queue
+//                               with _cancellationMode) so the worker
+//                               can pick the right sendUpdates mode
+//                               without round-tripping back to read
+//                               syncToCalendar first.
+function persistSyncToggle({ projectId, subtask, setProjects, next, cancellationMode }) {
+  const ts = new Date().toISOString();
+  if (typeof setProjects === "function") {
+    setProjects(prev => prev.map(p => {
+      if (!p || p.id !== projectId) return p;
+      const subs = { ...(p.subtasks || {}) };
+      subs[subtask.id] = { ...(subs[subtask.id] || {}), syncToCalendar: next, updatedAt: ts };
+      return { ...p, subtasks: subs, updatedAt: ts };
+    }));
+  }
+  if (next === false && subtask?.calendarEventId) {
+    const key = `${projectId}__${subtask.id}`;
+    fbUpdate("/", {
+      [`projects/${projectId}/subtasks/${subtask.id}/syncToCalendar`]: false,
+      [`projects/${projectId}/subtasks/${subtask.id}/updatedAt`]: ts,
+      [`calendarSyncQueue/${key}`]: {
+        projectId,
+        subtaskId: subtask.id,
+        action: "sync",
+        calendarEventId: null,
+        dueAt: new Date(Date.now() + CALENDAR_SYNC_DEBOUNCE_MS).toISOString(),
+        reason: "subtask-edit",
+        _cancellationMode: cancellationMode || "all",
+        attempts: 0,
+        lockedUntil: null,
+        lockOwner: null,
+        updatedAt: ts,
+      },
+    });
+    return;
+  }
+  // No-event-yet path OR turning back ON — single-leaf write, the
+  // standard enqueue helper picks it up because syncToCalendar is in
+  // CALENDAR_RELEVANT_FIELDS.
+  fbSet(`/projects/${projectId}/subtasks/${subtask.id}/syncToCalendar`, next);
+  fbSet(`/projects/${projectId}/subtasks/${subtask.id}/updatedAt`, ts);
+  enqueueCalendarSync({
+    projectId,
+    prevSubtask: subtask,
+    nextSubtask: { ...subtask, syncToCalendar: next },
+  });
+}
+
+// Confirm-removal dialog. Three options: cancel, remove with email,
+// remove silently. Returns "all" | "none" via onConfirm, or null on
+// cancel.
+function ShootCalendarRemovalDialog({ onConfirm, onCancel }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200,
+        background: "rgba(0,0,0,0.65)",
+        backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 24,
+      }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "var(--card)", border: "1px solid var(--border)",
+          borderRadius: 12, width: "min(520px, 100%)",
+          padding: 20, boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+          fontFamily: "inherit", color: "var(--fg)",
+        }}>
+        <h3 style={{ margin: "0 0 12px", fontSize: 16 }}>Remove from Viewix calendar?</h3>
+        <p style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5, color: "var(--muted)" }}>
+          This shoot is already on the calendar. Removing it will email a
+          cancellation to attendees. There's a "remove silently" option, but
+          Google can't guarantee silent removal reaches every external
+          calendar (Apple, Outlook), so attendees may keep seeing a stale
+          event. We recommend the cancellation email.
+        </p>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 16 }}>
+          <button
+            onClick={onCancel}
+            style={{ ...BTN.subtle, fontFamily: "inherit", cursor: "pointer", padding: "8px 14px" }}>
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm("none")}
+            style={{ ...BTN.subtle, fontFamily: "inherit", cursor: "pointer", padding: "8px 14px" }}
+            title="Worker calls Google with sendUpdates=none. Your producer calendar reflects the deletion; client calendars (especially Apple/Outlook) may still show a stale event.">
+            Remove silently (advanced)
+          </button>
+          <button
+            onClick={() => onConfirm("all")}
+            style={{
+              fontFamily: "inherit", cursor: "pointer", padding: "8px 14px",
+              background: "#EF4444", color: "#fff",
+              border: "1px solid #EF4444", borderRadius: 8, fontWeight: 600,
+            }}>
+            Remove with cancellation email
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Inline UI on every shoot SubtaskRow — banner + sync-status pill +
+// per-shoot syncToCalendar toggle.
+function ShootCalendarSyncControls({ subtask, queueEntry, onToggleSync, onRetry }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  // Re-render every 30s so the "syncs in N min" countdown ticks.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!queueEntry) return;
+    const id = setInterval(() => setTick(t => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, [queueEntry]);
+  void tick;
+
+  const syncToCalendar = subtask.syncToCalendar !== false;
+
+  // Times-missing / invalid banner. Shown when stage=shoot + dates set
+  // but times missing or end <= start. Catches the producer who set
+  // dates from the date inputs and forgot the times.
+  let timesBanner = null;
+  if (subtask.startDate || subtask.endDate) {
+    const haveBothTimes = !!subtask.startTime && !!subtask.endTime;
+    if (!haveBothTimes) {
+      timesBanner = "Add start + end times to sync this shoot to the Viewix calendar.";
+    } else if (subtask.startDate && subtask.endDate) {
+      const startKey = `${subtask.startDate}T${subtask.startTime}`;
+      const endKey = `${subtask.endDate}T${subtask.endTime}`;
+      if (endKey <= startKey) {
+        timesBanner = "End must be after start — calendar event is paused until this is fixed.";
+      }
+    }
+  }
+
+  const handleToggle = (e) => {
+    const checked = e.target.checked;
+    if (!checked && subtask.calendarEventId) {
+      // Synced shoot → confirm with three-button dialog.
+      setConfirmOpen(true);
+      return;
+    }
+    // Never-synced shoot, or turning ON. No confirm needed.
+    onToggleSync(checked, null);
+  };
+
+  const now = Date.now();
+  const dueAtMs = queueEntry?.dueAt ? Date.parse(queueEntry.dueAt) : null;
+  const minsToSync = dueAtMs ? Math.max(0, Math.round((dueAtMs - now) / 60_000)) : null;
+  const hasError = !!subtask.calendarSyncError;
+
+  let pill = null;
+  if (hasError) {
+    pill = (
+      <span style={pillStyle("#EF4444")} title={subtask.calendarSyncError}>
+        ⚠ Sync failed: {String(subtask.calendarSyncError).slice(0, 60)}
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            style={{
+              marginLeft: 8, padding: "2px 6px", fontSize: 10,
+              border: "1px solid rgba(255,255,255,0.4)", borderRadius: 4,
+              background: "transparent", color: "#fff", cursor: "pointer", fontFamily: "inherit",
+            }}>
+            Retry now
+          </button>
+        )}
+      </span>
+    );
+  } else if (queueEntry && dueAtMs && dueAtMs > now) {
+    pill = <span style={pillStyle("#8B5CF6")}>🕐 Syncs in {minsToSync || "<1"} min</span>;
+  } else if (queueEntry) {
+    pill = <span style={pillStyle("#8B5CF6")}>⟳ Syncing…</span>;
+  } else if (subtask.calendarEventId && subtask.calendarEventHtmlLink) {
+    pill = (
+      <a
+        href={subtask.calendarEventHtmlLink}
+        target="_blank" rel="noopener noreferrer"
+        style={{ ...pillStyle("#10B981"), textDecoration: "none" }}>
+        ✓ On calendar
+      </a>
+    );
+  } else if (subtask.calendarEventId) {
+    pill = <span style={pillStyle("#10B981")}>✓ On calendar</span>;
+  }
+
+  return (
+    <>
+      {timesBanner && (
+        <div style={{
+          marginTop: 6, marginLeft: 18,
+          padding: "4px 8px",
+          fontSize: 10, color: "#F59E0B",
+          background: "rgba(245,158,11,0.10)",
+          border: "1px solid rgba(245,158,11,0.30)",
+          borderRadius: 6,
+          maxWidth: "fit-content",
+        }}>
+          ⚠ {timesBanner}
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, marginLeft: 18, flexWrap: "wrap" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "var(--muted)", cursor: "pointer", userSelect: "none" }}>
+          <input
+            type="checkbox"
+            checked={syncToCalendar}
+            onChange={handleToggle}
+            style={{ cursor: "pointer", margin: 0 }}
+          />
+          Sync to Viewix calendar
+        </label>
+        {pill}
+      </div>
+      {confirmOpen && (
+        <ShootCalendarRemovalDialog
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={(mode) => {
+            setConfirmOpen(false);
+            onToggleSync(false, mode);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function pillStyle(color) {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 4,
+    padding: "2px 8px", fontSize: 10, fontWeight: 600,
+    color: "#fff", background: color, borderRadius: 999,
+    border: `1px solid ${color}`,
+  };
+}
+
 function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects, setDeliveries }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
+  const calendarSyncQueue = useContext(CalendarSyncContext);
+  const queueKey = `${projectId}__${subtask.id}`;
+  const queueEntry = calendarSyncQueue?.get?.(queueKey) || null;
   // useSortable wires this row into whatever <SortableContext> wraps
   // it (project details + the projects sub-tab list each have their
   // own). The drag handle in the leading cell carries the listeners
@@ -1073,6 +1329,15 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
           fbSet(`/deliveries/${delId}/videos/${idx}/viewixStatus`, "Ready for Review");
         }
       }
+    }
+
+    // Calendar sync — every shoot-relevant write enqueues a sync
+    // entry (5-min debounced). The helper skips no-op cases (subtask
+    // was never a shoot and isn't becoming one AND has no existing
+    // event to clean up), so non-shoot edits are safely cheap.
+    if (CALENDAR_RELEVANT_FIELDS.has(field)) {
+      const nextSubtask = { ...subtask, [field]: value };
+      enqueueCalendarSync({ projectId, prevSubtask: subtask, nextSubtask });
     }
   };
   const baseBg = striped ? "rgba(255,255,255,0.02)" : "transparent";
@@ -1251,6 +1516,45 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
             style={{ fontSize: 11, padding: "3px 6px", maxWidth: 90 }}
           />
         </div>
+        {/* Calendar-sync UI — only on shoot subtasks. Times-missing
+            banner + sync status pill + per-shoot toggle. Pure-render;
+            persist() handles the actual writes. */}
+        {subtask.stage === "shoot" && !viewOnly && (
+          <ShootCalendarSyncControls
+            subtask={subtask}
+            queueEntry={queueEntry}
+            onToggleSync={(next, cancellationMode) =>
+              persistSyncToggle({ projectId, subtask, setProjects, next, cancellationMode })
+            }
+            onRetry={() => {
+              const key = `${projectId}__${subtask.id}`;
+              const now = new Date().toISOString();
+              fbUpdate(`/calendarSyncQueue/${key}`, {
+                projectId,
+                subtaskId: subtask.id,
+                action: "sync",
+                calendarEventId: null,
+                dueAt: now, // immediate retry
+                reason: "manual-retry",
+                attempts: 0,
+                lockedUntil: null,
+                lockOwner: null,
+                lastError: null,
+                lastErrorAt: null,
+                updatedAt: now,
+              });
+              if (subtask.calendarSyncError && typeof setProjects === "function") {
+                setProjects(prev => prev.map(p => {
+                  if (!p || p.id !== projectId) return p;
+                  const subs = { ...(p.subtasks || {}) };
+                  subs[subtask.id] = { ...(subs[subtask.id] || {}), calendarSyncError: null };
+                  return { ...p, subtasks: subs };
+                }));
+                fbSet(`/projects/${projectId}/subtasks/${subtask.id}/calendarSyncError`, null);
+              }
+            }}
+          />
+        )}
       </td>
       {/* Empty cell to align with the parent table's new Lead column.
           Account manager / project lead are project-level fields and
@@ -1757,20 +2061,20 @@ function ProjectTable({ projects, allProjects, setProjects, setDeliveries, deliv
                           setProjects={setProjects}
                           setDeliveries={setDeliveries}
                           onDelete={(stId) => {
-                            // Optimistic local delete — same reason
-                            // the inline + add paths above do it.
-                            // Without this the row stayed visible
-                            // until reload even though Firebase had
-                            // already nulled the leaf.
-                            if (typeof setProjects === "function") {
-                              setProjects(prev => prev.map(pp => {
-                                if (!pp || pp.id !== p.id) return pp;
-                                const subs = { ...(pp.subtasks || {}) };
-                                delete subs[stId];
-                                return { ...pp, subtasks: subs, updatedAt: new Date().toISOString() };
-                              }));
-                            }
-                            fbSet(`/projects/${p.id}/subtasks/${stId}`, null);
+                            // Optimistic local delete + atomic queue
+                            // intercept. If the subtask carries a
+                            // calendarEventId, both the queue entry
+                            // (action=delete, with the eventId
+                            // cached) AND the subtask null commit in
+                            // one multi-path fbUpdate — RTDB's
+                            // atomicity prevents orphan calendar
+                            // events if the network blips.
+                            const stRecord = (p.subtasks || {})[stId];
+                            deleteSubtaskWithCalendarCleanup({
+                              projectId: p.id,
+                              subtask: stRecord,
+                              setProjects,
+                            });
                           }}
                         />
                       ))}
@@ -2099,6 +2403,24 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
       console.error("Failed to save project:", e);
       setSaveState("idle");
     }
+
+    // Calendar sync fan-out — when the client name / project name /
+    // client email changes, every FUTURE-scheduled shoot subtask
+    // needs to be re-synced so the calendar event reflects the
+    // updated payload (event summary uses clientName, attendees use
+    // clientContact.email). Past shoots are skipped — no point
+    // re-inviting people to events that already happened.
+    if (
+      path === "clientName" ||
+      path === "projectName" ||
+      path === "clientContact" ||
+      path === "clientContact/email"
+    ) {
+      fanOutCalendarSync({
+        project: { ...project, [path]: value },
+        reason: "project-edit",
+      });
+    }
   };
 
   // Click handlers for the linked-record pills. Each emits a hash-based
@@ -2348,20 +2670,15 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                               setProjects={setProjects}
                               setDeliveries={setDeliveries}
                               onDelete={(stId) => {
-                                // Optimistic local delete — same as the
-                                // ProjectTable's onDelete above. Without
-                                // this the row stayed visible until
-                                // reload despite the leaf being nulled
-                                // in Firebase.
-                                if (typeof setProjects === "function") {
-                                  setProjects(prev => prev.map(pp => {
-                                    if (!pp || pp.id !== project.id) return pp;
-                                    const subs = { ...(pp.subtasks || {}) };
-                                    delete subs[stId];
-                                    return { ...pp, subtasks: subs, updatedAt: new Date().toISOString() };
-                                  }));
-                                }
-                                fbSet(`/projects/${project.id}/subtasks/${stId}`, null);
+                                // Optimistic local delete + atomic
+                                // queue intercept (see ProjectTable's
+                                // onDelete above for the same logic).
+                                const stRecord = (project.subtasks || {})[stId];
+                                deleteSubtaskWithCalendarCleanup({
+                                  projectId: project.id,
+                                  subtask: stRecord,
+                                  setProjects,
+                                });
                               }}
                             />
                           ))}
@@ -2496,7 +2813,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
   );
 }
 
-export function Projects({ role, projects, setProjects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route }) {
+export function Projects({ role, projects, setProjects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route, calendarSyncQueue }) {
   // Lead role gets read-only access to the Projects tab — they can
   // see every record (rows, subtasks, project detail panel) but
   // can't edit, delete, archive, drag, or add. ONE carve-out:
@@ -2703,6 +3020,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   };
 
   return (
+    <CalendarSyncContext.Provider value={calendarSyncQueue || new Map()}>
     <ProjectsAccessContext.Provider value={{ viewOnly, canEditKickoff, canEditProducerNotes, role }}>
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2952,5 +3270,6 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
         />
       )}
     </ProjectsAccessContext.Provider>
+    </CalendarSyncContext.Provider>
   );
 }
