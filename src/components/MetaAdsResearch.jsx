@@ -15,7 +15,7 @@
 // them natively.
 
 import { useState, useEffect, useRef } from "react";
-import { authFetch, fbSet, fbSetAsync, fbUpdate, fbListenSafe } from "../firebase";
+import { authFetch, fbSet, fbUpdate, fbListenSafe } from "../firebase";
 import { CellRewriteModal, EditableField } from "./shared/CellRewriteModal";
 import { preproductionShareUrl } from "../utils";
 
@@ -1698,14 +1698,18 @@ function ScriptStep({ project, onPatch }) {
   );
 }
 
-// Rewrite modal — two modes per the producer flow:
+// Rewrite modal — two modes per the producer flow. Both modes route
+// through /api/meta-ads so the server-side admin SDK does the write;
+// client-side direct writes were tripping RTDB rule inheritance for
+// the editor role with PERMISSION_DENIED.
 //   "ai":     free-text instruction → Claude rewrites the cell/row →
-//             Firebase update via the rewriteCell / rewriteWholeScript
-//             handlers, which also persist the instruction to
-//             scriptFeedback so future rewrites hold context.
-//   "manual": producer edits the value(s) directly in-modal → Firebase
-//             update via fbUpdate (no Claude call, no feedback history
-//             entry — manual edits are author-truth, not coaching).
+//             rewriteCell / rewriteWholeScript handlers; the
+//             instruction is persisted to scriptFeedback so future
+//             rewrites hold context.
+//   "manual": producer edits the value(s) directly in-modal →
+//             manualUpdateCell / manualUpdateRow handlers (no Claude
+//             call, no feedback-history entry — manual edits are
+//             author-truth, not coaching).
 // target.mode controls cell-vs-row scope; the AI/Manual toggle is
 // modal-local state.
 const WHOLE_SCRIPT_FIELDS = [
@@ -1768,29 +1772,30 @@ function RewriteModal({ project, target, onClose, onDone }) {
     setError(null);
     setSubmitting(true);
     try {
-      // Resolve the row's current index right before writing — the
-      // table could have been regenerated since the modal opened.
-      // Refusing to write on row-not-found beats clobbering the wrong
-      // row, which is the same protection the AI handlers use.
-      const scriptTable = Array.isArray(project.scriptTable) ? project.scriptTable : [];
-      const idx = scriptTable.findIndex(r => r && r.id === target.rowId);
-      if (idx < 0) throw new Error("Row no longer in the script table — reopen and try again.");
-
-      if (isRow) {
-        const patch = {};
-        for (const [k] of WHOLE_SCRIPT_FIELDS) {
-          let v = manualRow[k];
-          if (typeof v !== "string") v = "";
-          if (k === "headline" && v.length > 35) v = v.slice(0, 35);
-          patch[k] = v;
-        }
-        await fbUpdate(`/preproduction/metaAds/${project.id}/scriptTable/${idx}`, patch);
-      } else {
-        let v = typeof manualCellValue === "string" ? manualCellValue : "";
-        if (target.column === "headline" && v.length > 35) v = v.slice(0, 35);
-        await fbSetAsync(`/preproduction/metaAds/${project.id}/scriptTable/${idx}/${target.column}`, v);
-      }
-      await fbUpdate(`/preproduction/metaAds/${project.id}`, { updatedAt: new Date().toISOString() });
+      // Route manual edits through /api/meta-ads (admin SDK on the
+      // server) instead of writing directly to RTDB from the client.
+      // Direct client writes were failing with PERMISSION_DENIED for
+      // the editor role — Firebase rules check auth.token.role on
+      // /preproduction/metaAds writes, and the inheritance was biting
+      // editors in ways routing through the API sidesteps entirely.
+      // Server-side row-index re-resolution gives the same race
+      // protection the AI handlers use.
+      const body = isRow
+        ? (() => {
+            const fields = {};
+            for (const [k] of WHOLE_SCRIPT_FIELDS) {
+              fields[k] = typeof manualRow[k] === "string" ? manualRow[k] : "";
+            }
+            return { action: "manualUpdateRow", projectId: project.id, rowId: target.rowId, fields };
+          })()
+        : { action: "manualUpdateCell", projectId: project.id, rowId: target.rowId, column: target.column, value: typeof manualCellValue === "string" ? manualCellValue : "" };
+      const r = await authFetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
       if (isMountedRef.current) onDone?.();
     } catch (e) {
       if (isMountedRef.current) setError(e.message || String(e));

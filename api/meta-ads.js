@@ -1012,6 +1012,71 @@ async function handleRewriteAllScripts(req, res) {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Manual edit (no Claude) — same race-safe write path as the AI
+// rewrite handlers, just skipping the prompt. Routing manual edits
+// through the server-side admin SDK avoids the client-vs-RTDB-rules
+// permission dance producers were hitting with PERMISSION_DENIED:
+// the editor role can call this endpoint (per the dispatcher's role
+// list) but couldn't write the scriptTable subtree directly from the
+// client because Firebase rules check auth.token.role inheritance
+// further down. Admin write bypasses that entirely.
+// ────────────────────────────────────────────────────────────────
+
+const ROW_FIELD_KEYS = ["hook", "explainPain", "results", "offer", "whyOffer", "cta", "headline", "adCopy"];
+
+async function handleManualUpdateCell(req, res) {
+  const { projectId, rowId, column, value } = req.body || {};
+  if (!projectId || !rowId || !column) {
+    return res.status(400).json({ error: "Missing projectId / rowId / column" });
+  }
+  if (!Object.prototype.hasOwnProperty.call(COLUMN_RULES, column)) {
+    return res.status(400).json({ error: `Unknown column: ${column}` });
+  }
+  let v = typeof value === "string" ? value : "";
+  if (column === "headline" && v.length > 35) v = v.slice(0, 35);
+
+  const freshTable = await fbGet(`/preproduction/metaAds/${projectId}/scriptTable`);
+  const freshList = Array.isArray(freshTable) ? freshTable : Object.values(freshTable || {});
+  const freshIndex = freshList.findIndex(r => r && r.id === rowId);
+  if (freshIndex < 0) {
+    return res.status(409).json({ error: "Row no longer in script table — reopen and try again." });
+  }
+  await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${freshIndex}/${column}`, v);
+  await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, value: v });
+}
+
+async function handleManualUpdateRow(req, res) {
+  const { projectId, rowId, fields } = req.body || {};
+  if (!projectId || !rowId || !fields || typeof fields !== "object") {
+    return res.status(400).json({ error: "Missing projectId / rowId / fields" });
+  }
+
+  const patch = {};
+  for (const k of ROW_FIELD_KEYS) {
+    if (!(k in fields)) continue;
+    let v = typeof fields[k] === "string" ? fields[k] : "";
+    if (k === "headline" && v.length > 35) v = v.slice(0, 35);
+    patch[k] = v;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "fields contained no recognised script columns" });
+  }
+
+  const freshTable = await fbGet(`/preproduction/metaAds/${projectId}/scriptTable`);
+  const freshList = Array.isArray(freshTable) ? freshTable : Object.values(freshTable || {});
+  const freshIndex = freshList.findIndex(r => r && r.id === rowId);
+  if (freshIndex < 0) {
+    return res.status(409).json({ error: "Row no longer in script table — reopen and try again." });
+  }
+  await fbPatch(`/preproduction/metaAds/${projectId}/scriptTable/${freshIndex}`, patch);
+  await fbPatch(`/preproduction/metaAds/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, patch });
+}
+
+// ────────────────────────────────────────────────────────────────
 // Push to Runsheets — mirrors the Social Organic pattern at
 // api/social-organic.js:handlePushToRunsheet, adapted for Meta Ads.
 // Same destination (/runsheets/{id}) so the Runsheets UI lights up
@@ -1473,7 +1538,11 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   try {
-    await requireRole(req, ["founders", "founder", "lead"]);
+    // editor is included so production-team members (who sign in with
+    // the editor password and inherit the editor custom claim from
+    // api/auth.js) can rewrite scripts and push runsheets. Previously
+    // they got 403 Forbidden on every Scripting-tab action.
+    await requireRole(req, ["founders", "founder", "lead", "editor"]);
   } catch (e) {
     return sendAuthError(res, e);
   }
@@ -1487,6 +1556,8 @@ export default async function handler(req, res) {
       case "rewriteCell":           return await handleRewriteCell(req, res);
       case "rewriteWholeScript":    return await handleRewriteWholeScript(req, res);
       case "rewriteAllScripts":     return await handleRewriteAllScripts(req, res);
+      case "manualUpdateCell":      return await handleManualUpdateCell(req, res);
+      case "manualUpdateRow":       return await handleManualUpdateRow(req, res);
       case "pushToRunsheet":        return await handlePushToRunsheet(req, res);
       case "generateBrandTruth":     return await handleGenerateBrandTruth(req, res);
       case "rewriteBrandTruthField": return await handleRewriteBrandTruthField(req, res);

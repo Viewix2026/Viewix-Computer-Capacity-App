@@ -14,16 +14,22 @@ const MOTIVATOR_COLORS = {
 // a new package tier is a single-place change.
 import { tierColor } from "../config";
 
+// Keys must match the actual scriptTable field names written by
+// api/meta-ads.js:handleScriptGenerate. The pre-rename column names
+// (explainThePain, theOffer, whyTheOffer, metaAdHeadline, metaAdCopy)
+// were left here when the schema shifted, so the public view was
+// rendering blank for those columns even though the data was right
+// there under the new keys.
 const SCRIPT_COLUMNS = [
   { key: "videoName", label: "Video Name", width: 140 },
   { key: "hook", label: "Hook", width: 200 },
-  { key: "explainThePain", label: "Explain the Pain", width: 180 },
+  { key: "explainPain", label: "Explain the Pain", width: 180 },
   { key: "results", label: "Results", width: 180 },
-  { key: "theOffer", label: "The Offer", width: 200 },
-  { key: "whyTheOffer", label: "Why the Offer", width: 180 },
+  { key: "offer", label: "The Offer", width: 200 },
+  { key: "whyOffer", label: "Why the Offer", width: 180 },
   { key: "cta", label: "CTA", width: 150 },
-  { key: "metaAdHeadline", label: "Meta Ad Headline", width: 160 },
-  { key: "metaAdCopy", label: "Meta Ad Copy", width: 240 },
+  { key: "headline", label: "Meta Ad Headline", width: 160 },
+  { key: "adCopy", label: "Meta Ad Copy", width: 240 },
 ];
 
 export function PreproductionPublicView() {
