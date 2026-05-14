@@ -250,6 +250,15 @@ export function parseAllowlist(value) {
   return ids.length ? new Set(ids) : null;
 }
 
+// Slack Block Kit `text` fields are capped at 3000 chars per block —
+// posts longer than that are rejected outright. Long Opus narrations
+// can run close to the limit, so we clip with an explicit suffix.
+const SLACK_TEXT_MAX = 2900;
+function truncateForSlack(text, max = SLACK_TEXT_MAX) {
+  if (typeof text !== "string" || text.length <= max) return text;
+  return text.slice(0, max - 14) + " …(truncated)";
+}
+
 // Format a brain flag-set into a Block Kit "Heads up" section for use
 // inside a confirm card (Slack scheduling) or as the flags block in
 // the daily digest.
@@ -272,7 +281,7 @@ export function buildBrainFlagsBlocks({ flags, narration, header = ":warning: He
   return [
     {
       type: "section",
-      text: { type: "mrkdwn", text: `${header}\n${lines.join("\n")}` },
+      text: { type: "mrkdwn", text: truncateForSlack(`${header}\n${lines.join("\n")}`) },
     },
   ];
 }

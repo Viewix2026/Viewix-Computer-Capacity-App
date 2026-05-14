@@ -7,6 +7,7 @@
 import { buildSystemPrompt, buildRewritePrompt, PACKAGE_CONFIGS } from "./preproduction-prompt.js";
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { fetchWithTimeout, TIMEOUTS } from "./_http.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
@@ -42,7 +43,7 @@ async function fbPatch(path, data) {
 }
 
 async function callClaude(systemPrompt, userMessage, apiKey) {
-  const resp = await fetch(ANTHROPIC_API, {
+  const resp = await fetchWithTimeout(ANTHROPIC_API, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -61,7 +62,7 @@ async function callClaude(systemPrompt, userMessage, apiKey) {
       ],
       messages: [{ role: "user", content: userMessage }],
     }),
-  });
+  }, TIMEOUTS.anthropic);
 
   if (!resp.ok) {
     const err = await resp.text();
@@ -149,7 +150,7 @@ export default async function handler(req, res) {
         const docId = docIdMatch[1];
 
         try {
-          const docResp = await fetch(`https://docs.google.com/document/d/${docId}/export?format=txt`);
+          const docResp = await fetchWithTimeout(`https://docs.google.com/document/d/${docId}/export?format=txt`, {}, TIMEOUTS.google);
           if (!docResp.ok) {
             throw new Error(`Google Doc fetch failed (${docResp.status}). Make sure the doc is set to "Anyone with the link can view".`);
           }

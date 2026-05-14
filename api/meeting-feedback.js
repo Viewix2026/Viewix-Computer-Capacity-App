@@ -5,6 +5,7 @@
 
 import { adminSet, getAdmin } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { fetchWithTimeout, TIMEOUTS } from "./_http.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
@@ -21,7 +22,7 @@ async function fbSet(path, data) {
 }
 
 async function callClaude(systemPrompt, userMessage, apiKey) {
-  const resp = await fetch(ANTHROPIC_API, {
+  const resp = await fetchWithTimeout(ANTHROPIC_API, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -34,7 +35,7 @@ async function callClaude(systemPrompt, userMessage, apiKey) {
       system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: userMessage }],
     }),
-  });
+  }, TIMEOUTS.anthropic);
   if (!resp.ok) {
     const err = await resp.text();
     throw new Error(`Anthropic API error ${resp.status}: ${err}`);

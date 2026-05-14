@@ -17,6 +17,7 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { PACKAGE_CONFIGS } from "./_tiers.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 import { loadSherpaContext, buildSherpaPromptBlock } from "./_sherpa.js";
+import { fetchWithTimeout, TIMEOUTS } from "./_http.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -337,7 +338,7 @@ async function handleAddManualAd(req, res) {
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 
 async function callClaude({ model, systemPrompt, userMessage, maxTokens, apiKey }) {
-  const r = await fetch(ANTHROPIC_API, {
+  const r = await fetchWithTimeout(ANTHROPIC_API, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
@@ -345,7 +346,7 @@ async function callClaude({ model, systemPrompt, userMessage, maxTokens, apiKey 
       system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: userMessage }],
     }),
-  });
+  }, TIMEOUTS.anthropic);
   if (!r.ok) {
     const err = await r.text();
     throw new Error(`Anthropic ${r.status}: ${err.slice(0, 400)}`);

@@ -12,6 +12,7 @@
 import { getAdmin } from "./_fb-admin.js";
 import { fingerprintFlag } from "../shared/scheduling/flags.js";
 import { todaySydney } from "../shared/scheduling/availability.js";
+import { fetchWithTimeout, TIMEOUTS } from "./_http.js";
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-opus-4-7";
@@ -118,7 +119,7 @@ export async function narrateBrain({
 
   let resp;
   try {
-    resp = await fetch(ANTHROPIC_API, {
+    resp = await fetchWithTimeout(ANTHROPIC_API, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -131,7 +132,7 @@ export async function narrateBrain({
         system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
         messages: [{ role: "user", content: userMessage }],
       }),
-    });
+    }, TIMEOUTS.anthropic);
   } catch (e) {
     console.error("scheduling-narrate fetch error:", e);
     return fallbackNarration(flags || []);
