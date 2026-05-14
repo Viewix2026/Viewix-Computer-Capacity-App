@@ -467,11 +467,13 @@ function CompetitorList({ platform, competitors, onChange }) {
 function RefreshButton({ accountId, enabled }) {
   const [status, setStatus] = useState(null); // null | "pending" | "done" | "error"
   const [message, setMessage] = useState("");
+  const [details, setDetails] = useState(null);
 
   const onClick = async () => {
     if (!enabled) return;
     setStatus("pending");
     setMessage("");
+    setDetails(null);
     try {
       const res = await authFetch("/api/analytics", {
         method: "POST",
@@ -485,10 +487,15 @@ function RefreshButton({ accountId, enabled }) {
       } else {
         setStatus("done");
         setMessage(data?.message || "Refresh queued.");
+        setDetails({
+          errors: Array.isArray(data?.errors) ? data.errors : [],
+          diagnostics: data?.diagnostics || null,
+        });
       }
     } catch (err) {
       setStatus("error");
       setMessage(err?.message || "Network error");
+      setDetails(null);
     }
   };
 
@@ -518,14 +525,32 @@ function RefreshButton({ accountId, enabled }) {
         {status === "pending" ? "Refreshing…" : "Refresh now"}
       </button>
       {message && (
-        <span style={{
+        <div style={{
           fontSize: 10,
           color: status === "error" ? "#EF4444" : "var(--muted)",
-          maxWidth: 240,
+          maxWidth: 360,
           textAlign: "right",
+          lineHeight: 1.45,
         }}>
-          {message}
-        </span>
+          <div>{message}</div>
+          {details?.diagnostics && (
+            <div>
+              Server saw {details.diagnostics.competitorsConfigured ?? 0} competitor(s)
+              {details.diagnostics.competitorHandlesSeen?.length
+                ? `: ${details.diagnostics.competitorHandlesSeen.join(", ")}`
+                : "."}
+            </div>
+          )}
+          {details?.errors?.length > 0 && (
+            <div style={{ color: "#F59E0B" }}>
+              {details.errors.map((e, i) => (
+                <div key={`${e.scope || "error"}-${e.handle || i}`}>
+                  {e.scope}{e.handle ? ` ${e.handle}` : ""}: {e.error}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
