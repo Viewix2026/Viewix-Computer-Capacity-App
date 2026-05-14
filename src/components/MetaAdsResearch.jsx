@@ -15,8 +15,9 @@
 // them natively.
 
 import { useState, useEffect, useRef } from "react";
-import { authFetch, fbSet, fbUpdate, fbListenSafe } from "../firebase";
+import { authFetch, fbSet, fbSetAsync, fbUpdate, fbListenSafe } from "../firebase";
 import { CellRewriteModal, EditableField } from "./shared/CellRewriteModal";
+import { preproductionShareUrl } from "../utils";
 
 // Tab registry — edit this list + a switch arm below to add/rename
 // tabs. Each entry has a key (matches project.tab), label (shown in
@@ -741,7 +742,7 @@ function ResearchStep({ project, onPatch }) {
 // typically only have an ad URL until the producer visits it — they
 // render with a FB-logo placeholder.
 function AdCard({ ad, onRemove }) {
-  const thumb = ad.thumbnailUrl || ad.snapshotUrl || null;
+  const thumb = ad.thumbnailUrl || null;
   const pageName = ad.pageName || ad.advertiserName || "Unknown advertiser";
   const body = (ad.bodyText || ad.headline || "").slice(0, 160);
   const adLink = ad.adUrl || (ad.adId ? `https://www.facebook.com/ads/library/?id=${ad.adId}` : null);
@@ -941,10 +942,10 @@ function VideoReviewStep({ project, onPatch }) {
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           {isApproved
             ? "Video Review approved. Move to Shortlist next."
-            : `${ticked.size} ticked · ${crossed.size} crossed · ${adList.length - ticked.size - crossed.size} unreviewed. Tick at least a few ads you'd want to script against before approving.`}
+            : `${ticked.size} ticked · ${crossed.size} crossed · ${adList.length - ticked.size - crossed.size} unreviewed.`}
         </div>
-        <button onClick={approve} disabled={ticked.size === 0}
-          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : ticked.size === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: ticked.size === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+        <button onClick={approve}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
           {isApproved ? "→ Shortlist" : "Approve Video Review"}
         </button>
       </div>
@@ -953,7 +954,7 @@ function VideoReviewStep({ project, onPatch }) {
 }
 
 function ReviewAdCard({ ad, status, onTick, onCross }) {
-  const thumb = ad.thumbnailUrl || ad.snapshotUrl || null;
+  const thumb = ad.thumbnailUrl || null;
   const adLink = ad.adUrl || (ad.adId ? `https://www.facebook.com/ads/library/?id=${ad.adId}` : null);
   const border = status === "ticked" ? "rgba(34,197,94,0.6)" : status === "crossed" ? "rgba(239,68,68,0.6)" : "var(--border)";
   return (
@@ -1021,24 +1022,24 @@ function ShortlistStep({ project, onPatch }) {
   const tickedAds = ticked.map(id => ads[id]).filter(Boolean);
 
   const approve = () => {
-    const count = Object.keys(shortlisted).length;
-    if (count === 0) { alert("Label at least one ticked ad as a format before approving."); return; }
     fbSet(`/preproduction/metaAds/${project.id}/approvals/shortlist`, new Date().toISOString());
     onPatch({ tab: "select" });
   };
+
+  const shortlistedCount = Object.keys(shortlisted).length;
 
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Shortlist</div>
         <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, maxWidth: 720 }}>
-          For each ticked ad, write what format it represents: what's the hook pattern, what's the structural move that makes it work. Optional — save formats you like to the Meta Ads Format Library so you can reuse them on future projects.
+          For each ticked ad, write what format it represents: what's the hook pattern, what's the structural move that makes it work. Optional — save formats you like to the Meta Ads Format Library so you can reuse them on future projects. You can also skip this step entirely and pick formats from the library on the Selection tab.
         </div>
       </div>
 
       {tickedAds.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", fontSize: 12, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 10 }}>
-          No ticked ads to shortlist yet. Go back to Video Review and tick some ads first.
+        <div style={{ padding: 30, textAlign: "center", fontSize: 12, color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 10 }}>
+          No ticked ads to shortlist. Continue to Selection to pick from existing Format Library entries, or go back to Video Review to tick some ads first.
         </div>
       ) : (
         <div style={{ display: "grid", gap: 12, marginBottom: 20 }}>
@@ -1048,15 +1049,17 @@ function ShortlistStep({ project, onPatch }) {
         </div>
       )}
 
-      {/* Approve */}
+      {/* Approve — no longer gated on shortlistedCount; producers can advance with library-only formats picked on Selection */}
       <div style={{ padding: "14px 18px", background: "var(--card)", border: `1px solid ${isApproved ? "rgba(34,197,94,0.4)" : "var(--border)"}`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           {isApproved
             ? "Shortlist approved. Move to Selection next."
-            : `${Object.keys(shortlisted).length} of ${tickedAds.length} ticked ads labelled as formats.`}
+            : tickedAds.length === 0
+              ? "Nothing shortlisted from this project — pick formats from the library on Selection."
+              : `${shortlistedCount} of ${tickedAds.length} ticked ads labelled as formats.`}
         </div>
-        <button onClick={approve} disabled={Object.keys(shortlisted).length === 0}
-          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : Object.keys(shortlisted).length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: Object.keys(shortlisted).length === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+        <button onClick={approve}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
           {isApproved ? "→ Selection" : "Approve Shortlist"}
         </button>
       </div>
@@ -1401,9 +1404,17 @@ function SelectStep({ project, onPatch }) {
 function ScriptStep({ project, onPatch }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
-  // Click-to-rewrite — stores the cell currently being edited.
-  // { rowId, column, label, currentValue } | null
+  // Click-to-rewrite — stores the cell or whole row currently being edited.
+  // Cell mode: { mode: "cell", rowId, column, label, currentValue }
+  // Row mode:  { mode: "row",  rowId, label, row }
   const [rewriteTarget, setRewriteTarget] = useState(null);
+  // Project-wide feedback box — applies one instruction to every script
+  // in parallel + persists to scriptFeedback.global so future per-cell
+  // rewrites also pick it up.
+  const [globalFeedback, setGlobalFeedback] = useState("");
+  const [applyingAll, setApplyingAll] = useState(false);
+  const [applyAllError, setApplyAllError] = useState(null);
+  const [applyAllResult, setApplyAllResult] = useState(null);
   const scripts = project.scriptTable || [];
   // Tracks mount so the 30-60s Claude call doesn't call setState on
   // an unmounted component when the producer switches tabs mid-flight.
@@ -1429,6 +1440,74 @@ function ScriptStep({ project, onPatch }) {
     }
   };
 
+  // Runsheet handoff state — mirrors the Social Organic pattern at
+  // SocialOrganicResearch.jsx:ScriptToolbar so the UX feels the same
+  // across both preproduction flows.
+  const runsheetHandoff = project.runsheetHandoff || null;
+  const pushed = !!runsheetHandoff?.runsheetId;
+  const shareUrl = preproductionShareUrl(project);
+  const [copied, setCopied] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [pushError, setPushError] = useState(null);
+
+  const copyShare = () => {
+    try {
+      navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard blocked (insecure context / permissions denied) —
+      // fall back to a native prompt the user can copy from manually.
+      window.prompt("Copy this URL:", shareUrl);
+    }
+  };
+
+  const pushToRunsheet = async () => {
+    if (pushed || pushing) return;
+    if (!window.confirm(`Push this project to the Runsheets tab? Creates a new runsheet with one video row per script (${scripts.length} videos).`)) return;
+    setPushError(null);
+    setPushing(true);
+    try {
+      const r = await authFetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pushToRunsheet", projectId: project.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+    } catch (e) {
+      if (isMountedRef.current) setPushError(e.message);
+    } finally {
+      if (isMountedRef.current) setPushing(false);
+    }
+  };
+
+  const applyToAll = async () => {
+    const text = globalFeedback.trim();
+    if (!text || applyingAll || scripts.length === 0) return;
+    if (!window.confirm(`Apply this feedback to all ${scripts.length} scripts? Each script is rewritten in parallel — takes ~30s end to end.`)) return;
+    setApplyAllError(null);
+    setApplyAllResult(null);
+    setApplyingAll(true);
+    try {
+      const r = await authFetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rewriteAllScripts", projectId: project.id, instruction: text }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      if (isMountedRef.current) {
+        setApplyAllResult(d);
+        setGlobalFeedback("");
+      }
+    } catch (e) {
+      if (isMountedRef.current) setApplyAllError(e.message);
+    } finally {
+      if (isMountedRef.current) setApplyingAll(false);
+    }
+  };
+
   return (
     <div>
       <div style={{ marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -1438,15 +1517,42 @@ function ScriptStep({ project, onPatch }) {
             Generate the full script table from your Brand Truth + selected formats. Each script lands in the Hormozi 7-column blueprint (Hook, Pain, Results, Offer, Why, CTA, Headline + Ad Copy).
           </div>
         </div>
-        <button onClick={generate} disabled={generating}
-          style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: generating ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: generating ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
-          {generating ? "Generating…" : scripts.length > 0 ? "Regenerate scripts" : "Generate scripts"}
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {scripts.length > 0 && project.shortId && (
+            <button onClick={copyShare}
+              style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              {copied ? "✓ Copied" : "📎 Copy share URL"}
+            </button>
+          )}
+          <button onClick={generate} disabled={generating}
+            style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: generating ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: generating ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+            {generating ? "Generating…" : scripts.length > 0 ? "Regenerate scripts" : "Generate scripts"}
+          </button>
+          {scripts.length > 0 && !pushed && (
+            <button onClick={pushToRunsheet} disabled={pushing}
+              style={{ padding: "10px 18px", borderRadius: 8, border: "none", background: pushing ? "#374151" : "#22C55E", color: "#fff", fontSize: 13, fontWeight: 700, cursor: pushing ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+              {pushing ? "Pushing…" : "→ Push to Runsheets"}
+            </button>
+          )}
+          {pushed && (
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(34,197,94,0.12)", color: "#22C55E", borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
+              <span>✓ Pushed {new Date(runsheetHandoff.pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
+              <span style={{ color: "#5A6B85", fontSize: 10, fontWeight: 500 }}>
+                Find it in <span style={{ color: "#22C55E", fontWeight: 700 }}>Pre-Prod → Runsheets</span>
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       {error && (
         <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
           {error}
+        </div>
+      )}
+      {pushError && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
+          {pushError}
         </div>
       )}
 
@@ -1460,8 +1566,45 @@ function ScriptStep({ project, onPatch }) {
         </div>
       ) : (
         <>
+          <div style={{ marginBottom: 14, padding: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
+              Feedback on all scripts
+            </div>
+            <textarea
+              value={globalFeedback}
+              onChange={e => setGlobalFeedback(e.target.value)}
+              disabled={applyingAll}
+              placeholder="e.g. Make every hook more aggressive. Or: tighten the CTAs across all scripts."
+              rows={2}
+              style={{ ...textareaSt, marginBottom: 8 }}
+            />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", maxWidth: 560, lineHeight: 1.4 }}>
+                Rewrites all {scripts.length} scripts in parallel and saves the note to project-wide feedback, so future per-cell rewrites also see it.
+              </div>
+              <button onClick={applyToAll} disabled={!globalFeedback.trim() || applyingAll}
+                style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: !globalFeedback.trim() || applyingAll ? "#374151" : "var(--accent)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: !globalFeedback.trim() || applyingAll ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                {applyingAll ? "Applying…" : `Apply to all ${scripts.length} scripts`}
+              </button>
+            </div>
+            {applyAllError && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 11, color: "#EF4444" }}>
+                {applyAllError}
+              </div>
+            )}
+            {applyAllResult && (
+              <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(34,197,94,0.08)", borderRadius: 6, border: "1px solid rgba(34,197,94,0.3)", fontSize: 11, color: "#22C55E" }}>
+                {applyAllResult.succeeded} rewritten · {applyAllResult.failed} failed · {applyAllResult.skipped} skipped
+                {applyAllResult.errors?.length > 0 && (
+                  <div style={{ marginTop: 4, fontSize: 10, color: "#EF4444" }}>
+                    {applyAllResult.errors.slice(0, 3).map(e => `${e.rowId}: ${e.error}`).join("; ")}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
-            Click any cell to rewrite it with AI. Your instruction + the row's current content + Brand Truth feed into Claude; just that field gets replaced.
+            Click any cell to rewrite it with AI. Or use the row-level button to rewrite a whole script as one cohesive update. Every instruction is remembered project-wide so the AI holds context across rewrites.
           </div>
           <div style={{ overflowX: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
             <table style={{ width: "100%", minWidth: 1400, borderCollapse: "collapse", fontSize: 12 }}>
@@ -1481,7 +1624,7 @@ function ScriptStep({ project, onPatch }) {
                   const Cell = ({ column, label, content, width, extraStyle }) => (
                     <td
                       style={{ padding: 0, borderBottom: "1px solid var(--border-light)", verticalAlign: "top", maxWidth: width, cursor: "pointer" }}
-                      onClick={() => setRewriteTarget({ rowId: row.id, column, label, currentValue: content || "" })}
+                      onClick={() => setRewriteTarget({ mode: "cell", rowId: row.id, column, label, currentValue: content || "" })}
                       title="Click to rewrite with AI"
                     >
                       <div style={{ padding: "10px 12px", minHeight: 40, ...(extraStyle || {}) }}>
@@ -1492,8 +1635,14 @@ function ScriptStep({ project, onPatch }) {
                   return (
                     <tr key={row.id || i}>
                       <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, verticalAlign: "top" }}>{String(i + 1).padStart(2, "0")}</td>
-                      <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top" }}>
-                        <div style={{ fontSize: 11, color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{row.videoName || "—"}</div>
+                      <td
+                        style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", cursor: "pointer" }}
+                        onClick={() => setRewriteTarget({ mode: "row", rowId: row.id, label: `Whole script — ${row.videoName || "(unnamed)"}`, row })}
+                        title="Click to give feedback on this entire script"
+                      >
+                        <div style={{ fontSize: 11, color: "var(--accent)", fontFamily: "'JetBrains Mono',monospace", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 3 }}>
+                          {row.videoName || "—"}
+                        </div>
                       </td>
                       <td style={{ padding: "10px 12px", borderBottom: "1px solid var(--border-light)", verticalAlign: "top", color: "var(--muted)", fontSize: 11 }}>{row.formatName || "—"}</td>
                       <Cell column="hook"         label="Hook"            content={row.hook}         width={240} />
@@ -1524,39 +1673,58 @@ function ScriptStep({ project, onPatch }) {
   );
 }
 
-// Rewrite modal — free-text instruction → Claude rewrites that one
-// field → Firebase update → modal closes. No preview / diff view in
-// v1; producer sees the update land in the table when Firebase
-// listener rehydrates.
+// Rewrite modal — two modes per the producer flow:
+//   "ai":     free-text instruction → Claude rewrites the cell/row →
+//             Firebase update via the rewriteCell / rewriteWholeScript
+//             handlers, which also persist the instruction to
+//             scriptFeedback so future rewrites hold context.
+//   "manual": producer edits the value(s) directly in-modal → Firebase
+//             update via fbUpdate (no Claude call, no feedback history
+//             entry — manual edits are author-truth, not coaching).
+// target.mode controls cell-vs-row scope; the AI/Manual toggle is
+// modal-local state.
+const WHOLE_SCRIPT_FIELDS = [
+  ["hook", "Hook"], ["explainPain", "Explain the Pain"], ["results", "Results"],
+  ["offer", "Offer"], ["whyOffer", "Why Offer"], ["cta", "CTA"],
+  ["headline", "Headline"], ["adCopy", "Ad Copy"],
+];
 function RewriteModal({ project, target, onClose, onDone }) {
+  const [mode, setMode] = useState("ai");  // "ai" | "manual"
   const [instruction, setInstruction] = useState("");
+  // Manual-edit state — seeded from target so the producer starts from
+  // the current value(s) rather than empty boxes.
+  const [manualCellValue, setManualCellValue] = useState(target.currentValue || "");
+  const seedRow = () => {
+    const out = {};
+    for (const [k] of WHOLE_SCRIPT_FIELDS) out[k] = target.row?.[k] || "";
+    return out;
+  };
+  const [manualRow, setManualRow] = useState(seedRow);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   // Guards against setState after unmount (user closes the modal mid-
-  // fetch) — plus a ref to dedupe rapid double-clicks on Rewrite which
-  // would otherwise fire two Claude calls and race each other.
+  // fetch) — plus a ref to dedupe rapid double-clicks which would
+  // otherwise fire two Claude calls and race each other.
   const isMountedRef = useRef(true);
   const inFlightRef = useRef(false);
   useEffect(() => () => { isMountedRef.current = false; }, []);
 
-  const submit = async () => {
+  const isRow = target.mode === "row";
+
+  const submitAi = async () => {
     if (!instruction.trim()) return;
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     setError(null);
     setSubmitting(true);
     try {
+      const body = isRow
+        ? { action: "rewriteWholeScript", projectId: project.id, rowId: target.rowId, instruction: instruction.trim() }
+        : { action: "rewriteCell", projectId: project.id, rowId: target.rowId, column: target.column, instruction: instruction.trim(), currentValue: target.currentValue };
       const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "rewriteCell",
-          projectId: project.id,
-          rowId: target.rowId,
-          column: target.column,
-          instruction: instruction.trim(),
-          currentValue: target.currentValue,
-        }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
@@ -1569,29 +1737,129 @@ function RewriteModal({ project, target, onClose, onDone }) {
     }
   };
 
+  const submitManual = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setError(null);
+    setSubmitting(true);
+    try {
+      // Resolve the row's current index right before writing — the
+      // table could have been regenerated since the modal opened.
+      // Refusing to write on row-not-found beats clobbering the wrong
+      // row, which is the same protection the AI handlers use.
+      const scriptTable = Array.isArray(project.scriptTable) ? project.scriptTable : [];
+      const idx = scriptTable.findIndex(r => r && r.id === target.rowId);
+      if (idx < 0) throw new Error("Row no longer in the script table — reopen and try again.");
+
+      if (isRow) {
+        const patch = {};
+        for (const [k] of WHOLE_SCRIPT_FIELDS) {
+          let v = manualRow[k];
+          if (typeof v !== "string") v = "";
+          if (k === "headline" && v.length > 35) v = v.slice(0, 35);
+          patch[k] = v;
+        }
+        await fbUpdate(`/preproduction/metaAds/${project.id}/scriptTable/${idx}`, patch);
+      } else {
+        let v = typeof manualCellValue === "string" ? manualCellValue : "";
+        if (target.column === "headline" && v.length > 35) v = v.slice(0, 35);
+        await fbSetAsync(`/preproduction/metaAds/${project.id}/scriptTable/${idx}/${target.column}`, v);
+      }
+      await fbUpdate(`/preproduction/metaAds/${project.id}`, { updatedAt: new Date().toISOString() });
+      if (isMountedRef.current) onDone?.();
+    } catch (e) {
+      if (isMountedRef.current) setError(e.message || String(e));
+    } finally {
+      inFlightRef.current = false;
+      if (isMountedRef.current) setSubmitting(false);
+    }
+  };
+
+  const submit = mode === "ai" ? submitAi : submitManual;
+  const canSubmit = mode === "ai" ? instruction.trim().length > 0 : true;
+
   return (
     <div onClick={onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
       <div onClick={e => e.stopPropagation()}
-        style={{ background: "var(--card)", borderRadius: 12, padding: 24, maxWidth: 520, width: "100%", border: "1px solid var(--border)" }}>
+        style={{ background: "var(--card)", borderRadius: 12, padding: 24, maxWidth: isRow ? 640 : 520, width: "100%", maxHeight: "90vh", overflowY: "auto", border: "1px solid var(--border)" }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
-          Rewrite with AI
+          {isRow ? "Edit whole script" : "Edit field"}
         </div>
         <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)", marginBottom: 10 }}>
           {target.label}
         </div>
-        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", marginBottom: 14, maxHeight: 120, overflowY: "auto" }}>
-          <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>Current</div>
-          <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-            {target.currentValue || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>(empty)</span>}
+
+        {/* AI / Manual toggle */}
+        <div style={{ display: "flex", gap: 2, marginBottom: 12, background: "var(--bg)", borderRadius: 6, padding: 3, width: "fit-content" }}>
+          <button onClick={() => setMode("ai")}
+            style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "ai" ? "var(--accent)" : "transparent", color: mode === "ai" ? "#fff" : "var(--muted)" }}>
+            AI rewrite
+          </button>
+          <button onClick={() => setMode("manual")}
+            style={{ padding: "6px 14px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "manual" ? "var(--accent)" : "transparent", color: mode === "manual" ? "#fff" : "var(--muted)" }}>
+            Manual edit
+          </button>
+        </div>
+
+        {/* Current preview — shown only in AI mode; in manual mode the editable fields ARE the preview */}
+        {mode === "ai" && (
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", marginBottom: 14, maxHeight: 220, overflowY: "auto" }}>
+            <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>Current</div>
+            {isRow ? (
+              <div style={{ fontSize: 11, color: "var(--fg)", lineHeight: 1.5 }}>
+                {WHOLE_SCRIPT_FIELDS.map(([key, lbl]) => (
+                  <div key={key} style={{ marginBottom: 6 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>{lbl}</div>
+                    <div style={{ whiteSpace: "pre-wrap" }}>
+                      {target.row?.[key] || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>(empty)</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                {target.currentValue || <span style={{ color: "var(--muted)", fontStyle: "italic" }}>(empty)</span>}
+              </div>
+            )}
           </div>
-        </div>
-        <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>
-          Instruction
-        </div>
-        <textarea value={instruction} onChange={e => setInstruction(e.target.value)} autoFocus rows={4}
-          placeholder="e.g. Make this more aggressive, lead with a specific dollar amount. Or: tighten to one sentence. Or: reframe as a Tried Before hook."
-          style={{ ...textareaSt, marginBottom: 12 }} />
+        )}
+
+        {mode === "ai" ? (
+          <>
+            <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>
+              Instruction
+            </div>
+            <textarea value={instruction} onChange={e => setInstruction(e.target.value)} autoFocus rows={4}
+              placeholder="e.g. Make this more aggressive, lead with a specific dollar amount. Or: tighten to one sentence. Or: reframe as a Tried Before hook."
+              style={{ ...textareaSt, marginBottom: 12 }} />
+          </>
+        ) : isRow ? (
+          <div style={{ marginBottom: 12 }}>
+            {WHOLE_SCRIPT_FIELDS.map(([key, lbl]) => (
+              <div key={key} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>
+                  {lbl}{key === "headline" && <span style={{ marginLeft: 6, color: "var(--accent)" }}>·35 char cap</span>}
+                </div>
+                <textarea
+                  value={manualRow[key]}
+                  onChange={e => setManualRow(prev => ({ ...prev, [key]: e.target.value }))}
+                  rows={key === "adCopy" ? 5 : key === "headline" ? 1 : 2}
+                  style={{ ...textareaSt }}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>
+              New value{target.column === "headline" && <span style={{ marginLeft: 6, color: "var(--accent)" }}>·35 char cap</span>}
+            </div>
+            <textarea value={manualCellValue} onChange={e => setManualCellValue(e.target.value)} autoFocus rows={4}
+              style={{ ...textareaSt, marginBottom: 12 }} />
+          </>
+        )}
+
         {error && (
           <div style={{ padding: "8px 12px", background: "rgba(239,68,68,0.08)", borderRadius: 6, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444", marginBottom: 12 }}>
             {error}
@@ -1602,9 +1870,9 @@ function RewriteModal({ project, target, onClose, onDone }) {
             style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 600, cursor: submitting ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
             Cancel
           </button>
-          <button onClick={submit} disabled={submitting || !instruction.trim()}
-            style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: submitting || !instruction.trim() ? "#374151" : "var(--accent)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: submitting || !instruction.trim() ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
-            {submitting ? "Rewriting…" : "Rewrite"}
+          <button onClick={submit} disabled={submitting || !canSubmit}
+            style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: submitting || !canSubmit ? "#374151" : "var(--accent)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: submitting || !canSubmit ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+            {submitting ? (mode === "ai" ? "Rewriting…" : "Saving…") : (mode === "ai" ? "Rewrite" : "Save")}
           </button>
         </div>
       </div>
