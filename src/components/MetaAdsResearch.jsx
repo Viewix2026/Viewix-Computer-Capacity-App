@@ -1075,16 +1075,27 @@ function ShortlistRow({ ad, project, existing }) {
   const [savingLibrary, setSavingLibrary] = useState(false);
   const shortlistId = `sl_${ad.id}`;
 
-  const save = () => {
-    if (!formatName.trim()) return;
+  // save accepts an optional `overrides` object so callers can persist
+  // a value that hasn't settled into React state yet — important for
+  // tag add/remove, which would otherwise hit the classic stale-closure
+  // bug: setTags(next) schedules a re-render but save() runs in the
+  // same tick and reads the old `tags` from its closure. Overrides
+  // bypass that by passing `next` through explicitly.
+  // The plain-object guard (constructor === Object) protects onBlur
+  // callers that pass a SyntheticEvent — those are treated as "no
+  // overrides" rather than accidentally being read as override keys.
+  const save = (overrides) => {
+    const o = (overrides && typeof overrides === "object" && overrides.constructor === Object) ? overrides : {};
+    const nextFormatName = (o.formatName ?? formatName).trim();
+    if (!nextFormatName) return;
     const libraryId = existing?.formatLibraryId || null;
     fbSet(`/preproduction/metaAds/${project.id}/shortlistedFormats/${shortlistId}`, {
       adId: ad.id,
       shortlistId,
       formatLibraryId: libraryId,
-      formatName: formatName.trim(),
-      description: description.trim(),
-      tags,
+      formatName: nextFormatName,
+      description: (o.description ?? description).trim(),
+      tags: o.tags ?? tags,
       thumbnail: ad.thumbnailUrl || null,
       videoUrl: ad.videoUrl || null,
       adUrl: ad.adUrl || null,
@@ -1146,8 +1157,16 @@ function ShortlistRow({ ad, project, existing }) {
   const addTag = () => {
     const t = tagInput.trim().replace(/^#/, "");
     if (!t || tags.includes(t)) return;
-    setTags([...tags, t]);
+    const next = [...tags, t];
+    setTags(next);
     setTagInput("");
+    save({ tags: next });
+  };
+
+  const removeTag = (t) => {
+    const next = tags.filter(x => x !== t);
+    setTags(next);
+    save({ tags: next });
   };
 
   return (
@@ -1178,11 +1197,11 @@ function ShortlistRow({ ad, project, existing }) {
           {tags.map(t => (
             <span key={t} style={{ padding: "2px 8px", background: "var(--bg)", borderRadius: 3, fontSize: 10, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 4 }}>
               {t}
-              <button onClick={() => { setTags(tags.filter(x => x !== t)); save(); }} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 11 }}>×</button>
+              <button onClick={() => removeTag(t)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 11 }}>×</button>
             </span>
           ))}
           <input type="text" value={tagInput} onChange={e => setTagInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTag(); save(); } }}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
             placeholder="+ Tag"
             style={{ ...textareaSt, width: 100, padding: "3px 8px", fontSize: 11 }} />
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -1277,8 +1296,14 @@ function SelectStep({ project, onPatch }) {
     }));
   }, [selected.length, totalTarget]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Approval is gated by BOTH having at least one format AND having the
+  // per-format counts add up to the project's total. Previously the
+  // approve handler only checked length, so producers could ship a 10/12
+  // allocation and silently get 10 ads from the generator (totalAds is
+  // computed from selectedFormats[].videoCount on the server).
+  const approveBlocked = selected.length === 0 || (!countsBalanced && totalTarget > 0);
   const approve = () => {
-    if (selected.length === 0) return;
+    if (approveBlocked) return;
     fbSet(`/preproduction/metaAds/${project.id}/approvals/select`, new Date().toISOString());
     onPatch({ tab: "script" });
   };
@@ -1387,8 +1412,8 @@ function SelectStep({ project, onPatch }) {
                 ? "Allocated count doesn't match the total video count yet — adjust or Equal split to balance."
                 : "Ready to approve."}
         </div>
-        <button onClick={approve} disabled={selected.length === 0}
-          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : selected.length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: selected.length === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+        <button onClick={approve} disabled={!isApproved && approveBlocked}
+          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : approveBlocked ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: !isApproved && approveBlocked ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
           {isApproved ? "→ Scripting" : "Approve Selection"}
         </button>
       </div>
