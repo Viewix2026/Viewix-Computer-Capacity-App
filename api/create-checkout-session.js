@@ -241,6 +241,55 @@ export default async function handler(req, res) {
       });
     }
 
+    // ── Custom: founder-defined schedule + saved card for future slices ──
+    //
+    // Same Stripe primitive as deposit_plus_manual — single PaymentIntent
+    // for slice 0, setup_future_usage: "off_session" so the card saves.
+    // Subsequent slices fire from cron/sales-daily (auto) or from the
+    // dashboard Charge button (manual or auto-retry-after-decline).
+    //
+    // metadata.sliceId is carried alongside sliceIdx so the webhook can
+    // resolve the slice by stable id even if the founder edits the
+    // schedule and re-orders pending rows.
+    else if (cfg.kind === "custom") {
+      const amountCents = Math.round(firstSlice.amount * 100);
+      session = await stripe.checkout.sessions.create({
+        ui_mode: "embedded_page",
+        mode: "payment",
+        customer: customer.id,
+        redirect_on_completion: "never",
+        line_items: [{
+          quantity: 1,
+          price_data: {
+            currency: "aud",
+            unit_amount: amountCents,
+            product_data: {
+              name: `${descriptorBase} — ${firstSlice.label || "Deposit"}`,
+            },
+          },
+        }],
+        payment_intent_data: {
+          setup_future_usage: "off_session",
+          description: `${descriptorBase} — ${firstSlice.label || "Deposit"}`,
+          metadata: {
+            saleId: sale.id,
+            shortId: sale.shortId || "",
+            clientName: sale.clientName || "",
+            videoType: sale.videoType || "",
+            packageKey: sale.packageKey || "",
+            sliceIdx: "0",
+            sliceId: firstSlice.sliceId || "",
+            gstRate: String(GST_RATE),
+          },
+        },
+        metadata: {
+          saleId: sale.id,
+          shortId: sale.shortId || "",
+          flow: "custom",
+        },
+      });
+    }
+
     // ── Paid-in-full (not currently used but kept for completeness) ──
     else if (cfg.kind === "paid_in_full") {
       const amountCents = Math.round(firstSlice.amount * 100);

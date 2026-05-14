@@ -1,4 +1,24 @@
 import { GST_RATE, scheduleForVideoType, computeStripeSurcharge } from "../api/_tiers.js";
+import {
+  newSliceId,
+  seedCustomSlices,
+  validateCustomSlices,
+  buildCustomSchedule,
+  sumCustomSlicesExGst,
+  sydneyDateKey,
+} from "../api/_sale-schedules.js";
+
+// Re-export the Custom-schedule helpers so frontend code has a single
+// import surface. Server endpoints import from api/_sale-schedules.js
+// directly.
+export {
+  newSliceId,
+  seedCustomSlices,
+  validateCustomSlices,
+  buildCustomSchedule,
+  sumCustomSlicesExGst,
+  sydneyDateKey,
+};
 
 // ─── Date Helpers ───
 export function todayKey() {
@@ -342,6 +362,12 @@ export function computeGst(totalExGst) {
 // status is "pending" for every slice at build time — the webhook
 // flips it to "paid" with paidAt + stripe refs as Stripe fires events.
 export function buildSchedule(videoType, totalExGst, depositDate) {
+  // Custom sales derive their schedule from sale.customSlices[] via
+  // buildCustomSchedule() — refuse to handle them through the preset
+  // path so a forgotten branch can't silently produce a 50/50 default.
+  if (videoType === "custom") {
+    throw new Error("buildSchedule: videoType 'custom' must use buildCustomSchedule(sale.customSlices, …)");
+  }
   const { grandTotal } = computeGst(totalExGst);
   const cfg = scheduleForVideoType(videoType);
   const anchor = depositDate ? new Date(depositDate) : new Date();

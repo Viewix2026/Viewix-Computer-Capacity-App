@@ -56,6 +56,15 @@
     },
     "api/cron/analytics-schedule.js": {
       "maxDuration": 300
+    },
+    "api/cron/sales-daily.js": {
+      "maxDuration": 120
+    },
+    "api/create-custom-sale.js": {
+      "maxDuration": 30
+    },
+    "api/update-custom-schedule.js": {
+      "maxDuration": 30
     }
   },
   "crons": [
@@ -98,6 +107,14 @@
     {
       "path": "/api/cron/analytics-schedule",
       "schedule": "0 17 * * *"
+    },
+    {
+      "path": "/api/cron/sales-daily",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/sales-daily",
+      "schedule": "0 23 * * *"
     }
   ],
   "rewrites": [
