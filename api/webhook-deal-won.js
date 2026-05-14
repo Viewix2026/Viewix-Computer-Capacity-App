@@ -7,6 +7,7 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { identifyDeal, productLineLabel, videoTypeToPartnership } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 import { send as sendEmail } from "./_email/send.js";
+import { resolveAccountManagerChip } from "./_email/getProjectContext.js";
 import { randomBytes } from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -411,6 +412,30 @@ export default async function handler(req, res) {
     // beyond ~5s for the email leg, regardless of Resend latency.
     try {
       if (clientEmail) {
+        // Resolve the Account Manager chip so the email's project card
+        // shows the AM's face + name + role + mobile, matching every
+        // other touchpoint. Falls back to null when (a) the account is
+        // brand-new and has no AM assigned yet, or (b) the resolved
+        // name isn't in /editors. Null produces no chip — the rest of
+        // the email still renders. Editors lookup is one extra
+        // Firebase read; webhook latency budget already absorbs it.
+        let accountManagerChip = null;
+        try {
+          const editorsRaw = await adminGet("/editors").catch(() => null);
+          const editors = Array.isArray(editorsRaw)
+            ? editorsRaw.filter(Boolean)
+            : (editorsRaw && typeof editorsRaw === "object" ? Object.values(editorsRaw).filter(Boolean) : []);
+          accountManagerChip = resolveAccountManagerChip({
+            project: { links, accountManager: "", projectLead: "" },
+            accounts,
+            editors,
+          });
+        } catch (chipErr) {
+          // Chip-resolution failure must NEVER block the email. Log
+          // and proceed with no chip.
+          console.error("webhook-deal-won: AM chip resolution failed:", chipErr.message);
+        }
+
         const emailResult = await sendEmail({
           template: "Confirmation",
           idempotencyKey: `${projectId}/Confirmation`,
@@ -427,6 +452,11 @@ export default async function handler(req, res) {
               clientName: companyName,
               numberOfVideos: parseInt(numberOfVideos) || null,
             },
+            // Producer slot drives the chip render in the project card.
+            // Other 3 templates resolve the same way via the cron path
+            // or the Deliveries modal. Null = chip hidden gracefully.
+            producer: accountManagerChip,
+            editor: null,
           },
           projectId,
           sendTimeoutMs: 5000,
