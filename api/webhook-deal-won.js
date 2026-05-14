@@ -262,6 +262,7 @@ export default async function handler(req, res) {
       await fbSet(`/clients/${clId}`, {
         id: clId,
         name: companyName.trim(),
+        attioId: companyId || "",
         projectLead: "",
         accountManager: "",
         docUrl: "",
@@ -272,7 +273,16 @@ export default async function handler(req, res) {
       results.sherpas = "exists";
       // Find the existing sherpa's id so the Projects tab links through.
       const existing = clientEntries.find(cl => (cl.name || "").trim().toLowerCase() === nameLC.trim());
-      if (existing?.id) links.sherpaId = existing.id;
+      if (existing?.id) {
+        links.sherpaId = existing.id;
+        // Self-heal legacy /clients records that pre-date attioId. Server
+        // Sherpa loader prefers attioId over fuzzy name match, so backfilling
+        // here on the next deal-won webhook lets the helper resolve without
+        // a separate migration script.
+        if (!existing.attioId && companyId) {
+          await fbPatch(`/clients/${existing.id}`, { attioId: companyId });
+        }
+      }
     }
 
     // --- 4. PREPRODUCTION ---

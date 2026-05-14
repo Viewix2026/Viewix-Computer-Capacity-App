@@ -153,6 +153,12 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
   const [manualCompany, setManualCompany] = useState("");
   const [manualTier, setManualTier] = useState("standard");
   const [accounts, setAccounts] = useState({});
+  const [clients, setClients] = useState({});
+  // /sherpaCacheMeta holds per-client doc fetch metadata (fetchedAt,
+  // byteSize, error, etc.) — NOT the full Sherpa text. The text path
+  // /sherpaCache is server-only by Firebase rule. UI uses meta to
+  // render the Brand Truth "Sherpa cached / Refresh" status row.
+  const [sherpaCacheMeta, setSherpaCacheMeta] = useState({});
   const [colWidths, setColWidths] = useState(() => {
     const w = {};
     SCRIPT_COLUMNS.forEach(c => { w[c.key] = c.width; });
@@ -182,7 +188,9 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
     });
     const unsub2 = fbListenSafe("/accounts", (data) => setAccounts(data || {}));
     const unsub3 = fbListenSafe("/preproduction/socialOrganic", (data) => setSocialOrganicProjects(data || {}));
-    return () => { unsub1(); unsub2(); unsub3(); };
+    const unsub4 = fbListenSafe("/clients", (data) => setClients(data || {}));
+    const unsub5 = fbListenSafe("/sherpaCacheMeta", (data) => setSherpaCacheMeta(data || {}));
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, []);
 
   // Unified project map for the Runsheets sub-tab. Each entry gets a
@@ -658,6 +666,9 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
         <MetaAdsResearch
           project={activeProject}
+          accounts={accounts}
+          clients={clients}
+          sherpaCacheMeta={sherpaCacheMeta}
           onBack={() => setActiveProjectId(null)}
           onPatch={(patch) => fbPatchProject(activeProject.id, patch)}
           onDelete={() => {
@@ -1211,6 +1222,8 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
         {subTab === "socialOrganic" && (
           <SocialOrganicResearch
             accounts={accounts}
+            clients={clients}
+            sherpaCacheMeta={sherpaCacheMeta}
             creating={socialOrganicCreating}
             onCreatingChange={setSocialOrganicCreating}
             deepLinkProjectId={route?.subTab === "socialOrganic" ? route?.recordId : null}
