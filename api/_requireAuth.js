@@ -71,7 +71,17 @@ export async function requireRole(req, allowedRoles) {
 
   const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
   if (roles.length && !roles.includes(decoded.role)) {
-    const err = new Error("Forbidden");
+    // Tell the caller WHAT role the token has and which roles are
+    // allowed. Bare "Forbidden" was useless — producers couldn't tell
+    // whether they needed a re-sign-in (claim missing from a stale
+    // token), the wrong password (claim wrong), or an actual
+    // permissions gap. The actionable hint covers the common cause:
+    // /api/auth now persists claims via setCustomUserClaims but
+    // pre-backfill sessions still hold tokens without them, and
+    // signing out + back in mints a fresh token that picks up the
+    // persisted claim.
+    const actual = decoded.role || "(no role claim)";
+    const err = new Error(`Forbidden — your token's role is "${actual}". Allowed: ${roles.join(", ")}. Sign out and back in with the right password if you expect access; this refreshes claims on your token.`);
     err.status = 403;
     throw err;
   }

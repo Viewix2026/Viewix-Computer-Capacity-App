@@ -41,7 +41,17 @@ export function initFB() {
         auth.onAuthStateChanged(async user => {
           if (user) {
             try {
-              const tok = await user.getIdTokenResult();
+              // Force refresh on every session restore. Custom claims
+              // set after the user's last sign-in (e.g. when /api/auth
+              // started calling setCustomUserClaims to persist the
+              // role) don't land on the existing cached ID token —
+              // Firebase only picks them up on a forced refresh, or
+              // ~55 min later when the token naturally expires. The
+              // gap was producing PERMISSION_DENIED and "Forbidden"
+              // errors for users whose user records had been
+              // back-filled but whose browser session still held the
+              // pre-backfill token.
+              const tok = await user.getIdTokenResult(true);
               currentRole = tok.claims?.role || null;
             } catch {
               currentRole = null;
