@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// Firebase Storage rules.
+//
+// Default: deny everything. Then narrowly allow:
+//   - public read on /analytics-thumbnails/** so the analytics
+//     dashboard can <img src> persisted IG thumbnails. Writes are
+//     server-only (admin SDK from api/_analyticsThumbnails.js); the
+//     browser never uploads here.
+//
+// Mirrors the firebase-rules.json convention: deny-by-default at the
+// root, then explicitly allowlist each path that should be exposed.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Persisted IG thumbnail bytes uploaded by the analytics webhook.
+    // Public read so <img src> works without auth; writes are
+    // strictly server-only via the admin SDK.
+    match /analytics-thumbnails/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Deny-by-default for everything else.
+    match /{allPaths=**} {
+      allow read: if false;
+      allow write: if false;
+    }
+  }
+}
