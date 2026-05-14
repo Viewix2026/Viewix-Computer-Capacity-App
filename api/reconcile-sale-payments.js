@@ -24,16 +24,31 @@ import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAu
 // Mark a single slice paid. Mirrors stripe-webhook.js#markSlicePaid
 // but kept inline so reconcile is a self-contained admin path that
 // can't be regressed by a webhook refactor.
-async function markSlicePaid(saleId, sliceIdx, patch = {}) {
+//
+// Resolves the target row by sliceId first (Custom-sale stable id) and
+// falls back to sliceIdx for legacy preset sales whose Stripe metadata
+// predates sliceId. After any custom row insert/remove/reorder, idx
+// alone would attach money to the wrong slice — sliceId is identity.
+async function markSlicePaid(saleId, { sliceId, sliceIdx }, patch = {}) {
   const sale = await adminGet(`/sales/${saleId}`);
   if (!sale) return { skipped: "sale gone" };
   const schedule = Array.isArray(sale.schedule) ? [...sale.schedule] : [];
-  if (!schedule[sliceIdx]) return { skipped: `sliceIdx ${sliceIdx} out of range` };
-  if (schedule[sliceIdx].status === "paid") return { skipped: "already paid" };
-  schedule[sliceIdx] = {
-    ...schedule[sliceIdx],
+
+  let idx = -1;
+  if (sliceId) idx = schedule.findIndex(s => s && s.sliceId === sliceId);
+  if (idx === -1 && sliceIdx !== undefined && sliceIdx !== null) {
+    const n = Number(sliceIdx);
+    if (Number.isInteger(n) && n >= 0 && schedule[n]) idx = n;
+  }
+  if (idx === -1) {
+    return { skipped: `no matching slice (sliceId=${sliceId || "n/a"}, sliceIdx=${sliceIdx})` };
+  }
+  if (schedule[idx].status === "paid") return { skipped: "already paid" };
+
+  schedule[idx] = {
+    ...schedule[idx],
     status: "paid",
-    paidAt: schedule[sliceIdx].paidAt || new Date().toISOString(),
+    paidAt: schedule[idx].paidAt || new Date().toISOString(),
     reconciledAt: new Date().toISOString(),  // Marker so we can audit which slices needed reconcile
     ...patch,
   };
@@ -43,7 +58,7 @@ async function markSlicePaid(saleId, sliceIdx, patch = {}) {
     paid: allPaid,
     ...(allPaid ? { paidAt: new Date().toISOString() } : {}),
   });
-  return { marked: sliceIdx, allPaid };
+  return { marked: idx, sliceId: schedule[idx].sliceId || null, allPaid };
 }
 
 export default async function handler(req, res) {
@@ -92,7 +107,9 @@ export default async function handler(req, res) {
       log.push({ subscription: sale.stripeSubscriptionId, paidInvoices: paidInvoices.length });
       for (let i = 0; i < paidInvoices.length; i++) {
         const inv = paidInvoices[i];
-        const result = await markSlicePaid(saleId, i, {
+        // Subscription invoices are 1:1 with sliceIdx (preset-only path),
+        // no sliceId yet — pass sliceIdx as the legacy resolver.
+        const result = await markSlicePaid(saleId, { sliceIdx: i }, {
           stripeInvoiceId: inv.id,
           amountPaid: (inv.amount_paid || 0) / 100,
           // Receipt URL on the invoice's hosted page
@@ -114,8 +131,9 @@ export default async function handler(req, res) {
       log.push({ paymentIntents: search.data.length });
       for (const pi of search.data) {
         const sliceIdx = pi.metadata?.sliceIdx;
-        if (sliceIdx === undefined || sliceIdx === null) {
-          log.push({ piId: pi.id, skipped: "no sliceIdx metadata" });
+        const sliceId  = pi.metadata?.sliceId;
+        if ((sliceIdx === undefined || sliceIdx === null) && !sliceId) {
+          log.push({ piId: pi.id, skipped: "no sliceId/sliceIdx metadata" });
           continue;
         }
         let receiptUrl = null;
@@ -127,12 +145,15 @@ export default async function handler(req, res) {
             // Non-fatal — receipt url is nice-to-have.
           }
         }
-        const result = await markSlicePaid(saleId, Number(sliceIdx), {
+        // sliceId is identity for Custom sales; sliceIdx is the legacy
+        // resolver for preset PaymentIntents. Post-edit row insert/
+        // remove can leave sliceIdx stale, so try sliceId first.
+        const result = await markSlicePaid(saleId, { sliceId, sliceIdx }, {
           stripePaymentIntentId: pi.id,
           amountPaid: (pi.amount_received || 0) / 100,
           receiptUrl,
         });
-        log.push({ sliceIdx: Number(sliceIdx), piId: pi.id, ...result });
+        log.push({ sliceId: sliceId || null, sliceIdx: sliceIdx !== undefined ? Number(sliceIdx) : null, piId: pi.id, ...result });
       }
     } catch (e) {
       // Stripe Search API requires the account to have it enabled (it's

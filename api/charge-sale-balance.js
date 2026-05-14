@@ -41,8 +41,21 @@ export default async function handler(req, res) {
     const slice = schedule[idx];
     if (!slice) return res.status(400).json({ error: `sliceIdx ${idx} out of range` });
     if (slice.status === "paid") return res.status(400).json({ error: "Slice already paid" });
-    if (slice.trigger !== "manual") {
-      return res.status(400).json({ error: `Slice ${idx} is not a manual-trigger slice (trigger=${slice.trigger})` });
+
+    // Manual-trigger slices are always charge-able from this endpoint.
+    // For Custom sales we also allow retrying an "auto" slice that
+    // declined — same charge path, founder-initiated. This is the only
+    // way to recover from a Stripe auto-charge failure without sending
+    // a fresh payment link.
+    const isCustom = sale.videoType === "custom";
+    const allowChargeReason =
+      slice.trigger === "manual" ? "manual"
+      : (isCustom && slice.trigger === "auto" && slice.status === "declined") ? "retry-declined-auto"
+      : null;
+    if (!allowChargeReason) {
+      return res.status(400).json({
+        error: `Slice ${idx} is not chargeable from this endpoint (trigger=${slice.trigger}, status=${slice.status}).`,
+      });
     }
 
     const stripe = new Stripe(secret);
@@ -115,25 +128,68 @@ export default async function handler(req, res) {
     // If the bank requires SCA, Stripe returns requires_action and
     // the Charge Balance button should surface that so the customer
     // can be emailed to authenticate (handled in a follow-up pass).
-    const pi = await stripe.paymentIntents.create({
-      amount: amountCents,
-      currency: "aud",
-      customer: customerId,
-      payment_method: paymentMethodId,
-      off_session: true,
-      confirm: true,
-      description: `${descriptorBase} — ${slice.label || `Slice ${idx}`}`,
-      metadata: {
-        saleId: sale.id,
-        shortId: sale.shortId || "",
-        clientName: sale.clientName || "",
-        videoType: sale.videoType || "",
-        packageKey: sale.packageKey || "",
-        sliceIdx: String(idx),
-      },
-    }, {
-      idempotencyKey: `charge-balance:${sale.id}:${idx}:${amountCents}`,
-    });
+    let pi;
+    try {
+      pi = await stripe.paymentIntents.create({
+        amount: amountCents,
+        currency: "aud",
+        customer: customerId,
+        payment_method: paymentMethodId,
+        off_session: true,
+        confirm: true,
+        description: `${descriptorBase} — ${slice.label || `Slice ${idx}`}`,
+        metadata: {
+          saleId: sale.id,
+          shortId: sale.shortId || "",
+          clientName: sale.clientName || "",
+          videoType: sale.videoType || "",
+          packageKey: sale.packageKey || "",
+          sliceIdx: String(idx),
+          sliceId: slice.sliceId || "",
+        },
+      }, {
+        idempotencyKey: `charge-balance:${sale.id}:${slice.sliceId || idx}:${amountCents}`,
+      });
+    } catch (stripeErr) {
+      // Stripe threw synchronously — record the decline directly so the
+      // dashboard chip flips to DECLINED and a founder can retry. The
+      // webhook handler is unreliable here: many off-session declines
+      // (card_declined, authentication_required, insufficient_funds)
+      // are surfaced as exceptions from create(), not as separate
+      // payment_intent.payment_failed events.
+      try {
+        const fresh = await adminGet(`/sales/${saleId}`);
+        const sched = Array.isArray(fresh?.schedule) ? [...fresh.schedule] : [];
+        if (sched[idx] && sched[idx].status !== "paid") {
+          sched[idx] = {
+            ...sched[idx],
+            status: "declined",
+            lastDeclineAt: new Date().toISOString(),
+            lastDeclineMessage: stripeErr?.message || String(stripeErr),
+            stripePaymentIntentId: stripeErr?.raw?.payment_intent?.id || stripeErr?.payment_intent?.id || sched[idx].stripePaymentIntentId || null,
+            autoAttemptKey: null,
+          };
+          await adminPatch(`/sales/${saleId}`, { schedule: sched });
+        }
+      } catch (writeErr) {
+        console.error("charge-sale-balance: failed to record decline:", writeErr.message);
+      }
+
+      if (stripeErr && stripeErr.code === "authentication_required") {
+        return res.status(200).json({
+          ok: false,
+          status: "authentication_required",
+          paymentIntentId: stripeErr.raw?.payment_intent?.id || null,
+          message: "Customer's bank requires 3D Secure re-authentication. Email them to complete the charge.",
+        });
+      }
+      console.error("charge-sale-balance Stripe error:", stripeErr);
+      return res.status(200).json({
+        ok: false,
+        status: stripeErr?.code || "declined",
+        message: stripeErr?.message || String(stripeErr),
+      });
+    }
 
     // Depending on PI status, respond accordingly. The webhook
     // (payment_intent.succeeded) will flip the slice to paid; we
@@ -146,15 +202,6 @@ export default async function handler(req, res) {
     }
     return res.status(200).json({ ok: false, status: pi.status, paymentIntentId: pi.id });
   } catch (e) {
-    // Stripe's common off-session-decline shape.
-    if (e && e.code === "authentication_required") {
-      return res.status(200).json({
-        ok: false,
-        status: "authentication_required",
-        paymentIntentId: e.raw?.payment_intent?.id || null,
-        message: "Customer's bank requires 3D Secure re-authentication. Email them to complete the charge.",
-      });
-    }
     console.error("charge-sale-balance error:", e);
     return res.status(500).json({ error: e.message || String(e) });
   }

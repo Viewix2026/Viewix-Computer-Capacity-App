@@ -406,7 +406,9 @@ function StudioSchedule({ sale, cfg }) {
     ? "Payments 2 and 3 are auto-charged to the card you enter today."
     : cfg.kind === "deposit_plus_manual"
       ? "The balance is charged manually when your project wraps — no auto-charge."
-      : "";
+      : cfg.kind === "custom"
+        ? "Future instalments are charged to the card you enter today on the dates shown."
+        : "";
 
   return (
     <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: 18 }}>
@@ -432,9 +434,20 @@ function StudioSchedule({ sale, cfg }) {
                 {s.label} · <span style={{ fontWeight: 500, color: "var(--muted)" }}>{s.dueLabel}</span>
               </div>
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                {s.trigger === "now" && "Charged on submit"}
-                {s.trigger === "auto" && "Auto-charged to card on file"}
-                {s.trigger === "manual" && "Viewix will charge this manually when the project concludes"}
+                {/* For Custom sales we deliberately hide the
+                    auto-vs-manual distinction from the customer — they
+                    only need to know the amount and the date. The
+                    mandate copy below covers authorisation for every
+                    future card-on-file charge regardless of trigger. */}
+                {cfg.kind === "custom"
+                  ? (s.trigger === "now" ? "Charged on submit" : null)
+                  : (
+                    <>
+                      {s.trigger === "now" && "Charged on submit"}
+                      {s.trigger === "auto" && "Auto-charged to card on file"}
+                      {s.trigger === "manual" && "Viewix will charge this manually when the project concludes"}
+                    </>
+                  )}
               </div>
             </div>
             <div style={{ textAlign: "right" }}>
@@ -462,6 +475,14 @@ function StudioConsent({ sale, cfg }) {
   const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
   const autoSlices = schedule.filter(s => s.trigger === "auto");
   const manualSlice = schedule.find(s => s.trigger === "manual");
+  // Custom mandate must cover EVERY future card-on-file charge (both
+  // auto and manual). Stripe's off-session SCA rules require the
+  // customer to authorise each future charge by amount + approximate
+  // timing — leaving manual slices out could cause Stripe to reject
+  // the off-session PaymentIntent later as unauthorised.
+  const futureCustom = cfg.kind === "custom"
+    ? schedule.filter((_, i) => i > 0)
+    : [];
 
   return (
     <div style={{
@@ -484,6 +505,19 @@ function StudioConsent({ sale, cfg }) {
         <>
           You're paying a <strong>50% deposit today</strong>. The remaining{" "}
           <strong>{fmtCurExact(manualSlice.amount)}</strong> is charged when your project wraps.
+        </>
+      )}
+      {cfg.kind === "custom" && futureCustom.length > 0 && (
+        <>
+          By completing this payment, you authorise Viewix Video Production to charge the same card{" "}
+          {futureCustom.map((s, i) => (
+            <span key={s.sliceId || i}>
+              <strong>{fmtCurExact(s.amount)} on {s.dueLabel}</strong>
+              {i < futureCustom.length - 2 ? ", " : i === futureCustom.length - 2 ? " and " : ""}
+            </span>
+          ))}
+          {" "}for the remaining instalments of this project. Cancel or update your card at any time by emailing{" "}
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--ink)" }}>hello@viewix.com.au</span>.
         </>
       )}
       {cfg.kind === "paid_in_full" && (

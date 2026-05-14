@@ -323,7 +323,17 @@ export const SALE_VIDEO_TYPES = [
     key: t.key, label: t.label,
     packages: [{ key: "base", label: t.label }],
   })),
+  // Custom: founder-defined schedule per client. Single synthetic package
+  // key so the existing videoType + packageKey shape stays valid downstream.
+  // `custom: true` lets the pricing tab, partnership-label, and webhook
+  // routers branch without enumerating product lines.
+  { key: "custom", label: "Custom", custom: true, packages: [{ key: "custom", label: "Custom" }] },
 ];
+
+// Bounds on the founder-defined Custom schedule. Row 0 is always the
+// deposit/now slice — these limits are inclusive of it.
+export const CUSTOM_MIN_SLICES = 2;
+export const CUSTOM_MAX_SLICES = 6;
 
 // ─── GST (Australia) ────────────────────────────────────────────────
 // All founder-entered sale prices are stored EX-GST. GST is added at
@@ -414,11 +424,19 @@ export const SALE_SCHEDULES = {
       { pct: 50, label: "Balance",  trigger: "manual", dueDaysOffset: null },
     ],
   },
+  // Custom — schedule slices come from sale.customSlices[], not from
+  // this config. buildSchedule() refuses to handle custom; the API and
+  // UI must call buildCustomSchedule() from api/_sale-schedules.js.
+  custom: {
+    kind: "custom",
+    slices: [],
+  },
 };
 
-// Helper: look up the schedule config for a videoType key. Falls back
-// to _default if the key isn't explicitly mapped (covers every one-off
-// type without needing to enumerate them here).
+// Helper: look up the schedule config for a videoType key. Returns the
+// explicit `custom` entry when asked; otherwise falls back to _default
+// for any one-off not explicitly mapped.
 export function scheduleForVideoType(videoType) {
+  if (videoType === "custom") return SALE_SCHEDULES.custom;
   return SALE_SCHEDULES[videoType] || SALE_SCHEDULES._default;
 }

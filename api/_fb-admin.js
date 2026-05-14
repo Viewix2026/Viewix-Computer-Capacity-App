@@ -57,3 +57,24 @@ export async function adminPatch(path, data) {
   if (err) throw new Error(err);
   await db.ref(path).update(data);
 }
+
+// RTDB transaction wrapper.
+//
+//   path        — Firebase ref path to transact on (string).
+//   updaterFn   — (currentValue) => newValue. Return `undefined` to
+//                 abort the transaction (e.g. lost the race, value
+//                 already changed by another writer).
+//
+// Returns { committed: boolean, snapshot: any }. The updater can be
+// called multiple times by RTDB if there's contention — keep it pure
+// (no side effects). Used by the Custom-sale cron to atomically flip
+// a pending slice to "processing" before charging Stripe.
+export async function runRtdbTransaction(path, updaterFn) {
+  const { db, err } = getAdmin();
+  if (err) throw new Error(err);
+  const result = await db.ref(path).transaction(updaterFn);
+  return {
+    committed: !!result.committed,
+    snapshot: result.snapshot ? result.snapshot.val() : null,
+  };
+}
