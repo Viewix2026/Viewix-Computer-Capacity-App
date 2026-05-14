@@ -17,6 +17,55 @@ import { Badge, Metric, NumIn, UBar, FChart } from "./UIComponents";
 import { Grid } from "./Grid";
 import { VideoEmbed } from "./shared/VideoEmbed";
 
+// Relative-time string for the "Auto · updated Xh ago" caption.
+// Pure local helper — adding date-fns just for this would be overkill.
+function relTime(ms) {
+  if (!Number.isFinite(ms)) return null;
+  const diff = Date.now() - ms;
+  if (diff < 0) return "just now";
+  const m = Math.round(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return `${d}d ago`;
+}
+
+// Read-only counterpart to <NumIn> for cron-owned inputs (Active
+// Projects, Avg Edit Hrs/Project/Wk, New Projects/Week). Same label
+// + value typography, plus a tiny caption explaining when the cron
+// last touched it and whether the value is fresh.
+function AutoField({ label, value, computedAt, status, sub, insufficientText }) {
+  let caption;
+  if (status === "insufficient_data") {
+    caption = `Auto · ${insufficientText || "insufficient data"}`;
+  } else if (!Number.isFinite(computedAt)) {
+    caption = "Auto · not yet computed";
+  } else {
+    const rel = relTime(computedAt);
+    caption = sub ? `Auto · updated ${rel} · ${sub}` : `Auto · updated ${rel}`;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.03em", textTransform: "uppercase" }}>{label}</label>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6,
+        padding: "8px 12px", borderRadius: 8,
+        border: "1px solid var(--border)",
+        background: "var(--bg)",  // muted vs --input-bg to signal read-only
+      }}>
+        <span style={{
+          fontSize: 15, fontWeight: 600,
+          fontFamily: "'JetBrains Mono',monospace",
+          color: "var(--fg)",
+        }}>{value == null ? "—" : value}</span>
+      </div>
+      <div style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>{caption}</div>
+    </div>
+  );
+}
+
 export function Capacity({
   capTab, setCapTab,
   scMode, setScMode, scIn, setScIn,
@@ -135,9 +184,19 @@ export function Capacity({
   const cwEds = weekData[curW]?.editors || scheduleEditors.map(e => ({ ...e, days: { ...e.defaultDays } }));
   const occ = cwEds.reduce((s, e) => s + DK.filter(d => dayVal(e.days[d]) === "in").length, 0);
   const c = useMemo(() => doCalc(ai, occ), [ai, occ]);
+  // upIn is the single mutation path for /inputs. Normal mode writes a
+  // /inputs/<key> leaf directly so the daily cron at
+  // /api/cron/capacity-stats can't be clobbered by App.jsx's bulk-write
+  // loop (which no longer touches /inputs — see comment at App.jsx:347).
+  // What-If mode mutates the shadow only; persistence happens via the
+  // Apply handler.
   const upIn = (k, v) => {
-    if (scMode) setScIn(p => ({ ...(p || inputs), [k]: v }));
-    else setInputs(p => ({ ...p, [k]: v }));
+    if (scMode) {
+      setScIn(p => ({ ...(p || inputs), [k]: v }));
+    } else {
+      setInputs(p => ({ ...p, [k]: v }));
+      fbSet(`/inputs/${k}`, v);
+    }
   };
   const monD = new Date(curW + "T00:00:00");
 
@@ -156,7 +215,24 @@ export function Capacity({
         <div style={{ padding: "10px 28px", background: "#1A1510", borderBottom: "1px solid #3D2E10", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: "#F59E0B" }}>WHAT-IF MODE</span>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => { if (scIn) setInputs(scIn); setScMode(false); setScIn(null); }} style={{ ...BTN, background: "#10B981", color: "white" }}>Apply</button>
+            <button onClick={() => {
+              // Apply only persists the four manual keys. The three
+              // auto-owned keys (currentActiveProjects, avgEditHoursPerProject,
+              // newProjectsPerWeek) are owned by the daily cron — any
+              // What-If override of them is for simulation only and is
+              // silently discarded here so we don't poison the auto baseline.
+              if (scIn) {
+                const MANUAL_KEYS = ["totalSuites", "hoursPerSuitePerDay", "avgProjectDuration", "targetUtilisation"];
+                const applied = {};
+                for (const k of MANUAL_KEYS) {
+                  if (scIn[k] === undefined) continue;
+                  applied[k] = scIn[k];
+                  fbSet(`/inputs/${k}`, scIn[k]);
+                }
+                setInputs(p => ({ ...p, ...applied }));
+              }
+              setScMode(false); setScIn(null);
+            }} style={{ ...BTN, background: "#10B981", color: "white" }}>Apply</button>
             <button onClick={() => { setScMode(false); setScIn(null); }} style={{ ...BTN, background: "#374151", color: "#9CA3AF" }}>Discard</button>
           </div>
         </div>
@@ -193,9 +269,38 @@ export function Capacity({
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16 }}>
               <NumIn label="Total Edit Suites" value={ai.totalSuites} onChange={v => upIn("totalSuites", v)} min={1} />
               <NumIn label="Hours / Suite / Day" value={ai.hoursPerSuitePerDay} onChange={v => upIn("hoursPerSuitePerDay", v)} min={1} step={0.5} />
-              <NumIn label="Active Projects" value={ai.currentActiveProjects} onChange={v => upIn("currentActiveProjects", v)} min={0} />
-              <NumIn label="Avg Edit Hrs / Project / Wk" value={ai.avgEditHoursPerProject} onChange={v => upIn("avgEditHoursPerProject", v)} min={0} step={0.5} />
-              <NumIn label="New Projects / Week" value={ai.newProjectsPerWeek} onChange={v => upIn("newProjectsPerWeek", v)} min={0} />
+              {scMode ? (
+                <NumIn label="Active Projects" value={ai.currentActiveProjects} onChange={v => upIn("currentActiveProjects", v)} min={0} />
+              ) : (
+                <AutoField
+                  label="Active Projects"
+                  value={ai.currentActiveProjects}
+                  computedAt={inputs._computed?.computedAt}
+                  sub={inputs._computed?.pipelineProjects?.value
+                    ? `${inputs._computed.pipelineProjects.value} in pipeline`
+                    : null}
+                />
+              )}
+              {scMode ? (
+                <NumIn label="Avg Edit Hrs / Project / Wk" value={ai.avgEditHoursPerProject} onChange={v => upIn("avgEditHoursPerProject", v)} min={0} step={0.5} />
+              ) : (
+                <AutoField
+                  label="Avg Edit Hrs / Project / Wk"
+                  value={ai.avgEditHoursPerProject}
+                  computedAt={inputs._computed?.computedAt}
+                  status={inputs._computed?.avgEditHoursPerProject?.status}
+                  insufficientText="using previous value · insufficient time-log data"
+                />
+              )}
+              {scMode ? (
+                <NumIn label="New Projects / Week" value={ai.newProjectsPerWeek} onChange={v => upIn("newProjectsPerWeek", v)} min={0} />
+              ) : (
+                <AutoField
+                  label="New Projects / Week"
+                  value={ai.newProjectsPerWeek}
+                  computedAt={inputs._computed?.computedAt}
+                />
+              )}
               <NumIn label="Avg Project Duration" value={ai.avgProjectDuration} onChange={v => upIn("avgProjectDuration", v)} min={1} suffix="weeks" />
               <NumIn label="Target Utilisation" value={Math.round(ai.targetUtilisation * 100)} onChange={v => upIn("targetUtilisation", v / 100)} min={10} max={100} suffix="%" />
             </div>
@@ -303,7 +408,7 @@ export function Capacity({
                 </div>
               </div>
             </div>
-            <Grid wk={curW} weekData={weekData} onUpdate={upWeek} masterEds={scheduleEditors} inputs={ai} projects={projects} onUpdateSuites={v => { if (scMode) setScIn(p => ({ ...(p || inputs), totalSuites: v })); else setInputs(p => ({ ...p, totalSuites: v })); }} />
+            <Grid wk={curW} weekData={weekData} onUpdate={upWeek} masterEds={scheduleEditors} inputs={ai} projects={projects} onUpdateSuites={v => upIn("totalSuites", v)} />
           </div>
         )}
 

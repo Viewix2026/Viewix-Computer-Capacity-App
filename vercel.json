@@ -56,6 +56,9 @@
     },
     "api/cron/analytics-schedule.js": {
       "maxDuration": 300
+    },
+    "api/cron/capacity-stats.js": {
+      "maxDuration": 60
     }
   },
   "crons": [
@@ -98,6 +101,10 @@
     {
       "path": "/api/cron/analytics-schedule",
       "schedule": "0 17 * * *"
+    },
+    {
+      "path": "/api/cron/capacity-stats",
+      "schedule": "30 18 * * *"
     }
   ],
   "rewrites": [

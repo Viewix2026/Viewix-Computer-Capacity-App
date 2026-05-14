@@ -344,7 +344,15 @@ export default function App(){
   // a direct fbSet, no other surface needs the deferred-flush
   // mechanism — every other delete path in the codebase already
   // does its own direct write at click time.
-  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{fbSet("/inputs",inputs);fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
+  useEffect(()=>{if(skipWrite.current)return;if(wt.current)clearTimeout(wt.current);skipRead.current=true;wt.current=setTimeout(()=>{try{/* /inputs intentionally NOT written from the bulk-write loop.
+   Capacity.jsx's upIn() now writes /inputs/<key> leaves directly
+   (matching VOTW / Deliveries / Projects / Accounts / Sales).
+   Reason: /api/cron/capacity-stats patches /inputs daily with the
+   three auto-owned keys (currentActiveProjects, newProjectsPerWeek,
+   avgEditHoursPerProject) plus _computed metadata. A bulk-write of
+   the whole inputs object would race the cron and clobber its
+   writes — the same clobber pattern documented for /accounts and
+   /deliveries below. */fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
    Same reasoning as /accounts and /sales above: Deliveries.jsx writes
    leaf paths directly per edit (videos[i].link, status, revision1,
    etc.), and server endpoints write leaves too (notify-revision).
@@ -452,25 +460,13 @@ export default function App(){
     setTeamHome(prev=>({...(prev||{}),...patch}));
   },[isFounder,foundersData?.teamQuote,foundersData?.videoOfTheWeek,teamHome?.teamQuote,teamHome?.videoOfTheWeek]);
 
-  // Auto-update active projects from /projects. Matches the count
-  // shown above the Projects sub-tab list — anything whose status
-  // doesn't normalise to "done" or "archived" is considered active.
-  // Was previously "inProgress" only, which underreported because
-  // notStarted / scheduled / waitingClient / stuck / onHold etc.
-  // are all still active workload from a capacity perspective.
-  // Same Firebase source replaced the Monday board count when we
-  // removed the Monday integration.
-  useEffect(()=>{
-    if(!isFounder||tool!=="capacity")return;
-    const count=projects.filter(p=>{
-      if(!p)return false;
-      const s=String(p.status||"").toLowerCase();
-      // Mirrors normaliseStatus in Projects.jsx — legacy "active" is
-      // treated as in-progress for the count.
-      return s!=="done" && s!=="archived";
-    }).length;
-    setInputs(p=>({...p,currentActiveProjects:count}));
-  },[role,tool,projects]);
+  // currentActiveProjects is now owned by the daily cron at
+  // /api/cron/capacity-stats, which patches /inputs with the correct
+  // commissioned + non-done/archived filter. The local effect that
+  // used to overwrite this from live /projects was removed because
+  // (a) it ignored the commissioned filter, and (b) it raced the
+  // cron's write whenever someone opened Capacity.
+
 
   const login=resolvedRole=>{if(resolvedRole)setRole(resolvedRole);};
   const logout=async()=>{try{await signOutUser();}catch{}setRole(null);};
