@@ -89,26 +89,36 @@ test("currentActiveProjects = 0 is honestly written (not preserved)", () => {
 
 // ─── newProjectsPerWeek (broad — deal inflow) ─────────────────────
 
-test("newProjectsPerWeek counts projects regardless of done/archived state", () => {
+test("newProjectsPerWeek counts projects regardless of done/archived state (within 14-day window)", () => {
   const projects = [
-    proj({ id: "p1", status: "done", createdAt: isoMinus(5) }),
-    proj({ id: "p2", status: "archived", createdAt: isoMinus(10) }),
-    proj({ id: "p3", status: "inProgress", createdAt: isoMinus(15) }),
-    proj({ id: "p4", status: "inProgress", commissioned: false, createdAt: isoMinus(20) }),
+    proj({ id: "p1", status: "done", createdAt: isoMinus(2) }),
+    proj({ id: "p2", status: "archived", createdAt: isoMinus(5) }),
+    proj({ id: "p3", status: "inProgress", createdAt: isoMinus(8) }),
+    proj({ id: "p4", status: "inProgress", commissioned: false, createdAt: isoMinus(12) }),
   ];
-  // 4 created in last 28 days, /4 weeks = 1.0
+  // 4 created in last 14 days, /2 weeks = 2.0
   const { patch } = computeCapacityStats({ projects, timeLogs: {}, now: NOW });
-  assert.equal(patch.newProjectsPerWeek, 1.0);
+  assert.equal(patch.newProjectsPerWeek, 2.0);
 });
 
-test("newProjectsPerWeek excludes projects created >28 days ago", () => {
+test("newProjectsPerWeek excludes projects created >14 days ago (2-week window)", () => {
   const projects = [
-    proj({ id: "p1", createdAt: isoMinus(40) }),
-    proj({ id: "p2", createdAt: isoMinus(10) }),
+    proj({ id: "p1", createdAt: isoMinus(20) }), // outside window
+    proj({ id: "p2", createdAt: isoMinus(10) }), // inside window
   ];
   const { patch } = computeCapacityStats({ projects, timeLogs: {}, now: NOW });
-  // Only p2 counts → 1/4 = 0.25
-  assert.equal(patch.newProjectsPerWeek, 0.3); // 0.25 rounded to 1dp = 0.3
+  // Only p2 counts → 1/2 = 0.5
+  assert.equal(patch.newProjectsPerWeek, 0.5);
+});
+
+test("newProjectsPerWeek excludes projects created exactly 15 days ago", () => {
+  const projects = [
+    proj({ id: "p1", createdAt: isoMinus(15) }),
+    proj({ id: "p2", createdAt: isoMinus(14) }), // edge: 14d boundary
+  ];
+  const { patch } = computeCapacityStats({ projects, timeLogs: {}, now: NOW });
+  // p1 outside, p2 inside → 1/2 = 0.5
+  assert.equal(patch.newProjectsPerWeek, 0.5);
 });
 
 test("project with malformed createdAt is silently skipped in newProjectsPerWeek", () => {
@@ -118,7 +128,8 @@ test("project with malformed createdAt is silently skipped in newProjectsPerWeek
     proj({ id: "p3", createdAt: isoMinus(5) }),
   ];
   const { patch } = computeCapacityStats({ projects, timeLogs: {}, now: NOW });
-  assert.equal(patch.newProjectsPerWeek, 0.3); // only p3 counts
+  // only p3 counts → 1/2 weeks = 0.5
+  assert.equal(patch.newProjectsPerWeek, 0.5);
 });
 
 // ─── project-weeks denominator ────────────────────────────────────
@@ -410,7 +421,7 @@ test("_computed always carries source + computedAt + windowDays", () => {
   const { computed } = computeCapacityStats({ projects: [], timeLogs: {}, now: NOW });
   assert.equal(computed.source, "capacity-stats-cron");
   assert.equal(computed.computedAt, NOW);
-  assert.equal(computed.windowDays, 28);
+  assert.deepEqual(computed.windowDays, { newProjects: 14, editHours: 28 });
 });
 
 // ─── done ──────────────────────────────────────────────────────────
