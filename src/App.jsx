@@ -44,6 +44,7 @@ const PreproductionPublicView  = lazy(() => import("./components/PreproductionPu
 const RoasCalculator           = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculator })));
 const RoasCalculatorPublicView = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculatorPublicView })));
 const Nurture                  = lazy(() => import("./components/Nurture").then(m => ({ default: m.Nurture })));
+const Users                    = lazy(() => import("./components/Users").then(m => ({ default: m.Users })));
 
 export default function App(){
   const[role,setRole]=useState(null); // "founder" | "closer"
@@ -541,6 +542,7 @@ export default function App(){
       {(isFounder||isLead||role==="editor"||role==="trial")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
       {(isFounder||role==="closer")&&<SideIcon icon="📚" label="Resources" active={tool==="resources"} onClick={()=>setTool("resources")}/>}
+      {isFounder&&<SideIcon icon="👤" label="Users" active={tool==="users"} onClick={()=>setTool("users")}/>}
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
@@ -805,6 +807,9 @@ export default function App(){
         accounts={accounts}
       />
     )}
+
+    {/* ═══ USERS (founder-only admin panel) ═══ */}
+    {tool==="users"&&isFounder&&(<Users/>)}
 
 
     </Suspense>
