@@ -36,7 +36,7 @@ function relTime(ms) {
 // Projects, Avg Edit Hrs/Project/Wk, New Projects/Week). Same label
 // + value typography, plus a tiny caption explaining when the cron
 // last touched it and whether the value is fresh.
-function AutoField({ label, value, computedAt, status, sub, insufficientText, caption: explicitCaption }) {
+function AutoField({ label, value, computedAt, status, sub, insufficientText, caption: explicitCaption, suffix }) {
   let caption;
   if (explicitCaption) {
     // Override path — used for values derived live from local state
@@ -65,6 +65,7 @@ function AutoField({ label, value, computedAt, status, sub, insufficientText, ca
           fontFamily: "'JetBrains Mono',monospace",
           color: "var(--fg)",
         }}>{value == null ? "—" : value}</span>
+        {suffix && <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, whiteSpace: "nowrap" }}>{suffix}</span>}
       </div>
       <div style={{ fontSize: 10, color: "var(--muted)", fontStyle: "italic" }}>{caption}</div>
     </div>
@@ -279,6 +280,28 @@ export function Capacity({
             <Metric label="Suites Occupied" value={`${c.occupiedSuiteDays}/${c.maxSuiteDays}`} sub="suite-days/week" />
             <Metric label="Editors to Fill" value={c.editorsNeeded} accent={c.editorsNeeded > 0 ? "#F59E0B" : "#10B981"} />
             <Metric label="Filled Util" value={pct(c.filledUtil)} sub="if all suites staffed" />
+            {(() => {
+              // Actual Avg Util — measured. Pairs with the user-set
+              // Target Utilisation. Numerator: edit-stage hours logged
+              // across ALL projects (active + completed) in the last
+              // 28 days, written by the daily cron. Denominator: 4 ×
+              // this week's realCapacity (assumes capacity is stable
+              // week-to-week; close enough for a 4-week rolling).
+              // Falls back to "—" when the cron hasn't populated the
+              // value yet or capacity is zero.
+              const loggedH = inputs._computed?.totalEditHoursLogged4wk?.value;
+              const cap4wk = c.realCapacity * 4;
+              const actualUtil = (Number.isFinite(loggedH) && cap4wk > 0)
+                ? loggedH / cap4wk
+                : null;
+              return (
+                <Metric
+                  label="Actual Avg Util"
+                  value={actualUtil == null ? "—" : pct(actualUtil)}
+                  sub="last 4 weeks"
+                />
+              );
+            })()}
           </div>
           <div style={{ background: scMode ? "#1A1510" : "var(--card)", border: `1px solid ${scMode ? "#3D2E10" : "var(--border)"}`, borderRadius: 12, padding: "20px 24px", marginBottom: 24 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -328,7 +351,18 @@ export function Capacity({
                   computedAt={inputs._computed?.computedAt}
                 />
               )}
-              <NumIn label="Avg Project Duration" value={ai.avgProjectDuration} onChange={v => upIn("avgProjectDuration", v)} min={1} suffix="weeks" />
+              {scMode ? (
+                <NumIn label="Avg Project Duration" value={ai.avgProjectDuration} onChange={v => upIn("avgProjectDuration", v)} min={1} suffix="weeks" />
+              ) : (
+                <AutoField
+                  label="Avg Project Duration"
+                  value={ai.avgProjectDuration}
+                  suffix="weeks"
+                  computedAt={inputs._computed?.computedAt}
+                  status={inputs._computed?.avgProjectDuration?.status}
+                  insufficientText="using previous value · need 3+ recent done projects"
+                />
+              )}
               <NumIn label="Target Utilisation" value={Math.round(ai.targetUtilisation * 100)} onChange={v => upIn("targetUtilisation", v / 100)} min={10} max={100} suffix="%" />
             </div>
           </div>

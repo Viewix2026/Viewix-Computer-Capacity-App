@@ -84,10 +84,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    const [projects, timeLogs, prevAvgEditHours] = await Promise.all([
+    const [projects, timeLogs, prevAvgEditHours, prevAvgProjectDuration] = await Promise.all([
       fbGet("/projects"),
       fbGet("/timeLogs"),
       fbGet("/inputs/avgEditHoursPerProject"),
+      fbGet("/inputs/avgProjectDuration"),
     ]);
 
     const { patch, computed } = computeCapacityStats({
@@ -95,6 +96,7 @@ export default async function handler(req, res) {
       timeLogs,
       now: Date.now(),
       prevAvgEditHours: Number.isFinite(prevAvgEditHours) ? prevAvgEditHours : null,
+      prevAvgProjectDuration: Number.isFinite(prevAvgProjectDuration) ? prevAvgProjectDuration : null,
     });
 
     await fbPatch("/inputs", patch);
