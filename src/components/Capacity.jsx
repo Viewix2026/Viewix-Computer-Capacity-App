@@ -194,6 +194,14 @@ export function Capacity({
   // Drives both the "Editor Days / Week" headline input and the
   // existing "Suites Occupied 26/35" stat downstream.
   const occ = cwEds.reduce((s, e) => s + DK.filter(d => dayVal(e.days[d]) === "in").length, 0);
+  // Bums-in-seats this week — count of editors with at least one
+  // "in" day scheduled. More actionable than the physical suite
+  // count (totalSuites) for capacity planning: hiring is about
+  // covering scheduled seats, not building more edit suites.
+  // totalSuites still drives the FILLED UTIL / SUITES OCCUPIED math
+  // (physical max) and is editable via the +/− buttons in the
+  // Weekly Schedule grid.
+  const editorsInSeats = cwEds.filter(e => DK.some(d => dayVal(e.days[d]) === "in")).length;
   const c = useMemo(() => doCalc(ai, occ), [ai, occ]);
   // upIn is the single mutation path for /inputs. Normal mode writes a
   // /inputs/<key> leaf directly so the daily cron at
