@@ -26,6 +26,11 @@ function getPackageDefault(pricing, videoType, packageKey) {
 export function Sale({
   // Sale (Payment Intake) state
   sales, setSales, salePricing, setSalePricing, isFounders,
+  // `canUseCustom` is broader than `isFounders` — founders + closers
+  // both create + edit Custom payment links. Server endpoints enforce
+  // the same set; the prop is just the UI gate so the dropdown option
+  // and Edit-schedule button appear for closers too.
+  canUseCustom,
   saleTab, setSaleTab,
   // Quotes state (lifted from App.jsx)
   quotes, setQuotes, activeQuoteId, setActiveQuoteId,
@@ -222,7 +227,10 @@ export function Sale({
 
   // Founder-only video-type options: Custom is hidden from non-founders
   // in the dropdown. (Server endpoint also enforces this.)
-  const visibleVideoTypes = SALE_VIDEO_TYPES.filter(t => !t.custom || isFounders);
+  // Custom is gated to founders + closers — wider than `isFounders`
+  // alone. Closers run the bulk of payment-link creation; locking them
+  // out of Custom defeats the point. Server endpoints mirror this set.
+  const visibleVideoTypes = SALE_VIDEO_TYPES.filter(t => !t.custom || canUseCustom);
 
   // Live validation for the Custom editor — runs every render so the
   // Σ-row + Save-disable both reflect the current state.
@@ -586,11 +594,11 @@ export function Sale({
                   {showChargeBalance && (
                     <button onClick={()=>{setChargingSale(s);setChargeResult(null);}} style={{...BTN,background:"#10B981",color:"white"}}>Charge Balance</button>
                   )}
-                  {/* Custom-sale edit button. Founder-only; backend
-                      enforces it too. Disabled once every slice is
-                      paid — at that point the schedule is fully
-                      settled and editing would be a no-op. */}
-                  {isFounders && s.videoType === "custom" && !s.paid && (
+                  {/* Custom-sale edit button. Founders + closers;
+                      backend mirrors the same set. Disabled once every
+                      slice is paid — at that point the schedule is
+                      fully settled and editing would be a no-op. */}
+                  {canUseCustom && s.videoType === "custom" && !s.paid && (
                     <button
                       onClick={()=>openEditCustom(s)}
                       title="Edit pending instalments (label, amount, offset, trigger). Paid slices are locked."

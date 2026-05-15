@@ -581,6 +581,7 @@ export default function App(){
         sales={sales} setSales={setSales}
         salePricing={salePricing} setSalePricing={setSalePricing}
         isFounders={isFounder}
+        canUseCustom={isFounder || role === "closer"}
         saleTab={saleTab} setSaleTab={setSaleTab}
         quotes={quotes} setQuotes={setQuotes}
         activeQuoteId={activeQuoteId} setActiveQuoteId={setActiveQuoteId}
