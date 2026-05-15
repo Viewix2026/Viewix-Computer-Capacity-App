@@ -226,6 +226,7 @@ function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
   // processing indicator lives in Firebase.
   const beginProcessing = async () => {
     setLocalProcError(null);
+    let needsClientClear = false;
     try {
       // Flip processingAt on client-side too so the UI snaps to the
       // processing state immediately (don't wait for the server round-
@@ -233,6 +234,7 @@ function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, new Date().toISOString());
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/transcript`, transcript);
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/producerNotes`, producerNotes);
+      needsClientClear = true;
       await new Promise(res => setTimeout(res, 150));
 
       const r = await authFetch("/api/meta-ads", {
@@ -240,19 +242,24 @@ function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
       });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        // Server should clear processingAt on its own error path, but
-        // mirror it here in case the server died before the finally
-        // block (e.g. Vercel timeout).
-        fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, null);
         throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
       }
-      // Firebase listener rehydrates fields automatically. Server
-      // clears processingAt before responding, so the indicator goes
-      // away as soon as the listener picks up the write.
+      // Server clears processingAt on its own success path, so this
+      // request finishing cleanly means we don't need to mirror.
+      needsClientClear = false;
     } catch (e) {
       setLocalProcError(e.message);
+    } finally {
+      // If we set the local flag but the server didn't acknowledge a
+      // clean clear (network error, authFetch throw, server died
+      // mid-call), mirror the clear here so the spinner can't pin
+      // forever. Previously this path only ran on `!r.ok`, missing
+      // every "fetch never returned a response" failure mode.
+      if (needsClientClear) {
+        fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, null);
+      }
     }
   };
 

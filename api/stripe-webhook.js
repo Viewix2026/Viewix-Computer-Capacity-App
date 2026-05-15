@@ -186,17 +186,19 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Webhook mode mismatch" });
   }
 
-  // Freshness window — Stripe's signature is valid forever, but
-  // we treat events older than 5 minutes as stale and refuse them.
-  // Belt-and-braces against (a) someone replaying a captured event
-  // weeks later to remark a slice paid, and (b) accidental replays
-  // from rotating webhook destinations between test/live modes.
-  // Stripe's own retry policy never produces events this old, so
-  // this rejects no legitimate traffic.
+  // Freshness window — secondary defence against replay. Stripe's
+  // signature layer (`stripe.webhooks.constructEvent` above) already
+  // rejects requests whose Stripe-Signature timestamp is older than
+  // 5 minutes; this window guards against re-processing a stale
+  // *business event* (e.g. someone re-feeding a captured event into
+  // a test/live mix-up days later). 24h is wide enough to accommodate
+  // Stripe's own legitimate retry policy, which can deliver events
+  // hours after the original `event.created` for failed deliveries.
+  // Tightening this further would reject real retries.
   const FRESHNESS_WINDOW_SECS = 24 * 60 * 60;
   if (event.created && (Date.now() / 1000 - event.created) > FRESHNESS_WINDOW_SECS) {
     console.warn("Stale webhook event rejected:", { id: event.id, type: event.type, ageSecs: Math.round(Date.now() / 1000 - event.created) });
-    return res.status(400).json({ error: "Stale event (older than 5 minutes)" });
+    return res.status(400).json({ error: "Stale event (older than 24 hours)" });
   }
 
   try {

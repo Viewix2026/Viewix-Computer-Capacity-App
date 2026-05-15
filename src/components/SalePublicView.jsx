@@ -83,22 +83,44 @@ export function SalePublicView() {
         setLoading(false);
         setError(`Firebase error: ${e.code || e.message}`);
       };
-      if (saleIdParam) {
-        unsub = fbListen(`/sales/${saleIdParam}`, (data) => {
+      // Per-record listener only — the `/sales` collection `.read` now
+      // requires a role claim. Pretty-path links resolve the shortId
+      // via /api/resolve-short-id first; legacy ?s={id} skips the hop.
+      const attachPerRecordListener = (id) => {
+        unsub = fbListen(`/sales/${id}`, (data) => {
           clearTimeout(timeoutId);
           if (data) { setSale(data); setError(null); }
-          else setError(`No sale record found for id ${saleIdParam}.`);
+          else setError(`No sale record found for id ${id}.`);
           setLoading(false);
         }, onReadError);
+      };
+      if (saleIdParam) {
+        attachPerRecordListener(saleIdParam);
       } else {
-        unsub = fbListen("/sales", (all) => {
+        try {
+          const r = await fetch(`/api/resolve-short-id?type=sales&shortId=${encodeURIComponent(shortId)}`);
+          if (cancelled) return;
+          if (r.status === 404) {
+            clearTimeout(timeoutId);
+            setError(`No payment link found for code "${shortId}". It may have been deleted.`);
+            setLoading(false);
+            return;
+          }
+          if (!r.ok) {
+            clearTimeout(timeoutId);
+            setError(`Resolver returned ${r.status}. Please ask Viewix for a fresh link.`);
+            setLoading(false);
+            return;
+          }
+          const { id } = await r.json();
+          if (cancelled) return;
+          attachPerRecordListener(id);
+        } catch (e) {
+          if (cancelled) return;
           clearTimeout(timeoutId);
-          if (!all) { setError("No sale records available."); setLoading(false); return; }
-          const match = Object.values(all).find(s => s && s.shortId && s.shortId.toLowerCase() === shortId);
-          if (match) { setSale(match); setError(null); }
-          else setError(`No payment link found for code "${shortId}". It may have been deleted.`);
+          setError(`Could not resolve link: ${e.message}`);
           setLoading(false);
-        }, onReadError);
+        }
       }
     });
     return () => { cancelled = true; clearTimeout(timeoutId); unsub(); };

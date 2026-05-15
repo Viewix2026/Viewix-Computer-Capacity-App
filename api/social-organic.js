@@ -22,6 +22,7 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { processApifyRun } from "./_apifyProcess.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 import { loadSherpaContext, buildSherpaPromptBlock } from "./_sherpa.js";
+import { fetchWithTimeout, TIMEOUTS } from "./_http.js";
 import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -78,7 +79,7 @@ async function fbPatch(path, data) {
 
 // ─── Claude helper (copy from api/preproduction.js) ───
 async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessage, maxTokens = 8000, apiKey }) {
-  const resp = await fetch(ANTHROPIC_API, {
+  const resp = await fetchWithTimeout(ANTHROPIC_API, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -91,7 +92,7 @@ async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessa
       system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: userMessage }],
     }),
-  });
+  }, TIMEOUTS.anthropic);
   if (!resp.ok) {
     const err = await resp.text();
     throw new Error(`Anthropic API error ${resp.status}: ${err}`);
@@ -393,7 +394,7 @@ function buildClassifierUserMessage(posts) {
 
 // Claude call that supports multimodal content blocks (caption + image)
 async function callClaudeMultimodal({ model, systemPrompt, userContent, maxTokens, apiKey }) {
-  const resp = await fetch(ANTHROPIC_API, {
+  const resp = await fetchWithTimeout(ANTHROPIC_API, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -406,7 +407,7 @@ async function callClaudeMultimodal({ model, systemPrompt, userContent, maxToken
       system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: userContent }],
     }),
-  });
+  }, TIMEOUTS.anthropic);
   if (!resp.ok) {
     const err = await resp.text();
     throw new Error(`Anthropic API error ${resp.status}: ${err.slice(0, 400)}`);
@@ -533,7 +534,7 @@ async function resolveTranscript({ transcript, googleDocUrl }) {
   const docIdMatch = googleDocUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
   if (!docIdMatch) throw new Error("Couldn't parse a Google Doc ID from the URL");
   const docId = docIdMatch[1];
-  const docResp = await fetch(`https://docs.google.com/document/d/${docId}/export?format=txt`);
+  const docResp = await fetchWithTimeout(`https://docs.google.com/document/d/${docId}/export?format=txt`, {}, TIMEOUTS.google);
   if (!docResp.ok) {
     throw new Error(`Google Doc fetch failed (${docResp.status}). Make sure the doc is set to "Anyone with the link can view".`);
   }

@@ -69,11 +69,19 @@ export default async function handler(req, res) {
   const headers = { Authorization: `Bearer ${ATTIO_KEY}`, "Content-Type": "application/json" };
 
   try {
-    // 1. Fetch all deals (paginated, cap 1000 to match existing /api/attio)
+    // 1. Fetch all deals (paginated). Hard ceiling at 5000 to avoid
+    //    unbounded runtime — the renewal pipeline reads the closed-lost
+    //    cohort that's most likely to age out first, so the previous
+    //    1000-cap was silently dropping exactly the records the
+    //    nurture loop most needs. If we ever hit the new ceiling we
+    //    log it so the cap can be revisited intentionally rather than
+    //    re-introducing the old silent-truncation mode.
+    const HARD_CAP = 5000;
     let allDeals = [];
     let offset = 0;
     const limit = 100;
     let hasMore = true;
+    let truncated = false;
     while (hasMore) {
       const r = await fetch("https://api.attio.com/v2/objects/deals/records/query", {
         method: "POST",
@@ -88,7 +96,11 @@ export default async function handler(req, res) {
       } else {
         hasMore = false;
       }
-      if (allDeals.length >= 1000) break;
+      if (allDeals.length >= HARD_CAP) {
+        truncated = true;
+        console.warn(`[sync-attio-cache] hit hard cap of ${HARD_CAP} deals; older deals not synced. Raise HARD_CAP or split by stage.`);
+        break;
+      }
     }
 
     const lastSyncedAt = new Date().toISOString();
@@ -99,6 +111,7 @@ export default async function handler(req, res) {
       total: allDeals.length,
       lastSyncedAt,
       lastSyncTrigger: trigger,
+      truncated,
     });
 
     // 3. Recalculate Founders north-star metrics so the Founders tab also

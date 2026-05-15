@@ -28,16 +28,25 @@
     "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')" },
 
     "deliveries": {
-      ".read": "auth != null",
+      ".read": "auth != null && auth.token.role != null",
       ".write": "auth != null && auth.token.role != null",
       ".indexOn": ["shortId"],
       "$deliveryId": {
         ".read": "auth != null",
         "videos": {
           "$idx": {
-            "revision1": { ".write": "auth != null" },
-            "revision2": { ".write": "auth != null" },
-            "posted":    { ".write": "auth != null" }
+            "revision1": {
+              ".write": "auth != null",
+              ".validate": "newData.isString() && newData.val().length <= 50"
+            },
+            "revision2": {
+              ".write": "auth != null",
+              ".validate": "newData.isString() && newData.val().length <= 50"
+            },
+            "posted": {
+              ".write": "auth != null",
+              ".validate": "newData.isBoolean()"
+            }
           }
         }
       }
@@ -45,25 +54,48 @@
 
     "preproduction": {
       "metaAds": {
-        ".read": "auth != null",
+        ".read": "auth != null && auth.token.role != null",
         ".write": "auth != null && auth.token.role != null",
         ".indexOn": ["shortId"],
         "$projectId": {
           ".read": "auth != null",
-          "clientFeedback": { ".write": "auth != null" }
+          "clientFeedback": {
+            ".write": "auth != null",
+            "$feedbackKey": {
+              ".validate": "newData.hasChild('text') && newData.child('text').isString() && newData.child('text').val().length <= 5000"
+            }
+          }
         }
       },
       "socialOrganic": {
-        ".read": "auth != null",
+        ".read": "auth != null && auth.token.role != null",
         ".write": "auth != null && auth.token.role != null",
         ".indexOn": ["shortId"],
         "$projectId": {
           ".read": "auth != null",
           "preproductionDoc": {
-            "clientFeedback":    { ".write": "auth != null" },
-            "sectionFeedback":   { ".write": "auth != null" },
-            "scriptFeedback":    { ".write": "auth != null" },
-            "reviewSubmittedAt": { ".write": "auth != null" }
+            "clientFeedback": {
+              ".write": "auth != null",
+              "$feedbackKey": {
+                ".validate": "newData.hasChild('text') && newData.child('text').isString() && newData.child('text').val().length <= 5000"
+              }
+            },
+            "sectionFeedback": {
+              ".write": "auth != null",
+              "$feedbackKey": {
+                ".validate": "newData.hasChild('text') && newData.child('text').isString() && newData.child('text').val().length <= 5000"
+              }
+            },
+            "scriptFeedback": {
+              ".write": "auth != null",
+              "$feedbackKey": {
+                ".validate": "newData.hasChild('text') && newData.child('text').isString() && newData.child('text').val().length <= 5000"
+              }
+            },
+            "reviewSubmittedAt": {
+              ".write": "auth != null",
+              ".validate": "newData.isString() && newData.val().length <= 100"
+            }
           }
         }
       },
@@ -88,9 +120,12 @@
     },
 
     "sales": {
-      ".read": "auth != null",
+      ".read": "auth != null && auth.token.role != null",
       ".write": "auth != null && auth.token.role != null",
-      ".indexOn": ["shortId"]
+      ".indexOn": ["shortId"],
+      "$saleId": {
+        ".read": "auth != null"
+      }
     },
 
     "saleThankYou": {

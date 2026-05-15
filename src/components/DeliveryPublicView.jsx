@@ -52,29 +52,48 @@ export function DeliveryPublicView(){
         setLoading(false);
         setNotFoundReason(`Firebase read error: ${e.code||e.message||"unknown"}. Rules may be blocking anonymous reads of this delivery.${authWorked?"":" (Anonymous auth also failed — likely rules denial.)"}`);
       };
-      if(deliveryId){
-        unsub=fbListen(`/deliveries/${deliveryId}`,(data)=>{
+      // We listen at the per-record path `/deliveries/{id}` only — the
+      // collection root `.read` now requires a role claim, so anonymous
+      // visitors can no longer scan every delivery from a single share
+      // link. For pretty-path links (/d/{shortId}/...) we resolve the
+      // shortId server-side via /api/resolve-short-id, then attach the
+      // listener at the resolved id. The legacy ?d={id} query string
+      // skips the resolve hop because the id is already in the URL.
+      const attachPerRecordListener=(id)=>{
+        unsub=fbListen(`/deliveries/${id}`,(data)=>{
           clearTimeout(timeoutId);
           if(data){setDelivery(data);setNotFoundReason(null);}
-          else{setNotFoundReason(`No delivery record at /deliveries/${deliveryId}. It may have been deleted or renamed.`);}
+          else{setNotFoundReason(`No delivery record at /deliveries/${id}. It may have been deleted or renamed.`);}
           setLoading(false);
         },onReadError);
+      };
+      if(deliveryId){
+        attachPerRecordListener(deliveryId);
       }else if(shortId){
-        unsub=fbListen("/deliveries",(allDeliveries)=>{
-          clearTimeout(timeoutId);
-          if(!allDeliveries){
-            setNotFoundReason(`The /deliveries collection came back empty — Firebase security rules may be blocking anonymous reads, or there are simply no deliveries yet.`);
+        try{
+          const r=await fetch(`/api/resolve-short-id?type=deliveries&shortId=${encodeURIComponent(shortId)}`);
+          if(cancelled)return;
+          if(r.status===404){
+            clearTimeout(timeoutId);
+            setNotFoundReason(`No delivery found for code "${shortId}". The link may be stale or the record was deleted.`);
             setLoading(false);
             return;
           }
-          const match=Object.values(allDeliveries).find(d=>d&&d.shortId&&d.shortId.toLowerCase()===shortId);
-          if(match){setDelivery(match);setNotFoundReason(null);}
-          else{
-            const total=Object.values(allDeliveries).filter(d=>d&&d.id).length;
-            setNotFoundReason(`Checked ${total} deliveries — none have shortId "${shortId}". The link may be stale or the record was deleted.`);
+          if(!r.ok){
+            clearTimeout(timeoutId);
+            setNotFoundReason(`Resolver returned ${r.status}. Please ask Viewix for a fresh link.`);
+            setLoading(false);
+            return;
           }
+          const{id}=await r.json();
+          if(cancelled)return;
+          attachPerRecordListener(id);
+        }catch(e){
+          if(cancelled)return;
+          clearTimeout(timeoutId);
+          setNotFoundReason(`Could not resolve link: ${e.message}`);
           setLoading(false);
-        },onReadError);
+        }
       }
     });
     // Cleanup also clears the notify batch timer so navigating away

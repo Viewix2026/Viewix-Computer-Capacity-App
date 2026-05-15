@@ -124,12 +124,24 @@ export default async function handler(req, res) {
     // tells us which slice. Idempotent — already-paid slices skip.
     // Search API needs `metadata['saleId']` syntax.
     try {
-      const search = await stripe.paymentIntents.search({
-        query: `metadata['saleId']:'${saleId}' AND status:'succeeded'`,
-        limit: 100,
-      });
-      log.push({ paymentIntents: search.data.length });
-      for (const pi of search.data) {
+      // Paginate Search results — Stripe caps each page at 100 and
+      // returns `next_page` when there are more matches. Previously
+      // the first 100 PaymentIntents were the only ones reconciled
+      // and the rest silently dropped, so a sale with >100 retries
+      // could leave later slices stuck pending forever.
+      const allPaymentIntents = [];
+      let nextPage;
+      do {
+        const page = await stripe.paymentIntents.search({
+          query: `metadata['saleId']:'${saleId}' AND status:'succeeded'`,
+          limit: 100,
+          ...(nextPage ? { page: nextPage } : {}),
+        });
+        allPaymentIntents.push(...page.data);
+        nextPage = page.next_page || null;
+      } while (nextPage);
+      log.push({ paymentIntents: allPaymentIntents.length });
+      for (const pi of allPaymentIntents) {
         const sliceIdx = pi.metadata?.sliceIdx;
         const sliceId  = pi.metadata?.sliceId;
         if ((sliceIdx === undefined || sliceIdx === null) && !sliceId) {

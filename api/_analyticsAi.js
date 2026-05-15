@@ -28,6 +28,7 @@
 
 import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
 import { createHash } from "node:crypto";
+import { fetchWithTimeout, TIMEOUTS } from "./_http.js";
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -79,7 +80,7 @@ async function fbSet(path, data) {
 async function callClaude({ model, systemPrompt, userMessage, maxTokens = 600 }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
-  const resp = await fetch(ANTHROPIC_API, {
+  const resp = await fetchWithTimeout(ANTHROPIC_API, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -94,7 +95,7 @@ async function callClaude({ model, systemPrompt, userMessage, maxTokens = 600 })
       system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: userMessage }],
     }),
-  });
+  }, TIMEOUTS.anthropic);
   if (!resp.ok) {
     const err = await resp.text();
     throw new Error(`Anthropic API ${resp.status}: ${err.slice(0, 300)}`);

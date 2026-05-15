@@ -12,8 +12,13 @@
 // Auth: founders-tier role gate to prevent accidental triggers.
 //
 // Trigger from the terminal once after deploy:
+//   # dry-run (default) — returns counts but writes nothing:
 //   curl -X POST -H "Authorization: Bearer $YOUR_TOKEN" \
 //     https://planner.viewix.com.au/api/cleanup-auto-roll-fields
+//
+//   # apply for real:
+//   curl -X POST -H "Authorization: Bearer $YOUR_TOKEN" \
+//     'https://planner.viewix.com.au/api/cleanup-auto-roll-fields?apply=1'
 //
 // Once you've confirmed the response shows the touched count you
 // expected, this file can be deleted in a follow-up PR. Leaving it
@@ -35,16 +40,22 @@ export default async function handler(req, res) {
     return sendAuthError(res, e);
   }
 
+  // Default to dry-run so a misclick on a "Run cleanup" producer button
+  // can't wipe data. The sibling collapse-stretched-edits.js follows
+  // the same `?apply=1` convention. Returns the same counts either way
+  // so the operator can pre-verify scope before flipping `apply=1`.
+  const apply = req.query?.apply === "1";
+
   try {
-    const result = await stripFields();
-    return res.status(200).json({ success: true, ...result });
+    const result = await stripFields({ apply });
+    return res.status(200).json({ success: true, apply, ...result });
   } catch (e) {
     console.error("cleanup-auto-roll-fields error:", e);
     return res.status(500).json({ error: e.message || String(e) });
   }
 }
 
-async function stripFields() {
+async function stripFields({ apply }) {
   const { db, err } = getAdmin();
   if (err) throw new Error(err);
 
@@ -65,7 +76,7 @@ async function stripFields() {
       const updates = {};
       if (hasCount) updates[`/projects/${pid}/subtasks/${stid}/autoRolledCount`] = null;
       if (hasLast) updates[`/projects/${pid}/subtasks/${stid}/autoRolledLast`] = null;
-      await db.ref().update(updates);
+      if (apply) await db.ref().update(updates);
       subtasksTouched++;
       projectModified = true;
       if (sample.length < 10) sample.push(`/projects/${pid}/subtasks/${stid}`);
