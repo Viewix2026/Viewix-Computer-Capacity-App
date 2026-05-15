@@ -187,15 +187,13 @@ export function Capacity({
   const scheduleEditors = editors.filter(e => !e.role || e.role === "editor");
   const ai = scMode && scIn ? scIn : inputs;
   const cwEds = weekData[curW]?.editors || scheduleEditors.map(e => ({ ...e, days: { ...e.defaultDays } }));
+  // occ = total editor-days scheduled this week (sum of "in" days
+  // across every editor). Multiplied by hoursPerSuitePerDay it gives
+  // the week's real editing capacity in hours — which is the same
+  // number the "Real Utilisation" stat already divides workload by.
+  // Drives both the "Editor Days / Week" headline input and the
+  // existing "Suites Occupied 26/35" stat downstream.
   const occ = cwEds.reduce((s, e) => s + DK.filter(d => dayVal(e.days[d]) === "in").length, 0);
-  // Bums-in-seats this week — count of editors with at least one
-  // "in" day scheduled. More actionable than the physical suite
-  // count (totalSuites) for capacity planning: hiring is about
-  // covering scheduled seats, not building more edit suites.
-  // totalSuites still drives the FILLED UTIL / SUITES OCCUPIED math
-  // (physical max) and is editable via the +/− buttons in the
-  // Weekly Schedule grid.
-  const editorsInSeats = cwEds.filter(e => DK.some(d => dayVal(e.days[d]) === "in")).length;
   const c = useMemo(() => doCalc(ai, occ), [ai, occ]);
   // upIn is the single mutation path for /inputs. Normal mode writes a
   // /inputs/<key> leaf directly so the daily cron at
@@ -284,12 +282,12 @@ export function Capacity({
                 <NumIn label="Total Edit Suites" value={ai.totalSuites} onChange={v => upIn("totalSuites", v)} min={1} />
               ) : (
                 <AutoField
-                  label="Editors In Seats"
-                  value={editorsInSeats}
+                  label="Editor Days / Week"
+                  value={occ}
                   caption="Live · from Weekly Schedule"
                 />
               )}
-              <NumIn label="Hours / Suite / Day" value={ai.hoursPerSuitePerDay} onChange={v => upIn("hoursPerSuitePerDay", v)} min={1} step={0.5} />
+              <NumIn label="Editing Hours / Day" value={ai.hoursPerSuitePerDay} onChange={v => upIn("hoursPerSuitePerDay", v)} min={1} step={0.5} />
               {scMode ? (
                 <NumIn label="Active Projects" value={ai.currentActiveProjects} onChange={v => upIn("currentActiveProjects", v)} min={0} />
               ) : (
