@@ -43,7 +43,10 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   try {
-    await requireRole(req, ["founders", "founder"]);
+    // Founders + closers can create Custom sales. Closers run most of
+    // the payment-link creation in practice; the dashboard UI is
+    // gated to the same set via the `canUseCustom` prop on <Sale/>.
+    await requireRole(req, ["founders", "founder", "closer"]);
   } catch (e) {
     return sendAuthError(res, e);
   }

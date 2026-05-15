@@ -50,7 +50,10 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   try {
-    await requireRole(req, ["founders", "founder"]);
+    // Founders + closers can edit Custom schedules — same set as the
+    // create endpoint. Server still enforces every immutability rule
+    // below (paid-slice deletion, total-change, paid-slice edits).
+    await requireRole(req, ["founders", "founder", "closer"]);
   } catch (e) {
     return sendAuthError(res, e);
   }
