@@ -20,8 +20,20 @@
 import { isActiveStatus } from "../projects/status.js";
 import { inferStage } from "../scheduling/stages.js";
 
-const WINDOW_DAYS = 28;
-const WINDOW_MS = WINDOW_DAYS * 24 * 3600 * 1000;
+// Edit-hour averaging keeps a 4-week window: editing rhythm is lumpy
+// (revisions land in batches), so a 2-week window would over-react to
+// any single quiet stretch. The project-weeks denominator caps on the
+// same window.
+const EDIT_HOURS_WINDOW_DAYS = 28;
+// "New Projects / Week" uses a SHORTER 2-week window because the
+// dashboard is recent enough that legacy projects all carry a
+// near-now createdAt (import-timestamp, not deal-won-date). A 4-week
+// window swept up the entire backfill and reported absurd inflow
+// rates (107.5/week). Two weeks lets the fresh webhook-deal-won
+// writes dominate without dragging the backfill in.
+const NEW_PROJECTS_WINDOW_DAYS = 14;
+const EDIT_HOURS_WINDOW_MS = EDIT_HOURS_WINDOW_DAYS * 24 * 3600 * 1000;
+const NEW_PROJECTS_WINDOW_MS = NEW_PROJECTS_WINDOW_DAYS * 24 * 3600 * 1000;
 const MIN_LOG_SAMPLES = 5;
 
 function round1(n) {
@@ -76,15 +88,18 @@ export function computeCapacityStats({
   const pipelineProjectsCount = projectsArr.filter(isUncommissionedActive).length;
 
   // ─── 2. New projects per week (broad — deal inflow) ────────────
-  // Counts every project created in the last 28 days regardless of
+  // Counts every project created in the last 14 days regardless of
   // commissioned/active/done state. Measures how fast deals are
-  // landing in the pipeline, NOT current scheduled workload.
-  const cutoffMs = now - WINDOW_MS;
+  // landing in the pipeline, NOT current scheduled workload. Uses a
+  // 2-week window (not 4) because legacy /projects records carry
+  // import-timestamp createdAt, not real deal-won-date — a 4-week
+  // window swept the entire backfill and reported ~107/week.
+  const newProjectsCutoffMs = now - NEW_PROJECTS_WINDOW_MS;
   const newCount = projectsArr.filter((p) => {
     const t = Date.parse(p?.createdAt || "");
-    return Number.isFinite(t) && t >= cutoffMs;
+    return Number.isFinite(t) && t >= newProjectsCutoffMs;
   }).length;
-  const newProjectsPerWeek = round1(newCount / 4);
+  const newProjectsPerWeek = round1(newCount / (NEW_PROJECTS_WINDOW_DAYS / 7));
 
   // ─── 3. Avg edit hrs / project / wk ────────────────────────────
   // Both numerator and denominator scope to currently-active
@@ -108,7 +123,8 @@ export function computeCapacityStats({
     }
   }
 
-  const cutoffDate = sydneyDate(cutoffMs);
+  const editHoursCutoffMs = now - EDIT_HOURS_WINDOW_MS;
+  const cutoffDate = sydneyDate(editHoursCutoffMs);
   let editSecs = 0;
   let logSampleCount = 0;
   for (const byDate of Object.values(timeLogs || {})) {
@@ -141,8 +157,8 @@ export function computeCapacityStats({
     const created = Date.parse(p?.createdAt || "");
     const ageDays = Number.isFinite(created)
       ? Math.max(0, (now - created) / (24 * 3600 * 1000))
-      : WINDOW_DAYS; // unknown createdAt → assume full window
-    projectWeeks += Math.min(WINDOW_DAYS, ageDays) / 7;
+      : EDIT_HOURS_WINDOW_DAYS; // unknown createdAt → assume full window
+    projectWeeks += Math.min(EDIT_HOURS_WINDOW_DAYS, ageDays) / 7;
   }
 
   const hasEnoughData = logSampleCount >= MIN_LOG_SAMPLES && projectWeeks > 0;
@@ -154,7 +170,10 @@ export function computeCapacityStats({
   const computed = {
     source: "capacity-stats-cron",
     computedAt: now,
-    windowDays: WINDOW_DAYS,
+    windowDays: {
+      newProjects: NEW_PROJECTS_WINDOW_DAYS,
+      editHours: EDIT_HOURS_WINDOW_DAYS,
+    },
     activeProjects: {
       value: currentActiveProjects,
       sampleSize: projectsArr.length,

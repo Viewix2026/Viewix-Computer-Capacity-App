@@ -36,9 +36,14 @@ function relTime(ms) {
 // Projects, Avg Edit Hrs/Project/Wk, New Projects/Week). Same label
 // + value typography, plus a tiny caption explaining when the cron
 // last touched it and whether the value is fresh.
-function AutoField({ label, value, computedAt, status, sub, insufficientText }) {
+function AutoField({ label, value, computedAt, status, sub, insufficientText, caption: explicitCaption }) {
   let caption;
-  if (status === "insufficient_data") {
+  if (explicitCaption) {
+    // Override path — used for values derived live from local state
+    // (e.g. editors-in-seats from the weekly schedule) where the
+    // cron-update language doesn't fit.
+    caption = explicitCaption;
+  } else if (status === "insufficient_data") {
     caption = `Auto · ${insufficientText || "insufficient data"}`;
   } else if (!Number.isFinite(computedAt)) {
     caption = "Auto · not yet computed";
@@ -183,6 +188,14 @@ export function Capacity({
   const ai = scMode && scIn ? scIn : inputs;
   const cwEds = weekData[curW]?.editors || scheduleEditors.map(e => ({ ...e, days: { ...e.defaultDays } }));
   const occ = cwEds.reduce((s, e) => s + DK.filter(d => dayVal(e.days[d]) === "in").length, 0);
+  // Bums-in-seats this week — count of editors with at least one
+  // "in" day scheduled. More actionable than the physical suite
+  // count (totalSuites) for capacity planning: hiring is about
+  // covering scheduled seats, not building more edit suites.
+  // totalSuites still drives the FILLED UTIL / SUITES OCCUPIED math
+  // (physical max) and is editable via the +/− buttons in the
+  // Weekly Schedule grid.
+  const editorsInSeats = cwEds.filter(e => DK.some(d => dayVal(e.days[d]) === "in")).length;
   const c = useMemo(() => doCalc(ai, occ), [ai, occ]);
   // upIn is the single mutation path for /inputs. Normal mode writes a
   // /inputs/<key> leaf directly so the daily cron at
@@ -267,7 +280,15 @@ export function Capacity({
               {!scMode && <button onClick={() => { setScIn({ ...inputs }); setScMode(true); }} style={{ ...BTN, border: "1px solid var(--border)", background: "transparent", color: "var(--accent)" }}>What-If Mode</button>}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16 }}>
-              <NumIn label="Total Edit Suites" value={ai.totalSuites} onChange={v => upIn("totalSuites", v)} min={1} />
+              {scMode ? (
+                <NumIn label="Total Edit Suites" value={ai.totalSuites} onChange={v => upIn("totalSuites", v)} min={1} />
+              ) : (
+                <AutoField
+                  label="Editors In Seats"
+                  value={editorsInSeats}
+                  caption="Live · from Weekly Schedule"
+                />
+              )}
               <NumIn label="Hours / Suite / Day" value={ai.hoursPerSuitePerDay} onChange={v => upIn("hoursPerSuitePerDay", v)} min={1} step={0.5} />
               {scMode ? (
                 <NumIn label="Active Projects" value={ai.currentActiveProjects} onChange={v => upIn("currentActiveProjects", v)} min={0} />
