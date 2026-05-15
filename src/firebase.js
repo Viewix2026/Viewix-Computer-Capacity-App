@@ -205,29 +205,54 @@ export function getCurrentRole() {
   return currentRole;
 }
 
-export async function signInWithRole(password) {
-  const r = await fetch("/api/auth", {
+// Per-user identity helpers — read straight from the live Firebase Auth
+// user. Used by audit-stamping in client-side write sites (e.g. the
+// delivery share modal stamps `_audit.lastEditedBy` with these).
+export function getCurrentUserUid()      { return auth?.currentUser?.uid        || null; }
+export function getCurrentUserEmail()    { return auth?.currentUser?.email      || null; }
+export function getCurrentUserName()     { return auth?.currentUser?.displayName|| null; }
+export function getCurrentUserPhotoURL() { return auth?.currentUser?.photoURL   || null; }
+
+export async function signInWithGoogle() {
+  // Ensure the Firebase app + auth SDK is loaded before constructing the
+  // provider (window.firebase.auth.GoogleAuthProvider is only defined
+  // after firebase-auth-compat.js finishes loading).
+  await new Promise(res => onFB(res));
+
+  const provider = new window.firebase.auth.GoogleAuthProvider();
+  // Force the account chooser even when only one Google session is
+  // active — prevents the wrong-account-stuck case where a user signed
+  // into the wrong Google account in another tab gets auto-selected.
+  provider.setCustomParameters({ prompt: "select_account" });
+
+  const cred = await auth.signInWithPopup(provider);
+  const idToken = await cred.user.getIdToken();
+
+  // Server verifies the Google ID token, looks up the user in /users,
+  // sets the role custom claim. We then force-refresh the ID token to
+  // pick up the freshly-written claim.
+  const r = await fetch("/api/auth-google", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization:  `Bearer ${idToken}`,
+    },
   });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok || !data.token) {
-    throw new Error(data.error || "Auth failed");
+  if (!r.ok) {
+    // Critical: drop the half-authed Firebase session. Without this,
+    // Firebase keeps the user signed in with no role claim — the app
+    // would render the Login screen but the next forced refresh would
+    // restore the same broken state.
+    try { await auth.signOut(); } catch {}
+    currentRole = null;
+    throw new Error(data.error || "Not authorized");
   }
-  // Ensure the Firebase app is loaded
-  await new Promise(res => onFB(res));
-  await auth.signInWithCustomToken(data.token);
-  // Force token refresh so the custom claim is available immediately
-  const u = auth.currentUser;
-  if (u) {
-    try {
-      const tok = await u.getIdTokenResult(true);
-      currentRole = tok.claims?.role || data.role;
-    } catch {
-      currentRole = data.role;
-    }
-  } else {
+
+  try {
+    const tok = await cred.user.getIdTokenResult(true);
+    currentRole = tok.claims?.role || data.role;
+  } catch {
     currentRole = data.role;
   }
   return currentRole;

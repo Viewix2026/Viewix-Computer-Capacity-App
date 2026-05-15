@@ -3,33 +3,43 @@
     ".read": false,
     ".write": false,
 
-    "inputs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "weekData": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "quotes": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "clientRateCards": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "clients": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
+    "inputs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "weekData": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "quotes": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "clientRateCards": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "clients": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "sherpaCache":     { ".read": false, ".write": false },
     "sherpaCacheMeta": { ".read": "auth != null && auth.token.role != null", ".write": false },
-    "training": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "trainingSuggestions": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "todos": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "teamLunch": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "buyerJourney": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "turnaround": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "mondayEditors": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "projects": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "runsheets": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "formatLibrary": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "preproductionTemplates": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "meetingFeedback": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "foundersMetrics": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null" },
-    "foundersBriefings": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')" },
-    "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')" },
+    "training": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "trainingSuggestions": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "todos": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "teamLunch": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "buyerJourney": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "turnaround": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "mondayEditors": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "projects": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "runsheets": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "formatLibrary": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "preproductionTemplates": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "meetingFeedback": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "foundersMetrics": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "foundersBriefings": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true" },
+    "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true" },
+
+    "users": {
+      ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
+      ".write": false,
+      "$uid":   { ".read": "auth != null && (auth.uid == $uid || auth.token.role == 'founders' || auth.token.role == 'founder')" }
+    },
+    "usersByEmail": {
+      ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
+      ".write": false
+    },
 
     "deliveries": {
       ".read": "auth != null",
-      ".write": "auth != null && auth.token.role != null",
+      ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true",
       ".indexOn": ["shortId"],
       "$deliveryId": {
         ".read": "auth != null",
@@ -46,7 +56,7 @@
     "preproduction": {
       "metaAds": {
         ".read": "auth != null",
-        ".write": "auth != null && auth.token.role != null",
+        ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true",
         ".indexOn": ["shortId"],
         "$projectId": {
           ".read": "auth != null",
@@ -55,7 +65,7 @@
       },
       "socialOrganic": {
         ".read": "auth != null",
-        ".write": "auth != null && auth.token.role != null",
+        ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true",
         ".indexOn": ["shortId"],
         "$projectId": {
           ".read": "auth != null",
@@ -73,39 +83,39 @@
       },
       "promptLearnings": {
         ".read": "auth != null && auth.token.role != null",
-        ".write": "auth != null && auth.token.role != null"
+        ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true"
       }
     },
 
     "accounts": {
       ".read": "auth != null",
-      ".write": "auth != null && auth.token.role != null"
+      ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "analytics": {
       ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'lead')",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'lead')"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'lead') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "sales": {
       ".read": "auth != null",
-      ".write": "auth != null && auth.token.role != null",
+      ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true",
       ".indexOn": ["shortId"]
     },
 
     "saleThankYou": {
       ".read": "auth != null",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "editors": {
       ".read": "auth != null",
-      ".write": "auth != null && auth.token.role != null"
+      ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "nurture": {
       ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "contactNotifications": {
@@ -115,12 +125,12 @@
 
     "foundersData": {
       ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "teamHome": {
       ".read": "auth != null && auth.token.role != null",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     }
   }
 }

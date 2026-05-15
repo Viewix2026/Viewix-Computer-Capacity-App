@@ -62,30 +62,38 @@ export async function requireRole(req, allowedRoles) {
 
   let decoded;
   try {
-    decoded = await admin.auth().verifyIdToken(match[1]);
+    // Second arg `true` enables the revocation check — combined with
+    // admin.auth().revokeRefreshTokens(uid) in api/admin-users.js's
+    // setActive:false/delete handlers, this kills API access for a
+    // deactivated user within seconds, even if their ID token hasn't
+    // expired yet.
+    decoded = await admin.auth().verifyIdToken(match[1], true);
   } catch {
-    const err = new Error("Invalid bearer token");
+    const err = new Error("Invalid or revoked bearer token");
     err.status = 401;
     throw err;
   }
 
   const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
   if (roles.length && !roles.includes(decoded.role)) {
-    // Tell the caller WHAT role the token has and which roles are
-    // allowed. Bare "Forbidden" was useless — producers couldn't tell
-    // whether they needed a re-sign-in (claim missing from a stale
-    // token), the wrong password (claim wrong), or an actual
-    // permissions gap. The actionable hint covers the common cause:
-    // /api/auth now persists claims via setCustomUserClaims but
-    // pre-backfill sessions still hold tokens without them, and
-    // signing out + back in mints a fresh token that picks up the
-    // persisted claim.
     const actual = decoded.role || "(no role claim)";
-    const err = new Error(`Forbidden — your token's role is "${actual}". Allowed: ${roles.join(", ")}. Sign out and back in with the right password if you expect access; this refreshes claims on your token.`);
+    const err = new Error(`Forbidden — your token's role is "${actual}". Allowed: ${roles.join(", ")}. Sign out and back in if you expect access; this refreshes claims on your token.`);
     err.status = 403;
     throw err;
   }
   return decoded;
+}
+
+// Build a normalised audit "actor" from a verified token.
+// Used by audit-stamping endpoints so every handler stops reassembling
+// { uid, email, name, ts } differently.
+export function actorFrom(decoded) {
+  return {
+    uid:   decoded.uid,
+    email: decoded.email || null,
+    name:  decoded.name  || null,
+    ts:    Date.now(),
+  };
 }
 
 export function sendAuthError(res, err) {
