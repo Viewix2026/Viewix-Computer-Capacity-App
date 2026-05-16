@@ -109,6 +109,10 @@ export async function applyPlanCore({ shortId, approveDespiteViolations = false,
   const projectId = proposal.projectId;
   const proposed = proposal.proposedSubtasks || [];
 
+  // Set once the atomic apply has committed. Its presence is the
+  // signal that the claim must never be released again.
+  let applied = null;
+
   // P1 #2 — guard everything after the claim.
   try {
     // ── Stale guard (capacity / conflict drift) ──────────────────
@@ -172,8 +176,8 @@ export async function applyPlanCore({ shortId, approveDespiteViolations = false,
       return { status: "stale", reason: "diverged", divergedKeys: diverged, shortId };
     }
 
-    // Terminal state + audit + history in the same atomic multi-path
-    // update so indexes stay consistent.
+    // Terminal state (approved) + the subtask writes go in ONE atomic
+    // multi-path update. That update is the point of no return.
     const terminal = {
       ...proposal,
       status: "approved",
@@ -188,24 +192,14 @@ export async function applyPlanCore({ shortId, approveDespiteViolations = false,
 
     await db.ref().update(updates);
 
-    await db.ref("/scheduling/history").push({
-      type: "plan_applied",
-      ts: nowIso,
-      actor: actor?.id || null,
-      actorName: actor?.name || null,
-      shortId,
-      planGroupId: proposal.planGroupId,
-      projectId,
-      subtaskCount: written.filter(w => w.action === "create" || w.action === "update").length,
-      approvedDespiteViolations: !!approveDespiteViolations,
-    });
-
-    return { status: "applied", shortId, written, counts: writeCounts(written) };
+    // Committed. Capture what the post-commit audit needs and break out
+    // of the release-on-error try — nothing past this line may ever
+    // release the claim (the plan is already written).
+    applied = { written, nowIso };
   } catch (e) {
-    // P1 #2 — release the claim so a retry can succeed. No partial
-    // write is possible: the only mutation is the single atomic
-    // db.ref().update(updates) above; reaching here means it never ran
-    // (or threw before any write).
+    // P1 #2 — failure BEFORE the atomic apply: release the claim so a
+    // retry can succeed. The only mutation is the single atomic
+    // db.ref().update(updates); reaching here means it never ran.
     await ref.update({
       status: "pending",
       claimedAt: null,
@@ -215,6 +209,36 @@ export async function applyPlanCore({ shortId, approveDespiteViolations = false,
     }).catch(() => {});
     return { status: "error", reason: e?.message || String(e), shortId };
   }
+
+  // ── Past the point of no return ────────────────────────────────
+  // Codex PR #148 re-pass P1: the audit push must NOT be able to
+  // reopen an already-applied plan. Best-effort, isolated — its
+  // failure is logged, never released, never fatal.
+  try {
+    await db.ref("/scheduling/history").push({
+      type: "plan_applied",
+      ts: applied.nowIso,
+      actor: actor?.id || null,
+      actorName: actor?.name || null,
+      shortId,
+      planGroupId: proposal.planGroupId,
+      projectId,
+      subtaskCount: applied.written.filter(w => w.action === "create" || w.action === "update").length,
+      approvedDespiteViolations: !!approveDespiteViolations,
+    });
+  } catch (auditErr) {
+    console.error(
+      "scheduling-plan-apply: audit push failed (non-fatal — plan already applied):",
+      auditErr,
+    );
+  }
+
+  return {
+    status: "applied",
+    shortId,
+    written: applied.written,
+    counts: writeCounts(applied.written),
+  };
 }
 
 // Release a claimed proposal back to pending (clears claim metadata so
