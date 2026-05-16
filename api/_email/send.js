@@ -34,10 +34,39 @@
 import { Resend } from "resend";
 import { getAdmin } from "../_fb-admin.js";
 import { renderEmailHtml, TEMPLATES } from "./render.js";
+import { slackPostMessage } from "../_slack-helpers.js";
 
 const FROM = "Viewix <hello@viewix.com.au>";
 const REPLY_TO = "hello@viewix.com.au";
 const PENDING_TTL_MS = 60 * 1000; // stale-lock cutoff
+
+// ─── Production-management Slack alerts ─────────────────────────────
+// Per Jeremy 2026-05-17: the email system must NOT post routine
+// success/summary noise to Slack. It posts ONLY when something didn't
+// go to plan, and those alerts go to the production-management
+// channel (NOT project-leads). Channel id is overridable via env;
+// defaults to the channel Jeremy specified so it works with zero
+// new config. Bot token reuses the existing Viewix Dashboard Slack
+// app token (same workspace) already used by the scheduling brain.
+//
+// One-time setup note: the Viewix Dashboard Slack app must be a
+// member of the production-management channel for chat.postMessage
+// to succeed (`/invite` the app once). postProdAlert fails soft —
+// a missing invite logs a warning, never breaks the cron.
+const PROD_MGMT_CHANNEL_ID = process.env.SLACK_PROD_MGMT_CHANNEL_ID || "C0AEX112NP9";
+
+async function postProdAlert(text) {
+  const botToken = process.env.SLACK_SCHEDULE_BOT_TOKEN;
+  if (!botToken || !PROD_MGMT_CHANNEL_ID) {
+    console.warn("send.js postProdAlert: bot token / channel id missing — alert dropped:", text);
+    return;
+  }
+  try {
+    await slackPostMessage({ channel: PROD_MGMT_CHANNEL_ID, text, botToken });
+  } catch (e) {
+    console.warn("send.js postProdAlert failed:", e.message);
+  }
+}
 
 // In-process counters so cron callers can log a single summary line
 // per run instead of one Slack post per scanned project. The counters
@@ -64,21 +93,14 @@ function getResend() {
   return _resend;
 }
 
-// Slack-log a single line for an event-driven send (Confirmation,
-// ReadyForReview). Cron paths post their own summary line and don't
-// route through here. Best-effort — never throws.
+// Slack-log a single line for an event-driven send issue (Confirmation
+// / ReadyForReview render fail, missing API key, send failure, timeout,
+// late reconciliation). These are all "didn't go to plan" signals —
+// never routine success — so they go to the production-management
+// channel, NOT project-leads (per Jeremy 2026-05-17). Best-effort —
+// never throws.
 async function slackLog(line) {
-  const url = process.env.SLACK_PROJECT_LEADS_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL;
-  if (!url) return;
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: line }),
-    });
-  } catch (e) {
-    console.warn("send.js slackLog failed:", e.message);
-  }
+  await postProdAlert(line);
 }
 
 // Slack-post the rendered HTML preview during dry-run so producers
@@ -383,28 +405,56 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
 // in send() writes a `failed` record on timeout and reconciles
 // the eventual outcome. Per GPT review feedback (P2).)
 
-// Summary line for cron paths. Posts one line per run with the
-// counter totals. Avoids per-call Slack spam when the kill switch
-// is engaged (or anywhere else counters accumulate).
+// Per-pass cron outcome reporter.
+//
+// Changed 2026-05-17 (Jeremy): a clean cron run posts NOTHING to
+// Slack. The old behaviour spammed project-leads with a `sent=N ·
+// skipped_…=N` line every single run — pure noise on a healthy
+// system. Now this only speaks up when a run didn't go to plan, and
+// it speaks to the production-management channel (via postProdAlert),
+// never project-leads.
+//
+// "Didn't go to plan" = failures OR skipped_missing (Jeremy's call):
+//   - counters.failed       a send genuinely failed (render / no key /
+//                            Resend error / timeout)
+//   - counters.skipped_missing  a client did NOT get their email
+//                            because the project is missing client
+//                            email / core fields — a real, silent,
+//                            client-impacting gap a founder must see
+//                            and fix (add the missing contact info).
+// Every other counter (sent, skipped_alreadySent, skipped_inFlight,
+// skipped_dryRun, skipped_killSwitch) is normal/expected → silent.
 export async function postCronSummary(label, counters) {
-  const url = process.env.SLACK_PROJECT_LEADS_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL;
-  if (!url) return;
-  const total = Object.values(counters).reduce((a, b) => a + b, 0);
-  if (total === 0) return; // nothing happened — nothing to log
-  const parts = Object.entries(counters)
+  const failed = counters?.failed || 0;
+  const skippedMissing = counters?.skipped_missing || 0;
+  if (failed === 0 && skippedMissing === 0) return; // healthy run — say nothing
+
+  // Lead with the problem counters; append the full breakdown for
+  // context so whoever's in prod-mgmt can see scope at a glance.
+  const problems = [];
+  if (failed > 0) problems.push(`failed=${failed}`);
+  if (skippedMissing > 0) problems.push(`skipped_missing=${skippedMissing}`);
+  const fullBreakdown = Object.entries(counters)
     .filter(([, v]) => v > 0)
     .map(([k, v]) => `${k}=${v}`)
     .join(" · ");
-  const text = `:gear: *${label}* ${parts}`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-  } catch (e) {
-    console.warn("send.js postCronSummary failed:", e.message);
-  }
+  const text =
+    `:warning: *${label}* did not go to plan — ${problems.join(" · ")}\n` +
+    `> full: ${fullBreakdown}\n` +
+    `> ${failed > 0 ? "Sends failed — check the email log / Resend." : ""}` +
+    `${skippedMissing > 0 ? " A client could not be emailed (missing client email or shoot fields) — fix the project record." : ""}`;
+  await postProdAlert(text);
+}
+
+// Cron pass crashed entirely (the try/catch in daily-09 around each
+// pass). Previously this was swallowed into the HTTP response only —
+// a pass throwing produced ZERO Slack signal, which directly violates
+// "tell me if it doesn't go to plan". Now it alerts prod-mgmt.
+export async function postCronPassError(label, errorMessage) {
+  await postProdAlert(
+    `:rotating_light: *${label}* CRASHED — ${errorMessage}\n` +
+    `> The pass threw before completing. Other passes in the run still execute independently. Investigate the cron logs.`
+  );
 }
 
 export { newCounters, FROM, REPLY_TO };

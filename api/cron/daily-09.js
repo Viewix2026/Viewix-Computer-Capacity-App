@@ -51,7 +51,7 @@
 //                             gate Pass 2 — only the email send.
 
 import { adminGet, adminPatch, adminSet } from "../_fb-admin.js";
-import { send, newCounters, postCronSummary } from "../_email/send.js";
+import { send, newCounters, postCronSummary, postCronPassError } from "../_email/send.js";
 import { getProjectContext, buildShootContext } from "../_email/getProjectContext.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
 
@@ -422,6 +422,7 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error("daily-09 Pass 1 failed:", e);
     summary.pass1 = { error: e.message };
+    await postCronPassError("daily-09 · Pass 1 ShootTomorrow", e.message);
   }
 
   // Pass 2 — Auto-progress
@@ -439,6 +440,7 @@ export default async function handler(req, res) {
     } catch (e) {
       console.error("daily-09 Pass 2 failed:", e);
       summary.pass2 = { error: e.message };
+      await postCronPassError("daily-09 · Pass 2 AutoProgress", e.message);
     }
   }
 
@@ -450,6 +452,7 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error("daily-09 Pass 3 failed:", e);
     summary.pass3 = { error: e.message };
+    await postCronPassError("daily-09 · Pass 3 InEditSuite", e.message);
   }
 
   if (dryRunReport) return res.status(200).json({ ok: true, summary });
