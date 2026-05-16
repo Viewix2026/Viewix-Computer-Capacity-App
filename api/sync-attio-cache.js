@@ -12,6 +12,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 import { requireRole, sendAuthError } from "./_requireAuth.js";
+import { isAuthorizedCron } from "./_cronAuth.js";
 
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -46,7 +47,7 @@ function dealRecordId(deal) {
 }
 
 export default async function handler(req, res) {
-  if (req.method === "GET" && req.headers["x-vercel-cron"] !== "1") {
+  if (req.method === "GET" && !isAuthorizedCron(req).ok) {
     return res.status(401).json({ error: "Cron header required" });
   }
   if (req.method === "POST") {

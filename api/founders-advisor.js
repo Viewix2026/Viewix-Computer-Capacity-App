@@ -18,6 +18,7 @@
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { isAuthorizedCron } from "./_cronAuth.js";
 import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -378,7 +379,7 @@ export default async function handler(req, res) {
   // invocations. Manual triggering must go through the authenticated
   // POST path below.
   if (req.method === "GET") {
-    const isCron = req.headers["x-vercel-cron"] === "1";
+    const isCron = isAuthorizedCron(req).ok;
     if (!isCron) return res.status(401).json({ error: "Cron header required" });
     try {
       const result = await weeklyCron();

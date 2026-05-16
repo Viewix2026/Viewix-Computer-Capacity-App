@@ -53,6 +53,7 @@
 import { adminGet, adminPatch, adminSet } from "../_fb-admin.js";
 import { send, newCounters, postCronSummary } from "../_email/send.js";
 import { getProjectContext, buildShootContext } from "../_email/getProjectContext.js";
+import { isAuthorizedCron } from "../_cronAuth.js";
 
 // Subject lines (locked 2026-05-13 per Codex audit — these match the
 // template body headlines and Jeremy's approved copy):
@@ -337,16 +338,17 @@ async function passInEditSuite({ projects, editors }) {
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ error: "GET only" });
 
-  // Auth — must be either Vercel cron or a valid secret.
-  const isVercelCron = req.headers["x-vercel-cron"] === "1";
-  const querySecret = (typeof req.query?.secret === "string"
-    ? req.query.secret
-    : new URL(req.url, "http://x").searchParams.get("secret")) || "";
-  const expectedSecret = process.env.CRON_TEST_SECRET || "";
-  const secretValid = !!expectedSecret && querySecret === expectedSecret;
-  if (!isVercelCron && !secretValid) {
+  // Auth — Vercel cron (Bearer CRON_SECRET or x-vercel-cron header
+  // presence) OR a valid ?secret= for manual runs. The old
+  // `x-vercel-cron === "1"` check 401'd every real Vercel cron and
+  // killed this whole pipeline from ~2026-05-09; see api/_cronAuth.js.
+  const auth = isAuthorizedCron(req);
+  if (!auth.ok) {
     return res.status(401).json({ error: "Cron header or valid ?secret required" });
   }
+  // secretValid is true ONLY for the ?secret= path — a real scheduled
+  // cron must never be able to pass the test-only overrides below.
+  const secretValid = !!auth.secretValid;
 
   // Test-only overrides (require valid secret).
   const url = new URL(req.url, "http://x");

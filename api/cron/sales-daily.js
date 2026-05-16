@@ -30,6 +30,7 @@
 
 import Stripe from "stripe";
 import { adminGet, adminPatch, runRtdbTransaction } from "../_fb-admin.js";
+import { isAuthorizedCron } from "../_cronAuth.js";
 
 function sydneyHour() {
   return parseInt(
@@ -63,16 +64,15 @@ async function slackNotify(text) {
 }
 
 export default async function handler(req, res) {
-  // Auth — Vercel cron header OR ?secret=$CRON_TEST_SECRET (manual test).
-  const isVercelCron = req.headers["x-vercel-cron"] === "1";
-  const querySecret = (typeof req.query?.secret === "string"
-    ? req.query.secret
-    : new URL(req.url, "http://x").searchParams.get("secret")) || "";
-  const expectedSecret = process.env.CRON_TEST_SECRET || "";
-  const secretValid = !!expectedSecret && querySecret === expectedSecret;
-  if (!isVercelCron && !secretValid) {
+  // Auth — Vercel cron (Bearer CRON_SECRET or x-vercel-cron header
+  // presence) OR ?secret=$CRON_TEST_SECRET (manual test). See
+  // api/_cronAuth.js — the old `x-vercel-cron === "1"` check 401'd
+  // every real Vercel cron (incident 2026-05-16).
+  const auth = isAuthorizedCron(req);
+  if (!auth.ok) {
     return res.status(401).json({ error: "Cron header or valid ?secret required" });
   }
+  const secretValid = !!auth.secretValid;
 
   const url = new URL(req.url, "http://x");
   const force = secretValid && url.searchParams.get("force") === "1";

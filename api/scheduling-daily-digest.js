@@ -15,6 +15,7 @@
 
 import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
 import { requireRole, sendAuthError } from "./_requireAuth.js";
+import { isAuthorizedCron } from "./_cronAuth.js";
 import { slackPostMessage } from "./_slack-helpers.js";
 import { todaySydney, nowInSydney } from "../shared/scheduling/availability.js";
 import { detectFlags } from "../shared/scheduling/conflicts.js";
@@ -37,7 +38,7 @@ function shouldRunNow(query, isCron) {
 }
 
 export default async function handler(req, res) {
-  const isCron = req.headers["x-vercel-cron"] === "1";
+  const isCron = isAuthorizedCron(req).ok;
   if (req.method === "GET") {
     if (!isCron) return res.status(401).json({ error: "Cron header required" });
   } else if (req.method === "POST") {
