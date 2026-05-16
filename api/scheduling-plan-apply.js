@@ -26,8 +26,12 @@ import { detectFlagsForDateRange } from "../shared/scheduling/conflicts.js";
 import { hydrateEstHours } from "../shared/scheduling/capacity.js";
 import { cachedStatsIsFresh } from "../shared/scheduling/stats.js";
 import { todaySydney } from "../shared/scheduling/availability.js";
-import { inferStage } from "../shared/scheduling/stages.js";
-import { videoIndexOf, partitionFlags } from "../shared/scheduling/planner.js";
+import { partitionFlags } from "../shared/scheduling/planner.js";
+import {
+  decideClaimOutcome,
+  reconcilePlan,
+  writeCounts,
+} from "../shared/scheduling/plan-apply-core.js";
 
 export const config = { maxDuration: 30 };
 
@@ -67,185 +71,161 @@ export default async function handler(req, res) {
 }
 
 // ─── Shared apply core (also called by slack-interactivity) ────────
+// Thin I/O wrapper over the pure plan-apply-core. Codex PR #148 fixes:
+//   P1 #1 — abort the claim transaction (return undefined) unless
+//           decideClaimOutcome says ok; never continue with a null
+//           proposal.
+//   P1 #2 — every post-claim step is under one try/catch; any throw
+//           releases the claim back to pending (safe: the write is a
+//           single atomic multi-path update, no partial-write window).
+//   P1 #3 — reconcilePlan reports rows that materially changed since
+//           proposal time; non-empty → refuse with a real stale,
+//           write nothing.
 export async function applyPlanCore({ shortId, approveDespiteViolations = false, actor }) {
   const { db } = getAdmin();
   if (!db) throw new Error("firebase-admin not configured");
 
   const ref = db.ref(`/scheduling/proposedPlans/${shortId}`);
 
-  // Atomic pending→claimed so double-clicks are idempotent.
+  // P1 #1 — pending→claimed. The updater returns `undefined` (a true
+  // abort) unless the claim is allowed; returning the unchanged record
+  // would *commit* the transaction and strand proposal === null.
   let proposal = null;
   const tx = await ref.transaction(curr => {
-    if (!curr) return curr;
-    if (curr.status !== "pending") return curr;
-    if (Date.now() > (curr.expiresAt || 0)) return curr;
+    const d = decideClaimOutcome(curr, Date.now());
+    if (!d.ok) return undefined;
     proposal = curr;
     return { ...curr, status: "claimed", claimedAt: Date.now(),
       claimedBy: actor?.id || null };
   });
-  if (!tx.committed) {
-    const cur = tx.snapshot?.val();
-    if (!cur) return { status: "not_pending", reason: "missing" };
-    if (cur.status === "approved") return { status: "applied", reason: "already_applied", shortId };
-    if (Date.now() > (cur.expiresAt || 0)) return { status: "not_pending", reason: "expired" };
-    return { status: "not_pending", reason: cur.status };
+  if (!tx.committed || !proposal) {
+    const d = decideClaimOutcome(tx.snapshot?.val(), Date.now());
+    if (d.status === "applied") {
+      return { status: "applied", reason: "already_applied", shortId };
+    }
+    return { status: d.status, reason: d.reason, shortId };
   }
 
   const projectId = proposal.projectId;
   const proposed = proposal.proposedSubtasks || [];
 
-  // ── Stale guard ────────────────────────────────────────────────
-  const [projectsRaw, editorsRaw, weekDataRaw, cachedStatsRec] = await Promise.all([
-    adminGet("/projects"),
-    adminGet("/editors"),
-    adminGet("/weekData"),
-    adminGet("/scheduling/cachedStats"),
-  ]);
-  const projects = projectsRaw || {};
-  const editorsList = Array.isArray(editorsRaw) ? editorsRaw : Object.values(editorsRaw || {});
-  const editors = editorsList.filter(e => e?.id);
-  const weekData = weekDataRaw || {};
-  const videoTypeStats = cachedStatsIsFresh(cachedStatsRec) ? (cachedStatsRec.stats || {}) : {};
-  const today = todaySydney();
+  // P1 #2 — guard everything after the claim.
+  try {
+    // ── Stale guard (capacity / conflict drift) ──────────────────
+    const [projectsRaw, editorsRaw, weekDataRaw, cachedStatsRec] = await Promise.all([
+      adminGet("/projects"),
+      adminGet("/editors"),
+      adminGet("/weekData"),
+      adminGet("/scheduling/cachedStats"),
+    ]);
+    const projects = projectsRaw || {};
+    const editorsList = Array.isArray(editorsRaw) ? editorsRaw : Object.values(editorsRaw || {});
+    const editors = editorsList.filter(e => e?.id);
+    const weekData = weekDataRaw || {};
+    const videoTypeStats = cachedStatsIsFresh(cachedStatsRec) ? (cachedStatsRec.stats || {}) : {};
+    const today = todaySydney();
 
-  if (!projects[projectId]) {
-    await ref.update({ status: "pending" }); // release claim
-    return { status: "error", reason: "project_deleted" };
-  }
-
-  const hydrated = hydrateEstHours(projects, videoTypeStats);
-  const virtual = applyVirtual(hydrated, projectId, proposed);
-  const touched = new Set();
-  for (const ps of proposed) for (const a of ps.assigneeIds || []) if (a) touched.add(a);
-  const window = proposal.input || {};
-  const detected = detectFlagsForDateRange({
-    startDate: window.rangeStart || today,
-    endDate: window.rangeEnd || today,
-    projects: virtual,
-    editors,
-    weekData,
-    videoTypeStats,
-    loggedHoursBySubtask: {},
-    scope: touched.size ? { kind: "actor", personIds: [...touched], today } : { kind: "all" },
-  });
-  const { hardViolations } = partitionFlags(detected);
-
-  if (hardViolations.length > 0 && !approveDespiteViolations) {
-    // Release the claim so the producer can re-review / approve-anyway.
-    await ref.update({ status: "pending", lastStaleCheckAt: Date.now() });
-    return { status: "stale", hardViolations, shortId };
-  }
-
-  // ── Idempotent multi-path write ────────────────────────────────
-  const liveSubtasks = (await adminGet(`/projects/${projectId}/subtasks`)) || {};
-  // Index existing rows by (stage|videoIndex). Skip archived.
-  const byKey = new Map();
-  let maxOrder = 0;
-  for (const [stid, st] of Object.entries(liveSubtasks)) {
-    if (!st || typeof st !== "object") continue;
-    maxOrder = Math.max(maxOrder, Number(st.order) || 0);
-    if (st.status === "archived") continue;
-    const idx = videoIndexOf(st);
-    if (idx == null) continue;
-    byKey.set(`${inferStage(st)}|${idx}`, { id: st.id || stid, st });
-  }
-
-  const nowIso = new Date().toISOString();
-  const updates = {};
-  const written = [];
-  let order = maxOrder;
-
-  for (const ps of proposed) {
-    const isRevision = ps.stage === "revisions";
-    const key = ps.videoIndex != null ? `${ps.stage}|${ps.videoIndex}` : null;
-    const match = key ? byKey.get(key) : null;
-
-    if (match) {
-      const m = match.st;
-      // Don't move work the producer already scheduled (non-revision).
-      if (!isRevision && m.startDate) { written.push({ id: match.id, action: "skip-scheduled" }); continue; }
-      // Revisions are create-once; if one exists, leave it.
-      if (isRevision) { written.push({ id: match.id, action: "skip-revision-exists" }); continue; }
-      // Update the existing (unscheduled) row in place.
-      const path = `/projects/${projectId}/subtasks/${match.id}`;
-      updates[`${path}/startDate`] = ps.startDate;
-      updates[`${path}/endDate`] = ps.endDate || ps.startDate;
-      updates[`${path}/startTime`] = ps.startTime || null;
-      updates[`${path}/endTime`] = ps.endTime || null;
-      updates[`${path}/assigneeIds`] = ps.assigneeIds || [];
-      updates[`${path}/assigneeId`] = ps.assigneeId || null;
-      updates[`${path}/stage`] = ps.stage;
-      updates[`${path}/status`] = m.status && ["inProgress", "done", "waitingClient"].includes(m.status)
-        ? m.status : "scheduled";
-      updates[`${path}/_videoIndex`] = ps._videoIndex ?? ps.videoIndex ?? null;
-      updates[`${path}/_planGroupId`] = proposal.planGroupId;
-      updates[`${path}/updatedAt`] = nowIso;
-      written.push({ id: match.id, action: "update" });
-    } else {
-      // Create a fresh row.
-      const newRef = db.ref(`/projects/${projectId}/subtasks`).push();
-      const id = newRef.key;
-      order += 1;
-      updates[`/projects/${projectId}/subtasks/${id}`] = {
-        id,
-        name: ps.name,
-        status: "scheduled",
-        stage: ps.stage,
-        startDate: ps.startDate || null,
-        endDate: ps.startDate ? (ps.endDate || ps.startDate) : null,
-        startTime: ps.startTime || null,
-        endTime: ps.endTime || null,
-        assigneeIds: ps.assigneeIds || [],
-        assigneeId: ps.assigneeId || null,
-        source: "slack-plan",
-        order,
-        _videoIndex: ps._videoIndex ?? ps.videoIndex ?? null,
-        _planGroupId: proposal.planGroupId,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      };
-      written.push({ id, action: "create" });
+    if (!projects[projectId]) {
+      await releaseClaim(ref);
+      return { status: "error", reason: "project_deleted", shortId };
     }
+
+    const hydrated = hydrateEstHours(projects, videoTypeStats);
+    const virtual = applyVirtual(hydrated, projectId, proposed);
+    const touched = new Set();
+    for (const ps of proposed) for (const a of ps.assigneeIds || []) if (a) touched.add(a);
+    const window = proposal.input || {};
+    const detected = detectFlagsForDateRange({
+      startDate: window.rangeStart || today,
+      endDate: window.rangeEnd || today,
+      projects: virtual,
+      editors,
+      weekData,
+      videoTypeStats,
+      loggedHoursBySubtask: {},
+      scope: touched.size ? { kind: "actor", personIds: [...touched], today } : { kind: "all" },
+    });
+    const { hardViolations } = partitionFlags(detected);
+
+    if (hardViolations.length > 0 && !approveDespiteViolations) {
+      await releaseClaim(ref, { lastStaleCheckAt: Date.now() });
+      return { status: "stale", reason: "hardViolations", hardViolations, shortId };
+    }
+
+    // ── Idempotent reconcile (pure) ──────────────────────────────
+    const liveSubtasks = (await adminGet(`/projects/${projectId}/subtasks`)) || {};
+    const subtasksRef = db.ref(`/projects/${projectId}/subtasks`);
+    const nowIso = new Date().toISOString();
+    const { updates, written, diverged } = reconcilePlan({
+      projectId,
+      proposedSubtasks: proposed,
+      liveSubtasks,
+      planGroupId: proposal.planGroupId,
+      nowIso,
+      mkId: () => subtasksRef.push().key,
+    });
+
+    // P1 #3 — a keyed row materially changed since proposal → refuse
+    // the whole apply (real stale, not a silent partial apply).
+    if (diverged.length > 0) {
+      await releaseClaim(ref, { lastStaleCheckAt: Date.now() });
+      return { status: "stale", reason: "diverged", divergedKeys: diverged, shortId };
+    }
+
+    // Terminal state + audit + history in the same atomic multi-path
+    // update so indexes stay consistent.
+    const terminal = {
+      ...proposal,
+      status: "approved",
+      approvedAt: Date.now(),
+      approvedBy: actor?.id || null,
+      approvedByName: actor?.name || null,
+      approvedDespiteViolations: !!approveDespiteViolations,
+      appliedWrites: written,
+    };
+    updates[`/scheduling/planHistory/${shortId}`] = terminal;
+    updates[`/scheduling/proposedPlans/${shortId}`] = terminal;
+
+    await db.ref().update(updates);
+
+    await db.ref("/scheduling/history").push({
+      type: "plan_applied",
+      ts: nowIso,
+      actor: actor?.id || null,
+      actorName: actor?.name || null,
+      shortId,
+      planGroupId: proposal.planGroupId,
+      projectId,
+      subtaskCount: written.filter(w => w.action === "create" || w.action === "update").length,
+      approvedDespiteViolations: !!approveDespiteViolations,
+    });
+
+    return { status: "applied", shortId, written, counts: writeCounts(written) };
+  } catch (e) {
+    // P1 #2 — release the claim so a retry can succeed. No partial
+    // write is possible: the only mutation is the single atomic
+    // db.ref().update(updates) above; reaching here means it never ran
+    // (or threw before any write).
+    await ref.update({
+      status: "pending",
+      claimedAt: null,
+      claimedBy: null,
+      lastError: String(e?.message || e),
+      lastErrorAt: Date.now(),
+    }).catch(() => {});
+    return { status: "error", reason: e?.message || String(e), shortId };
   }
+}
 
-  // Terminal state for the proposal + audit + history, in the same
-  // atomic multi-path update so indexes stay consistent.
-  const terminal = {
-    ...proposal,
-    status: "approved",
-    approvedAt: Date.now(),
-    approvedBy: actor?.id || null,
-    approvedByName: actor?.name || null,
-    approvedDespiteViolations: !!approveDespiteViolations,
-    appliedWrites: written,
-  };
-  updates[`/scheduling/planHistory/${shortId}`] = terminal;
-  updates[`/scheduling/proposedPlans/${shortId}`] = terminal; // keep visible, terminal status
-
-  await db.ref().update(updates);
-
-  await db.ref("/scheduling/history").push({
-    type: "plan_applied",
-    ts: nowIso,
-    actor: actor?.id || null,
-    actorName: actor?.name || null,
-    shortId,
-    planGroupId: proposal.planGroupId,
-    projectId,
-    subtaskCount: written.filter(w => w.action === "create" || w.action === "update").length,
-    approvedDespiteViolations: !!approveDespiteViolations,
-  });
-
-  return {
-    status: "applied",
-    shortId,
-    written,
-    counts: {
-      created: written.filter(w => w.action === "create").length,
-      updated: written.filter(w => w.action === "update").length,
-      skipped: written.filter(w => String(w.action).startsWith("skip")).length,
-    },
-  };
+// Release a claimed proposal back to pending (clears claim metadata so
+// the next attempt sees a clean pending record).
+async function releaseClaim(ref, extra = {}) {
+  await ref.update({
+    status: "pending",
+    claimedAt: null,
+    claimedBy: null,
+    ...extra,
+  }).catch(() => {});
 }
 
 // Virtual apply for the stale guard — mirrors planner.js's internal

@@ -46,6 +46,7 @@ import {
   REACTION,
 } from "./_slack-helpers.js";
 import { fingerprintFlag } from "../shared/scheduling/flags.js";
+import { inferStage } from "../shared/scheduling/stages.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -72,6 +73,28 @@ export default async function handler(req, res) {
     payload = JSON.parse(params.get("payload") || "{}");
   } catch (e) {
     return res.status(400).json({ error: "invalid payload" });
+  }
+
+  // P2 #4 — `plan_open` must call views.open BEFORE the ack: Slack's
+  // trigger_id is short-lived and opening the modal inside waitUntil
+  // (post-ack) is timing-fragile under cold starts. The project +
+  // editors reads are two fast Firebase gets, well within the 3s
+  // window. All other interactions keep the ack-then-waitUntil path.
+  const firstAction = payload?.actions?.[0];
+  if (payload?.type === "block_actions" && firstAction?.action_id === "plan_open") {
+    const botToken = process.env.SLACK_SCHEDULE_BOT_TOKEN;
+    const allowlist = parseAllowlist(process.env.SLACK_SCHEDULE_ALLOWED_USER_IDS);
+    if (allowlist && !allowlist.has(payload.user?.id)) {
+      res.status(200).end();
+      return;
+    }
+    try {
+      await handlePlanOpen({ payload, botToken });
+    } catch (err) {
+      console.error("slack-interactivity plan_open error:", err);
+    }
+    res.status(200).end();
+    return;
   }
 
   // Ack 200 immediately. Long work continues in waitUntil.
@@ -594,9 +617,18 @@ async function maybeOfferPlan({ projectId, appliedStage, threadTs, channel, botT
   if (!project) return;
   if (!(parseInt(project.numberOfVideos, 10) > 1)) return;
 
+  const subtasks = project.subtasks || {};
+
+  // P2 #5 — first-shoot-only. If the project already has another
+  // active scheduled shoot besides the one just confirmed, this isn't
+  // the first shoot and we shouldn't re-prompt "plan the rest".
+  const activeShoots = Object.values(subtasks).filter(s =>
+    s && inferStage(s) === "shoot" && s.startDate &&
+    s.status !== "done" && s.status !== "archived").length;
+  if (activeShoots > 1) return;
+
   // Already planned? Skip if any subtask carries a _planGroupId, or a
   // non-terminal proposedPlan exists for this project.
-  const subtasks = project.subtasks || {};
   const alreadyTagged = Object.values(subtasks).some(s => s && s._planGroupId);
   if (alreadyTagged) return;
   const plans = (await adminGet("/scheduling/proposedPlans")) || {};
