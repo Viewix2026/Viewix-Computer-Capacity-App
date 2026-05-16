@@ -44,6 +44,62 @@ Output strict JSON, no preamble:
   "recommendation": "single concrete fix sentence, or empty string"
 }`;
 
+// Phase 2: narrate-ONLY system prompt. The deterministic planner has
+// already produced a feasible allocation. Opus reads it, flags
+// tradeoffs, recommends small adjustments only when the data clearly
+// supports it. It NEVER proposes an alternate plan, invents dates, or
+// invents names. The output schema has no field for an alternate plan.
+const PLAN_SYSTEM_PROMPT = `You are the Viewix production manager reviewing a proposed editing plan.
+A deterministic planner has ALREADY produced a feasible allocation. Your job: read it, call
+out tradeoffs the producer should think about, and recommend small adjustments only when the
+data clearly supports it.
+
+You do NOT propose alternate plans. You do NOT invent dates, names, or facts. Use first names
+only. Be brief and decisive — no hedging.
+
+Output strict JSON, no preamble:
+{
+  "summary": "one sentence — the header line for the plan card",
+  "perRowText": { "<rowKey>": "optional 1-line callout for this row, omit rows with nothing to say" },
+  "recommendation": "single concrete adjustment sentence, or empty string"
+}
+
+rowKey is "<stage>#<videoIndex>" for edits/revisions (e.g. "edit#3") or "shoot#extra" for the
+extra shoot. Only include rows that genuinely warrant a callout (tight day, deadline pressure,
+multi-assignee). Silence on a row is fine.`;
+
+function buildPlanUserMessage({ plan, today, awareness }) {
+  const lines = [
+    `TODAY (Sydney): ${today}`,
+    `PROJECT: ${plan.project?.name} (${plan.project?.client || "no client"}) — ` +
+      `${plan.project?.numberOfVideos} videos, type ${plan.project?.videoType}`,
+    `DEADLINE: ${plan.deadline || "(none set)"}`,
+    `PLAN WINDOW: ${plan.planWindow?.start} → ${plan.planWindow?.end}`,
+    "",
+    "PROPOSED ROWS:",
+  ];
+  for (const s of plan.proposedSubtasks || []) {
+    const key = s.stage === "shoot" ? "shoot#extra" : `${s.stage}#${s.videoIndex}`;
+    const when = s.startDate ? `${s.startDate}${s.endDate && s.endDate !== s.startDate ? `..${s.endDate}` : ""}` : "unscheduled";
+    const times = s.startTime && s.endTime ? ` ${s.startTime}-${s.endTime}` : "";
+    const who = (s.assigneeIds || []).join(", ") || "(unassigned)";
+    lines.push(`- ${key} · ${s.name} · ${when}${times} · ${who} · ${s.mode}`);
+  }
+  if ((plan.hardViolations || []).length) {
+    lines.push("", "HARD VIOLATIONS (these block one-click approve):");
+    for (const v of plan.hardViolations) lines.push(`- ${JSON.stringify(v)}`);
+  }
+  if ((plan.warnings || []).length) {
+    lines.push("", "WARNINGS:");
+    for (const w of plan.warnings) lines.push(`- ${JSON.stringify(w)}`);
+  }
+  if (awareness?.editorFreeCapacity?.length) {
+    lines.push("", "EDITOR FREE CAPACITY (next 14 days):");
+    for (const e of awareness.editorFreeCapacity) lines.push(`- ${e.name}: ${e.freeHoursNext2Weeks}h free`);
+  }
+  return lines.join("\n");
+}
+
 function buildUserMessage({ flags, projects, editors, today, mode, awareness }) {
   // Resolve names so the model writes "Sam" instead of "ed-7".
   const editorById = new Map((editors || []).map(e => [e.id, e]));
@@ -98,6 +154,7 @@ function enrichForPrompt(flag, editorById, projectById) {
 
 export async function narrateBrain({
   flags,
+  plan = null,                 // Phase 2: present only when mode === "plan"
   projects,
   editors,
   today,
@@ -105,16 +162,23 @@ export async function narrateBrain({
   awareness = null,
   apiKey = process.env.ANTHROPIC_API_KEY,
 }) {
+  const isPlan = mode === "plan";
+
   // Silent on empty input for non-digest modes — saves a token of API spend.
-  if ((!flags || flags.length === 0) && mode !== "digest") {
+  if (!isPlan && (!flags || flags.length === 0) && mode !== "digest") {
     return { summary: "", perFlagText: {}, recommendation: "" };
   }
   if (!apiKey) {
     console.warn("scheduling-narrate: ANTHROPIC_API_KEY not configured");
-    return fallbackNarration(flags || []);
+    return isPlan
+      ? { summary: planFallbackSummary(plan), perRowText: {}, recommendation: "" }
+      : fallbackNarration(flags || []);
   }
 
-  const userMessage = buildUserMessage({ flags, projects, editors, today, mode, awareness });
+  const system = isPlan ? PLAN_SYSTEM_PROMPT : SYSTEM_PROMPT;
+  const userMessage = isPlan
+    ? buildPlanUserMessage({ plan, today, awareness })
+    : buildUserMessage({ flags, projects, editors, today, mode, awareness });
 
   let resp;
   try {
@@ -128,18 +192,22 @@ export async function narrateBrain({
       body: JSON.stringify({
         model: MODEL,
         max_tokens: MAX_TOKENS,
-        system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
         messages: [{ role: "user", content: userMessage }],
       }),
     });
   } catch (e) {
     console.error("scheduling-narrate fetch error:", e);
-    return fallbackNarration(flags || []);
+    return isPlan
+      ? { summary: planFallbackSummary(plan), perRowText: {}, recommendation: "" }
+      : fallbackNarration(flags || []);
   }
 
   if (!resp.ok) {
     console.error("scheduling-narrate API error:", resp.status, await resp.text().catch(() => ""));
-    return fallbackNarration(flags || []);
+    return isPlan
+      ? { summary: planFallbackSummary(plan), perRowText: {}, recommendation: "" }
+      : fallbackNarration(flags || []);
   }
 
   const data = await resp.json();
@@ -156,6 +224,13 @@ export async function narrateBrain({
   try {
     const trimmed = text.trim().replace(/^```json\s*/, "").replace(/\s*```$/, "");
     const parsed = JSON.parse(trimmed);
+    if (isPlan) {
+      return {
+        summary: String(parsed.summary || planFallbackSummary(plan)),
+        perRowText: parsed.perRowText && typeof parsed.perRowText === "object" ? parsed.perRowText : {},
+        recommendation: String(parsed.recommendation || ""),
+      };
+    }
     return {
       summary: String(parsed.summary || ""),
       perFlagText: parsed.perFlagText && typeof parsed.perFlagText === "object" ? parsed.perFlagText : {},
@@ -163,8 +238,22 @@ export async function narrateBrain({
     };
   } catch (e) {
     console.warn("scheduling-narrate: model output not JSON, falling back:", text.slice(0, 200));
-    return fallbackNarration(flags || []);
+    return isPlan
+      ? { summary: planFallbackSummary(plan), perRowText: {}, recommendation: "" }
+      : fallbackNarration(flags || []);
   }
+}
+
+// Plain summary when the LLM is unavailable — the plan card still
+// renders something useful.
+function planFallbackSummary(plan) {
+  if (!plan) return "Proposed plan.";
+  const edits = (plan.proposedSubtasks || []).filter(s => s.stage === "edit").length;
+  const revs = (plan.proposedSubtasks || []).filter(s => s.stage === "revisions").length;
+  const shoot = (plan.proposedSubtasks || []).some(s => s.stage === "shoot") ? "1 shoot, " : "";
+  const hv = (plan.hardViolations || []).length;
+  return `Plan for ${plan.project?.name || "project"}: ${shoot}${edits} edits, ${revs} revisions`
+    + (hv ? ` — ${hv} hard violation(s) to review.` : ".");
 }
 
 // Deterministic fallback when the LLM is unavailable / non-JSON.

@@ -18,18 +18,27 @@
 import { waitUntil } from "@vercel/functions";
 import { adminGet, getAdmin } from "./_fb-admin.js";
 import { runBrainPassForScheduling } from "./_scheduling-brain-pass.js";
+import { runPlanProposal } from "./_scheduling-planner.js";
+import { applyPlanCore } from "./scheduling-plan-apply.js";
 import {
   readRawBody,
   verifySlackSignature,
   todaySydney,
+  slackPostMessage,
   slackUpdateMessage,
   slackPostEphemeral,
   slackSwapReaction,
+  slackOpenView,
   parseAllowlist,
   fingerprintSubtask,
   fingerprintsMatch,
   nextStatusForUpdate,
   buildBrainFlagsBlocks,
+  buildPlanModalView,
+  parsePlanModalSubmission,
+  buildPlanCardBlocks,
+  buildViolationReviewBlocks,
+  buildPlanAppliedBlocks,
   STAGES,
   STAGE_LABELS,
   STAGE_EMOJI,
@@ -37,6 +46,7 @@ import {
   REACTION,
 } from "./_slack-helpers.js";
 import { fingerprintFlag } from "../shared/scheduling/flags.js";
+import { inferStage } from "../shared/scheduling/stages.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -65,6 +75,28 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "invalid payload" });
   }
 
+  // P2 #4 — `plan_open` must call views.open BEFORE the ack: Slack's
+  // trigger_id is short-lived and opening the modal inside waitUntil
+  // (post-ack) is timing-fragile under cold starts. The project +
+  // editors reads are two fast Firebase gets, well within the 3s
+  // window. All other interactions keep the ack-then-waitUntil path.
+  const firstAction = payload?.actions?.[0];
+  if (payload?.type === "block_actions" && firstAction?.action_id === "plan_open") {
+    const botToken = process.env.SLACK_SCHEDULE_BOT_TOKEN;
+    const allowlist = parseAllowlist(process.env.SLACK_SCHEDULE_ALLOWED_USER_IDS);
+    if (allowlist && !allowlist.has(payload.user?.id)) {
+      res.status(200).end();
+      return;
+    }
+    try {
+      await handlePlanOpen({ payload, botToken });
+    } catch (err) {
+      console.error("slack-interactivity plan_open error:", err);
+    }
+    res.status(200).end();
+    return;
+  }
+
   // Ack 200 immediately. Long work continues in waitUntil.
   res.status(200).end();
   waitUntil(processInteraction(payload).catch(err => {
@@ -80,12 +112,24 @@ async function processInteraction(payload) {
     return;
   }
 
+  const allowlist = parseAllowlist(process.env.SLACK_SCHEDULE_ALLOWED_USER_IDS);
+
+  // Phase 2: the /plan modal submit arrives as a view_submission (no
+  // actions array). The handler already acked 200 (which closes the
+  // modal); the heavy work runs here.
+  if (payload.type === "view_submission") {
+    if (allowlist && !allowlist.has(payload.user?.id)) return;
+    if (payload.view?.callback_id === "plan_modal") {
+      await handlePlanModalSubmit({ payload, botToken });
+    }
+    return;
+  }
+
   const action = payload.actions?.[0];
   if (!action) return;
 
   // Allowlist gate — same env var as the listener. Even if a user can
   // see the card in #scheduling, they can't act on it unless allowed.
-  const allowlist = parseAllowlist(process.env.SLACK_SCHEDULE_ALLOWED_USER_IDS);
   if (allowlist && !allowlist.has(payload.user?.id)) {
     await slackPostEphemeral({
       channel: payload.channel?.id,
@@ -109,7 +153,203 @@ async function processInteraction(payload) {
     await handleClarify({ payload, botToken });
     return;
   }
+  // ── Phase 2 plan actions ─────────────────────────────────────────
+  if (id === "plan_open") {
+    await handlePlanOpen({ payload, botToken });
+    return;
+  }
+  if (id === "plan_dismiss") {
+    await handlePlanDismiss({ payload, botToken });
+    return;
+  }
+  if (id === "plan_approve" || id === "plan_approve_anyway") {
+    await handlePlanApprove({ payload, botToken, despite: id === "plan_approve_anyway" });
+    return;
+  }
+  if (id === "plan_review_violations") {
+    await handlePlanReview({ payload, botToken });
+    return;
+  }
+  if (id === "plan_cancel") {
+    await handlePlanCancel({ payload, botToken });
+    return;
+  }
+  if (id === "open_project_link" || id === "open_team_board_link") {
+    return; // URL buttons — no server action needed
+  }
   console.warn("slack-interactivity: unknown action_id", id);
+}
+
+// ─── Phase 2 handlers ──────────────────────────────────────────────
+
+// "Plan it" button (from the auto follow-up) → open the planner modal.
+async function handlePlanOpen({ payload, botToken }) {
+  const projectId = payload.actions?.[0]?.value;
+  const triggerId = payload.trigger_id;
+  if (!projectId || !triggerId) return;
+  const [project, editorsRaw] = await Promise.all([
+    adminGet(`/projects/${projectId}`),
+    adminGet("/editors"),
+  ]);
+  if (!project) return;
+  const editors = (Array.isArray(editorsRaw) ? editorsRaw : Object.values(editorsRaw || {}))
+    .filter(e => e?.id);
+  try {
+    await slackOpenView({
+      trigger_id: triggerId,
+      view: buildPlanModalView({
+        project: { ...project, id: projectId },
+        editors,
+        defaultDeadline: project.dueDate || null,
+      }),
+      botToken,
+    });
+  } catch (e) {
+    console.error("handlePlanOpen views.open error:", e);
+  }
+}
+
+async function handlePlanDismiss({ payload, botToken }) {
+  const ch = payload.channel?.id;
+  const ts = payload.message?.ts;
+  if (!ch || !ts) return;
+  await slackUpdateMessage({
+    channel: ch, ts,
+    blocks: [{ type: "section", text: { type: "mrkdwn",
+      text: ":ok_hand: No worries — you've got the rest of this project." } }],
+    text: "Plan dismissed",
+    botToken,
+  });
+}
+
+// Modal submit → generate the plan, post the proposal card.
+async function handlePlanModalSubmit({ payload, botToken }) {
+  const channel = process.env.SLACK_SCHEDULE_CHANNEL_ID;
+  if (!channel) { console.error("handlePlanModalSubmit: SLACK_SCHEDULE_CHANNEL_ID missing"); return; }
+
+  const { projectId, input } = parsePlanModalSubmission(payload.view);
+  if (!projectId) return;
+
+  // Placeholder so the producer sees progress while Opus narrates.
+  let placeholderTs = null;
+  try {
+    const ph = await slackPostMessage({
+      channel,
+      text: "Brain is planning…",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: ":hourglass_flowing_sand: Brain is planning the pipeline…" } }],
+      botToken,
+    });
+    placeholderTs = ph?.ts || null;
+  } catch (e) { console.error("handlePlanModalSubmit placeholder error:", e); }
+
+  let out;
+  try {
+    out = await runPlanProposal({
+      projectId,
+      input,
+      triggeredBy: "slack",
+      triggeredVia: "manual",
+      triggeredByUserId: payload.user?.id || null,
+      triggeredByUserName: payload.user?.name || null,
+    });
+  } catch (e) {
+    console.error("handlePlanModalSubmit runPlanProposal error:", e);
+    if (placeholderTs) {
+      await slackUpdateMessage({ channel, ts: placeholderTs,
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: `:warning: Couldn't build the plan: ${e.message || e}` } }],
+        text: "Plan failed", botToken }).catch(() => {});
+    }
+    return;
+  }
+
+  const project = (await adminGet(`/projects/${projectId}`)) || {};
+  const blocks = buildPlanCardBlocks({
+    project: { ...project, id: projectId },
+    proposal: out.record,
+    narration: out.narration,
+  });
+  if (placeholderTs) {
+    await slackUpdateMessage({ channel, ts: placeholderTs, blocks,
+      text: out.narration?.summary || "Proposed plan", botToken });
+    // Record the card ts so approve/cancel can update the right message.
+    await getAdmin().db.ref(`/scheduling/proposedPlans/${out.shortId}/cardTs`).set(placeholderTs);
+  } else {
+    const post = await slackPostMessage({ channel, blocks,
+      text: out.narration?.summary || "Proposed plan", botToken });
+    if (post?.ts) await getAdmin().db.ref(`/scheduling/proposedPlans/${out.shortId}/cardTs`).set(post.ts);
+  }
+}
+
+async function handlePlanReview({ payload, botToken }) {
+  const shortId = payload.actions?.[0]?.value;
+  const ch = payload.channel?.id;
+  const ts = payload.message?.ts;
+  const proposal = await adminGet(`/scheduling/proposedPlans/${shortId}`);
+  if (!proposal || !ch || !ts) return;
+  await slackUpdateMessage({
+    channel: ch, ts,
+    blocks: buildViolationReviewBlocks({ proposal }),
+    text: "Review violations",
+    botToken,
+  });
+}
+
+async function handlePlanApprove({ payload, botToken, despite }) {
+  const shortId = payload.actions?.[0]?.value;
+  const ch = payload.channel?.id;
+  const ts = payload.message?.ts;
+  if (!shortId) return;
+  let result;
+  try {
+    result = await applyPlanCore({
+      shortId,
+      approveDespiteViolations: !!despite,
+      actor: { id: payload.user?.id || null, name: payload.user?.name || null },
+    });
+  } catch (e) {
+    console.error("handlePlanApprove error:", e);
+    result = { status: "error", reason: e.message || String(e) };
+  }
+
+  const proposal = await adminGet(`/scheduling/proposedPlans/${shortId}`);
+  const project = proposal ? (await adminGet(`/projects/${proposal.projectId}`)) || {} : {};
+  let blocks;
+  if (result.status === "applied") {
+    blocks = buildPlanAppliedBlocks({
+      project: { ...project, id: proposal?.projectId },
+      result, byUser: payload.user,
+    });
+  } else if (result.status === "stale") {
+    blocks = buildViolationReviewBlocks({ proposal: { ...proposal, hardViolations: result.hardViolations } });
+  } else {
+    blocks = [{ type: "section", text: { type: "mrkdwn",
+      text: `:warning: Couldn't apply the plan (${result.reason || result.status}).` } }];
+  }
+  if (ch && ts) {
+    await slackUpdateMessage({ channel: ch, ts, blocks,
+      text: result.status === "applied" ? "Plan applied" : "Plan not applied", botToken });
+  }
+}
+
+async function handlePlanCancel({ payload, botToken }) {
+  const shortId = payload.actions?.[0]?.value;
+  const ch = payload.channel?.id;
+  const ts = payload.message?.ts;
+  if (shortId) {
+    const { db } = getAdmin();
+    await db.ref(`/scheduling/proposedPlans/${shortId}`).update({
+      status: "cancelled", cancelledAt: Date.now(), cancelledBy: payload.user?.id || null,
+    }).catch(() => {});
+  }
+  if (ch && ts) {
+    await slackUpdateMessage({
+      channel: ch, ts,
+      blocks: [{ type: "section", text: { type: "mrkdwn",
+        text: ":x: Plan cancelled — nothing written." } }],
+      text: "Plan cancelled",
+      botToken,
+    });
+  }
 }
 
 // ─── Confirm ───────────────────────────────────────────────────────
@@ -351,6 +591,76 @@ async function applyProposal({ proposal, payload, botToken }) {
       botToken,
     });
   }
+
+  // Phase 2 auto-trigger — if we just scheduled a SHOOT on a
+  // multi-video project that hasn't been planned yet, offer to plan
+  // the rest of the pipeline in-thread. Best-effort; never block the
+  // confirm path on it.
+  try {
+    await maybeOfferPlan({
+      projectId,
+      appliedStage: patch.fields?.stage,
+      threadTs: ts || proposal.confirmMessageTs,
+      channel: payload.channel?.id,
+      botToken,
+    });
+  } catch (e) {
+    console.error("maybeOfferPlan error:", e);
+  }
+}
+
+// Post the "Plan the rest?" follow-up when a first shoot lands on a
+// multi-video project with no plan-group-tagged subtasks yet.
+async function maybeOfferPlan({ projectId, appliedStage, threadTs, channel, botToken }) {
+  if (appliedStage !== "shoot" || !channel) return;
+  const project = await adminGet(`/projects/${projectId}`);
+  if (!project) return;
+  if (!(parseInt(project.numberOfVideos, 10) > 1)) return;
+
+  const subtasks = project.subtasks || {};
+
+  // P2 #5 — first-shoot-only. If the project already has another
+  // active scheduled shoot besides the one just confirmed, this isn't
+  // the first shoot and we shouldn't re-prompt "plan the rest".
+  const activeShoots = Object.values(subtasks).filter(s =>
+    s && inferStage(s) === "shoot" && s.startDate &&
+    s.status !== "done" && s.status !== "archived").length;
+  if (activeShoots > 1) return;
+
+  // Already planned? Skip if any subtask carries a _planGroupId, or a
+  // non-terminal proposedPlan exists for this project.
+  const alreadyTagged = Object.values(subtasks).some(s => s && s._planGroupId);
+  if (alreadyTagged) return;
+  const plans = (await adminGet("/scheduling/proposedPlans")) || {};
+  const live = Object.values(plans).some(p =>
+    p?.projectId === projectId && ["pending", "claimed", "approved"].includes(p?.status));
+  if (live) return;
+
+  await slackPostMessage({
+    channel,
+    thread_ts: threadTs || undefined,
+    text: `Plan the rest of ${project.projectName}?`,
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn",
+          text: `:movie_camera: Just scheduled the *${project.projectName}* shoot. `
+            + `It has ${project.numberOfVideos} videos — plan the rest of the pipeline?` },
+      },
+      {
+        type: "actions",
+        elements: [
+          { type: "button", style: "primary",
+            text: { type: "plain_text", text: "Plan it" },
+            action_id: "plan_open", value: projectId },
+          { type: "button",
+            text: { type: "plain_text", text: "I'll handle it" },
+            action_id: "plan_dismiss", value: projectId },
+        ],
+      },
+    ],
+    botToken,
+  });
 }
 
 // ─── Cancel ────────────────────────────────────────────────────────
