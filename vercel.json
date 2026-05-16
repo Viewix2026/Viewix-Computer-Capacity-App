@@ -48,6 +48,12 @@
     "api/scheduling-cleanup.js": {
       "maxDuration": 60
     },
+    "api/slack-plan-listener.js": {
+      "maxDuration": 15
+    },
+    "api/scheduling-plan-apply.js": {
+      "maxDuration": 30
+    },
     "api/analytics.js": {
       "maxDuration": 60
     },

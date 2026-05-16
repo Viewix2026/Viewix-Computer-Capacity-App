@@ -28,6 +28,8 @@ const TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const EVENT_DEDUP_RETENTION_MS = 24 * 60 * 60 * 1000;
 const POSTED_FP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const PROPOSAL_TERMINAL_STATUSES = new Set(["used", "cancelled", "stale", "expired"]);
+// Phase 2 plan proposals: terminal once approved/cancelled/expired.
+const PLAN_TERMINAL_STATUSES = new Set(["approved", "cancelled", "expired", "stale"]);
 
 export default async function handler(req, res) {
   const isCron = req.headers["x-vercel-cron"] === "1";
@@ -63,7 +65,56 @@ async function runCleanup() {
     pendingFlagsSilenced: 0, pendingFlagsDoneDeleted: 0,
     postedFingerprintsDeleted: 0,
     eventsDeleted: 0,
+    planProposalsExpired: 0, planProposalsDeleted: 0, planHistoryDeleted: 0,
   };
+
+  // ── Phase 2 plan proposals (/scheduling/proposedPlans) ─────────
+  // Mirror the Slack-proposal lifecycle: pending past expiresAt →
+  // expired; terminal records older than the retention window → delete.
+  const plans = (await adminGet("/scheduling/proposedPlans")) || {};
+  for (const [shortId, p] of Object.entries(plans)) {
+    if (!p || typeof p !== "object") {
+      await db.ref(`/scheduling/proposedPlans/${shortId}`).remove();
+      result.planProposalsDeleted += 1;
+      continue;
+    }
+    const status = p.status || "";
+    const expiresAt = Number(p.expiresAt) || 0;
+    const createdAt = Number(p.createdAt) || 0;
+    if ((status === "pending" || status === "claimed") && expiresAt > 0 && now > expiresAt) {
+      await db.ref(`/scheduling/proposedPlans/${shortId}`).update({
+        status: "expired", expiredAt: now,
+      });
+      result.planProposalsExpired += 1;
+      continue;
+    }
+    if (PLAN_TERMINAL_STATUSES.has(status)) {
+      const refTime = Math.max(
+        Number(p.approvedAt) || 0,
+        Number(p.cancelledAt) || 0,
+        Number(p.expiredAt) || 0,
+        createdAt,
+      );
+      if (refTime > 0 && now - refTime > TERMINAL_RETENTION_MS) {
+        await db.ref(`/scheduling/proposedPlans/${shortId}`).remove();
+        result.planProposalsDeleted += 1;
+      }
+    }
+  }
+
+  // ── Phase 2 plan history (/scheduling/planHistory) ─────────────
+  const planHistory = (await adminGet("/scheduling/planHistory")) || {};
+  for (const [shortId, p] of Object.entries(planHistory)) {
+    const refTime = Math.max(
+      Number(p?.approvedAt) || 0,
+      Number(p?.cancelledAt) || 0,
+      Number(p?.createdAt) || 0,
+    );
+    if (!p || (refTime > 0 && now - refTime > TERMINAL_RETENTION_MS)) {
+      await db.ref(`/scheduling/planHistory/${shortId}`).remove();
+      result.planHistoryDeleted += 1;
+    }
+  }
 
   // ── Slack-scheduler proposals (existing /scheduling/pending tree) ──
   const proposals = (await adminGet("/scheduling/pending")) || {};
