@@ -118,8 +118,7 @@ async function lookupSlackId(name) {
 }
 
 // Build the Slack message body for the chosen review type. Returns
-// the text plus the resolved cc Slack IDs (used for the lead/manager
-// mention list). Pure helper — does not post.
+// the text. Pure helper — does not post.
 async function buildSlackText({ reviewType, projectName, clientName, videoName, editorName, projectLead, accountManager, frameioLink }) {
   const header = clientName
     ? `*${escapeSlack(clientName)}: ${escapeSlack(projectName)}*`
@@ -136,12 +135,14 @@ async function buildSlackText({ reviewType, projectName, clientName, videoName, 
   ]);
   const leadMention    = leadSlackId    ? `<@${leadSlackId}>`    : (safeLead    ? `*${safeLead}*`    : "");
   const managerMention = managerSlackId ? `<@${managerSlackId}>` : (safeManager ? `*${safeManager}*` : "");
-  const ccPings = [leadSlackId && leadMention, managerSlackId && managerMention].filter(Boolean).join(" ");
-  const ccLine  = ccPings ? ` — cc ${ccPings}` : "";
+  // No top-of-message "— cc @lead @AM": the Project lead / Account
+  // manager body lines below already render the same <@ID> mentions
+  // (which still ping), so a cc line was pure duplicated noise — worse
+  // when lead and AM are the same person ("cc @Steve @Steve").
 
   const text = reviewType === "internal"
-    ? `:eyes: *Ready for internal review*${ccLine}\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}`
-    : `:white_check_mark: *Ready for client review*${ccLine}\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}\n_Link added to the Deliveries tab and pushed to the client's delivery page._`;
+    ? `:eyes: *Ready for internal review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}`
+    : `:white_check_mark: *Ready for client review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}\n_Link added to the Deliveries tab and pushed to the client's delivery page._`;
 
   return text;
 }
