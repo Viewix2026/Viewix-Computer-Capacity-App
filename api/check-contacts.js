@@ -4,6 +4,7 @@
 // Env vars needed: SLACK_WEBHOOK_URL
 
 import { adminGet, adminSet, getAdmin } from "./_fb-admin.js";
+import { isAuthorizedCron } from "./_cronAuth.js";
 
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -28,7 +29,7 @@ function getLevel(days) {
 
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ error: "GET only" });
-  if (req.headers["x-vercel-cron"] !== "1") {
+  if (!isAuthorizedCron(req).ok) {
     return res.status(401).json({ error: "Cron header required" });
   }
 
