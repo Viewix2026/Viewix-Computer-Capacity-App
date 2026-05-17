@@ -103,6 +103,18 @@ function trimTranscript(t, cap = 24000) {
   );
 }
 
+// A `quote` must be a genuine verbatim span of the transcript. We
+// normalize whitespace only (transcripts have ragged newlines and the
+// model routinely collapses them) — nothing else. A paraphrase dressed
+// up as a quote poisons trust in the whole KB, so a quote that fails
+// this check causes the WHOLE insight to be skipped, not softened.
+function quoteInTranscript(quote, transcript) {
+  const q = String(quote || "").trim();
+  if (q.length < 4) return false;
+  const norm = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
+  return norm(transcript).includes(norm(q));
+}
+
 export const EXTRACTION_SYSTEM_PROMPT = `You maintain a deduplicated, weighted knowledge base of sales-call insights that closers study to improve. You receive ONE sales call's transcript plus the current canonical list of insights already in the knowledge base. Your job: decide which insights in this call are genuinely NEW versus restatements of ones already on the list, and assign each a severity.
 
 TAXONOMY — every insight is exactly one of:
@@ -206,6 +218,13 @@ export async function extractAndMergeInsights({
   const bump = async (itemId, incomingSeverity, quote) => {
     const res = await runRtdbTransaction(`/transcriptInsights/items/${itemId}`, (cur) => {
       if (!cur || cur.status !== "active") return undefined;
+      // Source-level idempotency. The marker write is the LAST step, so a
+      // crash after item writes but before the marker would let self-heal
+      // retry and double-count. Guard at the source of truth instead: if
+      // this transcript already contributed to this item, abort the txn —
+      // no extra weight, no duplicate source, not logged in `applied`.
+      const already = Array.isArray(cur.sources) && cur.sources.some(s => s && s.feedbackId === feedbackId);
+      if (already) return undefined;
       return {
         ...cur,
         weight: (cur.weight || 0) + 1,
@@ -228,6 +247,7 @@ export async function extractAndMergeInsights({
   for (const inc of increments) {
     const id = inc && typeof inc.id === "string" ? inc.id : null;
     if (!id || !activeById.has(id)) { skipped++; continue; }
+    if (!quoteInTranscript(inc.quote, fullTranscript)) { skipped++; continue; }
     await bump(id, inc.severity, inc.quote);
   }
 
@@ -235,6 +255,7 @@ export async function extractAndMergeInsights({
   //     was capped). Same type + normalized-title match → increment.
   for (const item of created) {
     if (!item || !TYPES.includes(item.type) || !item.title) { skipped++; continue; }
+    if (!quoteInTranscript(item.quote, fullTranscript)) { skipped++; continue; }
     const norm = normalizeTitle(item.title);
     let dupId = null;
     for (const [id, v] of activeById) {
