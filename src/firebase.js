@@ -123,29 +123,95 @@ export function fbUpdate(p, v) {
   if (db) db.ref(p).update(v).catch(e => console.error("Firebase update failed", p, e));
 }
 
+export function isPermissionDenied(err) {
+  if (!err) return false;
+  const code = String(err.code || "").toUpperCase();
+  const msg = String(err.message || "").toUpperCase();
+  return code === "PERMISSION_DENIED" || code === "PERMISSION-DENIED" ||
+         msg.includes("PERMISSION_DENIED") || msg.includes("PERMISSION DENIED");
+}
+
 // `cb` is called with the snapshot value. Optional `onError` is called
-// if Firebase rules deny the read (or any other read error). Without
-// an error handler, rules denials would silently never fire cb at all,
-// leaving callers hanging on "Loading…" forever (what we saw on
-// DeliveryPublicView when anonymous auth was blocked).
+// ONLY after the permission-denied retry budget is exhausted (or
+// immediately for non-permission errors) — never on an intermediate
+// denied read, so callers that mark themselves "loaded" on error don't
+// wedge when a retry then succeeds.
+//
+// Retry net (post-Google-SSO): the realtime socket authenticates on its
+// own async schedule. Right after Google sign-in the socket can still be
+// holding the pre-claim token while the JS-side token already has the
+// role claim — a role-gated read (`/users`, `/projects`, `/analytics`…)
+// then hits PERMISSION_DENIED. Without a retry that denial is terminal
+// (Firebase never re-fires a denied .on()) until a full page reload.
+// We force a token refresh and re-attach, bounded to MAX_RETRIES so a
+// genuinely unauthorized read settles into onError instead of looping.
 export function fbListen(p, cb, onError) {
   if (!db) return () => {};
-  const r = db.ref(p);
-  // CRITICAL: pass the specific handler to .off(). Firebase's
-  // `ref.off("value")` with no callback detaches EVERY listener on that
-  // ref, not just the one we attached here. If two components listened
-  // to the same path (e.g. /formatLibrary is read by FormatLibrary,
-  // SocialOrganicResearch shortlist "add as example", and
-  // SocialOrganicSelect), unmounting one would silently blank the
-  // others — which is the "Social Organic / Runsheets / Format Library
-  // go blank after navigating away" bug that kept coming back.
-  const handler = s => cb(s.val());
-  const errHandler = e => {
-    console.error("Firebase listen error on", p, e);
-    if (onError) onError(e);
+
+  const MAX_RETRIES = 2;
+  const RETRY_DELAY_MS = 400;
+
+  // Per-subscription state — captured in this closure so an old retry
+  // closure can never detach a newer listener or fire a stale timer.
+  let retryCount = 0;
+  let retryTimer = null;
+  let currentRef = null;
+  let currentHandler = null;
+  let cancelled = false;
+
+  const detach = () => {
+    // CRITICAL: pass the specific handler to .off(). Firebase's
+    // `ref.off("value")` with no callback detaches EVERY listener on that
+    // ref, not just the one we attached here. If two components listened
+    // to the same path (e.g. /formatLibrary is read by FormatLibrary,
+    // SocialOrganicResearch shortlist "add as example", and
+    // SocialOrganicSelect), unmounting one would silently blank the
+    // others — which is the "Social Organic / Runsheets / Format Library
+    // go blank after navigating away" bug that kept coming back.
+    if (currentRef && currentHandler) currentRef.off("value", currentHandler);
+    currentRef = null;
+    currentHandler = null;
   };
-  r.on("value", handler, errHandler);
-  return () => r.off("value", handler);
+
+  const attach = () => {
+    if (cancelled) return;
+    const ref = db.ref(p);
+    const handler = s => {
+      // A successful read clears the retry budget so a later transient
+      // denial (e.g. token rotation ~55 min in) gets a fresh 2 tries.
+      retryCount = 0;
+      cb(s.val());
+    };
+    const errHandler = async e => {
+      if (cancelled) return;
+      if (isPermissionDenied(e) && retryCount < MAX_RETRIES) {
+        retryCount++;
+        // Quiet — a red console.error on every self-healing fresh Google
+        // login would make a working system look broken.
+        console.warn(`Firebase listen denied on ${p}, refreshing token and retrying (${retryCount}/${MAX_RETRIES})`);
+        try { await auth?.currentUser?.getIdToken(true); } catch {}
+        if (cancelled) return;
+        detach();
+        retryTimer = setTimeout(() => { retryTimer = null; attach(); }, RETRY_DELAY_MS);
+        return;
+      }
+      // Final permission failure, or a non-permission error: log loudly
+      // and notify the caller so the UI can show a real failure state.
+      console.error("Firebase listen error on", p, e);
+      if (onError) onError(e);
+    };
+    ref.on("value", handler, errHandler);
+    currentRef = ref;
+    currentHandler = handler;
+  };
+
+  attach();
+
+  return () => {
+    cancelled = true;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    detach();
+  };
 }
 
 // Safer wrapper around fbListen for auth-gated paths:
@@ -163,7 +229,7 @@ export function fbListen(p, cb, onError) {
 // The caller still chooses how to coerce null → empty (via `d || {}` or
 // whatever default makes sense). The wrapper just makes sure transient
 // nulls after a successful load don't wipe live state.
-export function fbListenSafe(path, cb) {
+export function fbListenSafe(path, cb, onError) {
   let off = () => {};
   let hasLoaded = false;
   // `cancelled` guards the auth-deferred path: if the caller unmounts
@@ -186,7 +252,9 @@ export function fbListenSafe(path, cb) {
       }
       // else: stale null after real data — ignore. Firebase will re-fire
       // with fresh data once the token refresh / reconnect settles.
-    });
+    }, onError);
+    // onError only fires after fbListen's permission-denied retry budget
+    // is exhausted — callers can safely treat it as a terminal failure.
   };
   // Gate on auth — avoids the pre-auth "security rules return null" bug.
   if (authReady) attach();
@@ -250,7 +318,15 @@ export async function signInWithGoogle() {
   }
 
   try {
-    const tok = await cred.user.getIdTokenResult(true);
+    // Force a refresh so the freshly-set role claim lands on the token,
+    // then nudge the realtime socket to re-handshake with it. Best-effort
+    // only — goOnline() does NOT block until the socket carries the new
+    // claim, it just shrinks the race window. Correctness is owned by
+    // fbListen's permission-denied retry net; this makes that retry
+    // rarely needed on a clean login.
+    await cred.user.getIdToken(true);
+    try { db.goOffline(); db.goOnline(); } catch {}
+    const tok = await cred.user.getIdTokenResult(false);
     currentRole = tok.claims?.role || data.role;
   } catch {
     currentRole = data.role;

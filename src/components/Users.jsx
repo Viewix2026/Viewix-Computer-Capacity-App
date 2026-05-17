@@ -24,13 +24,22 @@ export function Users() {
   const [users, setUsers] = useState({});
   const [busy, setBusy] = useState({});
   const [err, setErr] = useState("");
+  // Distinct from `err` (action failures). `loadError` = the /users read
+  // itself was denied after fbListen exhausted its retry budget. Empty
+  // data and unreadable data are different states — "No users yet" on an
+  // auth failure is a lie in an admin panel.
+  const [loadError, setLoadError] = useState(false);
 
   // Add-user form
   const [newEmail, setNewEmail] = useState("");
   const [newRole, setNewRole] = useState("editor");
   const [inviting, setInviting] = useState(false);
 
-  useEffect(() => fbListenSafe("/users", d => setUsers(d || {})), []);
+  useEffect(() => fbListenSafe(
+    "/users",
+    d => { setLoadError(false); setUsers(d || {}); },
+    () => setLoadError(true),
+  ), []);
 
   const myUid = getCurrentUserUid();
 
@@ -142,7 +151,13 @@ export function Users() {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
+            {rows.length === 0 && loadError && (
+              <tr><td colSpan={5} style={{ padding: "24px 14px", textAlign: "center", color: "#EF4444", lineHeight: 1.5 }}>
+                Couldn't load users. Your session token is missing founder access.<br/>
+                Reload the page or sign out and back in.
+              </td></tr>
+            )}
+            {rows.length === 0 && !loadError && (
               <tr><td colSpan={5} style={{ padding: "24px 14px", textAlign: "center", color: "var(--muted)" }}>No users yet.</td></tr>
             )}
             {rows.map(u => {
