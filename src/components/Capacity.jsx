@@ -175,7 +175,18 @@ export function Capacity({
     setRosterNewName("");
     setRosterAdding(false);
   };
-  const rosterRemove = id => setEditors(prev => prev.filter(e => e.id !== id));
+  // Direct write at click time. The App-level bulk writer is
+  // debounced and the /editors listener rehydrates state from the
+  // stored value — relying on the debounce let the listener echo
+  // stale data back and resurrect the deleted person (same class of
+  // bug already fixed for Deliveries deletes; App.jsx's bulk-write
+  // comment notes every other delete path direct-writes at click
+  // time — the roster delete was the lone exception).
+  const rosterRemove = id => {
+    const next = editors.filter(e => e.id !== id);
+    setEditors(next);
+    fbSet("/editors", next);
+  };
   const rosterRename = () => {
     if (!rosterEditName.trim()) { setRosterEditId(null); return; }
     setEditors(prev => prev.map(e => e.id === rosterEditId ? { ...e, name: rosterEditName.trim() } : e));
