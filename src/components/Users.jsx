@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { fbListenSafe, authFetch, getCurrentUserUid } from "../firebase";
-import { ROLES, ROLE_LABELS } from "../lib/roles";
+import { ROLES, ROLE_LABELS, normalizeRole } from "../lib/roles";
 import { BTN } from "../config";
 
 const fmtDate = (ms) => {
@@ -179,7 +179,7 @@ export function Users() {
                   </td>
                   <td style={{ padding: "12px 14px" }}>
                     <select
-                      value={u.role || ""}
+                      value={normalizeRole(u.role || "")}
                       disabled={busy[`role:${u.uid}`]}
                       onChange={e => onChangeRole(u.uid, e.target.value)}
                       style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12 }}
