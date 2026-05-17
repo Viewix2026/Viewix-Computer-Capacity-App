@@ -657,7 +657,6 @@ function StudioThankYou({ sale, thankYou, justPaid }) {
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
                 />
-                <div className="vx-video-badge vx-mono">2 MIN WATCH</div>
               </div>
             ) : (
               <div className="vx-video-placeholder">
@@ -1099,12 +1098,6 @@ const STUDIO_CSS = `
   border: 1px solid var(--vx-line); background: #000;
 }
 .vx-video-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
-.vx-video-badge {
-  position: absolute; left: 14px; top: 14px;
-  padding: 4px 8px; font-size: 11px; letter-spacing: .12em;
-  background: rgba(255,255,255,.14); backdrop-filter: blur(8px);
-  color: #fff; border-radius: 6px; text-transform: uppercase;
-}
 .vx-video-placeholder {
   aspect-ratio: 16 / 9; border-radius: 14px;
   background: var(--vx-paper-2); border: 1px dashed var(--vx-line-strong);
