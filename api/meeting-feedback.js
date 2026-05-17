@@ -5,6 +5,7 @@
 
 import { adminSet, getAdmin } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { extractAndMergeInsights } from "./_transcript-insights.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
@@ -334,5 +335,25 @@ ${transcript}`;
   await fbSet(`/meetingFeedback/${feedbackId}/analysis`, updated);
   await fbSet(`/meetingFeedback/${feedbackId}/status`, "analysed");
   await fbSet(`/meetingFeedback/${feedbackId}/lastError`, null);
+
+  // Second pass: mine recurring objections / pain points / content ideas
+  // into the weighted /transcriptInsights knowledge base. Non-fatal —
+  // analysis already succeeded; a failure here must NOT flip status to
+  // error. The self-heal cron retries records left without a marker.
+  try {
+    await extractAndMergeInsights({
+      feedbackId,
+      transcript,
+      analysisSummary: updated.summary,
+      salesperson,
+      clientName,
+      meetingType,
+      apiKey,
+    });
+  } catch (e) {
+    console.error("insight extraction failed (non-fatal):", e);
+    try { await fbSet(`/meetingFeedback/${feedbackId}/insightsError`, e.message || "extract failed"); } catch {}
+  }
+
   return updated;
 }

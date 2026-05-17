@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { BTN, NB } from "../config";
 import { MeetingFeedback } from "./MeetingFeedback";
+import { TranscriptInsightsLab } from "./TranscriptInsightsLab";
 
 export function Training({
   role, isFounder,
@@ -214,6 +215,7 @@ export function Training({
             <div style={{ display: "flex", gap: 2, background: "var(--bg)", borderRadius: 6, padding: 2 }}>
               <button onClick={() => { setTrainingSubTab("modules"); setActiveModuleId(null); }} style={{ padding: "5px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: trainingSubTab === "modules" ? "var(--accent)" : "transparent", color: trainingSubTab === "modules" ? "#fff" : "var(--muted)" }}>Modules</button>
               <button onClick={() => { setTrainingSubTab("meetingFeedback"); setActiveModuleId(null); }} style={{ padding: "5px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: trainingSubTab === "meetingFeedback" ? "var(--accent)" : "transparent", color: trainingSubTab === "meetingFeedback" ? "#fff" : "var(--muted)" }}>Meeting Feedback</button>
+              <button onClick={() => { setTrainingSubTab("insightsLab"); setActiveModuleId(null); }} style={{ padding: "5px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: trainingSubTab === "insightsLab" ? "var(--accent)" : "transparent", color: trainingSubTab === "insightsLab" ? "#fff" : "var(--muted)" }}>Transcript Insights Lab</button>
             </div>
           )}
         </div>
@@ -226,6 +228,12 @@ export function Training({
       {trainingSubTab === "meetingFeedback" && canSeeMeetingFeedback && (
         <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 28px 60px" }}>
           <MeetingFeedback />
+        </div>
+      )}
+
+      {trainingSubTab === "insightsLab" && canSeeMeetingFeedback && (
+        <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 28px 60px" }}>
+          <TranscriptInsightsLab readOnly />
         </div>
       )}
 
