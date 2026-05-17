@@ -12,7 +12,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import confetti from "canvas-confetti";
 import { fmtSecsShort, matchSherpaForName, resolveAccountForProject, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
-import { fbSet, fbListen, fbUpdate, onFB, authFetch } from "../firebase";
+import { fbSet, fbListen, fbUpdate, onFB, authFetch, getCurrentUserEmail } from "../firebase";
 import { FrameioLinkCell } from "./Projects";
 import { ClientGoalPill } from "./ClientGoalPill";
 
@@ -1396,6 +1396,31 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
     [isSelfScoped, editors, currentUserEmail, currentUserName]
   );
   const activeEditorId = isSelfScoped ? matchedEditor?.id : editorId;
+
+  // Auto-link the logged-in person to their roster profile by email.
+  // Pre-SSO every editor shared one password and manually picked their
+  // name each session (PersonPicker). Post per-user SSO each editor has
+  // their own Google identity, so resolve editorId from their email
+  // matched against the roster's `email` field — no manual pick.
+  //
+  // Runs once. The guard ref means a later manual clear (the "switch
+  // person" button, used by founders/leads to view any editor) is NOT
+  // re-resolved, so browsing still works. No match (founder with no
+  // roster row, or an editor whose roster email isn't set yet) falls
+  // through to PersonPicker — the prior behaviour, never worse.
+  const autoLinkedRef = useRef(false);
+  useEffect(() => {
+    if (autoLinkedRef.current) return;
+    if (editorId) { autoLinkedRef.current = true; return; }
+    if (!Array.isArray(editors) || editors.length === 0) return;
+    const myEmail = (getCurrentUserEmail() || "").trim().toLowerCase();
+    if (!myEmail) return;
+    const mine = editors.find(e => (e?.email || "").trim().toLowerCase() === myEmail);
+    if (mine?.id) {
+      autoLinkedRef.current = true;
+      setEditorId(mine.id);
+    }
+  }, [editors, editorId]);
 
   // All tasks for this editor, classified.
   const sherpaIdx = useMemo(() => buildSherpaIndex(clients), [clients]);
