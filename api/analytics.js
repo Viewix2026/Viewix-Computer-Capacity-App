@@ -2,10 +2,10 @@
 //
 // Action-dispatched (matches the social-organic.js / attio.js
 // convention). Every action requires the existing
-// requireRole(req, ["founders", "founder", "lead"]) gate — the same
-// allowlist used by App.jsx + firebase-rules.json. Three role
-// strings (legacy "founders" + current "founder" + "lead") matches
-// existing codebase convention; do not "clean it up."
+// requireRole(req, ["founders", "manager", "lead"]) gate — the same
+// allowlist used by App.jsx + firebase-rules.json. `manager` is the
+// renamed singular founder login; requireRole normalises legacy
+// `founder` tokens during the cutover.
 //
 // Actions:
 //   - refresh: manual scrape trigger. 1/day cap per client +
@@ -70,7 +70,7 @@ export default async function handler(req, res) {
 
   let decoded;
   try {
-    decoded = await requireRole(req, ["founders", "founder", "lead"]);
+    decoded = await requireRole(req, ["founders", "manager", "lead"]);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message || "Auth error" });
     return;

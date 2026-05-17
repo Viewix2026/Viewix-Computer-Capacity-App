@@ -43,7 +43,7 @@ export default async function handler(req, res) {
 
   let decoded;
   try {
-    decoded = await requireRole(req, ["founders", "founder", "lead"]);
+    decoded = await requireRole(req, ["founders", "manager", "lead"]);
   } catch (e) {
     return sendAuthError(res, e);
   }

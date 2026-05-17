@@ -11,7 +11,7 @@
 //   3. Future-proofing — same pattern when we lock preset creation
 //      behind a server endpoint too.
 //
-// Auth: bearer token verified by requireRole(["founders", "founder"]).
+// Auth: bearer token verified by requireRole(["founders", "manager"]).
 // Returns: 200 { ok: true, sale } with the freshly-written record.
 
 import { adminGet, adminSet } from "./_fb-admin.js";
@@ -46,7 +46,7 @@ export default async function handler(req, res) {
     // Founders + closers can create Custom sales. Closers run most of
     // the payment-link creation in practice; the dashboard UI is
     // gated to the same set via the `canUseCustom` prop on <Sale/>.
-    await requireRole(req, ["founders", "founder", "closer"]);
+    await requireRole(req, ["founders", "manager", "closer"]);
   } catch (e) {
     return sendAuthError(res, e);
   }

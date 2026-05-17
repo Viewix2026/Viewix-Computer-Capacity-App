@@ -47,7 +47,7 @@ import { dispatchReviewBatch } from "./_email/dispatchReviewBatch.js";
 // Role allow-list. Deliberately excludes "editor" — the locked rule
 // is that editors never trigger client emails. If an editor logs in
 // and somehow reaches this endpoint, the role check returns 403.
-const ALLOWED_ROLES = ["founders", "founder", "lead"];
+const ALLOWED_ROLES = ["founders", "manager", "lead"];
 
 // Map dispatchReviewBatch errors to HTTP status codes. Each thrown
 // error has a `.code` field set; we look up the status here so the

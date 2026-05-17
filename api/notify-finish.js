@@ -57,7 +57,7 @@ import { requireRole, sendAuthError } from "./_requireAuth.js";
 // primary caller (editor flagging their own video done). `lead`
 // and the two `founder*` roles cover producers / Steve / Jeremy
 // triaging in the Editor Dashboard on someone else's behalf.
-const ALLOWED_ROLES = ["founders", "founder", "lead", "editor"];
+const ALLOWED_ROLES = ["founders", "manager", "lead", "editor"];
 
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT = 30; // editors finish many tasks a day; revisions had 10

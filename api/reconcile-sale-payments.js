@@ -70,7 +70,7 @@ export default async function handler(req, res) {
   if (!secret) return res.status(500).json({ error: "STRIPE_SECRET_KEY not configured" });
 
   try {
-    await requireRole(req, ["founders", "founder"]);
+    await requireRole(req, ["founders", "manager"]);
   } catch (e) {
     return sendAuthError(res, e);
   }

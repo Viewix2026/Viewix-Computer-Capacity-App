@@ -1948,7 +1948,7 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
     setSaving(true);
     const id = `cm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
-    const authorRole = viewerRole === "founder" || viewerRole === "founders"
+    const authorRole = viewerRole === "founders" || viewerRole === "manager" || viewerRole === "founder"
       ? "Founder"
       : viewerRole === "lead" ? "Lead"
       : "Producer";
@@ -2499,12 +2499,12 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   // kick-off video URL stays editable in the project detail panel
   // because that's a lead-owned field per spec.
   const viewOnly = role === "lead";
-  const canEditKickoff = role === "lead" || role === "founder" || role === "founders";
+  const canEditKickoff = role === "lead" || role === "manager" || role === "founder" || role === "founders";
   // Producer Notes carve-out — leads need to keep the field current
   // so the editor working off the project has the latest brief. Same
   // shape as kickoff: lead is otherwise viewOnly, this one field
   // (and its appended comment thread below) bypasses the gate.
-  const canEditProducerNotes = role === "lead" || role === "founder" || role === "founders";
+  const canEditProducerNotes = role === "lead" || role === "manager" || role === "founder" || role === "founders";
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
   // Quick-view modal — opened when a producer clicks a bar on the

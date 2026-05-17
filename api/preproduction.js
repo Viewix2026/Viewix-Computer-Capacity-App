@@ -110,7 +110,7 @@ export default async function handler(req, res) {
   const PUBLIC_ACTIONS = new Set(["notifyFeedback", "submitReview"]);
   if (!PUBLIC_ACTIONS.has(action)) {
     try {
-      await requireRole(req, ["founders", "founder", "lead"]);
+      await requireRole(req, ["founders", "manager", "lead"]);
     } catch (e) {
       return sendAuthError(res, e);
     }

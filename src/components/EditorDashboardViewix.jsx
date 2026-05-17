@@ -249,6 +249,43 @@ function PersonPicker({ editors, onPick }) {
   );
 }
 
+function norm(s) {
+  return String(s || "").trim().toLowerCase();
+}
+
+function findEditorForLogin(editors, email, name) {
+  const list = Array.isArray(editors) ? editors : [];
+  const emailKey = norm(email);
+  if (emailKey) {
+    const byEmail = list.find(ed => norm(ed.email) === emailKey);
+    if (byEmail) return byEmail;
+  }
+  const nameKey = norm(name);
+  if (nameKey) {
+    return list.find(ed => norm(ed.name) === nameKey) || null;
+  }
+  return null;
+}
+
+function MissingEditorProfile({ email, name }) {
+  return (
+    <div style={{ padding: "48px 28px", display: "flex", justifyContent: "center" }}>
+      <div style={{
+        width: 560, maxWidth: "100%",
+        background: "var(--card)", border: "1px solid var(--border)",
+        borderRadius: 12, padding: "26px 28px", textAlign: "center",
+      }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: "var(--fg)", marginBottom: 8 }}>Editor profile not linked</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
+          This login could not be matched to a roster record.
+          <br />
+          Signed in as {email || name || "unknown account"}.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Stage / status pill ──────────────────────────────────────────
 function StagePill({ stage }) {
   const c = STAGE_COLOURS[stage] || STAGE_COLOURS.preProduction;
@@ -1324,7 +1361,7 @@ function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClos
 }
 
 // ─── Main component ───────────────────────────────────────────────
-export function EditorDashboardViewix({ projects = [], editors = [], clients = [], deliveries = [], accounts = {} }) {
+export function EditorDashboardViewix({ projects = [], editors = [], clients = [], deliveries = [], accounts = {}, viewerRole = null, currentUserEmail = null, currentUserName = null }) {
   const [editorId, setEditorId] = useState(null);
   const [timers, setTimers] = useState({});
   const [timeLogs, setTimeLogs] = useState({});
@@ -1353,10 +1390,16 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   const intervalRef = useRef(null);
   const justStoppedRef = useRef({});
   const today = isoToday();
+  const isSelfScoped = viewerRole === "editor" || viewerRole === "trial";
+  const matchedEditor = useMemo(
+    () => isSelfScoped ? findEditorForLogin(editors, currentUserEmail, currentUserName) : null,
+    [isSelfScoped, editors, currentUserEmail, currentUserName]
+  );
+  const activeEditorId = isSelfScoped ? matchedEditor?.id : editorId;
 
   // All tasks for this editor, classified.
   const sherpaIdx = useMemo(() => buildSherpaIndex(clients), [clients]);
-  const allTasks = useMemo(() => tasksForEditor(projects, editorId, sherpaIdx, accounts), [projects, editorId, sherpaIdx, accounts]);
+  const allTasks = useMemo(() => tasksForEditor(projects, activeEditorId, sherpaIdx, accounts), [projects, activeEditorId, sherpaIdx, accounts]);
   const { todayTasks, upcomingTasks, overdueTasks } = useMemo(
     () => classifyTasks(allTasks, today),
     [allTasks, today]
@@ -1365,8 +1408,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   // Listen to Firebase /timeLogs for this editor + day so timers
   // resume after page reload and the daily total stays consistent.
   useEffect(() => {
-    if (!editorId) return;
-    const path = `/timeLogs/${editorId}/${today}`;
+    if (!activeEditorId) return;
+    const path = `/timeLogs/${activeEditorId}/${today}`;
     let unsub = () => {};
     let cancelled = false;
     onFB(() => {
@@ -1396,15 +1439,15 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       });
     });
     return () => { cancelled = true; unsub(); };
-  }, [editorId, today]);
+  }, [activeEditorId, today]);
 
   // History listener — pulls every day's logs for this editor so the
   // stats grid can compute trailing averages. Cheap: one editor's
   // /timeLogs node is small (one entry per task per day) so a full
   // listener is fine even at 6 months of data.
   useEffect(() => {
-    if (!editorId) return;
-    const path = `/timeLogs/${editorId}`;
+    if (!activeEditorId) return;
+    const path = `/timeLogs/${activeEditorId}`;
     let unsub = () => {};
     let cancelled = false;
     onFB(() => {
@@ -1414,7 +1457,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       });
     });
     return () => { cancelled = true; unsub(); };
-  }, [editorId]);
+  }, [activeEditorId]);
 
   // Avg hours per Edit-stage task. Aggregates `secs` per taskId
   // across every logged day, filtering to entries marked `stage:
@@ -1472,7 +1515,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   const doStart = (taskId) => {
     const now = Date.now();
     setTimers(prev => ({ ...prev, [taskId]: { running: true, elapsed: 0, startedAt: now } }));
-    fbSet(`/timeLogs/${editorId}/${today}/_running`, { taskId, startedAt: now });
+    fbSet(`/timeLogs/${activeEditorId}/${today}/_running`, { taskId, startedAt: now });
   };
 
   const startTimer = (taskId) => {
@@ -1491,7 +1534,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
     justStoppedRef.current[taskId] = Date.now();
     const elapsed = Math.floor((Date.now() - t.startedAt) / 1000);
     setTimers(prev => ({ ...prev, [taskId]: { running: false, elapsed: 0, startedAt: null } }));
-    fbSet(`/timeLogs/${editorId}/${today}/_running`, null);
+    fbSet(`/timeLogs/${activeEditorId}/${today}/_running`, null);
     const prevLog = timeLogs[taskId] || {};
     const prevSecs = typeof prevLog === "number" ? prevLog : (prevLog.secs || 0);
     const newTotal = prevSecs + elapsed;
@@ -1503,7 +1546,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       stage: task?.stage || "",
       source: "viewix",
     };
-    fbSet(`/timeLogs/${editorId}/${today}/${taskId}`, logData);
+    fbSet(`/timeLogs/${activeEditorId}/${today}/${taskId}`, logData);
     setTimeLogs(p => ({ ...p, [taskId]: logData }));
   };
 
@@ -1515,8 +1558,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   };
 
   const resetTimer = (taskId) => {
-    fbSet(`/timeLogs/${editorId}/${today}/${taskId}`, null);
-    fbSet(`/timeLogs/${editorId}/${today}/_running`, null);
+    fbSet(`/timeLogs/${activeEditorId}/${today}/${taskId}`, null);
+    fbSet(`/timeLogs/${activeEditorId}/${today}/_running`, null);
     setTimeLogs(p => { const n = { ...p }; delete n[taskId]; return n; });
     setTimers(prev => ({ ...prev, [taskId]: { running: false, elapsed: 0, startedAt: null } }));
   };
@@ -1534,7 +1577,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       stage: task?.stage || "",
       source: "viewix",
     };
-    fbSet(`/timeLogs/${editorId}/${today}/${taskId}`, logData);
+    fbSet(`/timeLogs/${activeEditorId}/${today}/${taskId}`, logData);
     setTimeLogs(p => ({ ...p, [taskId]: logData }));
     setAdjustingTask(null);
     setAdjustMins("");
@@ -1553,9 +1596,13 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   }, 0);
 
   // ─── No editor picked yet ──────────────────────────────────────
-  if (!editorId) return <PersonPicker editors={editors} onPick={setEditorId} />;
+  if (isSelfScoped && !activeEditorId) {
+    return <MissingEditorProfile email={currentUserEmail} name={currentUserName} />;
+  }
 
-  const editor = editors.find(e => e.id === editorId);
+  if (!activeEditorId) return <PersonPicker editors={editors} onPick={setEditorId} />;
+
+  const editor = editors.find(e => e.id === activeEditorId);
   const editorName = editor?.name || "(unknown)";
 
   // ─── Picked editor view ─────────────────────────────────────────
@@ -1788,7 +1835,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       {finishingTaskId && (() => {
         const ft = allTasks.find(x => x.id === finishingTaskId);
         if (!ft) return null;
-        const editor = editors.find(e => e.id === editorId);
+        const editor = editors.find(e => e.id === activeEditorId);
         return (
           <FinishModal
             task={ft}

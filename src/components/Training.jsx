@@ -6,9 +6,9 @@
 //   trial             → ONLY the "Editor Onboarding" category (the
 //                       11-module starter pack). Anything else is
 //                       gated behind the editor or higher role.
-//   founder / founders / lead → everything
+//   manager / founders / lead → everything
 //
-// Founders + closers also get the Meeting Feedback sub-tab for
+// Admins + closers also get the Meeting Feedback sub-tab for
 // Claude-powered sales call analysis.
 
 import { useState } from "react";
@@ -22,8 +22,8 @@ export function Training({
   activeModuleId, setActiveModuleId,
   trainingSubTab, setTrainingSubTab,
 }) {
-  const isAdmin = role === "founder" || role === "founders";
-  const userName = isAdmin ? "Jeremy" : role === "closer" ? "Team" : "Editor";
+  const isAdmin = isFounder;
+  const userName = role === "founders" ? "Jeremy" : isAdmin ? "Manager" : role === "closer" ? "Team" : "Editor";
 
   // ─── Local UI state ───
   const [trainingEditMode, setTrainingEditMode] = useState(false);

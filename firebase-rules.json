@@ -24,16 +24,16 @@
     "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "meetingFeedback": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "foundersMetrics": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
-    "foundersBriefings": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true" },
-    "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true" },
+    "foundersBriefings": { ".read": "auth != null && auth.token.role == 'founders'", ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true" },
+    "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true" },
 
     "users": {
-      ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
+      ".read":  "auth != null && auth.token.role == 'founders'",
       ".write": false,
-      "$uid":   { ".read": "auth != null && (auth.uid == $uid || auth.token.role == 'founders' || auth.token.role == 'founder')" }
+      "$uid":   { ".read": "auth != null && (auth.uid == $uid || auth.token.role == 'founders')" }
     },
     "usersByEmail": {
-      ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
+      ".read":  "auth != null && auth.token.role == 'founders'",
       ".write": false
     },
 
@@ -93,8 +93,8 @@
     },
 
     "analytics": {
-      ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'lead')",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'lead') && root.child('users').child(auth.uid).child('active').val() === true"
+      ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder' || auth.token.role == 'lead')",
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder' || auth.token.role == 'lead') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "sales": {
@@ -105,7 +105,7 @@
 
     "saleThankYou": {
       ".read": "auth != null",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "editors": {
@@ -114,23 +114,23 @@
     },
 
     "nurture": {
-      ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
+      ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder')",
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "contactNotifications": {
-      ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
+      ".read": "auth != null && auth.token.role == 'founders'",
       ".write": false
     },
 
     "foundersData": {
-      ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder')",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
     "teamHome": {
       ".read": "auth != null && auth.token.role != null",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     }
   }
 }

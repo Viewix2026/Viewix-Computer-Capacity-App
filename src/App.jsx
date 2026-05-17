@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
-import { initFB, onFB, fbSet, fbListen, recentlyWroteTo, onAuthReady, signOutUser, authFetch } from "./firebase";
+import { initFB, onFB, fbSet, fbListen, recentlyWroteTo, onAuthReady, signOutUser, authFetch, getCurrentUserEmail, getCurrentUserName } from "./firebase";
 import {
   CONTENT_CATEGORIES, CAT_COLORS,
   VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS,
@@ -27,6 +27,7 @@ import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
 import { useSalesSync } from "./sync/useSalesSync";
 import { useProjectsSync } from "./sync/useProjectsSync";
+import { isAdminRole, isFounderRole, normalizeRole } from "./lib/roles";
 
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
@@ -47,7 +48,7 @@ const Nurture                  = lazy(() => import("./components/Nurture").then(
 const Users                    = lazy(() => import("./components/Users").then(m => ({ default: m.Users })));
 
 export default function App(){
-  const[role,setRole]=useState(null); // "founder" | "closer"
+  const[role,setRole]=useState(null); // "founders" | "manager" | "closer" | ...
   const[loading,setLoading]=useState(true);
   const[tool,setTool]=useState("home");
   const[capTab,setCapTab]=useState("dashboard");
@@ -224,19 +225,13 @@ export default function App(){
     });
   },[]);
 
-  const isFounder=role==="founder"||role==="founders";
-  // Per Jeremy: `founder` and `founders` are the same tier — both
-  // passwords grant identical access. The constants used to be
-  // distinct (isFounders = plural-only) and the codebase has dozens
-  // of gates that read each one differently. Aliasing isFounders
-  // to isFounder collapses the distinction in one line: every
-  // downstream `isFounders` check now permits both roles, including
-  // the Founders sidebar tab + tab route, the /foundersData
-  // bulk-write, and Sale.jsx's pricing/charge/reconcile actions.
-  // Firebase rule on /foundersData write was loosened in lockstep
-  // (see firebase-rules.json) so both roles' writes actually land.
-  const isFounders=isFounder;
-  const isLead=role==="lead";
+  const normalizedRole=normalizeRole(role);
+  // `founders` is the owner tier. `manager` replaces the old singular
+  // `founder` login for operational admin access. Legacy `founder`
+  // tokens normalise to manager during the cutover.
+  const isFounders=isFounderRole(normalizedRole);
+  const isFounder=isAdminRole(normalizedRole);
+  const isLead=normalizedRole==="lead";
 
   // Firebase data listeners — gated on auth being ready so the root listener
   // doesn't attach before the auth token is available (prevents listener lockout
@@ -320,19 +315,13 @@ export default function App(){
       // page renders the Team Quote + Video of the Week for every
       // logged-in user, not just founders.
       listen("/teamHome",data=>{if(data)setTeamHome(data);});
-      // /foundersData listener is gated on isFounder (both `founder`
-      // and `founders` roles) — same gate the rule uses post-fix.
-      // Was isFounders-only, which meant a `founder` user couldn't
-      // read foundersData and the teamHome migration never fired
-      // for them — Home page stayed empty (Jeremy's "headline +
-      // video missing" report). Writing /foundersData remains
-      // restricted to `founders` via both the bulk-write gate
-      // below and the rule itself.
-      if(isFounder)listen("/foundersData",data=>{if(data)setFoundersData(data);});
+      // /foundersData is owner-tier data. Managers use /teamHome for
+      // shared home-page fields and don't need the private founders node.
+      if(isFounders)listen("/foundersData",data=>{if(data)setFoundersData(data);});
       // /sales listener moved to useSalesSync — see src/sync/.
       listen("/salePricing",data=>{if(data)setSalePricing(data);});
       listen("/saleThankYou",data=>{if(data)setSaleThankYou(data);});
-      listen("/attioCache",data=>{if(data&&data.data)setAttioDeals({data:data.data,total:data.total||data.data.length,lastSyncedAt:data.lastSyncedAt||null});});
+      if(isFounder)listen("/attioCache",data=>{if(data&&data.data)setAttioDeals({data:data.data,total:data.total||data.data.length,lastSyncedAt:data.lastSyncedAt||null});});
     });
     return()=>{cancelled=true;clearTimeout(fallback);unsubs.forEach(u=>u());};
   },[role,isFounder,isFounders]);
@@ -542,7 +531,7 @@ export default function App(){
       {(isFounder||isLead||role==="editor"||role==="trial")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
       {(isFounder||role==="closer")&&<SideIcon icon="📚" label="Resources" active={tool==="resources"} onClick={()=>setTool("resources")}/>}
-      {isFounder&&<SideIcon icon="👤" label="Users" active={tool==="users"} onClick={()=>setTool("users")}/>}
+      {isFounders&&<SideIcon icon="👤" label="Users" active={tool==="users"} onClick={()=>setTool("users")}/>}
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
@@ -766,7 +755,7 @@ export default function App(){
     </>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
-    {tool==="editors"&&(isFounder||isLead||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts}/>)}
+    {tool==="editors"&&(isFounder||isLead||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} viewerRole={normalizedRole} currentUserEmail={getCurrentUserEmail()} currentUserName={getCurrentUserName()}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
@@ -809,7 +798,7 @@ export default function App(){
     )}
 
     {/* ═══ USERS (founder-only admin panel) ═══ */}
-    {tool==="users"&&isFounder&&(<Users/>)}
+    {tool==="users"&&isFounders&&(<Users/>)}
 
 
     </Suspense>

@@ -20,7 +20,7 @@
 
 import { getAdmin } from "./_fb-admin.js";
 import { handleOptions, setCors } from "./_requireAuth.js";
-import { isValidRole } from "./_roles.js";
+import { isValidRole, normalizeRole } from "./_roles.js";
 
 const BOOTSTRAP_FOUNDERS = (process.env.BOOTSTRAP_FOUNDER_EMAILS || "")
   .split(",")
@@ -142,17 +142,20 @@ export default async function handler(req, res) {
     await admin.auth().revokeRefreshTokens(realUid);
     return res.status(403).json({ error: "Account deactivated." });
   }
-  if (!isValidRole(userRec.role)) {
+  const role = normalizeRole(userRec.role);
+  if (!isValidRole(role)) {
     await admin.auth().setCustomUserClaims(realUid, { role: null });
     return res.status(500).json({ error: "Invalid role on user record. Contact a founder." });
   }
 
   // 7. Authorized — persist role claim, stamp lastLoginAt
-  await admin.auth().setCustomUserClaims(realUid, { role: userRec.role });
-  await db.ref(`/users/${realUid}/lastLoginAt`).set(Date.now());
+  await admin.auth().setCustomUserClaims(realUid, { role });
+  const loginPatch = { lastLoginAt: Date.now() };
+  if (role !== userRec.role) loginPatch.role = role;
+  await db.ref(`/users/${realUid}`).update(loginPatch);
 
   return res.status(200).json({
-    role:     userRec.role,
+    role,
     email,
     name:     userRec.name || decoded.name || null,
     photoURL: userRec.photoURL || decoded.picture || null,

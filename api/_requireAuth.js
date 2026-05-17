@@ -1,4 +1,5 @@
 import { getAdmin } from "./_fb-admin.js";
+import { normalizeRole } from "./_roles.js";
 
 const DEFAULT_ALLOWED_ORIGINS = [
   "https://planner.viewix.com.au",
@@ -74,13 +75,15 @@ export async function requireRole(req, allowedRoles) {
     throw err;
   }
 
-  const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
-  if (roles.length && !roles.includes(decoded.role)) {
+  const roles = (Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles]).map(normalizeRole);
+  const actualRole = normalizeRole(decoded.role);
+  if (roles.length && !roles.includes(actualRole)) {
     const actual = decoded.role || "(no role claim)";
     const err = new Error(`Forbidden — your token's role is "${actual}". Allowed: ${roles.join(", ")}. Sign out and back in if you expect access; this refreshes claims on your token.`);
     err.status = 403;
     throw err;
   }
+  decoded.role = actualRole;
   return decoded;
 }
 

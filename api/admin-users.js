@@ -25,7 +25,7 @@
 
 import { getAdmin } from "./_fb-admin.js";
 import { handleOptions, setCors, requireRole, sendAuthError, actorFrom } from "./_requireAuth.js";
-import { isValidRole, isFounderRole, FOUNDER_ROLES } from "./_roles.js";
+import { isAssignableRole, isFounderRole, FOUNDER_ROLES } from "./_roles.js";
 import { emailKeyFor } from "./auth-google.js";
 
 export default async function handler(req, res) {
@@ -67,7 +67,7 @@ async function invite(req, res, db, actor) {
   const name  = (req.body.name || "").trim() || email;
 
   if (!email || !email.includes("@")) return res.status(400).json({ error: "Valid email required" });
-  if (!isValidRole(role))             return res.status(400).json({ error: "Invalid role" });
+  if (!isAssignableRole(role))        return res.status(400).json({ error: "Invalid role" });
 
   const emailKey = emailKeyFor(email);
 
@@ -102,7 +102,7 @@ async function setRole(req, res, db, admin, actor) {
   const targetUid = String(req.body.targetUid || "");
   const role      = String(req.body.role || "");
   if (!targetUid)        return res.status(400).json({ error: "targetUid required" });
-  if (!isValidRole(role)) return res.status(400).json({ error: "Invalid role" });
+  if (!isAssignableRole(role)) return res.status(400).json({ error: "Invalid role" });
 
   const rec = (await db.ref(`/users/${targetUid}`).once("value")).val();
   if (!rec) return res.status(404).json({ error: "User not found" });

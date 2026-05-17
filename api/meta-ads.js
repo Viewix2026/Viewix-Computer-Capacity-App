@@ -1618,7 +1618,7 @@ export default async function handler(req, res) {
     // the editor password and inherit the editor custom claim from
     // api/auth.js) can rewrite scripts and push runsheets. Previously
     // they got 403 Forbidden on every Scripting-tab action.
-    await requireRole(req, ["founders", "founder", "lead", "editor"]);
+    await requireRole(req, ["founders", "manager", "lead", "editor"]);
   } catch (e) {
     return sendAuthError(res, e);
   }

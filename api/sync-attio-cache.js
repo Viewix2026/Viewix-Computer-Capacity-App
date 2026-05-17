@@ -52,7 +52,7 @@ export default async function handler(req, res) {
   }
   if (req.method === "POST") {
     try {
-      await requireRole(req, ["founders", "founder"]);
+      await requireRole(req, ["founders", "manager"]);
     } catch (e) {
       return sendAuthError(res, e);
     }

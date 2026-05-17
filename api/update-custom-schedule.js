@@ -53,7 +53,7 @@ export default async function handler(req, res) {
     // Founders + closers can edit Custom schedules — same set as the
     // create endpoint. Server still enforces every immutability rule
     // below (paid-slice deletion, total-change, paid-slice edits).
-    await requireRole(req, ["founders", "founder", "closer"]);
+    await requireRole(req, ["founders", "manager", "closer"]);
   } catch (e) {
     return sendAuthError(res, e);
   }

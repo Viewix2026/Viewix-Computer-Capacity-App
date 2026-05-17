@@ -46,7 +46,7 @@ export default async function handler(req, res) {
     // trigger LLM spend / Slack posts via an unauthenticated POST.
     // Mirrors api/founders-advisor.js's pattern.
     try {
-      await requireRole(req, ["founders", "founder"]);
+      await requireRole(req, ["founders", "manager"]);
     } catch (e) {
       return sendAuthError(res, e);
     }

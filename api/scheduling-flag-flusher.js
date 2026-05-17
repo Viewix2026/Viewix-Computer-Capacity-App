@@ -40,7 +40,7 @@ export default async function handler(req, res) {
     // Manual run path — require founders auth so the public can't
     // trigger flag posting / Slack mutations via an unauthenticated POST.
     try {
-      await requireRole(req, ["founders", "founder"]);
+      await requireRole(req, ["founders", "manager"]);
     } catch (e) {
       return sendAuthError(res, e);
     }
