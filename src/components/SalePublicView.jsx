@@ -15,7 +15,7 @@ import { useState, useEffect, useMemo } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
 import { Logo } from "./Logo";
 import { SALE_VIDEO_TYPES } from "../config";
-import { fmtCur, fmtCurExact, logoBg, embedUrl, isEmbeddableBookingUrl, normaliseImageUrl, validateLinkUrl } from "../utils";
+import { fmtCur, fmtCurExact, logoBg, embedUrl, isEmbeddableBookingUrl, validateLinkUrl } from "../utils";
 import { scheduleForVideoType } from "../../api/_tiers";
 import { loadStripe } from "@stripe/stripe-js";
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
@@ -118,26 +118,6 @@ export function SalePublicView() {
     return () => { cancelled = true; unsub(); };
   }, [sale?.id]);
 
-  // Roster — the thank-you page producer's avatar lives on the editor
-  // record now (Capacity → Team Roster → Photo column). We look up the
-  // producer by a name-startsWith match ("Vish" finds "Vish Peiris",
-  // "Vish P", etc.) so the producer can edit their avatar in one place
-  // and every future thank-you page picks it up. Falls back to the
-  // hardcoded initials circle when no match / no avatarUrl.
-  const [roster, setRoster] = useState([]);
-  useEffect(() => {
-    if (!sale) return;
-    let unsub = () => {};
-    let cancelled = false;
-    onFB(() => {
-      if (cancelled) return;
-      unsub = fbListen("/editors", (data) => {
-        setRoster(Array.isArray(data) ? data.filter(Boolean) : []);
-      });
-    });
-    return () => { cancelled = true; unsub(); };
-  }, [sale?.id]);
-
   // Once we have the sale, request an Embedded Checkout Session. Only
   // re-request if the sale id changes. If already paid, skip — the
   // thank-you view renders instead.
@@ -204,7 +184,7 @@ export function SalePublicView() {
   //                             states for Social Media subs)
   const firstSlicePaid = sale.schedule?.[0]?.status === "paid";
   if (sale.paid || optimisticPaid || firstSlicePaid) {
-    return <StudioThankYou sale={sale} thankYou={thankYou} roster={roster} justPaid={optimisticPaid && !sale.paid} />;
+    return <StudioThankYou sale={sale} thankYou={thankYou} justPaid={optimisticPaid && !sale.paid} />;
   }
 
   return (
@@ -532,25 +512,12 @@ function StudioConsent({ sale, cfg }) {
 // self-contained (masthead + footer inline), mirrors the design-
 // handoff spec from /Users/cicero/Documents/Webpages/design_handoff_deposit_thankyou:
 // paper-cream background, Montserrat display headline in brand
-// accent, 4-up facts strip, producer's note + video two-up, TidyCal
+// accent, 3-up facts strip, team note + video two-up, TidyCal
 // booking embed inside a styled shell, receipt + numbered next-steps.
 // Responsive: 2-up grids collapse to 1-up at ≤960px, facts strip to
 // 2-up at ≤720px, further tweaks at ≤480px.
-//
-// Producer is hardcoded below. To swap in a real photo, set
-// PRODUCER.avatarUrl to the uploaded URL; otherwise we render the
-// VP initials circle.
-const PRODUCER = {
-  name: "Vish Peiris",
-  role: "Production Manager",
-  initials: "VP",
-  // TODO: set when Vish sends a headshot URL. Use https, circular crop
-  // recommended at 120x120 so it renders crisp on retina.
-  avatarUrl: "",
-  avatarBg: "linear-gradient(135deg,#0082FA 0%,#004F99 100%)",
-};
 
-function StudioThankYou({ sale, thankYou, roster, justPaid }) {
+function StudioThankYou({ sale, thankYou, justPaid }) {
   // Scroll reset — the customer arrived at this layout scrolled down
   // to the Stripe iframe on the payment page. Without this, they land
   // at the bottom of the thank-you and miss the headline + confetti.
@@ -565,15 +532,6 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
   // customer sees the confirmation, receipt badge, and booking button.
   const slot = thankYou?.packages?.[sale.videoType]?.[sale.packageKey] || {};
 
-  // Producer lookup — name-startsWith match against /editors so a
-  // producer's avatar/phone/email live in one place (Capacity → Team
-  // Roster). Falls back to the hardcoded PRODUCER constant when no
-  // match, which is also where we default when the roster listener
-  // hasn't loaded yet.
-  const producerEditor = (Array.isArray(roster) ? roster : []).find(e =>
-    e && (e.name || "").toLowerCase().startsWith(PRODUCER.name.split(/\s+/)[0].toLowerCase())
-  );
-  const producerAvatarUrl = normaliseImageUrl(producerEditor?.avatarUrl, 120);
   const bookingUrl = thankYou?.bookingUrl?.trim() || "";
   const videoSrc = embedUrl(slot.videoUrl);
   const nextSteps = (slot.nextStepsCopy || "").trim();
@@ -659,20 +617,19 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
           </p>
         </section>
 
-        {/* 4-up facts strip — the "Paid" value is the first slice that
+        {/* 3-up facts strip — the "Paid" value is the first slice that
             just cleared (deposit for Meta Ads, payment 1 of 3 for
             Social). Falls back to depositAmount for legacy records. */}
         <section className="vx-facts">
           <StudioFact k="Paid" v={fmtCur(sale.schedule?.[0]?.amount ?? sale.depositAmount)} sub={sale.schedule?.[0]?.label || "Deposit"} />
           <StudioFact k="Order" v={orderRef} sub="Reference" mono />
-          <StudioFact k={PRODUCER.role} v={PRODUCER.name} sub="Viewix" />
           <StudioFact k="First meeting" v="Pre-production" sub="Book below" />
         </section>
 
-        {/* Two-up: producer's note + video */}
+        {/* Two-up: team note + video */}
         <section className="vx-two-up">
           <div className="vx-card vx-note">
-            <div className="vx-eyebrow">A note from your producer</div>
+            <div className="vx-eyebrow">A note from the Viewix team</div>
             {nextSteps ? (
               <div className="vx-note-body">
                 <MarkdownLite text={nextSteps} />
@@ -690,13 +647,6 @@ function StudioThankYou({ sale, thankYou, roster, justPaid }) {
                 </p>
               </>
             )}
-            <div className="vx-note-sig">
-              <StudioAvatar avatarUrl={producerAvatarUrl} />
-              <div>
-                <div className="vx-note-sig-name">{PRODUCER.name}</div>
-                <div className="vx-note-sig-role vx-muted">{PRODUCER.role} · Viewix</div>
-              </div>
-            </div>
           </div>
 
           <div className="vx-video-col">
@@ -997,23 +947,6 @@ function StudioNext({ n, h, s }) {
   );
 }
 
-function StudioAvatar({ avatarUrl }) {
-  // Prefer the roster-pulled URL; fall back to the hardcoded PRODUCER
-  // constant (set by paste later) and finally to the initials circle.
-  // onError hides the img if the URL 404s or Drive throttles, so a
-  // broken link doesn't leave an empty square.
-  const [broken, setBroken] = useState(false);
-  const url = !broken && (avatarUrl || PRODUCER.avatarUrl);
-  if (url) {
-    return <img src={url} alt={PRODUCER.name} className="vx-avatar-img" onError={() => setBroken(true)} />;
-  }
-  return (
-    <div className="vx-avatar" style={{ background: PRODUCER.avatarBg }} aria-hidden="true">
-      {PRODUCER.initials}
-    </div>
-  );
-}
-
 // Confetti burst — 36 radial pieces in the brand palette. Fires once
 // via parent's `burstOn` flag, animation lasts 1.4s, parent unmounts
 // the component when done. Hidden entirely via prefers-reduced-motion.
@@ -1135,7 +1068,7 @@ const STUDIO_CSS = `
   max-width: 560px; margin: 0 auto; line-height: 1.5;
 }
 .vx-facts {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 0;
   border: 1px solid var(--vx-line); border-radius: 14px;
   background: #fff; overflow: hidden; margin-bottom: 28px;
 }
@@ -1146,7 +1079,7 @@ const STUDIO_CSS = `
   font-variant-numeric: tabular-nums; word-break: break-word;
 }
 .vx-fact-sub { font-size: 12px; margin-top: 2px; }
-.vx-two-up { display: grid; grid-template-columns: 1.05fr 1fr; gap: 24px; margin-bottom: 28px; }
+.vx-two-up { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 24px; margin-bottom: 28px; }
 .vx-two-up-sm { grid-template-columns: 1fr 1fr; }
 .vx-card { background: #fff; border: 1px solid var(--vx-line); border-radius: 14px; padding: 28px; }
 .vx-note-body { font-size: 15px; line-height: 1.65; color: var(--vx-ink); margin-top: 12px; }
@@ -1159,22 +1092,7 @@ const STUDIO_CSS = `
   margin: 12px 0 14px; letter-spacing: -0.01em;
 }
 .vx-note-p { font-size: 14px; line-height: 1.6; margin: 0 0 12px; }
-.vx-note-sig {
-  display: flex; align-items: center; gap: 10px;
-  margin-top: 22px; padding-top: 16px;
-  border-top: 1px dashed var(--vx-line-strong);
-}
-.vx-avatar, .vx-avatar-img {
-  width: 40px; height: 40px; border-radius: 99px;
-  color: #fff; font-size: 14px; font-weight: 600;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.vx-avatar { box-shadow: inset 0 0 0 2px rgba(255,255,255,.18); }
-.vx-avatar-img { object-fit: cover; }
-.vx-note-sig-name { font-size: 14px; font-weight: 600; }
-.vx-note-sig-role { font-size: 12px; }
-.vx-video-col { display: flex; flex-direction: column; gap: 16px; }
+.vx-video-col { display: flex; flex-direction: column; justify-content: center; gap: 16px; }
 .vx-video-frame {
   position: relative; aspect-ratio: 16 / 9;
   border-radius: 14px; overflow: hidden;
@@ -1267,7 +1185,6 @@ const STUDIO_CSS = `
   .vx-note-quote { font-size: 22px; }
   .vx-facts { grid-template-columns: repeat(2, 1fr); }
   .vx-fact:nth-child(3) { border-left: 0; border-top: 1px solid var(--vx-line); }
-  .vx-fact:nth-child(4) { border-top: 1px solid var(--vx-line); }
   .vx-booking-iframe { height: 640px; }
 }
 @media (max-width: 480px) {
