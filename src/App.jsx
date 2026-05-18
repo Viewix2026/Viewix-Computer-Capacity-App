@@ -44,8 +44,13 @@ const Preproduction            = lazy(() => import("./components/Preproduction")
 const PreproductionPublicView  = lazy(() => import("./components/PreproductionPublicView").then(m => ({ default: m.PreproductionPublicView })));
 const RoasCalculator           = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculator })));
 const RoasCalculatorPublicView = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculatorPublicView })));
+// /r/ shareable analytics report (#165–#168). Aliased to avoid the
+// identifier collision with the /c/ work portal below; the export in
+// src/features/clientPortal stays as-is (no edits to that merged code).
+const AnalyticsClientPortal    = lazy(() => import("./features/clientPortal/ClientPortal").then(m => ({ default: m.ClientPortal })));
 const Nurture                  = lazy(() => import("./components/Nurture").then(m => ({ default: m.Nurture })));
 const Users                    = lazy(() => import("./components/Users").then(m => ({ default: m.Users })));
+// /c/ logged-in client work portal (PR #164).
 const ClientPortal             = lazy(() => import("./components/portal/ClientPortal").then(m => ({ default: m.ClientPortal })));
 
 export default function App(){
@@ -503,11 +508,37 @@ export default function App(){
   const roasParam=new URLSearchParams(window.location.search).get("roas");
   if(roasParam)return(<Suspense fallback={lazyFallback}><RoasCalculatorPublicView/></Suspense>);
 
-  // Client portal — its own passwordless email-link auth + org-scoped
-  // API. Short-circuits BEFORE the staff Login gate so a client (no
-  // role claim) never lands on the staff sign-in screen.
+  // Two distinct external client surfaces, both short-circuited BEFORE
+  // the staff Login gate (a client never lands on staff sign-in):
+  //
+  //   /c/  = logged-in client WORK portal (PR #164) — passwordless
+  //          email-link auth + org-scoped registry + server-side
+  //          redacted API. Projects / Deliveries / Pre-production.
+  //   /r/  = shareable client ANALYTICS report (#165–#168) — anon
+  //          auth, reads only the pre-redacted /analytics/public/{HASH}
+  //          projection. Different job, different auth, different risk.
+  //
+  // They are deliberately separate components (ClientPortal vs
+  // AnalyticsClientPortal) so the /r/ anon model can never leak into
+  // the /c/ authed model.
   const portalMatch=pathname.match(/^\/c(?:\/|$)/);
   if(portalMatch)return(<Suspense fallback={lazyFallback}><ClientPortal/></Suspense>);
+
+  // Client analytics report — /r/HASH/slug (pretty) or ?r=HASH. Light
+  // Suspense fallback (the shared lazyFallback is dark — wrong for an
+  // external client surface).
+  const prettyPortal=pathname.match(/^\/r\/([A-Za-z0-9_-]{6,16})(?:\/|$)/);
+  const portalParam=new URLSearchParams(window.location.search).get("r");
+  if(prettyPortal||portalParam)return(
+    <Suspense fallback={
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#FFFFFF"}}>
+        <div style={{textAlign:"center"}}>
+          <Logo h={34}/>
+          <div style={{marginTop:16,color:"#6B7280",fontSize:14,fontFamily:"'Montserrat',sans-serif"}}>Loading your dashboard…</div>
+        </div>
+      </div>
+    }><AnalyticsClientPortal/></Suspense>
+  );
 
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
