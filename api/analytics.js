@@ -34,6 +34,7 @@ import {
 } from "./_analyticsScrape.js";
 import { adminGet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { recomputeClientAnalytics } from "./_analyticsScoring.js";
+import { makePortalShortId } from "./_analyticsClientProjection.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -84,6 +85,7 @@ export default async function handler(req, res) {
 
   if (action === "refresh") return await handleRefresh(req, res, body);
   if (action === "recompute") return await handleRecompute(req, res, body);
+  if (action === "getPortalLink") return await handleGetPortalLink(req, res, body);
   if (action === "setManualFormatOverride") return await handleSetManualFormatOverride(req, res, body);
   if (action === "clearManualFormatOverride") return await handleClearManualFormatOverride(req, res, body);
 
@@ -118,6 +120,42 @@ async function handleRecompute(req, res, body) {
     console.error(`[analytics] recompute action failed for ${clientId}:`, err);
     res.status(500).json({ error: err.message || "Recompute failed" });
   }
+}
+
+// ─── getPortalLink ────────────────────────────────────────────────
+//
+// Founder/lead-gated. Returns the per-client magic-link token for the
+// external client portal. Mints + persists config.portalShortId on
+// first ask so a founder can grab the link before the first recompute
+// has run. The portal itself only ever reads /analytics/public/{token}
+// (a client-safe projection) — this action never exposes internal
+// state, just the token + display name to build the share URL.
+async function handleGetPortalLink(req, res, body) {
+  const { accountId } = body;
+  if (!accountId) {
+    res.status(400).json({ error: "Missing accountId" });
+    return;
+  }
+  const config = await fbGet(`/analytics/clients/${accountId}/config`);
+  if (!config) {
+    res.status(404).json({ error: "No analytics config for this account. Set one up first." });
+    return;
+  }
+  let portalShortId = config.portalShortId;
+  if (!portalShortId) {
+    portalShortId = makePortalShortId();
+    await fbPatch(`/analytics/clients/${accountId}/config`, { portalShortId });
+  }
+  // The portal only has data once a recompute has written the
+  // projection. lastRecomputeAt lives on the client root, not config.
+  const lastRecomputeAt = await fbGet(`/analytics/clients/${accountId}/lastRecomputeAt`);
+  res.status(200).json({
+    ok: true,
+    action: "getPortalLink",
+    portalShortId,
+    companyName: config.companyName || "",
+    hasProjection: !!lastRecomputeAt,
+  });
 }
 
 // ─── setManualFormatOverride / clearManualFormatOverride ─────────
