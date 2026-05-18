@@ -44,3 +44,22 @@ export function buildDeliveryUrl(delivery) {
   const slug = slugify(`${delivery.clientName || ""} ${delivery.projectName || ""}`);
   return `${base}/d/${delivery.shortId}${slug ? "/" + slug : ""}`;
 }
+
+/**
+ * Build the public pre-production URL from a preproduction record.
+ * Server-safe sibling of src/utils.js#preproductionShareUrl (which
+ * reads window.location.origin and can't run in a serverless fn).
+ * @param {object} preprod - Firebase preproduction record (metaAds | socialOrganic)
+ * @returns {string|null}  - https URL, or null if base URL or shortId is missing
+ */
+export function buildPreproductionUrl(preprod) {
+  if (!preprod) return null;
+  const base = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+  if (!base) return null;
+  if (!preprod.shortId) {
+    if (preprod.id) return `${base}/?p=${preprod.id}`;
+    return null;
+  }
+  const slug = slugify(preprod.companyName || "");
+  return `${base}/p/${preprod.shortId}${slug ? "/" + slug : ""}`;
+}

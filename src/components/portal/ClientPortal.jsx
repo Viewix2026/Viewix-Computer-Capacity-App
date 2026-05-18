@@ -1,0 +1,151 @@
+import { useEffect, useState, useCallback } from "react";
+import {
+  initFB, onClientAuthChanged, looksLikeClientSignInLink, completeClientSignIn,
+  getPendingClientEmail, signOutUser, authFetch,
+} from "../../firebase";
+import { PORTAL_CSS } from "./portalTheme";
+import { ViewixLogo } from "./ui";
+import { SignIn } from "./SignIn";
+import { Dashboard } from "./Dashboard";
+import { ProjectView } from "./ProjectView";
+
+const THEME_KEY = "vx_portal_theme";
+
+function PortalLoading({ label = "Loading your portal..." }) {
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
+      <div style={{ textAlign: "center" }}>
+        <ViewixLogo size={26} style={{ margin: "0 auto" }} />
+        <div style={{ marginTop: 16, color: "var(--text-3)", fontSize: 13 }}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
+// Parse the in-portal route from the pathname:
+//   /c, /c/            -> { name:"dashboard" }
+//   /c/p/<shortId>     -> { name:"project", id }
+function parseRoute() {
+  const m = window.location.pathname.match(/^\/c\/p\/([a-z0-9]{4,16})/i);
+  if (m) return { name: "project", id: m[1].toLowerCase() };
+  return { name: "dashboard" };
+}
+
+export function ClientPortal() {
+  const [user, setUser] = useState(undefined);          // undefined=boot, null=signed out, obj=in
+  const [completing, setCompleting] = useState(looksLikeClientSignInLink());
+  const [needEmail, setNeedEmail] = useState(false);     // cross-device link open
+  const [completeErr, setCompleteErr] = useState("");
+  const [route, setRoute] = useState(parseRoute());
+  const [theme, setTheme] = useState(() => {
+    try { return window.localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; }
+  });
+
+  useEffect(() => { document.title = "Viewix — Client Portal"; initFB(); }, []);
+
+  // Complete an email-link sign-in if we arrived via one. Gate on the
+  // URL-only check (the CDN auth SDK may not be loaded yet);
+  // completeClientSignIn awaits onFB and does the authoritative check.
+  useEffect(() => {
+    if (!looksLikeClientSignInLink()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await completeClientSignIn();           // uses pending email (same device)
+        if (cancelled) return;
+        // Strip the long sign-in query string, keep the /c/ route.
+        window.history.replaceState(null, "", "/c/");
+        setCompleting(false);
+      } catch (e) {
+        if (cancelled) return;
+        if (e?.code === "vx/email-required" && !getPendingClientEmail()) {
+          setNeedEmail(true);                   // cross-device → ask for email
+        } else {
+          setCompleteErr(e?.message || "Sign-in link could not be completed");
+        }
+        setCompleting(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Continuous auth subscription.
+  useEffect(() => onClientAuthChanged(u => setUser(u)), []);
+
+  // In-portal navigation (history API + popstate).
+  const navigate = useCallback((to) => {
+    window.history.pushState(null, "", to);
+    setRoute(parseRoute());
+  }, []);
+  useEffect(() => {
+    const onPop = () => setRoute(parseRoute());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const onTheme = useCallback((t) => {
+    setTheme(t);
+    try { window.localStorage.setItem(THEME_KEY, t); } catch {}
+  }, []);
+
+  const onSignOut = useCallback(async () => {
+    try { await signOutUser(); } catch {}
+    navigate("/c/");
+    setUser(null);
+  }, [navigate]);
+
+  // Finish a cross-device link once the user re-enters their email.
+  const completeWithEmail = useCallback(async (email) => {
+    setCompleteErr("");
+    try {
+      await completeClientSignIn(email);
+      window.history.replaceState(null, "", "/c/");
+      setNeedEmail(false);
+    } catch (e) {
+      setCompleteErr(e?.message || "Could not complete sign-in");
+    }
+  }, []);
+
+  let body;
+  if (completing) {
+    body = <PortalLoading label="Signing you in..." />;
+  } else if (!user) {
+    body = (
+      <SignIn
+        needEmail={needEmail}
+        completeError={completeErr}
+        onCompleteWithEmail={completeWithEmail}
+      />
+    );
+  } else if (route.name === "project") {
+    body = (
+      <ProjectView
+        projectShortId={route.id}
+        user={user}
+        theme={theme}
+        onTheme={onTheme}
+        onSignOut={onSignOut}
+        onBack={() => navigate("/c/")}
+        authFetch={authFetch}
+      />
+    );
+  } else {
+    body = (
+      <Dashboard
+        user={user}
+        theme={theme}
+        onTheme={onTheme}
+        onSignOut={onSignOut}
+        onOpenProject={(shortId) => navigate(`/c/p/${shortId}`)}
+        authFetch={authFetch}
+      />
+    );
+  }
+
+  return (
+    <div className={"vx" + (theme === "dark" ? " dark" : "")}>
+      <style>{PORTAL_CSS}</style>
+      {body}
+    </div>
+  );
+}

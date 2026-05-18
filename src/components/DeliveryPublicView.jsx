@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
-import { initFB, onFB, fbSetAsync, fbListen, signInAnonymouslyForPublic } from "../firebase";
+import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
+import { writeDeliveryLeaf, createRevisionNotifier } from "./deliveryReview/deliveryWrites";
 import { StatusSelect } from "./UIComponents";
 import { Logo } from "./Logo";
 import { logoBg } from "../utils";
@@ -16,8 +17,18 @@ export function DeliveryPublicView(){
   const deliveryId=new URLSearchParams(window.location.search).get("d");
   const prettyMatch=window.location.pathname.match(/^\/d\/([a-z0-9]{4,12})/i);
   const shortId=prettyMatch?prettyMatch[1].toLowerCase():null;
-  const pendingChanges=useRef([]);
-  const batchTimer=useRef(null);
+  // Shared notifier — same batching the portal Deliveries tab uses.
+  // Getters read a live ref so the once-created notifier never closes
+  // over a stale (first-render null) delivery.
+  const deliveryRef=useRef(null);
+  deliveryRef.current=delivery;
+  const notifier=useRef(null);
+  if(!notifier.current){
+    notifier.current=createRevisionNotifier({
+      getClientName:()=>deliveryRef.current?.clientName||"Unknown Client",
+      getDeliveryId:()=>deliveryRef.current?.id||deliveryId,
+    });
+  }
 
   const[notFoundReason,setNotFoundReason]=useState(null);
   useEffect(()=>{
@@ -77,9 +88,9 @@ export function DeliveryPublicView(){
         },onReadError);
       }
     });
-    // Cleanup also clears the notify batch timer so navigating away
-    // with pending revision edits doesn't leave a 2-minute timer alive.
-    return ()=>{cancelled=true;clearTimeout(timeoutId);unsub();if(batchTimer.current){clearTimeout(batchTimer.current);batchTimer.current=null;}};
+    // Cleanup disposes the shared notifier's batch timer so navigating
+    // away with pending revision edits doesn't leave a 2-minute timer.
+    return ()=>{cancelled=true;clearTimeout(timeoutId);unsub();notifier.current?.dispose();};
   },[deliveryId,shortId]);
 
   // Resolve account logo when delivery or accounts change. Same cleanup
@@ -102,14 +113,6 @@ export function DeliveryPublicView(){
     return ()=>{cancelled=true;unsub();};
   },[delivery?.clientName]);
 
-  const flushNotifications=()=>{
-    if(pendingChanges.current.length===0)return;
-    const changes=[...pendingChanges.current];
-    pendingChanges.current=[];
-    const clientName=delivery?.clientName||"Unknown Client";
-    fetch("/api/notify-revision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clientName,deliveryId:delivery?.id||deliveryId,changes})}).catch(e=>console.error("Notification error:",e));
-  };
-
   const updateField=(videoId,field,value)=>{
     if(!delivery)return;
     // Guard against missing/non-array videos — legacy delivery records
@@ -123,25 +126,14 @@ export function DeliveryPublicView(){
     const updated={...delivery,videos:videos.map(v=>v?.id===videoId?{...v,[field]:value}:v)};
     setDelivery(updated);
     setSaving(true);
-    // Write the single field path instead of the whole delivery record.
-    // Firebase rules only permit anonymous writes to .../videos/{idx}/revision1
-    // and .../videos/{idx}/revision2 — writing the whole /deliveries/{id}
-    // object would fail with PERMISSION_DENIED and the listener would then
-    // rehydrate state back to the server version, producing the "status
-    // flickers then goes blank" bug clients were seeing.
-    const path=`/deliveries/${delivery.id}/videos/${videoIndex}/${field}`;
-    fbSetAsync(path,value).catch(e=>console.error("posted/revision leaf write failed",{path,field,value,e}));
+    // Leaf-scoped write via the shared module (same path the portal
+    // Deliveries tab writes). Firebase rules only permit writes to
+    // .../videos/{idx}/{revision1|revision2|posted} — never the whole
+    // /deliveries/{id} object.
+    writeDeliveryLeaf(delivery.id,videoIndex,field,value).catch(()=>{});
     setTimeout(()=>setSaving(false),800);
     if(field==="revision1"||field==="revision2"){
-      pendingChanges.current.push({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});
-      // Bounded queue — clients reviewing for hours without pausing 2min
-      // (which resets the batch timer, see below) would otherwise grow
-      // this unbounded. 200 changes is far more than any real review
-      // session; dropping the oldest loses a notification line, not
-      // client state.
-      if(pendingChanges.current.length>200)pendingChanges.current.shift();
-      if(batchTimer.current)clearTimeout(batchTimer.current);
-      batchTimer.current=setTimeout(flushNotifications,120000);
+      notifier.current.queue({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});
     }
   };
 

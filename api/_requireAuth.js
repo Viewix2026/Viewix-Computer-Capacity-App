@@ -87,6 +87,59 @@ export async function requireRole(req, allowedRoles) {
   return decoded;
 }
 
+// Identity-only verifier for the client portal. Does NOT decide access
+// (the projects endpoint owns org scoping) — it only answers "who is
+// this token". Returns a discriminated union:
+//   { kind:"staff",  email, role, decoded }  — token carries a valid role claim
+//   { kind:"client", email,       decoded }  — verified email, no role claim
+// Throws 401 for missing/invalid/forged/expired tokens or an
+// unverified email on a non-staff token. Staff Google tokens DO carry
+// an email, so the discriminator is the presence of the role claim.
+export async function requireClientOrStaff(req) {
+  const authHeader = req.headers.authorization || "";
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    const err = new Error("Missing bearer token");
+    err.status = 401;
+    throw err;
+  }
+
+  const { admin, err } = getAdmin();
+  if (err) {
+    const authErr = new Error(err);
+    authErr.status = 500;
+    throw authErr;
+  }
+
+  let decoded;
+  try {
+    decoded = await admin.auth().verifyIdToken(match[1], true);
+  } catch {
+    const e = new Error("Invalid or revoked bearer token");
+    e.status = 401;
+    throw e;
+  }
+
+  const email = (decoded.email || "").toLowerCase();
+  const role = normalizeRole(decoded.role);
+
+  // Staff: a valid role claim. (Active-gate + per-rule checks still
+  // apply to staff elsewhere; this endpoint family only reads.)
+  if (role) {
+    return { kind: "staff", email: email || null, role, decoded };
+  }
+
+  // Client: must be a verified email (email-link sign-in sets
+  // email_verified). No role claim → fenced out of all staff data by
+  // the existing rules; here it just identifies the person.
+  if (!email || decoded.email_verified !== true) {
+    const e = new Error("Verified email required");
+    e.status = 401;
+    throw e;
+  }
+  return { kind: "client", email, decoded };
+}
+
 // Build a normalised audit "actor" from a verified token.
 // Used by audit-stamping endpoints so every handler stops reassembling
 // { uid, email, name, ts } differently.
