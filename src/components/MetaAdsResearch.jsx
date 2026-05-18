@@ -1615,6 +1615,11 @@ function ScriptStep({ project, onPatch }) {
           {pushError}
         </div>
       )}
+      {project.scriptWarning && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(245,158,11,0.08)", borderRadius: 8, border: "1px solid rgba(245,158,11,0.3)", fontSize: 12, color: "#F59E0B" }}>
+          ⚠ {project.scriptWarning}
+        </div>
+      )}
 
       {scripts.length === 0 ? (
         <div style={{ padding: 40, textAlign: "center", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 10 }}>
