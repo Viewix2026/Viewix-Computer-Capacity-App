@@ -46,6 +46,7 @@ const RoasCalculator           = lazy(() => import("./components/RoasCalculator"
 const RoasCalculatorPublicView = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculatorPublicView })));
 const Nurture                  = lazy(() => import("./components/Nurture").then(m => ({ default: m.Nurture })));
 const Users                    = lazy(() => import("./components/Users").then(m => ({ default: m.Users })));
+const ClientPortal             = lazy(() => import("./components/portal/ClientPortal").then(m => ({ default: m.ClientPortal })));
 
 export default function App(){
   const[role,setRole]=useState(null); // "founders" | "manager" | "closer" | ...
@@ -501,6 +502,12 @@ export default function App(){
   // Check for public ROAS calculator link (no auth required, pure client-side state)
   const roasParam=new URLSearchParams(window.location.search).get("roas");
   if(roasParam)return(<Suspense fallback={lazyFallback}><RoasCalculatorPublicView/></Suspense>);
+
+  // Client portal — its own passwordless email-link auth + org-scoped
+  // API. Short-circuits BEFORE the staff Login gate so a client (no
+  // role claim) never lands on the staff sign-in screen.
+  const portalMatch=pathname.match(/^\/c(?:\/|$)/);
+  if(portalMatch)return(<Suspense fallback={lazyFallback}><ClientPortal/></Suspense>);
 
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);

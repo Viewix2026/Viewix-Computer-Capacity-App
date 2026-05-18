@@ -32,6 +32,10 @@
       ".write": false,
       "$uid":   { ".read": "auth != null && (auth.uid == $uid || auth.token.role == 'founders')" }
     },
+
+    "accountPortalAccess":           { ".read": false, ".write": false },
+    "accountPortalAccessCandidates": { ".read": false, ".write": false },
+    "clientAccess":                  { ".read": false, ".write": false },
     "usersByEmail": {
       ".read":  "auth != null && auth.token.role == 'founders'",
       ".write": false

@@ -340,6 +340,87 @@ export async function signInAnonymouslyForPublic() {
   return auth.signInAnonymously();
 }
 
+// ─── Client portal: passwordless email-link auth ───
+// Separate Firebase Auth provider from staff Google SSO. A client-link
+// user carries a verified `email` and NO `role` claim, so the existing
+// role-gated rules fence it out of all staff data automatically. The
+// completion URL is the /c/ portal route so App.jsx short-circuits to
+// the portal before the staff Login renders.
+
+const PENDING_EMAIL_KEY = "vx_portal_pending_email";
+
+export function getPendingClientEmail() {
+  try { return window.localStorage.getItem(PENDING_EMAIL_KEY) || null; } catch { return null; }
+}
+export function clearPendingClientEmail() {
+  try { window.localStorage.removeItem(PENDING_EMAIL_KEY); } catch {}
+}
+
+export async function sendClientSignInLink(email) {
+  await new Promise(res => onFB(res));
+  const clean = String(email || "").trim().toLowerCase();
+  if (!clean || !clean.includes("@")) throw new Error("Enter a valid email address");
+  const actionCodeSettings = {
+    // Land back on the portal route so the short-circuit catches it
+    // before the staff gate. handleCodeInApp must be true for email-link.
+    url: `${window.location.origin}/c/`,
+    handleCodeInApp: true,
+  };
+  await auth.sendSignInLinkToEmail(clean, actionCodeSettings);
+  try { window.localStorage.setItem(PENDING_EMAIL_KEY, clean); } catch {}
+  return clean;
+}
+
+// URL-only pre-check — works BEFORE the CDN auth SDK has loaded (the
+// real auth.isSignInWithEmailLink needs the SDK, which initialises
+// async via initFB). Firebase email-link URLs always carry
+// mode=signIn + an oobCode. Used for the initial render gate; the
+// authoritative SDK check happens inside completeClientSignIn.
+export function looksLikeClientSignInLink() {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    return q.get("mode") === "signIn" && !!q.get("oobCode");
+  } catch { return false; }
+}
+
+export function isClientSignInLink() {
+  try {
+    if (auth) return auth.isSignInWithEmailLink(window.location.href);
+    return looksLikeClientSignInLink();
+  } catch { return false; }
+}
+
+// Complete email-link sign-in. Same device → pending email is in
+// localStorage and we complete silently. Cross-device open → caller
+// must pass the re-entered email.
+export async function completeClientSignIn(emailOverride) {
+  await new Promise(res => onFB(res));
+  if (!auth.isSignInWithEmailLink(window.location.href)) {
+    throw new Error("This is not a valid sign-in link");
+  }
+  const email = String(emailOverride || getPendingClientEmail() || "").trim().toLowerCase();
+  if (!email) {
+    const err = new Error("Confirm your email to finish signing in");
+    err.code = "vx/email-required";
+    throw err;
+  }
+  const cred = await auth.signInWithEmailLink(email, window.location.href);
+  clearPendingClientEmail();
+  return cred.user;
+}
+
+// Continuous auth-state subscription for the portal (raw Firebase user).
+// Distinct from onAuthReady (one-shot, role-focused). Returns an unsub.
+export function onClientAuthChanged(cb) {
+  let unsub = () => {};
+  let cancelled = false;
+  onFB(() => {
+    if (cancelled) return;
+    unsub = auth.onAuthStateChanged(u => cb(u || null));
+  });
+  return () => { cancelled = true; unsub(); };
+}
+
 export async function getAuthToken(forceRefresh = false) {
   await new Promise(res => onFB(res));
   const user = auth?.currentUser;

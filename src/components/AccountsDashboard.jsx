@@ -3,6 +3,7 @@ import { fbSet, fbUpdate } from "../firebase";
 import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS, CLIENT_GOAL_COLORS } from "../config";
 import { logoBg, matchSherpaForName } from "../utils";
 import { ClientGoalPill } from "./ClientGoalPill";
+import { AccountPortalAccess } from "./portal/AccountPortalAccess";
 import { videoTypeToPartnership } from "../../api/_tiers.js";
 
 // Alias kept so local references to DEFAULT_GAPS inside this file read
@@ -633,6 +634,7 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
                             <div style={{ gridColumn: "1 / -1" }}>
                               <SherpaDocField acct={acct} clients={clients || []} setClients={setClients} />
                             </div>
+                            <AccountPortalAccess accountId={acct.id} />
                           </div>
                         </td>
                       </tr>

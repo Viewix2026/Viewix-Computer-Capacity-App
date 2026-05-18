@@ -11,6 +11,10 @@ import react from '@vitejs/plugin-react'
 //   - everything else falls into the main app chunk
 export default defineConfig({
   plugins: [react()],
+  // Honor the PORT env (preview/launch tooling assigns one). Falls
+  // back to Vite's default 5173 for plain `npm run dev`. Only affects
+  // the dev server — `vite build` (Vercel) ignores `server`.
+  server: process.env.PORT ? { port: Number(process.env.PORT), strictPort: true } : undefined,
   build: {
     chunkSizeWarningLimit: 700,
     rollupOptions: {
