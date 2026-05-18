@@ -25,6 +25,9 @@ const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeas
 // Swap via env var APIFY_META_ADS_ACTOR if a different actor is preferred —
 // the run-sync endpoint takes the actor path verbatim.
 const DEFAULT_META_ADS_ACTOR = "curious_coder~facebook-ads-library-scraper";
+const META_PROJECT_TABS = new Set(["brandTruth", "research", "videoReview", "shortlist", "select", "script"]);
+const META_PROJECT_APPROVALS = new Set(["brandTruth", "research", "videoReview", "shortlist", "select", "script"]);
+const META_PROJECT_STATUSES = new Set(["draft", "archived", "exported", "done", "completed"]);
 
 async function fbGet(path) {
   const { err } = getAdmin();
@@ -49,6 +52,50 @@ async function fbPatch(path, data) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
+}
+
+async function handlePatchProject(req, res) {
+  const { projectId, patch } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    return res.status(400).json({ error: "Missing patch object" });
+  }
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const out = {};
+  if (Object.prototype.hasOwnProperty.call(patch, "tab")) {
+    if (!META_PROJECT_TABS.has(patch.tab)) {
+      return res.status(400).json({ error: `Invalid tab: ${patch.tab}` });
+    }
+    out.tab = patch.tab;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "status")) {
+    if (!META_PROJECT_STATUSES.has(patch.status)) {
+      return res.status(400).json({ error: `Invalid status: ${patch.status}` });
+    }
+    out.status = patch.status;
+  }
+  if (patch.approvals && typeof patch.approvals === "object" && !Array.isArray(patch.approvals)) {
+    const approvals = { ...(project.approvals || {}) };
+    for (const [key, value] of Object.entries(patch.approvals)) {
+      if (!META_PROJECT_APPROVALS.has(key)) {
+        return res.status(400).json({ error: `Invalid approval key: ${key}` });
+      }
+      if (value == null) delete approvals[key];
+      else approvals[key] = String(value);
+    }
+    out.approvals = approvals;
+  }
+
+  if (!Object.keys(out).length) {
+    return res.status(400).json({ error: "No supported fields in patch" });
+  }
+
+  out.updatedAt = new Date().toISOString();
+  await fbPatch(`/preproduction/metaAds/${projectId}`, out);
+  return res.status(200).json({ ok: true, patch: out });
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1630,6 +1677,7 @@ export default async function handler(req, res) {
   const { action } = req.body || {};
   try {
     switch (action) {
+      case "patchProject":       return await handlePatchProject(req, res);
       case "scrapeAdLibrary":   return await handleScrapeAdLibrary(req, res);
       case "addManualAd":       return await handleAddManualAd(req, res);
       case "scriptGenerate":    return await handleScriptGenerate(req, res);
