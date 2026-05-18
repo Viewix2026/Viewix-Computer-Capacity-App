@@ -3262,10 +3262,16 @@ function BrandTruthStep({ project, linkedAccount, linkedClient, sherpaMeta, onPa
     setGenError(null);
     setGenerating(true);
     try {
-      // Make sure the latest transcript + notes are on disk before generating.
+      // Make sure the latest transcript + notes are committed to disk
+      // before generating. fbSetAsync resolves only when Firebase ACKs
+      // the write, so the backend's fbGet sees the new values. The old
+      // fire-and-forget fbSet + setTimeout(50) raced: a long transcript
+      // wouldn't commit inside 50ms, the server read empty, and the
+      // producer got "Paste a transcript or producer notes before
+      // generating" with both boxes clearly full.
       await Promise.all([
-        new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/transcript`, transcript); setTimeout(res, 50); }),
-        new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/producerNotes`, producerNotes); setTimeout(res, 50); }),
+        fbSetAsync(`/preproduction/socialOrganic/${project.id}/brandTruth/transcript`, transcript),
+        fbSetAsync(`/preproduction/socialOrganic/${project.id}/brandTruth/producerNotes`, producerNotes),
       ]);
       const r = await authFetch("/api/social-organic", {
         method: "POST",
