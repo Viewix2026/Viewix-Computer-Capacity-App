@@ -511,8 +511,8 @@ function DropCell({
         borderRight: "1px solid var(--border)",
         borderBottom: "1px solid var(--border)",
         // Caller drives row height via minHeight so the cell expands
-        // with the lane count of the parent row. Falls back to 60.
-        minHeight: minHeight ?? 60,
+        // with the lane count of the parent row. Falls back to 44.
+        minHeight: minHeight ?? 44,
         position: sticky != null ? "sticky" : "static",
         left: sticky,
         // Sticky columns sit above the column-stripe layer (z 0) but
@@ -739,7 +739,7 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
         };
       }
       const rowCount = Math.max(1, laneCount);
-      for (let i = 0; i < rowCount; i++) trackSizes.push("minmax(56px, auto)");
+      for (let i = 0; i < rowCount; i++) trackSizes.push("minmax(44px, auto)");
       cursor += rowCount;
       return {
         row, editor, laneBars, laneCount: rowCount, startRow,
@@ -1473,7 +1473,11 @@ function Row({ row, editor, weekData, rowIdx, startRow, laneCount, laneBars, dat
             // cell underneath does.
             zIndex: 1,
             display: "flex",
-            alignItems: "stretch",
+            // flex-start (not stretch) so a short card sizes to its own
+            // content instead of being stretched to the tallest bar in
+            // the same lane track — that stretch was the "dead space at
+            // the bottom of the card" the producer reported.
+            alignItems: "flex-start",
           }}>
             <GanttBar
               subtask={st}
@@ -1631,11 +1635,11 @@ const headerCell = {
   whiteSpace: "nowrap", letterSpacing: 0.3,
 };
 const rowLabel = {
-  padding: "10px 14px", display: "flex", alignItems: "center",
+  padding: "6px 14px", display: "flex", alignItems: "center",
   borderBottom: "1px solid var(--border)",
   // 24px so editor names stay legible when the producer zooms the
   // browser out (e.g., 67%) to fit more days on screen. Sized up
   // twice — 13px → 18px → 24px — based on Jeremy's feedback that
   // 18px still felt too small at zoom-out.
-  fontSize: 24, minHeight: 60,
+  fontSize: 24, minHeight: 44,
 };
