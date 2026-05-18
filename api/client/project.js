@@ -34,16 +34,23 @@ export default async function handler(req, res) {
   if (err) return res.status(500).json({ error: err });
   const db = admin.database();
 
-  // Authorised account set for this caller.
+  // Authorised account set for this caller. Registry-FIRST (see
+  // api/client/projects.js): a registered client — even one who is
+  // also Viewix staff — gets their client scope; staff-support-mode
+  // (?accountId=) is only the fallback for non-registered staff.
   let allowed;
-  if (who.kind === "staff") {
+  const emailKey = who.email ? emailKeyFor(who.email) : null;
+  const reg = emailKey
+    ? (await db.ref(`/clientAccess/${emailKey}`).once("value")).val()
+    : null;
+  if (reg && reg.accountIds) {
+    allowed = new Set(Object.keys(reg.accountIds).filter(k => reg.accountIds[k]));
+  } else if (who.kind === "staff") {
     const accountId = String(req.query.accountId || "");
     if (!accountId) return res.status(400).json({ error: "Staff support mode requires ?accountId=" });
     allowed = new Set([accountId]);
   } else {
-    const reg = (await db.ref(`/clientAccess/${emailKeyFor(who.email)}`).once("value")).val();
-    if (!reg || !reg.accountIds) return res.status(403).json({ error: "No portal access" });
-    allowed = new Set(Object.keys(reg.accountIds).filter(k => reg.accountIds[k]));
+    return res.status(403).json({ error: "No portal access" });
   }
 
   const projects = (await db.ref("/projects").once("value")).val() || {};

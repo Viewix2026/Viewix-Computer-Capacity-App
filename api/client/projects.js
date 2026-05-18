@@ -36,7 +36,19 @@ export default async function handler(req, res) {
   let accountIds = [];
   let displayName = null;
 
-  if (who.kind === "staff") {
+  // Registry-FIRST. The /clientAccess registry is the source of truth
+  // for "what can this email see as a client". A Viewix staffer who is
+  // ALSO a registered client (e.g. testing with their own email) must
+  // get their client view — staff-support-mode (explicit ?accountId=)
+  // is only the fallback for staff who are NOT registered clients.
+  const emailKey = who.email ? emailKeyFor(who.email) : null;
+  const reg = emailKey
+    ? (await db.ref(`/clientAccess/${emailKey}`).once("value")).val()
+    : null;
+  if (reg && reg.accountIds) {
+    accountIds = Object.keys(reg.accountIds).filter(k => reg.accountIds[k]);
+    displayName = reg.displayName || who.email;
+  } else if (who.kind === "staff") {
     const accountId = String(req.query.accountId || "");
     if (!accountId) {
       return res.status(400).json({ error: "Staff support mode requires ?accountId=" });
@@ -44,14 +56,8 @@ export default async function handler(req, res) {
     accountIds = [accountId];
     displayName = who.email || "Staff preview";
   } else {
-    const emailKey = emailKeyFor(who.email);
-    const reg = (await db.ref(`/clientAccess/${emailKey}`).once("value")).val();
-    if (!reg || !reg.accountIds) {
-      // Valid token, no live access → empty (NOT 401).
-      return res.status(200).json({ displayName: null, projects: [] });
-    }
-    accountIds = Object.keys(reg.accountIds).filter(k => reg.accountIds[k]);
-    displayName = reg.displayName || who.email;
+    // Valid token, no live access → empty (NOT 401).
+    return res.status(200).json({ displayName: null, projects: [] });
   }
 
   const allowed = new Set(accountIds);

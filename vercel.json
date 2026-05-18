@@ -150,5 +150,10 @@
     { "source": "/r", "destination": "/index.html" },
     { "source": "/r/", "destination": "/index.html" },
     { "source": "/r/:rest*", "destination": "/index.html" }
+  ],
+  "redirects": [
+    { "source": "/c", "destination": "/clients", "permanent": false },
+    { "source": "/c/", "destination": "/clients/", "permanent": false },
+    { "source": "/c/:rest*", "destination": "/clients/:rest*", "permanent": false }
   ]
 }
