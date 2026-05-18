@@ -25,6 +25,9 @@ const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeas
 // Swap via env var APIFY_META_ADS_ACTOR if a different actor is preferred —
 // the run-sync endpoint takes the actor path verbatim.
 const DEFAULT_META_ADS_ACTOR = "curious_coder~facebook-ads-library-scraper";
+const META_PROJECT_TABS = new Set(["brandTruth", "research", "videoReview", "shortlist", "select", "script"]);
+const META_PROJECT_APPROVALS = new Set(["brandTruth", "research", "videoReview", "shortlist", "select", "script"]);
+const META_PROJECT_STATUSES = new Set(["draft", "archived", "exported", "done", "completed"]);
 
 async function fbGet(path) {
   const { err } = getAdmin();
@@ -49,6 +52,50 @@ async function fbPatch(path, data) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
+}
+
+async function handlePatchProject(req, res) {
+  const { projectId, patch } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    return res.status(400).json({ error: "Missing patch object" });
+  }
+
+  const project = await fbGet(`/preproduction/metaAds/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const out = {};
+  if (Object.prototype.hasOwnProperty.call(patch, "tab")) {
+    if (!META_PROJECT_TABS.has(patch.tab)) {
+      return res.status(400).json({ error: `Invalid tab: ${patch.tab}` });
+    }
+    out.tab = patch.tab;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "status")) {
+    if (!META_PROJECT_STATUSES.has(patch.status)) {
+      return res.status(400).json({ error: `Invalid status: ${patch.status}` });
+    }
+    out.status = patch.status;
+  }
+  if (patch.approvals && typeof patch.approvals === "object" && !Array.isArray(patch.approvals)) {
+    const approvals = { ...(project.approvals || {}) };
+    for (const [key, value] of Object.entries(patch.approvals)) {
+      if (!META_PROJECT_APPROVALS.has(key)) {
+        return res.status(400).json({ error: `Invalid approval key: ${key}` });
+      }
+      if (value == null) delete approvals[key];
+      else approvals[key] = String(value);
+    }
+    out.approvals = approvals;
+  }
+
+  if (!Object.keys(out).length) {
+    return res.status(400).json({ error: "No supported fields in patch" });
+  }
+
+  out.updatedAt = new Date().toISOString();
+  await fbPatch(`/preproduction/metaAds/${projectId}`, out);
+  return res.status(200).json({ ok: true, patch: out });
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -396,6 +443,41 @@ function parseJSON(raw) {
   }
 }
 
+// When Claude's scriptTable response is truncated by the output token
+// cap, the JSON is unterminated and parseJSON can't recover it. Rather
+// than 422 and lose every script, walk the scriptTable array and keep
+// each element that closed cleanly. The producer gets the rows that
+// completed plus a warning to regenerate / fill the remainder.
+function salvageScriptTable(raw) {
+  const text = String(raw || "");
+  const m = text.match(/"scriptTable"\s*:\s*\[/);
+  if (!m) return [];
+  let i = m.index + m[0].length;
+  const objs = [];
+  while (i < text.length) {
+    while (i < text.length && /[\s,]/.test(text[i])) i++;       // skip whitespace + element commas
+    if (i >= text.length || text[i] === "]") break;
+    if (text[i] !== "{") break;
+    let depth = 0, inStr = false, esc = false, j = i;
+    for (; j < text.length; j++) {
+      const ch = text[j];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") { depth--; if (depth === 0) { j++; break; } }
+    }
+    if (depth !== 0) break;            // object truncated mid-stream — stop, don't include a partial
+    let obj;
+    try { obj = JSON.parse(text.slice(i, j)); }
+    catch { break; }
+    objs.push(obj);
+    i = j;
+  }
+  return objs;
+}
+
 const META_ADS_SCRIPT_PROMPT = `You are a senior Meta ad script writer at Viewix, a Sydney-based video production agency. You produce direct-response Meta ad scripts designed to run on Facebook and Instagram, built around Alex Hormozi's motivator framework (Toward / Away From / Tried Before) and audience-awareness targeting (Problem Aware / Problem Unaware).
 
 Each script you write is a single 30-60s video scripted through the Hormozi seven-column blueprint:
@@ -594,7 +676,11 @@ Produce the scriptTable JSON now.`;
       model: "claude-opus-4-6",
       systemPrompt: META_ADS_SCRIPT_PROMPT,
       userMessage,
-      maxTokens: 16000,
+      // 32k (opus-4-6's standard ceiling, no beta header needed).
+      // A full Hormozi table for a large package is 8 substantial
+      // text fields × 20+ rows, which overran the old 16k cap and
+      // truncated the JSON mid-string.
+      maxTokens: 32000,
       apiKey: ANTHROPIC_KEY,
     });
   } catch (e) {
@@ -602,9 +688,20 @@ Produce the scriptTable JSON now.`;
   }
 
   let parsed;
-  try { parsed = parseJSON(raw); }
-  catch (e) {
-    return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
+  let salvaged = false;
+  try {
+    parsed = parseJSON(raw);
+  } catch (e) {
+    // Truncation fallback: recover whatever rows closed cleanly so a
+    // 26-script run that got cut at row 22 yields 22 usable scripts
+    // instead of zero. Producer regenerates or fills the rest.
+    const rows = salvageScriptTable(raw);
+    if (rows.length > 0) {
+      parsed = { scriptTable: rows };
+      salvaged = true;
+    } else {
+      return res.status(422).json({ error: "Claude returned invalid JSON", detail: e.message, rawPreview: raw.slice(0, 500) });
+    }
   }
 
   // Post-process: stable ids, headline length trim, default numbering
@@ -625,13 +722,17 @@ Produce the scriptTable JSON now.`;
     adCopy: row.adCopy || "",
   }));
 
+  const scriptWarning = salvaged
+    ? `Generation hit the output limit — recovered ${scriptTable.length} complete scripts. Regenerate to try for the full set, or fill any missing rows with Rewrite.`
+    : null;
   await fbPatch(`/preproduction/metaAds/${projectId}`, {
     scriptTable,
     updatedAt: new Date().toISOString(),
     scriptGeneratedAt: new Date().toISOString(),
+    scriptWarning,
   });
 
-  return res.status(200).json({ success: true, rows: scriptTable.length });
+  return res.status(200).json({ success: true, rows: scriptTable.length, salvaged });
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1286,8 +1387,10 @@ async function handleGenerateBrandTruth(req, res) {
   const project = await fbGet(`/preproduction/metaAds/${projectId}`);
   if (!project) return res.status(404).json({ error: "Project not found" });
 
-  const transcript = project.brandTruth?.transcript || "";
-  const producerNotes = project.brandTruth?.producerNotes || "";
+  const bodyTranscript = typeof req.body?.transcript === "string" ? req.body.transcript : null;
+  const bodyProducerNotes = typeof req.body?.producerNotes === "string" ? req.body.producerNotes : null;
+  const transcript = bodyTranscript !== null ? bodyTranscript : (project.brandTruth?.transcript || "");
+  const producerNotes = bodyProducerNotes !== null ? bodyProducerNotes : (project.brandTruth?.producerNotes || "");
   if (!transcript.trim()) {
     return res.status(400).json({ error: "Paste the pre-production transcript before processing." });
   }
@@ -1296,6 +1399,8 @@ async function handleGenerateBrandTruth(req, res) {
   // even if the producer navigates between tabs during the ~15-30s
   // Claude call. Cleared on success OR failure below.
   await fbPatch(`/preproduction/metaAds/${projectId}/brandTruth`, {
+    transcript,
+    producerNotes,
     processingAt: new Date().toISOString(),
   });
 
@@ -1626,6 +1731,7 @@ export default async function handler(req, res) {
   const { action } = req.body || {};
   try {
     switch (action) {
+      case "patchProject":       return await handlePatchProject(req, res);
       case "scrapeAdLibrary":   return await handleScrapeAdLibrary(req, res);
       case "addManualAd":       return await handleAddManualAd(req, res);
       case "scriptGenerate":    return await handleScriptGenerate(req, res);

@@ -4,13 +4,19 @@
       "maxDuration": 300
     },
     "api/meeting-feedback.js": {
-      "maxDuration": 120
+      "maxDuration": 180
+    },
+    "api/transcript-insights.js": {
+      "maxDuration": 60
+    },
+    "api/cron/transcript-insights-selfheal.js": {
+      "maxDuration": 300
     },
     "api/social-organic.js": {
       "maxDuration": 300
     },
     "api/fathom-webhook.js": {
-      "maxDuration": 120
+      "maxDuration": 180
     },
     "api/whisper.js": {
       "maxDuration": 60
@@ -128,6 +134,10 @@
     {
       "path": "/api/cron/sales-daily",
       "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/cron/transcript-insights-selfheal",
+      "schedule": "0 * * * *"
     }
   ],
   "rewrites": [

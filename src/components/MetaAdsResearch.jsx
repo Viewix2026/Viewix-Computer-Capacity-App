@@ -227,25 +227,18 @@ function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
   const beginProcessing = async () => {
     setLocalProcError(null);
     try {
-      // Flip processingAt on client-side too so the UI snaps to the
-      // processing state immediately (don't wait for the server round-
-      // trip to mark it). Server overwrites with its own timestamp.
-      fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, new Date().toISOString());
-      fbSet(`/preproduction/metaAds/${project.id}/brandTruth/transcript`, transcript);
-      fbSet(`/preproduction/metaAds/${project.id}/brandTruth/producerNotes`, producerNotes);
-      await new Promise(res => setTimeout(res, 150));
-
       const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
+        body: JSON.stringify({
+          action: "generateBrandTruth",
+          projectId: project.id,
+          transcript,
+          producerNotes,
+        }),
       });
       const d = await r.json();
       if (!r.ok) {
-        // Server should clear processingAt on its own error path, but
-        // mirror it here in case the server died before the finally
-        // block (e.g. Vercel timeout).
-        fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, null);
         throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
       }
       // Firebase listener rehydrates fields automatically. Server
@@ -261,8 +254,7 @@ function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
   };
 
   const approve = () => {
-    fbSet(`/preproduction/metaAds/${project.id}/approvals/brandTruth`, new Date().toISOString());
-    onPatch({ tab: "research" });
+    onPatch({ approvals: { brandTruth: new Date().toISOString() }, tab: "research" });
   };
 
   const approvals = project?.approvals || {};
@@ -617,8 +609,7 @@ function ResearchStep({ project, onPatch }) {
   };
 
   const approve = () => {
-    fbSet(`/preproduction/metaAds/${project.id}/approvals/research`, new Date().toISOString());
-    onPatch({ tab: "videoReview" });
+    onPatch({ approvals: { research: new Date().toISOString() }, tab: "videoReview" });
   };
 
   return (
@@ -914,8 +905,7 @@ function VideoReviewStep({ project, onPatch }) {
   };
 
   const approve = () => {
-    fbSet(`/preproduction/metaAds/${project.id}/approvals/videoReview`, new Date().toISOString());
-    onPatch({ tab: "shortlist" });
+    onPatch({ approvals: { videoReview: new Date().toISOString() }, tab: "shortlist" });
   };
 
   return (
@@ -1069,8 +1059,7 @@ function ShortlistStep({ project, onPatch }) {
   const tickedAds = ticked.map(id => ads[id]).filter(Boolean);
 
   const approve = () => {
-    fbSet(`/preproduction/metaAds/${project.id}/approvals/shortlist`, new Date().toISOString());
-    onPatch({ tab: "select" });
+    onPatch({ approvals: { shortlist: new Date().toISOString() }, tab: "select" });
   };
 
   const shortlistedCount = Object.keys(shortlisted).length;
@@ -1351,8 +1340,7 @@ function SelectStep({ project, onPatch }) {
   const approveBlocked = selected.length === 0 || (!countsBalanced && totalTarget > 0);
   const approve = () => {
     if (approveBlocked) return;
-    fbSet(`/preproduction/metaAds/${project.id}/approvals/select`, new Date().toISOString());
-    onPatch({ tab: "script" });
+    onPatch({ approvals: { select: new Date().toISOString() }, tab: "script" });
   };
 
   return (
@@ -1625,6 +1613,11 @@ function ScriptStep({ project, onPatch }) {
       {pushError && (
         <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(239,68,68,0.08)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.3)", fontSize: 12, color: "#EF4444" }}>
           {pushError}
+        </div>
+      )}
+      {project.scriptWarning && (
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: "rgba(245,158,11,0.08)", borderRadius: 8, border: "1px solid rgba(245,158,11,0.3)", fontSize: 12, color: "#F59E0B" }}>
+          ⚠ {project.scriptWarning}
         </div>
       )}
 

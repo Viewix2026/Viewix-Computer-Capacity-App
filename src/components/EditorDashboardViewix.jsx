@@ -12,7 +12,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import confetti from "canvas-confetti";
 import { fmtSecsShort, matchSherpaForName, resolveAccountForProject, EDITOR_DAILY_TARGET_HOURS, EDITOR_DAILY_TARGET_SECS } from "../utils";
-import { fbSet, fbListen, fbUpdate, onFB, authFetch } from "../firebase";
+import { fbSet, fbSetAsync, fbListen, fbUpdate, onFB, authFetch, getCurrentUserEmail, isPermissionDenied } from "../firebase";
 import { FrameioLinkCell } from "./Projects";
 import { ClientGoalPill } from "./ClientGoalPill";
 
@@ -1389,6 +1389,17 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   const [kickoffTaskId, setKickoffTaskId] = useState(null);
   const intervalRef = useRef(null);
   const justStoppedRef = useRef({});
+  // Logged-time writes that have been issued locally but not yet
+  // confirmed accepted by the server. Overlaid on every /timeLogs
+  // listener snapshot so a rolled-back (rule-denied) or mid-flight
+  // server snapshot can't wipe a just-logged total back to 0 — the
+  // bug where stopping the timer or "± Time" reset to 0 with no
+  // feedback. Cleared per-task once fbSetAsync resolves (write landed).
+  const pendingLogsRef = useRef({});
+  // Surfaced to the user when a logged-time write is rejected (most
+  // likely PERMISSION_DENIED) so the failure is loud instead of a
+  // silent reset. { taskId, msg }.
+  const [logError, setLogError] = useState(null);
   const today = isoToday();
   const isSelfScoped = viewerRole === "editor" || viewerRole === "trial";
   const matchedEditor = useMemo(
@@ -1396,6 +1407,31 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
     [isSelfScoped, editors, currentUserEmail, currentUserName]
   );
   const activeEditorId = isSelfScoped ? matchedEditor?.id : editorId;
+
+  // Auto-link the logged-in person to their roster profile by email.
+  // Pre-SSO every editor shared one password and manually picked their
+  // name each session (PersonPicker). Post per-user SSO each editor has
+  // their own Google identity, so resolve editorId from their email
+  // matched against the roster's `email` field — no manual pick.
+  //
+  // Runs once. The guard ref means a later manual clear (the "switch
+  // person" button, used by founders/leads to view any editor) is NOT
+  // re-resolved, so browsing still works. No match (founder with no
+  // roster row, or an editor whose roster email isn't set yet) falls
+  // through to PersonPicker — the prior behaviour, never worse.
+  const autoLinkedRef = useRef(false);
+  useEffect(() => {
+    if (autoLinkedRef.current) return;
+    if (editorId) { autoLinkedRef.current = true; return; }
+    if (!Array.isArray(editors) || editors.length === 0) return;
+    const myEmail = (getCurrentUserEmail() || "").trim().toLowerCase();
+    if (!myEmail) return;
+    const mine = editors.find(e => (e?.email || "").trim().toLowerCase() === myEmail);
+    if (mine?.id) {
+      autoLinkedRef.current = true;
+      setEditorId(mine.id);
+    }
+  }, [editors, editorId]);
 
   // All tasks for this editor, classified.
   const sherpaIdx = useMemo(() => buildSherpaIndex(clients), [clients]);
@@ -1417,7 +1453,14 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       unsub = fbListen(path, (data) => {
         if (data) {
           const { _running, ...logs } = data;
-          setTimeLogs(logs);
+          // Overlay locally-issued writes the server hasn't confirmed
+          // yet. Firebase rolls a rule-denied .set() back to server
+          // truth and re-fires this listener with the pre-write
+          // snapshot; without this overlay that wholesale-replaces the
+          // just-logged total with 0.
+          const pending = pendingLogsRef.current;
+          const merged = Object.keys(pending).length ? { ...logs, ...pending } : logs;
+          setTimeLogs(merged);
           if (_running && _running.taskId && _running.startedAt) {
             const stoppedAt = justStoppedRef.current[_running.taskId];
             if (stoppedAt && (Date.now() - stoppedAt) < 3000) return;
@@ -1434,7 +1477,8 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
             });
           }
         } else {
-          setTimeLogs({});
+          const pending = pendingLogsRef.current;
+          setTimeLogs(Object.keys(pending).length ? { ...pending } : {});
         }
       });
     });
@@ -1528,6 +1572,35 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
     doStart(taskId);
   };
 
+  // Persist a logged-time total with the failure made visible. The old
+  // code used fire-and-forget fbSet: a rule-denied write was swallowed
+  // in a console.error, Firebase rolled the optimistic value back to
+  // server truth, and the listener re-rendered it as 0 with no feedback
+  // (David's "stop timer / ± Time resets to 0" bug). Here the task is
+  // marked pending (listener overlay keeps the value on screen) and a
+  // rejection raises a loud banner instead of a silent reset. Pending
+  // clears only once the server confirms the write landed.
+  const persistLog = (taskId, logData) => {
+    pendingLogsRef.current = { ...pendingLogsRef.current, [taskId]: logData };
+    setTimeLogs(p => ({ ...p, [taskId]: logData }));
+    fbSetAsync(`/timeLogs/${activeEditorId}/${today}/${taskId}`, logData)
+      .then(() => {
+        const next = { ...pendingLogsRef.current };
+        delete next[taskId];
+        pendingLogsRef.current = next;
+        setLogError(prev => (prev && prev.taskId === taskId ? null : prev));
+      })
+      .catch(e => {
+        console.error("timeLog write failed", { taskId, e });
+        setLogError({
+          taskId,
+          msg: isPermissionDenied(e)
+            ? "Your time did NOT save — Firebase denied the write. Your account is likely inactive in /users (the rule needs active === true). The number on screen is not logged — flag this to Jeremy."
+            : `Your time did NOT save — ${e?.message || "the write failed"}. The number on screen is not logged.`,
+        });
+      });
+  };
+
   const stopTimer = (taskId) => {
     const t = timers[taskId];
     if (!t || !t.running) return;
@@ -1546,8 +1619,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       stage: task?.stage || "",
       source: "viewix",
     };
-    fbSet(`/timeLogs/${activeEditorId}/${today}/${taskId}`, logData);
-    setTimeLogs(p => ({ ...p, [taskId]: logData }));
+    persistLog(taskId, logData);
   };
 
   const confirmTimerSwitch = () => {
@@ -1558,6 +1630,10 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   };
 
   const resetTimer = (taskId) => {
+    const next = { ...pendingLogsRef.current };
+    delete next[taskId];
+    pendingLogsRef.current = next;
+    setLogError(prev => (prev && prev.taskId === taskId ? null : prev));
     fbSet(`/timeLogs/${activeEditorId}/${today}/${taskId}`, null);
     fbSet(`/timeLogs/${activeEditorId}/${today}/_running`, null);
     setTimeLogs(p => { const n = { ...p }; delete n[taskId]; return n; });
@@ -1577,8 +1653,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
       stage: task?.stage || "",
       source: "viewix",
     };
-    fbSet(`/timeLogs/${activeEditorId}/${today}/${taskId}`, logData);
-    setTimeLogs(p => ({ ...p, [taskId]: logData }));
+    persistLog(taskId, logData);
     setAdjustingTask(null);
     setAdjustMins("");
   };
@@ -1608,6 +1683,23 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
   // ─── Picked editor view ─────────────────────────────────────────
   return (
     <div style={{ background: "transparent", color: "var(--fg)" }}>
+      {logError && (
+        <div style={{
+          padding: "10px 28px", background: "#7F1D1D", color: "#FEE2E2",
+          fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center",
+          justifyContent: "space-between", gap: 16,
+        }}>
+          <span>{logError.msg}</span>
+          <button
+            onClick={() => setLogError(null)}
+            style={{
+              background: "transparent", border: "1px solid #FCA5A5",
+              color: "#FEE2E2", borderRadius: 6, padding: "2px 10px",
+              fontSize: 12, cursor: "pointer", flexShrink: 0,
+            }}
+          >Dismiss</button>
+        </div>
+      )}
       {/* Header */}
       <div style={{
         padding: "16px 28px", borderBottom: "1px solid var(--border)",

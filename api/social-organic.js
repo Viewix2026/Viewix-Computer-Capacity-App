@@ -1767,10 +1767,18 @@ async function handleGenerateBrandTruth(req, res) {
   const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
   if (!project) return res.status(404).json({ error: "Project not found" });
 
-  const transcript = project.brandTruth?.transcript || "";
-  const producerNotes = project.brandTruth?.producerNotes || "";
+  const bodyTranscript = typeof req.body?.transcript === "string" ? req.body.transcript : null;
+  const bodyProducerNotes = typeof req.body?.producerNotes === "string" ? req.body.producerNotes : null;
+  const transcript = bodyTranscript !== null ? bodyTranscript : (project.brandTruth?.transcript || "");
+  const producerNotes = bodyProducerNotes !== null ? bodyProducerNotes : (project.brandTruth?.producerNotes || "");
   if (!transcript.trim() && !producerNotes.trim()) {
     return res.status(400).json({ error: "Paste a transcript or producer notes before generating." });
+  }
+  if (bodyTranscript !== null || bodyProducerNotes !== null) {
+    await fbPatch(`/preproduction/socialOrganic/${projectId}/brandTruth`, {
+      transcript,
+      producerNotes,
+    });
   }
 
   // Pull the full Client Sherpa Google Doc + the thin Attio-cache scraps

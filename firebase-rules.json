@@ -23,6 +23,7 @@
     "preproductionTemplates": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "meetingFeedback": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "transcriptInsights": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'founder' || auth.token.role == 'closer')", ".write": false },
     "foundersMetrics": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "foundersBriefings": { ".read": "auth != null && auth.token.role == 'founders'", ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true" },
     "attioCache": { ".read": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder')", ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true" },

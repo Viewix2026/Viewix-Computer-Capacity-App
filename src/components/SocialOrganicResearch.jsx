@@ -3262,15 +3262,15 @@ function BrandTruthStep({ project, linkedAccount, linkedClient, sherpaMeta, onPa
     setGenError(null);
     setGenerating(true);
     try {
-      // Make sure the latest transcript + notes are on disk before generating.
-      await Promise.all([
-        new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/transcript`, transcript); setTimeout(res, 50); }),
-        new Promise(res => { fbSet(`/preproduction/socialOrganic/${project.id}/brandTruth/producerNotes`, producerNotes); setTimeout(res, 50); }),
-      ]);
       const r = await authFetch("/api/social-organic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
+        body: JSON.stringify({
+          action: "generateBrandTruth",
+          projectId: project.id,
+          transcript,
+          producerNotes,
+        }),
       });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
