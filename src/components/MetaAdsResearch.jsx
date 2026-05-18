@@ -155,9 +155,10 @@ const META_BRAND_TRUTH_FIELDS = [
   { key: "uniqueValueProp", label: "Unique Value Proposition", hint: "What makes this different from every other agency / provider in the space?" },
   { key: "targetCustomer",  label: "Target Customer",          hint: "Who is seeing these ads? Demographic + psychographic. Be specific." },
   { key: "painPoints",      label: "Pain Points",              hint: "What are they struggling with right now? What keeps them up at night?" },
-  { key: "desiredOutcome",  label: "Desired Outcome",          hint: "What do they want to be true after buying? The toward state — aspirational, concrete." },
+  { key: "clientsDesiredOutcome", label: "Client's Desired Outcome", hint: "What does the client want from this round of Meta ads, why they came to Viewix, and what they want us to deliver." },
   { key: "proofPoints",     label: "Proof Points",             hint: "Specific case studies, numbers, named clients, testimonials the scripts can cite." },
   { key: "competitors",     label: "Competitors / Category",   hint: "Who are they up against? What does the prospect's feed look like filled with competitor content?" },
+  { key: "keyConsiderations", label: "Key Considerations",     hint: "Things the client raised that must be respected in production: hard no-no's, wording to avoid, required positioning." },
 ];
 
 function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
@@ -612,6 +613,19 @@ function ResearchStep({ project, onPatch }) {
     onPatch({ approvals: { research: new Date().toISOString() }, tab: "videoReview" });
   };
 
+  // Skip the entire Ad Library path. Some clients don't need any
+  // scraped reference ads — they'll script against existing Format
+  // Library entries. Marking research + videoReview + shortlist
+  // approved (so the tab checkmarks reflect reality) and jumping
+  // straight to Selection, where library formats get picked. Video
+  // Review and Shortlist are empty without scraped ads anyway, so
+  // landing the producer there would just be two more clicks to nowhere.
+  const skipAdLibrary = () => {
+    if (!window.confirm("Skip the Ad Library? No ads will be scraped or reviewed — you'll jump straight to Selection to pick formats from the Format Library. You can come back to this tab any time.")) return;
+    const ts = new Date().toISOString();
+    onPatch({ approvals: { research: ts, videoReview: ts, shortlist: ts }, tab: "select" });
+  };
+
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
@@ -766,10 +780,17 @@ function ResearchStep({ project, onPatch }) {
               ? `You've got ${adList.length} ad${adList.length === 1 ? "" : "s"} in the pool — usually 10+ is a good minimum for Video Review. Add more before approving.`
               : "When you've got a good pool of ads to review, approve to unlock Video Review."}
         </div>
-        <button onClick={approve} disabled={adList.length === 0}
-          style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : adList.length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: adList.length === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
-          {isApproved ? "→ Video Review" : "Approve Research"}
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={skipAdLibrary}
+            title="No reference ads needed — jump straight to Selection and pick from the Format Library"
+            style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+            Skip Ad Library →
+          </button>
+          <button onClick={approve} disabled={adList.length === 0}
+            style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : adList.length === 0 ? "#374151" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: adList.length === 0 ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+            {isApproved ? "→ Video Review" : "Approve Research"}
+          </button>
+        </div>
       </div>
     </div>
   );

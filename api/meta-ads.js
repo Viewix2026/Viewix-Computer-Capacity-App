@@ -658,8 +658,9 @@ BRAND TRUTH:
 - Unique Value Prop: ${bt.uniqueValueProp || "(none)"}
 - Target Customer: ${bt.targetCustomer || "(none)"}
 - Pain Points: ${bt.painPoints || "(none)"}
-- Desired Outcome: ${bt.desiredOutcome || "(none)"}
+- Client's Desired Outcome: ${bt.clientsDesiredOutcome || bt.desiredOutcome || "(none)"}
 - Proof Points: ${bt.proofPoints || "(none)"}
+- Key Considerations (production must-respects, no-no's, required positioning): ${bt.keyConsiderations || "(none)"}
 - Competitors: ${bt.competitors || "(none)"}
 
 ${project.brandTruth?.transcript ? `\nONBOARDING TRANSCRIPT (excerpt):\n${project.brandTruth.transcript.slice(0, 6000)}\n` : ""}
@@ -878,8 +879,9 @@ BRAND TRUTH:
 - Unique Value Prop: ${bt.uniqueValueProp || "(none)"}
 - Target Customer: ${bt.targetCustomer || "(none)"}
 - Pain Points: ${bt.painPoints || "(none)"}
-- Desired Outcome: ${bt.desiredOutcome || "(none)"}
+- Client's Desired Outcome: ${bt.clientsDesiredOutcome || bt.desiredOutcome || "(none)"}
 - Proof Points: ${bt.proofPoints || "(none)"}
+- Key Considerations (production must-respects, no-no's, required positioning): ${bt.keyConsiderations || "(none)"}
 ${formatGuidance}${priorFeedback}
 EXISTING ROW (for voice consistency):
 - Video Name: ${row.videoName || ""}
@@ -993,8 +995,9 @@ BRAND TRUTH:
 - Unique Value Prop: ${bt.uniqueValueProp || "(none)"}
 - Target Customer: ${bt.targetCustomer || "(none)"}
 - Pain Points: ${bt.painPoints || "(none)"}
-- Desired Outcome: ${bt.desiredOutcome || "(none)"}
+- Client's Desired Outcome: ${bt.clientsDesiredOutcome || bt.desiredOutcome || "(none)"}
 - Proof Points: ${bt.proofPoints || "(none)"}
+- Key Considerations (production must-respects, no-no's, required positioning): ${bt.keyConsiderations || "(none)"}
 ${formatGuidance}${priorFeedback}
 CURRENT SCRIPT (you are rewriting this — all seven fields together):
 - Video Name: ${row.videoName || ""}
@@ -1346,10 +1349,11 @@ async function handlePushToRunsheet(req, res) {
 //
 // generateBrandTruth: one-shot extraction from the pre-production
 // transcript + producer notes. Mirrors the Social Organic pattern
-// but fills the 8 Meta-Ads-specific fields (brandTruths, productOffer,
-// uniqueValueProp, targetCustomer, painPoints, desiredOutcome,
-// proofPoints, competitors). Output is bullet-style: 3-5 lines per
-// field, separated by newline. Frontend renders them as bullets.
+// but fills the 9 Meta-Ads-specific fields (brandTruths, productOffer,
+// uniqueValueProp, targetCustomer, painPoints, clientsDesiredOutcome,
+// proofPoints, competitors, keyConsiderations). Output is bullet-style:
+// up to 4 lines per field, separated by newline. Frontend renders them
+// as bullets.
 // ═══════════════════════════════════════════════════════════════════
 
 const META_ADS_BRAND_TRUTH_PROMPT = `You are a senior creative strategist at Viewix, a Sydney-based video production agency. You have just sat in on a pre-production meeting with a client about to shoot a round of Meta video ads. Produce the "Brand Truth" block the producer will carry through the rest of the pre-production workflow — Ad Library benchmarking, video review, shortlist, selection, and Hormozi-style script generation.
@@ -1360,16 +1364,17 @@ RULES:
 - Never use em dashes. Use commas, full stops, or rewrite.
 - Return a single JSON object with the exact structure below. No markdown, no preamble, no code fences.
 
-STRUCTURE — every field is a list of 3-5 short bullet-style lines, one idea per line, separated by a newline character ("\\n"). Do NOT output prose paragraphs. Do NOT include leading bullet markers (no •, no dashes, no numbers) — the frontend renders the bullets automatically. Each line is one specific, concrete claim or observation. Keep lines under 25 words where possible.
+STRUCTURE — every field is a list of NO MORE THAN 4 short bullet-style lines, one idea per line, separated by a newline character ("\\n"). Four is a hard ceiling — never output a fifth line for any field; pick the four strongest. Do NOT output prose paragraphs. Do NOT include leading bullet markers (no •, no dashes, no numbers) — the frontend renders the bullets automatically. Each line is one specific, concrete claim or observation. Keep lines under 25 words where possible.
 {
-  "brandTruths":     "3-5 lines on what's actually true about this business. Not marketing fluff, the real version — operational truths, founder quirks, what this brand does better than most.",
-  "productOffer":    "3-5 lines on what exactly is being sold in these ads. Deliverable, format, and price point. Be specific about the package / promise the ads are driving to.",
-  "uniqueValueProp": "3-5 lines on what makes this different from every other agency / provider in the space. Why a prospect would pick THIS one over the competitor Instagram suggests next.",
-  "targetCustomer":  "3-5 lines on who is seeing these ads. Demographic + psychographic, specific. Business owners 30-50 in trades, first-time founders, existing 7-figure ecomm brands — that level of specificity.",
-  "painPoints":      "3-5 lines, each a specific pain the viewer is struggling with RIGHT NOW. Use direct viewer-voice quotes where the transcript supports it. Concrete, not abstract.",
-  "desiredOutcome":  "3-5 lines on what the viewer wants to be true AFTER buying. The toward state — aspirational, concrete. What changes in their business / life / identity when this works.",
-  "proofPoints":     "3-5 lines of specific case studies, numbers, named clients, testimonials the scripts can cite. Vague proof = weak ads, so get specific. Quote numbers from the transcript where available.",
-  "competitors":     "3-5 lines on who they're up against. Named competitors if the transcript mentions them. What the prospect's Instagram feed looks like filled with competitor content."
+  "brandTruths":          "Up to 4 lines on what's actually true about this business. Not marketing fluff, the real version — operational truths, founder quirks, what this brand does better than most.",
+  "productOffer":         "Up to 4 lines on what exactly is being sold in these ads. Deliverable, format, and price point. Be specific about the package / promise the ads are driving to.",
+  "uniqueValueProp":      "Up to 4 lines on what makes this different from every other agency / provider in the space. Why a prospect would pick THIS one over the competitor Instagram suggests next.",
+  "targetCustomer":       "Up to 4 lines on who is seeing these ads. Demographic + psychographic, specific. Business owners 30-50 in trades, first-time founders, existing 7-figure ecomm brands — that level of specificity.",
+  "painPoints":           "Up to 4 lines, each a specific pain the viewer is struggling with RIGHT NOW. Use direct viewer-voice quotes where the transcript supports it. Concrete, not abstract.",
+  "clientsDesiredOutcome":"Up to 4 lines on what the CLIENT wants to achieve with this round of Meta ads, why they approached Viewix, and what they want Viewix to deliver for them. This is the client's goal for the engagement, not the ad viewer's after-state. Quote their own words on the result they're chasing.",
+  "proofPoints":          "Up to 4 lines of specific case studies, numbers, named clients, testimonials the scripts can cite. Vague proof = weak ads, so get specific. Quote numbers from the transcript where available.",
+  "competitors":          "Up to 4 lines on who they're up against. Named competitors if the transcript mentions them. What the prospect's Instagram feed looks like filled with competitor content.",
+  "keyConsiderations":    "Up to 4 lines of things the client raised in the meeting that must be respected during production. Hard no-no's, words or claims they explicitly said to avoid, and any specific positioning, tone, or messaging they insisted on. If they didn't raise anything, return an empty string."
 }`;
 
 async function getBrandTruthPromptOverride() {
@@ -1478,14 +1483,15 @@ Produce the brand truth JSON now.`;
   }
 
   const fields = {
-    brandTruths:     parsed.brandTruths     || "",
-    productOffer:    parsed.productOffer    || "",
-    uniqueValueProp: parsed.uniqueValueProp || "",
-    targetCustomer:  parsed.targetCustomer  || "",
-    painPoints:      parsed.painPoints      || "",
-    desiredOutcome:  parsed.desiredOutcome  || "",
-    proofPoints:     parsed.proofPoints     || "",
-    competitors:     parsed.competitors     || "",
+    brandTruths:           parsed.brandTruths           || "",
+    productOffer:          parsed.productOffer          || "",
+    uniqueValueProp:       parsed.uniqueValueProp       || "",
+    targetCustomer:        parsed.targetCustomer        || "",
+    painPoints:            parsed.painPoints            || "",
+    clientsDesiredOutcome: parsed.clientsDesiredOutcome || "",
+    proofPoints:           parsed.proofPoints           || "",
+    competitors:           parsed.competitors           || "",
+    keyConsiderations:     parsed.keyConsiderations     || "",
   };
 
   await fbPatch(`/preproduction/metaAds/${projectId}/brandTruth`, {
@@ -1523,14 +1529,16 @@ async function handleRewriteBrandTruthField(req, res) {
   // style (newline-separated lines) to match the rest of the step.
   const fields = project.brandTruth?.fields || {};
   const fieldLabelMap = {
-    brandTruths:     "Brand Truths",
-    productOffer:    "Product / Offer",
-    uniqueValueProp: "Unique Value Proposition",
-    targetCustomer:  "Target Customer",
-    painPoints:      "Pain Points",
-    desiredOutcome:  "Desired Outcome",
-    proofPoints:     "Proof Points",
-    competitors:     "Competitors / Category",
+    brandTruths:           "Brand Truths",
+    productOffer:          "Product / Offer",
+    uniqueValueProp:       "Unique Value Proposition",
+    targetCustomer:        "Target Customer",
+    painPoints:            "Pain Points",
+    clientsDesiredOutcome: "Client's Desired Outcome",
+    desiredOutcome:        "Client's Desired Outcome",
+    proofPoints:           "Proof Points",
+    competitors:           "Competitors / Category",
+    keyConsiderations:     "Key Considerations",
   };
   const targetLabel = fieldLabelMap[path] || path;
 
