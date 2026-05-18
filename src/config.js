@@ -253,3 +253,27 @@ input[type="number"]{-moz-appearance:textfield;}
 .founders-ticker-track{animation:founders-ticker-scroll 60s linear infinite;}
 .founders-ticker-track:hover{animation-play-state:paused;}
 `;
+
+// CSS_LIGHT — the EXTERNAL (client-facing) theme. Same CSS variable
+// NAMES as the dark theme above, brand-compliant LIGHT values, scoped
+// to a `.viewix-portal` wrapper so it never leaks into the internal
+// app. "dark = internal, light = external" — token-only theming, one
+// component layer, two maps. Full Viewix brand: white/light-grey
+// surfaces, Viewix Blue primary, Viewix Orange accent (≤10%, used via
+// --accent-2), Montserrat throughout.
+export const CSS_LIGHT = `
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&display=swap');
+.viewix-portal{
+  --bg:#FFFFFF;--fg:#1A2233;--card:#F4F5F9;--border:#CBCCD1;--border-light:#E3E5EC;
+  --muted:#6B7280;--accent:#0082FA;--accent-2:#F87700;--accent-soft:rgba(0,130,250,0.10);
+  --navy:#004F99;--bar-bg:#ECEEF3;--input-bg:#FFFFFF;--good:#10B981;
+  font-family:'Montserrat',Arial,Helvetica,sans-serif;
+  background:var(--bg);color:var(--fg);min-height:100vh;line-height:1.55;
+}
+.viewix-portal *{box-sizing:border-box;margin:0;padding:0;font-family:inherit;}
+.viewix-portal ::-webkit-scrollbar{width:8px;height:8px;}
+.viewix-portal ::-webkit-scrollbar-track{background:var(--card);}
+.viewix-portal ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
+@keyframes viewix-portal-rise{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+.viewix-portal .rise{animation:viewix-portal-rise .45s ease both;}
+`;

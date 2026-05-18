@@ -44,6 +44,7 @@ const Preproduction            = lazy(() => import("./components/Preproduction")
 const PreproductionPublicView  = lazy(() => import("./components/PreproductionPublicView").then(m => ({ default: m.PreproductionPublicView })));
 const RoasCalculator           = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculator })));
 const RoasCalculatorPublicView = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculatorPublicView })));
+const ClientPortal             = lazy(() => import("./features/clientPortal/ClientPortal").then(m => ({ default: m.ClientPortal })));
 const Nurture                  = lazy(() => import("./components/Nurture").then(m => ({ default: m.Nurture })));
 const Users                    = lazy(() => import("./components/Users").then(m => ({ default: m.Users })));
 
@@ -501,6 +502,24 @@ export default function App(){
   // Check for public ROAS calculator link (no auth required, pure client-side state)
   const roasParam=new URLSearchParams(window.location.search).get("roas");
   if(roasParam)return(<Suspense fallback={lazyFallback}><RoasCalculatorPublicView/></Suspense>);
+
+  // Check for the client analytics portal — /r/HASH/slug (pretty) or
+  // ?r=HASH. Light, brand-compliant, anon-auth, reads only the
+  // client-safe /analytics/public/{HASH} projection. Its own light
+  // Suspense fallback (the shared lazyFallback is dark — wrong for an
+  // external client surface).
+  const prettyPortal=pathname.match(/^\/r\/([A-Za-z0-9_-]{6,16})(?:\/|$)/);
+  const portalParam=new URLSearchParams(window.location.search).get("r");
+  if(prettyPortal||portalParam)return(
+    <Suspense fallback={
+      <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#FFFFFF"}}>
+        <div style={{textAlign:"center"}}>
+          <Logo h={34}/>
+          <div style={{marginTop:16,color:"#6B7280",fontSize:14,fontFamily:"'Montserrat',sans-serif"}}>Loading your dashboard…</div>
+        </div>
+      </div>
+    }><ClientPortal/></Suspense>
+  );
 
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
