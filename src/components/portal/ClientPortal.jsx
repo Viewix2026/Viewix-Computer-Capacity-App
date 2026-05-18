@@ -23,10 +23,10 @@ function PortalLoading({ label = "Loading your portal..." }) {
 }
 
 // Parse the in-portal route from the pathname:
-//   /c, /c/            -> { name:"dashboard" }
-//   /c/p/<shortId>     -> { name:"project", id }
+//   /clients, /clients/        -> { name:"dashboard" }
+//   /clients/p/<shortId>       -> { name:"project", id }
 function parseRoute() {
-  const m = window.location.pathname.match(/^\/c\/p\/([a-z0-9]{4,16})/i);
+  const m = window.location.pathname.match(/^\/clients\/p\/([a-z0-9]{4,16})/i);
   if (m) return { name: "project", id: m[1].toLowerCase() };
   return { name: "dashboard" };
 }
@@ -53,8 +53,8 @@ export function ClientPortal() {
       try {
         await completeClientSignIn();           // uses pending email (same device)
         if (cancelled) return;
-        // Strip the long sign-in query string, keep the /c/ route.
-        window.history.replaceState(null, "", "/c/");
+        // Strip the long sign-in query string, keep the /clients/ route.
+        window.history.replaceState(null, "", "/clients/");
         setCompleting(false);
       } catch (e) {
         if (cancelled) return;
@@ -90,7 +90,7 @@ export function ClientPortal() {
 
   const onSignOut = useCallback(async () => {
     try { await signOutUser(); } catch {}
-    navigate("/c/");
+    navigate("/clients/");
     setUser(null);
   }, [navigate]);
 
@@ -99,7 +99,7 @@ export function ClientPortal() {
     setCompleteErr("");
     try {
       await completeClientSignIn(email);
-      window.history.replaceState(null, "", "/c/");
+      window.history.replaceState(null, "", "/clients/");
       setNeedEmail(false);
     } catch (e) {
       setCompleteErr(e?.message || "Could not complete sign-in");
@@ -125,7 +125,7 @@ export function ClientPortal() {
         theme={theme}
         onTheme={onTheme}
         onSignOut={onSignOut}
-        onBack={() => navigate("/c/")}
+        onBack={() => navigate("/clients/")}
         authFetch={authFetch}
       />
     );
@@ -136,7 +136,7 @@ export function ClientPortal() {
         theme={theme}
         onTheme={onTheme}
         onSignOut={onSignOut}
-        onOpenProject={(shortId) => navigate(`/c/p/${shortId}`)}
+        onOpenProject={(shortId) => navigate(`/clients/p/${shortId}`)}
         authFetch={authFetch}
       />
     );

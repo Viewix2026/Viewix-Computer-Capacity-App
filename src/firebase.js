@@ -344,8 +344,8 @@ export async function signInAnonymouslyForPublic() {
 // Separate Firebase Auth provider from staff Google SSO. A client-link
 // user carries a verified `email` and NO `role` claim, so the existing
 // role-gated rules fence it out of all staff data automatically. The
-// completion URL is the /c/ portal route so App.jsx short-circuits to
-// the portal before the staff Login renders.
+// completion URL is the /clients/ portal route so App.jsx short-circuits
+// to the portal before the staff Login renders.
 
 const PENDING_EMAIL_KEY = "vx_portal_pending_email";
 
@@ -363,7 +363,7 @@ export async function sendClientSignInLink(email) {
   const actionCodeSettings = {
     // Land back on the portal route so the short-circuit catches it
     // before the staff gate. handleCodeInApp must be true for email-link.
-    url: `${window.location.origin}/c/`,
+    url: `${window.location.origin}/clients/`,
     handleCodeInApp: true,
   };
   await auth.sendSignInLinkToEmail(clean, actionCodeSettings);
