@@ -1286,8 +1286,10 @@ async function handleGenerateBrandTruth(req, res) {
   const project = await fbGet(`/preproduction/metaAds/${projectId}`);
   if (!project) return res.status(404).json({ error: "Project not found" });
 
-  const transcript = project.brandTruth?.transcript || "";
-  const producerNotes = project.brandTruth?.producerNotes || "";
+  const bodyTranscript = typeof req.body?.transcript === "string" ? req.body.transcript : null;
+  const bodyProducerNotes = typeof req.body?.producerNotes === "string" ? req.body.producerNotes : null;
+  const transcript = bodyTranscript !== null ? bodyTranscript : (project.brandTruth?.transcript || "");
+  const producerNotes = bodyProducerNotes !== null ? bodyProducerNotes : (project.brandTruth?.producerNotes || "");
   if (!transcript.trim()) {
     return res.status(400).json({ error: "Paste the pre-production transcript before processing." });
   }
@@ -1296,6 +1298,8 @@ async function handleGenerateBrandTruth(req, res) {
   // even if the producer navigates between tabs during the ~15-30s
   // Claude call. Cleared on success OR failure below.
   await fbPatch(`/preproduction/metaAds/${projectId}/brandTruth`, {
+    transcript,
+    producerNotes,
     processingAt: new Date().toISOString(),
   });
 
