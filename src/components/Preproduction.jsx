@@ -215,6 +215,34 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
     : projectList.filter(p => p.status === statusFilter);
 
   const activeProject = activeProjectId ? projects[activeProjectId] : null;
+  const patchMetaProjectViaApi = async (projectId, patch) => {
+    setProjects(prev => {
+      const current = prev[projectId] || {};
+      return {
+        ...prev,
+        [projectId]: {
+          ...current,
+          ...patch,
+          approvals: patch.approvals
+            ? { ...(current.approvals || {}), ...patch.approvals }
+            : current.approvals,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    });
+    try {
+      const r = await authFetch("/api/meta-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "patchProject", projectId, patch }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` - ${d.detail}` : ""));
+    } catch (e) {
+      console.error("Meta Ads project patch failed", e);
+      alert(`Could not save this Meta Ads change: ${e.message}`);
+    }
+  };
 
   // Find project lead from accounts (match by attioCompanyId or company name)
   const findAccount = (proj) => {
@@ -670,7 +698,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
           clients={clients}
           sherpaCacheMeta={sherpaCacheMeta}
           onBack={() => setActiveProjectId(null)}
-          onPatch={(patch) => fbPatchProject(activeProject.id, patch)}
+          onPatch={(patch) => patchMetaProjectViaApi(activeProject.id, patch)}
           onDelete={() => {
             if (!window.confirm(`Delete "${activeProject.companyName}" Meta Ads project? This cannot be undone.`)) return;
             fbSet(`/preproduction/metaAds/${activeProject.id}`, null);
