@@ -15,7 +15,7 @@
 // them natively.
 
 import { useState, useEffect, useRef } from "react";
-import { authFetch, fbSet, fbSetAsync, fbUpdate, fbListenSafe } from "../firebase";
+import { authFetch, fbSet, fbUpdate, fbListenSafe } from "../firebase";
 import { CellRewriteModal, EditableField } from "./shared/CellRewriteModal";
 import { SherpaStatusRow } from "./shared/SherpaStatusRow";
 import { matchSherpaClientRecord, preproductionShareUrl } from "../utils";
@@ -231,22 +231,16 @@ function BrandTruthStep({ project, linkedClient, sherpaMeta, onPatch }) {
       // processing state immediately (don't wait for the server round-
       // trip to mark it). Server overwrites with its own timestamp.
       fbSet(`/preproduction/metaAds/${project.id}/brandTruth/processingAt`, new Date().toISOString());
-      // Await the transcript + notes writes — the backend reads them
-      // straight back via fbGet to validate, and the old fire-and-
-      // forget fbSet + setTimeout(150) raced on long transcripts:
-      // the write hadn't committed, the server saw empty, and the
-      // producer got "Paste a transcript..." with the box clearly
-      // full. processingAt stays fire-and-forget (UI hint only, not
-      // read by the validation).
-      await Promise.all([
-        fbSetAsync(`/preproduction/metaAds/${project.id}/brandTruth/transcript`, transcript),
-        fbSetAsync(`/preproduction/metaAds/${project.id}/brandTruth/producerNotes`, producerNotes),
-      ]);
 
       const r = await authFetch("/api/meta-ads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "generateBrandTruth", projectId: project.id }),
+        body: JSON.stringify({
+          action: "generateBrandTruth",
+          projectId: project.id,
+          transcript,
+          producerNotes,
+        }),
       });
       const d = await r.json();
       if (!r.ok) {
