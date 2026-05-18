@@ -26,6 +26,12 @@ import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../../fireba
 import { CSS_LIGHT } from "../../config";
 import { Logo } from "../../components/Logo";
 import { GATHERING } from "./portalCopy";
+import { Winning } from "./zones/Winning";
+import { NextVideos } from "./zones/NextVideos";
+import { FormatPlaybook } from "./zones/FormatPlaybook";
+import { Story } from "./zones/Story";
+import { Niche } from "./zones/Niche";
+import { WhatThisIncludes } from "./zones/WhatThisIncludes";
 
 function readShortId() {
   const pretty = window.location.pathname.match(/^\/r\/([A-Za-z0-9_-]{6,16})(?:\/|$)/);
@@ -127,10 +133,15 @@ function CenteredState({ children }) {
   );
 }
 
-// PortalBody — the page scaffold. Step 3 replaces the placeholder
-// block with the real zones (Header → Winning → NextVideos →
-// Gathering states → FormatPlaybook → Story → Niche), mobile-first.
-// For step 2 it proves the projection round-trips end-to-end.
+// PortalBody — the page, in build/priority order:
+//   Header snapshot → Winning → NextVideos → FormatPlaybook → Story →
+//   Niche → "what this includes" drawer.
+//
+// First-screen discipline (the ~15s trust moment on a 375px phone):
+// the Header card is deliberately tight — one momentum sentence + one
+// hero proof — and the very next thing is the single top winning post
+// (Winning's first card is accented) plus the first next-video idea.
+// One proof, one post, one idea before scroll. Not a mini dashboard.
 function PortalBody({ p }) {
   const company = p?.header?.companyName || "Your content";
   const freshness = p?.meta?.freshnessLine || "";
@@ -138,43 +149,48 @@ function PortalBody({ p }) {
   const headerGathering = ds.header === "gathering";
 
   return (
-    <div style={{
-      maxWidth: 720, margin: "0 auto", padding: "20px 16px 64px",
-    }}>
+    <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 16px 64px" }}>
       <div className="rise" style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        marginBottom: 18,
+        gap: 12, marginBottom: 18,
       }}>
         <Logo h={28} />
-        <span style={{ fontSize: 12, color: "var(--muted)" }}>{freshness}</span>
+        <span style={{ fontSize: 12, color: "var(--muted)", textAlign: "right" }}>
+          {freshness}
+        </span>
       </div>
 
+      {/* Header snapshot card — momentum + hero proof. Tight. */}
       <div className="rise" style={{
         background: "var(--card)", border: "1px solid var(--border)",
         borderRadius: 16, padding: "22px 20px",
       }}>
         <div style={{
-          fontSize: 13, fontWeight: 700, color: "var(--navy)",
+          fontSize: 13, fontWeight: 800, color: "var(--navy)",
           textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8,
         }}>
           {company}
         </div>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "var(--fg)", lineHeight: 1.4 }}>
+        <div style={{ fontSize: 19, fontWeight: 800, color: "var(--fg)", lineHeight: 1.4 }}>
           {headerGathering
             ? GATHERING.header
             : (p?.header?.momentumSentence || GATHERING.header)}
         </div>
         {p?.header?.heroProof && !headerGathering && (
           <div style={{
-            marginTop: 12, fontSize: 15, color: "var(--fg)", lineHeight: 1.5,
+            marginTop: 12, fontSize: 15, color: "var(--fg)", lineHeight: 1.55,
           }}>
             {p.header.heroProof}
           </div>
         )}
       </div>
 
-      {/* Step 3 mounts the real zones here. This scaffold confirms the
-          projection reads end-to-end and the light theme is scoped. */}
+      <Winning items={p?.winning} dataState={ds.winning} />
+      <NextVideos items={p?.nextVideos} dataState={ds.nextVideos} />
+      <FormatPlaybook items={p?.formatPlaybook} dataState={ds.formatPlaybook} />
+      <Story story={p?.story} dataState={ds.story} />
+      <Niche niche={p?.niche} dataState={ds.niche} />
+      <WhatThisIncludes text={p?.meta?.whatThisIncludes} />
     </div>
   );
 }
