@@ -27,6 +27,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { classifyFormat } from "./_analyticsFormatHeuristic.js";
 import { buildNextVideoRecs } from "./_analyticsRecsBuilder.js";
+import { buildClientProjection, makePortalShortId } from "./_analyticsClientProjection.js";
 import {
   isClaudeEnabled,
   classifyFormatWithClaude,
@@ -699,6 +700,9 @@ export async function recomputeClientAnalytics(clientId) {
   // Top 3 competitor posts of the last 7d get a 2-sentence Claude take.
   // Niche pulse summarises last-7d competitor posts into max 2 dot-points.
   // Both gated on isClaudeEnabled — recompute still succeeds without them.
+  // Captured here (not just written to Firebase) so the client-safe
+  // projection at the tail can reuse the takes without a re-read.
+  let thisWeekInNicheForProjection = null;
   if (isClaudeEnabled()) {
     try {
       const last7dCompetitorPosts = collectRecentCompetitorPosts(competitorsRoot, enabledPlatforms, now, 7);
@@ -723,6 +727,7 @@ export async function recomputeClientAnalytics(clientId) {
           return null;
         }
       });
+      thisWeekInNicheForProjection = { posts: takes.filter(Boolean) };
       await fbSet(`/analytics/insights/${clientId}/${weekId}/thisWeekInNiche`, {
         posts: takes.filter(Boolean),
         generatedAt: new Date().toISOString(),
@@ -783,6 +788,34 @@ export async function recomputeClientAnalytics(clientId) {
     } catch (err) {
       console.warn(`[analytics-scoring] weekly summary failed for ${clientId}: ${err.message}`);
     }
+  }
+
+  // ─── 9b. Client-safe projection (powers the external light portal)
+  // The portal reads ONLY /analytics/public/{portalShortId}. Build
+  // the client-safe view from the state we just computed and write it
+  // there. Fully guarded: a projection failure logs and is swallowed
+  // so it can never break the internal pipeline. "Auto-building" is
+  // preserved — this regenerates on every recompute (webhook/cron/
+  // manual) the engine already runs.
+  try {
+    let portalShortId = config.portalShortId;
+    if (!portalShortId) {
+      portalShortId = makePortalShortId();
+      await fbPatch(`/analytics/clients/${clientId}/config`, { portalShortId });
+    }
+    const projection = buildClientProjection({
+      config, status, momentum, baselines, competitorCohort,
+      formatCounts, recs, videoUpdates, videosRoot, competitorsRoot,
+      renewalAmmo, thisWeekInNiche: thisWeekInNicheForProjection,
+      enabledPlatforms, computedAt,
+    });
+    await fbSet(`/analytics/public/${portalShortId}`, {
+      ...projection,
+      clientId,                 // back-reference (server-only consumers)
+      portalShortId,
+    });
+  } catch (err) {
+    console.warn(`[analytics-scoring] client projection failed for ${clientId}: ${err.message}`);
   }
 
   // ─── 10. lastRecomputeAt last so it reflects a fully successful run.

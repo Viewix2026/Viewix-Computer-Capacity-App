@@ -95,7 +95,11 @@
 
     "analytics": {
       ".read":  "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder' || auth.token.role == 'lead')",
-      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder' || auth.token.role == 'lead') && root.child('users').child(auth.uid).child('active').val() === true"
+      ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder' || auth.token.role == 'lead') && root.child('users').child(auth.uid).child('active').val() === true",
+      "public": {
+        ".read": "auth != null",
+        ".write": false
+      }
     },
 
     "sales": {
