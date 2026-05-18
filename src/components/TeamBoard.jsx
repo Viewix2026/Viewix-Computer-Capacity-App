@@ -11,7 +11,7 @@
 // Projects.jsx subtask drawer reads. Per-leaf fbSet writes so concurrent
 // webhook patches don't clobber producer drags.
 
-import { useMemo, useState, useRef, useCallback } from "react";
+import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { fbSet, authFetch } from "../firebase";
 import TeamBoardFlagBanner from "./TeamBoardFlagBanner.jsx";
 import {
@@ -251,7 +251,9 @@ function StageLegend() {
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 16,
-      padding: "0 4px 12px",
+      // Row padding is owned by the wrapper in TeamBoard so the legend
+      // and the collapse-all toggle share one baseline.
+      padding: 0,
       flexWrap: "wrap",
     }}>
       {STAGE_LEGEND.map(s => {
@@ -665,6 +667,43 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
     [editors]
   );
 
+  // Per-person collapse. A producer can fold a heavy editor's row into a
+  // thin line so the rest of the roster stays scannable. This is a local
+  // view preference (not shared state) so it lives in localStorage, read
+  // once at mount and written back by the effect below — the setCollapsed
+  // updaters stay pure.
+  const COLLAPSE_LS_KEY = "viewix.teamBoard.collapsedEditors";
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      const raw = localStorage.getItem(COLLAPSE_LS_KEY);
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_LS_KEY, JSON.stringify([...collapsed]));
+    } catch { /* storage disabled / quota — non-fatal, just won't persist */ }
+  }, [collapsed]);
+
+  const toggleCollapsed = useCallback((id) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const collapseAll = useCallback(() => {
+    setCollapsed(new Set(editors.map(e => e.id)));
+  }, [editors]);
+  const expandAll = useCallback(() => {
+    setCollapsed(new Set());
+  }, []);
+  // True only when every editor is folded — drives the all-toggle label.
+  const allCollapsed = editors.length > 0 && editors.every(e => collapsed.has(e.id));
+
   // Single droppable id for the bottom pool. Used by both the
   // useDroppable hook on the drawer and by onDragEnd to detect drops.
   const POOL_ID = "__pool__";
@@ -675,19 +714,40 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
   // grow vertically without overlapping. Carries the full editor
   // record (including defaultDays for the Capacity-tab integration)
   // alongside the simplified row info.
+  // Fixed height of a collapsed editor's single thin row. Distinct from
+  // the expanded lane track (minmax(56px, auto)) so a folded person reads
+  // as a slim line, not a short-but-still-chunky band.
+  const COLLAPSED_ROW = "32px";
   const editorLayout = useMemo(() => {
     let cursor = 2;  // grid row 1 = header row
+    // Explicit per-track sizing instead of repeat(...): expanded editors
+    // emit one minmax(56px,auto) track per lane (identical to the old
+    // behaviour), collapsed editors emit one fixed COLLAPSED_ROW track.
+    const trackSizes = [];
     const items = editors.map(editor => {
       const row = { id: editor.id, name: editor.name, muted: false };
       const sched = scheduled.get(editor.id) || [];
       const { bars: laneBars, laneCount } = assignLanes(sched);
-      const rowCount = Math.max(1, laneCount);
+      const isCollapsed = collapsed.has(editor.id);
       const startRow = cursor;
+      if (isCollapsed) {
+        trackSizes.push(COLLAPSED_ROW);
+        cursor += 1;
+        return {
+          row, editor, laneBars, laneCount: 1, startRow,
+          collapsed: true, hiddenCount: sched.length,
+        };
+      }
+      const rowCount = Math.max(1, laneCount);
+      for (let i = 0; i < rowCount; i++) trackSizes.push("minmax(56px, auto)");
       cursor += rowCount;
-      return { row, editor, laneBars, laneCount: rowCount, startRow };
+      return {
+        row, editor, laneBars, laneCount: rowCount, startRow,
+        collapsed: false, hiddenCount: 0,
+      };
     });
-    return { items, totalRows: cursor - 2 };
-  }, [editors, scheduled]);
+    return { items, totalRows: cursor - 2, trackSizes };
+  }, [editors, scheduled, collapsed]);
 
   // ─── Drag handler ────────────────────────────────────────────────
   const sensors = useSensors(useSensor(PointerSensor, {
@@ -1009,10 +1069,33 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
           onDismiss={() => setBrainFlags(null)}
         />
       )}
-      {/* Stage colour key — sits above the calendar so producers can
-          map a coloured bar back to its stage name. Static, subtle,
-          defers to the data below. */}
-      <StageLegend />
+      {/* Stage colour key (left) + collapse-all toggle (right). The
+          wrapper owns the row padding; StageLegend's own padding was
+          zeroed so both sit on one baseline. */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 16, padding: "0 4px 12px", flexWrap: "wrap",
+      }}>
+        <StageLegend />
+        {editors.length > 0 && (
+          <button
+            type="button"
+            onClick={allCollapsed ? expandAll : collapseAll}
+            title={allCollapsed ? "Expand every row" : "Collapse every row"}
+            style={{
+              background: "none", border: "none", padding: "2px 4px",
+              margin: 0, cursor: "pointer",
+              color: "var(--fg)", opacity: 0.55,
+              fontSize: 11, fontWeight: 700, lineHeight: 1,
+              fontFamily: "inherit", whiteSpace: "nowrap",
+              textTransform: "uppercase", letterSpacing: 0.4,
+              transition: "opacity 0.12s",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = 0.55; }}
+          >{allCollapsed ? "▾ Expand all" : "▸ Collapse all"}</button>
+        )}
+      </div>
       {/* No toolbar — the calendar is purely scroll-driven. The grid
           starts on the Monday of the current week and extends right as
           the producer scrolls. */}
@@ -1056,7 +1139,7 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
               // as its busiest day demands), then a 1fr filler so the
               // column-stripe layer (grid-row 1/-1) carries weekend
               // tints all the way to the bottom of the scroll viewport.
-              gridTemplateRows: `auto repeat(${editorLayout.totalRows}, minmax(56px, auto)) 1fr`,
+              gridTemplateRows: `auto ${editorLayout.trackSizes.join(" ")} 1fr`,
               minWidth: "fit-content",
               minHeight: "100%",
             }}>
@@ -1146,6 +1229,9 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
                   dates={dates}
                   colsForSpan={colsForSpan}
                   onOpenProject={onOpenProject}
+                  collapsed={item.collapsed}
+                  hiddenCount={item.hiddenCount}
+                  onToggleCollapse={toggleCollapsed}
                 />
               ))}
             </div>
@@ -1197,7 +1283,7 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
 // "${startRow} / ${startRow + laneCount}". The auto-sized lanes inside
 // the block drive the editor's total height; the label stretches to
 // match.
-function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
+function EditorLabel({ row, rowIdx, startRow, laneCount, striped, collapsed, hiddenCount, onToggleCollapse }) {
   const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
     id: `editor-drag:${row.id}`,
     data: { mode: "reorderEditor", editorId: row.id, fromIdx: rowIdx },
@@ -1220,6 +1306,10 @@ function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
       {...attributes}
       style={{
         ...rowLabel,
+        // Collapsed: shrink the label to fit the 32px track. rowLabel is
+        // sized for the 60px expanded row (big padding + 24px font) which
+        // would overflow a folded line.
+        ...(collapsed ? { padding: "0 14px", minHeight: 0, fontSize: 13 } : null),
         gridColumn: 1,
         gridRow: `${startRow} / ${startRow + laneCount}`,
         position: "sticky", left: 0, zIndex: 3,
@@ -1255,9 +1345,36 @@ function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
         onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
         onMouseLeave={e => { if (!isDragging) e.currentTarget.style.opacity = 0.55; }}
       >⋮⋮</span>
+      {/* Collapse toggle. Not inside the grip's listener span, and it
+          stops pointer/click propagation so it can never start the
+          editor-reorder draggable. */}
+      <button
+        type="button"
+        title={collapsed ? "Expand row" : "Collapse row"}
+        aria-label={collapsed ? "Expand row" : "Collapse row"}
+        onPointerDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); onToggleCollapse?.(row.id); }}
+        style={{
+          background: "none", border: "none", padding: "2px 4px",
+          margin: 0, cursor: "pointer",
+          color: "var(--fg)", opacity: 0.55,
+          fontSize: 11, lineHeight: 1, fontFamily: "inherit",
+          transition: "opacity 0.12s",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+        onMouseLeave={e => { e.currentTarget.style.opacity = 0.55; }}
+      >{collapsed ? "▸" : "▾"}</button>
       <span style={{ fontWeight: 700, color: "var(--fg)" }}>
         {row.name}
       </span>
+      {collapsed && hiddenCount > 0 && (
+        <span style={{
+          color: "var(--muted)", fontWeight: 600, fontSize: 12,
+          whiteSpace: "nowrap",
+        }}>
+          · {hiddenCount}
+        </span>
+      )}
     </div>
   );
 }
@@ -1271,9 +1388,44 @@ function EditorLabel({ row, rowIdx, startRow, laneCount, striped }) {
 // Replaces the previous fixed-height + paddingTop arrangement which
 // clipped wrapped text whenever a bar's content exceeded the bar's
 // height.
-function Row({ row, editor, weekData, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, onOpenProject }) {
+function Row({ row, editor, weekData, rowIdx, startRow, laneCount, laneBars, dates, colsForSpan, onOpenProject, collapsed, hiddenCount, onToggleCollapse }) {
   const striped = rowIdx % 2 === 1;
   const endRow = startRow + laneCount;  // exclusive end for grid-row range
+
+  // Collapsed: just the sticky label + a non-droppable filler strip so the
+  // thin row keeps a visible bottom rule across the day columns (without
+  // it the row vanishes except for the name cell). It mirrors an expanded
+  // body DropCell's treatment — translucent bg at zIndex 1, above the
+  // column-stripe layer — so weekend/today/Monday tints read THROUGH it
+  // exactly as they do on full rows (an opaque fill here would paint over
+  // the stripes and break their top-to-bottom continuity). pointerEvents
+  // off so it's never a drop target and never intercepts a drag.
+  if (collapsed) {
+    return (
+      <>
+        <EditorLabel
+          row={row}
+          rowIdx={rowIdx}
+          startRow={startRow}
+          laneCount={laneCount}
+          striped={striped}
+          collapsed={collapsed}
+          hiddenCount={hiddenCount}
+          onToggleCollapse={onToggleCollapse}
+        />
+        <div
+          style={{
+            gridColumn: "2 / -1",
+            gridRow: `${startRow} / ${endRow}`,
+            background: striped ? "rgba(255,255,255,0.018)" : "transparent",
+            borderBottom: "1px solid var(--border)",
+            pointerEvents: "none",
+            zIndex: 1,
+          }}
+        />
+      </>
+    );
+  }
 
   return (
     <>
@@ -1283,6 +1435,9 @@ function Row({ row, editor, weekData, rowIdx, startRow, laneCount, laneBars, dat
         startRow={startRow}
         laneCount={laneCount}
         striped={striped}
+        collapsed={collapsed}
+        hiddenCount={hiddenCount}
+        onToggleCollapse={onToggleCollapse}
       />
 
       {/* One drop cell per date (cols 2..N+1). Each cell spans all of
