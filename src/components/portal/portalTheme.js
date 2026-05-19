@@ -1,7 +1,7 @@
 // Viewix Client Portal — scoped design token layer.
 //
 // Verbatim from the Claude Design handoff (project/index.html <style>).
-// Injected as <style>{PORTAL_CSS}</style> inside the /c/ portal root ONLY.
+// Injected as <style>{PORTAL_CSS}</style> inside the /clients/ portal root ONLY.
 // Everything is scoped under `.vx` so it never touches the staff
 // dashboard's dark theme in src/config.js (different DOM subtree, no
 // global selectors). `.vx.dark` ships but stays internal-only (the user
