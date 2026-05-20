@@ -8,6 +8,18 @@ import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPT
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
 import { StatusSelect } from "./UIComponents";
 import { fbSet, authFetch } from "../firebase";
+import { SchedulePostingModal } from "./SchedulePostingModal";
+// Phase 3 — Schedule Posting flow. Banner appears when every video in
+// a delivery is Approved AND the delivery's postingOwner === "viewix"
+// (default) AND createdAt is after the migration cutoff. See
+// api/_tiers.js for getDefaultVideosPerWeek + SOCIAL_CADENCE_DEFAULTS.
+import { getDefaultVideosPerWeek } from "../../api/_tiers.js";
+
+// Phase 3 migration cutoff — only new deliveries get the "Schedule
+// social posting" banner. Pre-cutoff deliveries continue to use the
+// existing manual `posted` checkbox workflow until they finish.
+// Drop this constant once the old roster has cycled through.
+const SCHEDULE_FEATURE_LAUNCH_TS = Date.parse("2026-05-21T00:00:00+10:00");
 
 export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDeliveryId }) {
   const [activeDeliveryId, setActiveDeliveryId] = useState(null);
@@ -17,6 +29,10 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
   // result banner survives a tab pinball back to the same delivery.
   const [shareOpenFor, setShareOpenFor] = useState(null); // delivery id when open
   const [lastShareResult, setLastShareResult] = useState(null); // { deliveryId, state, batchId, videoCount, at }
+  // Phase 3 schedule-posting modal state. Same lifted-to-parent pattern
+  // as shareOpenFor so the result banner survives a tab pinball back.
+  const [scheduleOpenFor, setScheduleOpenFor] = useState(null);
+  const [lastScheduleResult, setLastScheduleResult] = useState(null); // { deliveryId, scheduleId, at }
 
   // Deep-link receiver — Projects → Delivery linked-record pill drops
   // a hash route like #projects/deliveries/del-1234 which lands here.
@@ -211,6 +227,27 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
             }}
           />
         )}
+        {scheduleOpenFor === d.id && (
+          <SchedulePostingModal
+            delivery={d}
+            accountId={findAcct(d.clientName)?.id || null}
+            accountPlatforms={findAcct(d.clientName)?.platforms || null}
+            clientPreferences={d.postingPreferences || null}
+            defaultVideosPerWeek={getDefaultVideosPerWeek(
+              findAcct(d.clientName)?.productLine || null,
+              findAcct(d.clientName)?.partnershipTier || null,
+            )}
+            onClose={() => setScheduleOpenFor(null)}
+            onSent={(result) => {
+              setLastScheduleResult({
+                deliveryId: d.id,
+                scheduleId: result.scheduleId,
+                at: new Date().toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" }),
+              });
+              setScheduleOpenFor(null);
+            }}
+          />
+        )}
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
           {/* Project details */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
@@ -223,6 +260,73 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
             <div><span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Client Share Link</span><div style={{ fontSize: 12, color: "var(--accent)", marginTop: 2, fontFamily: "'JetBrains Mono',monospace" }}>{shareUrl(d.id)}</div></div>
             <button onClick={() => copyLink(d.id)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>Copy</button>
           </div>
+
+          {/* Phase 3 — Posting ownership + "Schedule social posting"
+              banner. Lives between the Share Link card and the Videos
+              table because that's the natural producer flow: share
+              with client → client approves → schedule. */}
+          {d.createdAt && Date.parse(d.createdAt) > SCHEDULE_FEATURE_LAUNCH_TS && (() => {
+            const postingOwner = d.postingOwner || "viewix";
+            const total = d.videos?.length || 0;
+            const allApproved = total > 0 && d.videos.every(v =>
+              v && (v.revision1 === "Approved" || v.revision2 === "Approved")
+            );
+            const allAssetsReady = total > 0 && d.videos.every(v => v && (v.zernioMediaUrl || postingOwner === "client"));
+            const dismissed = !!d.scheduleBannerDismissed;
+            const justScheduled = lastScheduleResult?.deliveryId === d.id;
+
+            return (
+              <div style={{ marginBottom: 20, padding: "12px 16px", background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Posting</span>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--fg)", cursor: "pointer" }}>
+                      <input
+                        type="radio" name={`postingOwner-${d.id}`} checked={postingOwner === "viewix"}
+                        onChange={() => { fbSet(`/deliveries/${d.id}/postingOwner`, "viewix"); setD({ postingOwner: "viewix" }); }}
+                        style={{ accentColor: "var(--accent)" }}
+                      /> Viewix posts via scheduler
+                    </label>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--fg)", cursor: "pointer" }}>
+                      <input
+                        type="radio" name={`postingOwner-${d.id}`} checked={postingOwner === "client"}
+                        onChange={() => { fbSet(`/deliveries/${d.id}/postingOwner`, "client"); setD({ postingOwner: "client" }); }}
+                        style={{ accentColor: "var(--accent)" }}
+                      /> Client posts themselves
+                    </label>
+                  </div>
+                  {postingOwner === "viewix" && allApproved && !dismissed && !justScheduled && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>
+                        ✓ All videos approved {allAssetsReady ? "" : "(assets still transferring…)"}
+                      </span>
+                      <button
+                        onClick={() => setScheduleOpenFor(d.id)}
+                        disabled={!allAssetsReady}
+                        style={{
+                          ...BTN,
+                          background: allAssetsReady ? "#10B981" : "#374151",
+                          color: "white",
+                          opacity: allAssetsReady ? 1 : 0.5,
+                          cursor: allAssetsReady ? "pointer" : "not-allowed",
+                        }}
+                        title={allAssetsReady ? "Schedule social posting" : "Waiting for Mac Mini worker to finish moving assets into Zernio."}
+                      >Schedule social posting</button>
+                      <button
+                        onClick={() => { fbSet(`/deliveries/${d.id}/scheduleBannerDismissed`, true); setD({ scheduleBannerDismissed: true }); }}
+                        style={{ ...BTN, background: "transparent", color: "var(--muted)", border: "1px solid var(--border)" }}
+                      >Dismiss</button>
+                    </div>
+                  )}
+                  {justScheduled && (
+                    <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>
+                      ✓ Scheduled at {lastScheduleResult.at} · {lastScheduleResult.scheduleId.slice(0, 14)}…
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Videos table */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
