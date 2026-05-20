@@ -8,6 +8,7 @@ import { ViewixLogo } from "./ui";
 import { SignIn } from "./SignIn";
 import { Dashboard } from "./Dashboard";
 import { ProjectView } from "./ProjectView";
+import { ConnectedAccounts } from "./ConnectedAccounts";
 
 const THEME_KEY = "vx_portal_theme";
 
@@ -23,9 +24,13 @@ function PortalLoading({ label = "Loading your portal..." }) {
 }
 
 // Parse the in-portal route from the pathname:
-//   /clients, /clients/        -> { name:"dashboard" }
-//   /clients/p/<shortId>       -> { name:"project", id }
+//   /clients, /clients/         -> { name:"dashboard" }
+//   /clients/p/<shortId>        -> { name:"project", id }
+//   /clients/accounts           -> { name:"accounts" }   (Phase 5)
 function parseRoute() {
+  if (/^\/clients\/accounts\/?$/i.test(window.location.pathname)) {
+    return { name: "accounts" };
+  }
   const m = window.location.pathname.match(/^\/clients\/p\/([a-z0-9]{4,16})/i);
   if (m) return { name: "project", id: m[1].toLowerCase() };
   return { name: "dashboard" };
@@ -127,6 +132,16 @@ export function ClientPortal() {
         onSignOut={onSignOut}
         onBack={() => navigate("/clients/")}
         authFetch={authFetch}
+      />
+    );
+  } else if (route.name === "accounts") {
+    body = (
+      <ConnectedAccounts
+        user={user}
+        theme={theme}
+        onTheme={onTheme}
+        onSignOut={onSignOut}
+        onBack={() => navigate("/clients/")}
       />
     );
   } else {
