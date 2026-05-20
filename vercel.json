@@ -146,6 +146,10 @@
     {
       "path": "/api/cron/social-asset-reconcile",
       "schedule": "30 23 * * *"
+    },
+    {
+      "path": "/api/cron/social-schedule-sync",
+      "schedule": "*/15 * * * *"
     }
   ],
   "rewrites": [
