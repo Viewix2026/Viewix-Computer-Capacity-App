@@ -26,6 +26,14 @@ function videoRow(v, idx) {
     revision1: String(v?.revision1 || ""),
     revision2: String(v?.revision2 || ""),
     posted: !!v?.posted,
+    // Caption (Phase 2B snapshot from pre-prod). Present once the
+    // video has been approved. Pre-approval the client portal renders
+    // a live read-through from /preproduction/socialOrganic — that
+    // join is done by api/client/project.js (it already loads the
+    // linked preprod doc) and the portal UI picks pre-prod text when
+    // the delivery's caption is empty. From the redactor's
+    // perspective: emit whatever's on the delivery (string or empty).
+    caption: v?.caption ? String(v.caption) : "",
   };
 }
 
@@ -104,6 +112,45 @@ export function redactProjectListItem({ project, account, delivery, preprod, edi
     counts,
     needsYou: counts.ready > 0 && counts.approved < counts.total,
     accountManager: accountManagerBlock(account, editors),
+  };
+}
+
+// ─── redactConnectionStatus ────────────────────────────────────────
+// Per-platform social-account connection state served to the client
+// portal Connected Accounts view (/clients/accounts). NEVER leaks any
+// Zernio internals — profileKey, accessUrl, refresh tokens, etc. The
+// client knows: which platform, whether it's connected, when it was
+// last connected, whether action is needed. Nothing more.
+//
+// `refreshBy` is Zernio's proactive token-expiry warning (best-in-
+// class — neither upload-post nor self-host backends have this). When
+// present, the portal can nudge the client BEFORE the token actually
+// dies, instead of finding out via a failed post.
+export function redactConnectionStatus({ platform, status, lastConnected, refreshBy }) {
+  return {
+    platform: String(platform || ""),
+    status: String(status || "unknown"),     // "connected" | "disconnected" | "expiring"
+    lastConnected: lastConnected || null,
+    refreshBy: refreshBy || null,
+  };
+}
+
+// ─── redactScheduleItem ────────────────────────────────────────────
+// One row of the client portal Posting Schedule tab. Strips
+// everything that isn't safe to surface: zernioPostId, zernioMediaUrl,
+// frameioFileId, clientReferenceId, batchId, profileKey. The client
+// sees the post they're getting, when it goes out, where, and its
+// current status — read-only for v1. Reschedule / change-caption from
+// the portal is deferred (Phase 7+).
+export function redactScheduleItem(item, video) {
+  return {
+    videoName: String(video?.name || video?.title || ""),
+    postAt: item?.postAt || null,
+    caption: item?.caption ? String(item.caption) : "",
+    platforms: Array.isArray(item?.platforms) ? item.platforms.map(String) : [],
+    trialReel: !!item?.trialReel,
+    status: String(item?.status || "pending"),  // "pending" | "posted" | "failed" | "cancelled"
+    permalink: item?.permalink ? String(item.permalink) : null,
   };
 }
 
