@@ -61,18 +61,20 @@ export default async function handler(req, res) {
   }
 
   const allowed = new Set(accountIds);
-  const [projSnap, acctSnap, delSnap, metaSnap, soSnap] = await Promise.all([
+  const [projSnap, acctSnap, delSnap, metaSnap, soSnap, editorsSnap] = await Promise.all([
     db.ref("/projects").once("value"),
     db.ref("/accounts").once("value"),
     db.ref("/deliveries").once("value"),
     db.ref("/preproduction/metaAds").once("value"),
     db.ref("/preproduction/socialOrganic").once("value"),
+    db.ref("/editors").once("value"),
   ]);
   const projects = projSnap.val() || {};
   const accounts = acctSnap.val() || {};
   const deliveries = delSnap.val() || {};
   const metaAds = metaSnap.val() || {};
   const socialOrganic = soSnap.val() || {};
+  const editors = editorsSnap.val() || {};
 
   const out = [];
   for (const project of Object.values(projects)) {
@@ -85,7 +87,7 @@ export default async function handler(req, res) {
     const preprod = ppId && ppType === "metaAds" ? metaAds[ppId]
       : ppId && ppType === "socialOrganic" ? socialOrganic[ppId]
         : null;
-    out.push(redactProjectListItem({ project, account, delivery, preprod }));
+    out.push(redactProjectListItem({ project, account, delivery, preprod, editors }));
   }
 
   // Active first, then by name — stable, no internal sort keys leaked.

@@ -171,7 +171,7 @@ export function Capacity({
   const rosterToggle = (eid, day) => setEditors(prev => prev.map(e => e.id === eid ? { ...e, defaultDays: { ...e.defaultDays, [day]: !e.defaultDays[day] } } : e));
   const rosterAdd = () => {
     if (!rosterNewName.trim()) return;
-    setEditors(prev => [...prev, { id: `ed-${Date.now()}`, name: rosterNewName.trim(), phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } }]);
+    setEditors(prev => [...prev, { id: `ed-${Date.now()}`, name: rosterNewName.trim(), phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } }]);
     setRosterNewName("");
     setRosterAdding(false);
   };
@@ -401,6 +401,7 @@ export function Capacity({
                   <th style={{ ...TH, width: 90, textAlign: "center" }}>Edit suite</th>
                   <th style={{ ...TH, width: 130, textAlign: "left" }}>Phone</th>
                   <th style={{ ...TH, width: 170, textAlign: "left" }}>Email</th>
+                  <th style={{ ...TH, width: 190, textAlign: "left" }}>Booking URL</th>
                   <th style={{ ...TH, width: 130, textAlign: "left" }} title="Slack member ID — used to @-mention the project lead in Slack notifications. Find it in Slack: click someone's profile photo → ⋮ More → Copy member ID. Looks like U02ABC123.">Slack ID</th>
                   {DL.map(d => <th key={d} style={{ ...TH, textAlign: "center", minWidth: 60 }}>{d}</th>)}
                   <th style={{ ...TH, width: 45, textAlign: "center" }}>Days</th>
@@ -433,6 +434,7 @@ export function Capacity({
                         </td>
                         <td style={TD}><input type="text" value={ed.phone || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, phone: e.target.value } : x))} placeholder="Phone..." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit" }} /></td>
                         <td style={TD}><input type="text" value={ed.email || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, email: e.target.value } : x))} placeholder="Email..." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit" }} /></td>
+                        <td style={TD}><input type="url" value={ed.bookingUrl || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, bookingUrl: e.target.value.trim() } : x))} placeholder="https://calendly.com/..." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit" }} /></td>
                         <td style={TD}><input type="text" value={ed.slackUserId || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, slackUserId: e.target.value.trim() } : x))} placeholder="U02ABC123" title="Slack member ID for @-mentions in the project-lead and video-deliveries notifications. Get it from Slack: profile photo → ⋮ → Copy member ID." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "'JetBrains Mono',monospace" }} /></td>
                         {DK.map(day => <td key={day} onClick={() => rosterToggle(ed.id, day)} style={{ ...TD, textAlign: "center", cursor: "pointer", userSelect: "none", background: ed.defaultDays[day] ? "var(--accent-soft)" : "transparent", color: ed.defaultDays[day] ? "var(--accent)" : "#3A4558", fontWeight: 700 }}>{ed.defaultDays[day] ? "IN" : "-"}</td>)}
                         <td style={{ ...TD, textAlign: "center", fontWeight: 700, fontFamily: "'JetBrains Mono',monospace" }}>{dn}</td>
@@ -444,7 +446,7 @@ export function Capacity({
                     <tr>
                       <td style={TD}></td>
                       <td style={TD}><input ref={rosterAddRef} type="text" value={rosterNewName} onChange={e => setRosterNewName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") rosterAdd(); if (e.key === "Escape") { setRosterAdding(false); setRosterNewName(""); } }} placeholder="Name..." style={{ width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid var(--accent)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, fontWeight: 600, outline: "none" }} /></td>
-                      <td style={TD} colSpan={7}></td>
+                      <td style={TD} colSpan={10}></td>
                       <td style={{ ...TD, textAlign: "center" }}><button onClick={rosterAdd} style={{ ...BTN, background: "var(--accent)", color: "white" }}>Add</button></td>
                       <td style={{ ...TD, textAlign: "center" }}><button onClick={() => { setRosterAdding(false); setRosterNewName(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 16 }}>x</button></td>
                     </tr>
@@ -843,4 +845,3 @@ function AvatarCell({ avatarSrc, initials, currentUrl, onSave, name }) {
     </button>
   );
 }
-

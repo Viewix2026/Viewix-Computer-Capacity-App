@@ -56,19 +56,34 @@ export function derivePhase(project, delivery, preprod) {
   return 0;                                            // Kickoff
 }
 
+function clean(v) {
+  const s = String(v || "").trim();
+  return s || null;
+}
+
+function resolveAccountManagerEditor(account, editors) {
+  const target = clean(account?.accountManager)?.toLowerCase();
+  if (!target || !editors) return null;
+  const list = Array.isArray(editors) ? editors : Object.values(editors);
+  // Match account.accountManager to /editors by case-insensitive trimmed name.
+  // First match wins; current AM names are unique in the Viewix roster.
+  return list.find(ed => clean(ed?.name)?.toLowerCase() === target) || null;
+}
+
 // Curated PUBLIC account-manager block. Intentionally client-visible
-// (user-decided brief amendment). Maps ONLY these fields off the
-// account record; everything missing (the data model has no AM
-// photo / phone / booking URL today) returns null and the UI falls
-// back. Never copies projectLead or any other internal owner field.
-export function accountManagerBlock(account) {
-  const name = String(account?.accountManager || "").trim();
+// (user-decided brief amendment). Prefer the matching /editors roster
+// record for rich public details, then fall back to the account-level
+// override fields. Never copies projectLead or any other internal owner
+// field.
+export function accountManagerBlock(account, editors = null) {
+  const editor = resolveAccountManagerEditor(account, editors);
+  const name = clean(editor?.name) || clean(account?.accountManager);
   return {
-    name: name || null,
-    photo: account?.accountManagerPhoto || null,
-    phone: account?.accountManagerPhone || null,
-    email: account?.accountManagerEmail || null,
-    bookingUrl: account?.accountManagerBookingUrl || null,
+    name,
+    photo: clean(editor?.avatarUrl) || clean(account?.accountManagerPhoto),
+    phone: clean(editor?.phone) || clean(account?.accountManagerPhone),
+    email: clean(editor?.email) || clean(account?.accountManagerEmail),
+    bookingUrl: clean(editor?.bookingUrl) || clean(account?.accountManagerBookingUrl),
   };
 }
 
@@ -77,7 +92,7 @@ function orgName(project, account) {
 }
 
 // Dashboard list item. NOT a filtered project — a built projection.
-export function redactProjectListItem({ project, account, delivery, preprod }) {
+export function redactProjectListItem({ project, account, delivery, preprod, editors }) {
   const counts = deliveryCounts(delivery?.videos);
   return {
     projectId: project?.shortId || null,          // shortId, not raw internal id
@@ -88,7 +103,7 @@ export function redactProjectListItem({ project, account, delivery, preprod }) {
     productLine: project?.productLine || null,
     counts,
     needsYou: counts.ready > 0 && counts.approved < counts.total,
-    accountManager: accountManagerBlock(account),
+    accountManager: accountManagerBlock(account, editors),
   };
 }
 
@@ -97,7 +112,7 @@ export function redactProjectListItem({ project, account, delivery, preprod }) {
 // client-safe ClientReview cockpit (the same one /p/{shortId} serves
 // in production today) — so detail returns a handle (type + shortId +
 // url), never the raw /preproduction node.
-export function redactProjectDetail({ project, account, delivery, preprod, deliveryUrl, preprodUrl }) {
+export function redactProjectDetail({ project, account, delivery, preprod, deliveryUrl, preprodUrl, editors }) {
   const videos = Array.isArray(delivery?.videos) ? delivery.videos : [];
   const counts = deliveryCounts(videos);
   const preprodType = project?.links?.preprodType || null; // "metaAds" | "socialOrganic"
@@ -108,7 +123,7 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
     status: project?.status === "archived" ? "archived" : "active",
     phase: derivePhase(project, delivery, preprod),
     productLine: project?.productLine || null,
-    accountManager: accountManagerBlock(account),
+    accountManager: accountManagerBlock(account, editors),
     deliveries: delivery ? {
       available: true,
       deliveryId: delivery.id || null,            // leaf write path target
