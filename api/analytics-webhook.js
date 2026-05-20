@@ -109,27 +109,71 @@ function extractFollowerCount(items) {
 
 // ─── Webhook handler ───────────────────────────────────────────────
 
+// Helper: identifying info on the caller for logs. Never expose this
+// back in a response — purely for our own anomaly-debugging.
+function callerFingerprint(req) {
+  const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+    || req.socket?.remoteAddress || "-";
+  const ua = req.headers["user-agent"] || "-";
+  return `ip=${ip} ua="${ua}"`;
+}
+
+// Outer wrapper: GUARANTEES we never 500 silently. A 500 from a
+// public webhook endpoint pollutes Vercel anomaly alerts, gives
+// scanners a useful signal, and triggers Apify's 4-retry budget on
+// genuinely poisoned payloads. We swallow uncaught throws here and
+// log the stack + caller fingerprint so future "fails early without
+// logging" alerts actually leave a trail.
 export default async function handler(req, res) {
+  try {
+    await handle(req, res);
+  } catch (err) {
+    console.error(`[analytics-webhook] UNCAUGHT ${req.method} ${req.url || ""} ${callerFingerprint(req)}:`, err?.stack || err);
+    if (!res.headersSent) {
+      res.status(200).json({ ok: false, ignored: true, reason: "internal_error" });
+    }
+  }
+}
+
+async function handle(req, res) {
   // Apify webhooks are POST. Bare GET / OPTIONS shouldn't 500.
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
 
+  // Validate the shared secret FIRST, before touching env vars or the
+  // body. Unauthenticated traffic gets a generic 401 — we never tell a
+  // stranger why they failed (was it a missing secret, a wrong secret,
+  // a config gap on our side?). The auth check goes before the
+  // env-var check on purpose: if APIFY_ANALYTICS_WEBHOOK_SECRET is
+  // somehow unset, surface it ONLY in our logs, not as a 500 to the
+  // caller (a 500 told the previous Vercel anomaly alert nothing
+  // useful — just that something failed early).
   const expected = process.env.APIFY_ANALYTICS_WEBHOOK_SECRET;
+  const provided = req.query?.secret || req.headers["x-apify-webhook-secret"];
   if (!expected) {
-    res.status(500).json({ error: "APIFY_ANALYTICS_WEBHOOK_SECRET not configured" });
+    console.error(`[analytics-webhook] CRITICAL: APIFY_ANALYTICS_WEBHOOK_SECRET unset on this deployment ${callerFingerprint(req)}`);
+    res.status(401).json({ error: "Unauthorized" });
     return;
   }
-  const provided = req.query?.secret || req.headers["x-apify-webhook-secret"];
   if (provided !== expected) {
-    res.status(401).json({ error: "Invalid webhook secret" });
+    // Log every blocked POST so anomalies (the AWS-IP burst that
+    // prompted this hardening) leave a fingerprint trail. One log line
+    // per blocked call is cheap.
+    console.warn(`[analytics-webhook] rejected ${callerFingerprint(req)}`);
+    res.status(401).json({ error: "Unauthorized" });
     return;
   }
 
+  // Beyond this point the caller is authenticated. A missing
+  // APIFY_API_TOKEN now is a genuine internal config error — 500 to
+  // the caller (which is Apify; retry-with-backoff is the right
+  // behaviour) and log loudly so we notice.
   const apifyToken = process.env.APIFY_API_TOKEN;
   if (!apifyToken) {
-    res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
+    console.error("[analytics-webhook] CRITICAL: APIFY_API_TOKEN unset; cannot fetch dataset");
+    res.status(500).json({ error: "Internal config error" });
     return;
   }
 
