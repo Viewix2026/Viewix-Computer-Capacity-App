@@ -75,8 +75,14 @@ assert.equal(li.counts.posted, 1);
 // 2. detail — no forbidden keys, deliveries rows only allowed fields
 const d = redactProjectDetail({ project, account, delivery, preprod, deliveryUrl: "https://x/d/dd11", preprodUrl: "https://x/p/pp11", editors });
 assertNoForbidden(d, "detail");
+// Allowlist updated 2026-05-21 — caption added per Phase 2B
+// (pre-prod-authored copy snapshotted onto the delivery at approval,
+// surfaced in the client portal so the client knows exactly what
+// they're approving alongside the video). Adding `caption` is an
+// allowlist EXPANSION, not a forbidden-key leak — it's a producer-
+// authored, client-facing field by design.
 const rowKeys = Object.keys(d.deliveries.rows[0]).sort();
-assert.deepEqual(rowKeys, ["id", "idx", "link", "n", "posted", "revision1", "revision2", "title", "viewixStatus"]);
+assert.deepEqual(rowKeys, ["caption", "id", "idx", "link", "n", "posted", "revision1", "revision2", "title", "viewixStatus"]);
 assert.equal(d.deliveries.deliveryId, "del-1");
 assert.equal(d.preproduction.type, "socialOrganic");
 assert.equal(d.preproduction.embeddable, true);

@@ -67,10 +67,19 @@ export default async function handler(req, res) {
     requeuedBy: { uid: actor.uid, email: actor.email || null },
     // Clear the prior media url so the modal doesn't silently use a
     // stale Zernio public url while the worker is mid-transfer of the
-    // new bytes. The mirror on /deliveries/{id}/videos/{idx}.zernioMediaUrl
-    // is cleared by the worker on successful re-transfer.
+    // new bytes.
     zernioMediaUrl: null,
   });
+
+  // ALSO clear the delivery-side mirror at requeue time. Codex audit
+  // P1: only clearing /socialAssets/.../zernioMediaUrl left the modal's
+  // pre-flight check happy with a stale value because it reads from
+  // /deliveries/{id}/videos/{idx}.zernioMediaUrl. Truth must be in
+  // BOTH places (and the batch endpoint additionally verifies
+  // /socialAssets[key].status === "ready" defensively).
+  if (row.deliveryId != null && row.videoIdx != null) {
+    await db.ref(`/deliveries/${row.deliveryId}/videos/${row.videoIdx}/zernioMediaUrl`).set(null);
+  }
 
   return res.status(200).json({ ok: true, key, requeued: true });
 }

@@ -18,6 +18,7 @@
 import { handleOptions, setCors, requireClientOrStaff, sendAuthError } from "../_requireAuth.js";
 import { getAdmin } from "../_fb-admin.js";
 import { emailKeyFor } from "../auth-google.js";
+import { parseFrameioFileId } from "../_frameioUrl.js";
 
 export default async function handler(req, res) {
   if (handleOptions(req, res, "POST, OPTIONS")) return;
@@ -88,11 +89,7 @@ export default async function handler(req, res) {
         const assetKey = `${deliveryId}_${videoId}`;
         const existing = (await db.ref(`/socialAssets/${assetKey}`).once("value")).val();
         if (existing) continue;
-        let frameioFileId = v.frameioFileId || null;
-        if (!frameioFileId && v.link) {
-          const m = String(v.link).match(/\/(?:files|reviews)\/([a-z0-9-]{6,})/i);
-          if (m) frameioFileId = m[1];
-        }
+        const frameioFileId = v.frameioFileId || parseFrameioFileId(v.link);
         await db.ref(`/socialAssets/${assetKey}`).set({
           deliveryId, videoId, videoIdx: idx, accountId, frameioFileId,
           status: frameioFileId ? "queued" : "failed",

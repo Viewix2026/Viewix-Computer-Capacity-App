@@ -24,6 +24,7 @@
 import { adminGet, getAdmin } from "../_fb-admin.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
 import { REVISION_APPROVED } from "../_constants.js";
+import { parseFrameioFileId } from "../_frameioUrl.js";
 
 export default async function handler(req, res) {
   // Use the shared cron-auth helper — same path Vercel's bearer
@@ -74,13 +75,9 @@ export default async function handler(req, res) {
       const existing = await adminGet(`/socialAssets/${assetKey}`);
       if (existing) { alreadyQueued++; continue; }
 
-      // Resolve frameioFileId — same fallback walk as the on-video-
-      // approved handler.
-      let frameioFileId = v.frameioFileId || null;
-      if (!frameioFileId && v.link) {
-        const m = String(v.link).match(/\/(?:files|reviews)\/([a-z0-9-]{6,})/i);
-        if (m) frameioFileId = m[1];
-      }
+      // Resolve frameioFileId — shared parser, fixed regex (Codex
+      // audit P1).
+      let frameioFileId = v.frameioFileId || parseFrameioFileId(v.link);
 
       await db.ref(`/socialAssets/${assetKey}`).set({
         deliveryId,

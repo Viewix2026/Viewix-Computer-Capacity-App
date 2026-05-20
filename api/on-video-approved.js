@@ -32,6 +32,7 @@
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { REVISION_APPROVED } from "./_constants.js";
+import { parseFrameioFileId } from "./_frameioUrl.js";
 
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT = 30;
@@ -201,21 +202,15 @@ export default async function handler(req, res) {
       });
     }
 
-    // 6. Resolve frameioFileId. Two paths:
-    //    (a) The delivery video carries a `frameioFileId` field
-    //        (preferred — set by whoever uploaded to Frame.io).
-    //    (b) Parse from `link` if it's a Frame.io review URL.
-    //        Frame.io review URLs look like
-    //          https://app.frame.io/reviews/<reviewId>/<fileId>
-    //        or https://f.io/<shortcode> (which doesn't resolve
-    //        without a separate API call). For (b) we extract from
-    //        the path; if neither works, the worker will error out
-    //        with a clear message and Slack-ping after 3 attempts.
-    let frameioFileId = video.frameioFileId || null;
-    if (!frameioFileId && video.link) {
-      const m = String(video.link).match(/\/(?:files|reviews)\/([a-z0-9-]{6,})/i);
-      if (m) frameioFileId = m[1];
-    }
+    // 6. Resolve frameioFileId. Preferred: an explicit
+    //    `frameioFileId` field on the delivery video. Fallback:
+    //    parse it out of `video.link` via the shared shape walker
+    //    in api/_frameioUrl.js (Codex audit caught a regex bug
+    //    that captured reviewIds instead of fileIds — see that
+    //    file for the comment chain). If neither works, the row
+    //    is queued with status "failed" and a clear error so the
+    //    producer fixes the link.
+    let frameioFileId = video.frameioFileId || parseFrameioFileId(video.link);
 
     // 7. Write the asset transfer queue row. The Mac Mini worker
     //    (workers/social-asset-transfer/) picks it up within 15s.

@@ -106,7 +106,14 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "schedule_invalid", detail: e.message });
   }
 
-  // 5. Assemble + validate each item before any Zernio call.
+  // 5. Assemble + validate each item before any Zernio call. The
+  //    authoritative source for "is this asset ready to schedule?" is
+  //    /socialAssets/{deliveryId}_{videoId}.status, NOT the delivery
+  //    mirror. The mirror is a cache for the modal's pre-flight
+  //    enable/disable logic — but it can lag the queue row when
+  //    transitioning to stale or failed. We re-check the queue row
+  //    here so a stale/failed asset can NEVER slip through into a
+  //    Zernio createPost call. Codex audit P1.
   const assembled = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i] || {};
@@ -116,22 +123,52 @@ export default async function handler(req, res) {
     }
     const v = videos[idx];
     if (!v) return res.status(400).json({ error: `item ${i}: video missing at idx ${idx}` });
-    if (!v.zernioMediaUrl) {
+    const videoId = v.videoId || v.id || null;
+    if (!videoId) {
       return res.status(409).json({
-        error: "asset_not_ready",
-        detail: `Video at idx ${idx} (${v.name || v.id}) has no zernioMediaUrl yet. Wait for the asset transfer to complete.`,
+        error: "video_missing_id",
+        detail: `Video at idx ${idx} has no videoId — pre-migration record. Set a videoId before scheduling.`,
         videoIdx: idx,
       });
     }
+
+    // Authoritative asset-truth lookup. Reject if the queue row is
+    // not in "ready" state, regardless of what the delivery mirror
+    // shows. Cover: queued (transfer not started), claimed/transferring
+    // (transfer in progress), failed (3 attempts exhausted),
+    // stale (source file changed), or row missing (no transfer
+    // ever queued).
+    const assetKey = `${deliveryId}_${videoId}`;
+    const assetRow = await adminGet(`/socialAssets/${assetKey}`);
+    if (!assetRow) {
+      return res.status(409).json({
+        error: "asset_not_queued",
+        detail: `Video at idx ${idx} (${v.name || videoId}) has no /socialAssets row. The on-video-approved hook never fired — re-queue from Deliveries.`,
+        videoIdx: idx,
+      });
+    }
+    if (assetRow.status !== "ready" || !assetRow.zernioMediaUrl) {
+      return res.status(409).json({
+        error: "asset_not_ready",
+        detail: `Video at idx ${idx} (${v.name || videoId}) has asset status "${assetRow.status}". Only "ready" assets can be scheduled. ${assetRow.error ? "Error: " + assetRow.error : ""}`.trim(),
+        videoIdx: idx,
+        assetStatus: assetRow.status,
+      });
+    }
+
     const platforms = Array.isArray(item.platforms) ? item.platforms.map(String) : [];
     if (platforms.length === 0) {
       return res.status(400).json({ error: `item ${i}: at least one platform required` });
     }
     assembled.push({
       videoIdx: idx,
-      videoId: v.videoId || v.id || null,
-      frameioFileId: v.frameioFileId || null,
-      zernioMediaUrl: v.zernioMediaUrl,
+      videoId,
+      frameioFileId: assetRow.frameioFileId || v.frameioFileId || null,
+      // Read mediaUrl from the authoritative queue row, not the cached
+      // delivery mirror — protects against a brief window where the
+      // mirror lags a stale-flip.
+      zernioMediaUrl: assetRow.zernioMediaUrl,
+      sourceFingerprint: assetRow.sourceFingerprint || null,
       caption: String(item.caption || v.caption || ""),
       platforms,
       trialReel: !!item.trialReel,

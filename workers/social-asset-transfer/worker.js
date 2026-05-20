@@ -109,12 +109,19 @@ export async function processRow(db, key) {
     if (e.code === "STALE_SOURCE") {
       // Producer changed the underlying file. Mark stale, clear the
       // possibly-outdated url, surface in Slack so the producer knows.
+      // ALSO clear the delivery-side mirror so the Phase 3 modal's
+      // pre-flight check (which reads from the cached mirror) doesn't
+      // silently let the producer schedule a stale upload — Codex
+      // audit P1.
       await db.ref(`/socialAssets/${key}`).update({
         status: "stale",
         zernioMediaUrl: null,
         error: e.message,
         attempts,
       });
+      if (row.deliveryId != null && row.videoIdx != null) {
+        await db.ref(`/deliveries/${row.deliveryId}/videos/${row.videoIdx}/zernioMediaUrl`).set(null);
+      }
       await slack(`:warning: Asset transfer marked STALE — source file changed for delivery \`${row.deliveryId}\` video \`${row.videoIdx}\`. Producer must re-queue from the Deliveries UI.`);
       return { stale: true, key };
     }

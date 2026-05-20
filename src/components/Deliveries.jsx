@@ -14,6 +14,12 @@ import { SchedulePostingModal } from "./SchedulePostingModal";
 // (default) AND createdAt is after the migration cutoff. See
 // api/_tiers.js for getDefaultVideosPerWeek + SOCIAL_CADENCE_DEFAULTS.
 import { getDefaultVideosPerWeek, tierFromPartnershipType } from "../../api/_tiers.js";
+// Codex audit P1: producer-side revision writes go through
+// updateVideo (direct fbSet), not writeDeliveryLeaf, so the
+// auto-fire of /api/on-video-approved that the client portal +
+// public review get for free does NOT happen here. Import the
+// notifier explicitly and hook it from updateVideo.
+import { notifyVideoApproved } from "./deliveryReview/deliveryWrites";
 
 // Phase 3 migration cutoff — only new deliveries get the "Schedule
 // social posting" banner. Pre-cutoff deliveries continue to use the
@@ -151,6 +157,18 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
         Object.entries(patch).forEach(([k, val]) => {
           fbSet(`/deliveries/${dId}/videos/${idx}/${k}`, val == null ? "" : val);
         });
+        // Codex audit P1: when the producer flips revision1/revision2
+        // to "Approved" directly here, fire the Phase 2B side-effect
+        // POST that snapshots the caption + queues the Mac Mini
+        // transfer. Without this, internal producer approvals would
+        // sit silent until the daily reconcile cron catches them.
+        // Note: the existing video.revision1/2 from the closure
+        // could be stale by a millisecond — the side-effect is
+        // idempotent (the endpoint short-circuits if /socialAssets/
+        // {key} already exists), so an extra fire is harmless.
+        if ((patch.revision1 === "Approved" || patch.revision2 === "Approved")) {
+          notifyVideoApproved(dId, idx);
+        }
         const newVideos = del.videos.map(v => v.id === vid ? { ...v, ...patch } : v);
         return { ...del, videos: newVideos };
       }));
@@ -353,6 +371,13 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 140 }}>Viewix Status</th>
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 120 }}>Rev Round 1</th>
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 120 }}>Rev Round 2</th>
+                  {/* Phase 2B caption — snapshotted from pre-prod at
+                      approval. Editable here pre-approval so the
+                      producer can fine-tune; the client sees this
+                      exact text alongside the video in the client
+                      portal Deliveries view and approves both
+                      together via the existing revision dropdown. */}
+                  <th style={{ ...TH, textAlign: "left", padding: "8px 12px", width: 200 }}>Caption</th>
                   <th style={{ ...TH, textAlign: "left", padding: "8px 12px", width: 180 }}>Notes</th>
                   {/* Posted — anyone can tick. Client view writes the
                       same /videos/{idx}/posted leaf via anon auth
@@ -369,6 +394,9 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.viewixStatus} options={VIEWIX_STATUSES} colors={VIEWIX_STATUS_COLORS} onChange={val => updateVideo(v.id, { viewixStatus: val })} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val => updateVideo(v.id, { revision1: val })} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val => updateVideo(v.id, { revision2: val })} /></td>
+                    <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)" }}>
+                      <textarea value={v.caption || ""} onChange={e => updateVideo(v.id, { caption: e.target.value })} placeholder="Caption (snapshotted from pre-prod at approval — edit before sharing if needed)" rows={2} style={{ ...inputSt, fontFamily: "inherit", resize: "vertical", minHeight: 38 }} />
+                    </td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)" }}><input value={v.notes || ""} onChange={e => updateVideo(v.id, { notes: e.target.value })} placeholder="Notes..." style={inputSt} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}>
                       <input type="checkbox"
