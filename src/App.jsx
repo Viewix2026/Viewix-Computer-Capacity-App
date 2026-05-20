@@ -422,8 +422,16 @@ export default function App(){
     });
   }, [projects, deliveries]);
 
-  // Backfill missing crew members (Jeremy/Steve/Vish) into the roster — one-time per workspace.
-  useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"},{id:"ed-vish",name:"Vish"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);
+  // [REMOVED 2026-05-18] A useEffect here used to force-re-add
+  // Jeremy/Steve/Vish on every `editors.length` change if any were
+  // missing by name. It did NO fresh-DB seeding (it early-returned
+  // when the roster was empty) — `useState(DEF_EDS)` already seeds
+  // Jeremy/Steve/Vish on a fresh workspace. Its only real effect was
+  // making those three permanently undeletable: deleting Vish from
+  // the Team Roster removed him from state, length changed, the
+  // effect fired, and re-added him with a blank record in the same
+  // render — the "delete isn't working" bug Jeremy reported. Removed
+  // so roster deletes of any member actually stick.
 
   // One-time migration: copy the public Home-page fields (teamQuote +
   // videoOfTheWeek) out of /foundersData into /teamHome where every
