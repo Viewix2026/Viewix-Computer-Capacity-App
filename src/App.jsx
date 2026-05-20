@@ -40,6 +40,10 @@ const Capacity                 = lazy(() => import("./components/Capacity").then
 const Projects                 = lazy(() => import("./components/Projects").then(m => ({ default: m.Projects })));
 const Training                 = lazy(() => import("./components/Training").then(m => ({ default: m.Training })));
 const DeliveryPublicView       = lazy(() => import("./components/DeliveryPublicView").then(m => ({ default: m.DeliveryPublicView })));
+// Phase 6 — producer-side admin tab for the Social Posting Scheduler.
+// Founder/Lead-gated; shows every provisioned Zernio profile + their
+// per-platform connection state with one-click reconnect.
+const SocialConnections        = lazy(() => import("./components/SocialConnections").then(m => ({ default: m.SocialConnections })));
 const Preproduction            = lazy(() => import("./components/Preproduction").then(m => ({ default: m.Preproduction })));
 const PreproductionPublicView  = lazy(() => import("./components/PreproductionPublicView").then(m => ({ default: m.PreproductionPublicView })));
 const RoasCalculator           = lazy(() => import("./components/RoasCalculator").then(m => ({ default: m.RoasCalculator })));
@@ -573,6 +577,7 @@ export default function App(){
         setTool("projects");
       }}/>}
       {(isFounder||isLead)&&<SideIcon icon="📈" label="Analytics" active={tool==="analytics"} onClick={()=>setTool("analytics")}/>}
+      {(isFounder||isLead)&&<SideIcon icon="🔗" label="Socials" active={tool==="socialConnections"} onClick={()=>setTool("socialConnections")}/>}
       {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
       {(isFounder||isLead||role==="editor"||role==="trial")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
       <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
@@ -782,6 +787,7 @@ export default function App(){
 
     {/* ═══ PREPRODUCTION ═══ */}
     {tool==="analytics"&&(isFounder||isLead)&&(<Analytics/>)}
+    {tool==="socialConnections"&&(isFounder||isLead)&&(<SocialConnections/>)}
     {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder} dealProjects={projects} route={route.tool==="preproduction"?route:null}/>)}
 
     {/* ═══ NURTURE — sequence hub (Lapsed Proposals + 5 stub sub-tabs) ═══ */}
