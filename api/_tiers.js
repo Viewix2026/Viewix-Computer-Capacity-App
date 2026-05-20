@@ -478,6 +478,27 @@ export function getDefaultVideosPerWeek(productLine, tier) {
   return SOCIAL_CADENCE_DEFAULTS?.[productLine]?.[tier] ?? 1;
 }
 
+// Self-audit fix: accounts carry `partnershipType` as a human label
+// (e.g. "Brand Builder - Social Media") — they do NOT carry separate
+// productLine/tier fields. The Phase 3 modal needs the tier key to
+// look up the cadence default. This helper extracts it. Both
+// socialPremium and socialOrganic produce the same partnershipType
+// label by design (see videoTypeToPartnership in this file), so we
+// just return the tier key — the cadence defaults are identical for
+// both product lines anyway.
+//
+// Returns: tier key ("starter" | "brandBuilder" | "marketLeader" |
+// "marketDominator") or null if no match.
+export function tierFromPartnershipType(partnershipType) {
+  if (!partnershipType) return null;
+  const lower = String(partnershipType).toLowerCase();
+  if (lower.includes("market dominator")) return "marketDominator";
+  if (lower.includes("market leader"))    return "marketLeader";
+  if (lower.includes("brand builder"))    return "brandBuilder";
+  if (lower.includes("starter pack") || lower.includes("start pack") || lower.startsWith("starter")) return "starter";
+  return null;
+}
+
 // Default posting days for the modal. Monday/Wednesday/Friday is the
 // canonical 3x/week pattern — works for any cadence ≤ 3. For higher
 // cadences the producer ticks additional days.

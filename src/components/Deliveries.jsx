@@ -13,7 +13,7 @@ import { SchedulePostingModal } from "./SchedulePostingModal";
 // a delivery is Approved AND the delivery's postingOwner === "viewix"
 // (default) AND createdAt is after the migration cutoff. See
 // api/_tiers.js for getDefaultVideosPerWeek + SOCIAL_CADENCE_DEFAULTS.
-import { getDefaultVideosPerWeek } from "../../api/_tiers.js";
+import { getDefaultVideosPerWeek, tierFromPartnershipType } from "../../api/_tiers.js";
 
 // Phase 3 migration cutoff — only new deliveries get the "Schedule
 // social posting" banner. Pre-cutoff deliveries continue to use the
@@ -233,10 +233,17 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
             accountId={findAcct(d.clientName)?.id || null}
             accountPlatforms={findAcct(d.clientName)?.platforms || null}
             clientPreferences={d.postingPreferences || null}
-            defaultVideosPerWeek={getDefaultVideosPerWeek(
-              findAcct(d.clientName)?.productLine || null,
-              findAcct(d.clientName)?.partnershipTier || null,
-            )}
+            defaultVideosPerWeek={(() => {
+              // Self-audit fix: accounts don't carry separate
+              // productLine/partnershipTier fields. Parse the tier
+              // out of the partnershipType label. Cadence defaults
+              // are identical for socialOrganic vs socialPremium,
+              // so picking either product line is fine — pass
+              // socialOrganic by default and let the producer
+              // override in the modal if a project skews differently.
+              const tier = tierFromPartnershipType(findAcct(d.clientName)?.partnershipType || "");
+              return getDefaultVideosPerWeek("socialOrganic", tier);
+            })()}
             onClose={() => setScheduleOpenFor(null)}
             onSent={(result) => {
               setLastScheduleResult({
