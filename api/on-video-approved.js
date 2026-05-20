@@ -33,6 +33,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { REVISION_APPROVED } from "./_constants.js";
 import { parseFrameioFileId } from "./_frameioUrl.js";
+import { captionForVideoId } from "./_preprodCaptions.js";
 
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT = 30;
@@ -57,49 +58,19 @@ function checkRate(ip) {
 }
 
 // Look up the caption for `videoId` on the linked pre-production doc.
-// Best-effort: tries a handful of likely paths because the exact
-// shape needs verification (Open Item #6 in the plan). If nothing
-// matches, returns "" — the producer fills it in manually on the
-// delivery side. The asset transfer still queues regardless; an
-// empty caption is acceptable v1 fallback.
-//
-// Returns the caption string ("" if none found).
+// Uses the shared helper in _preprodCaptions.js so the snapshot here
+// matches the read-through fallback the client portal renders pre-
+// approval (Codex P1 pass 2). If neither matches, returns "" — the
+// producer fills it in manually on the delivery side. The asset
+// transfer still queues regardless; an empty caption is an acceptable
+// v1 fallback.
 async function lookupPreprodCaption({ project, videoId }) {
   if (!project || !videoId) return "";
   const preprodType = project?.links?.preprodType;
   const preprodId = project?.links?.preprodId;
   if (preprodType !== "socialOrganic" || !preprodId) return "";
-
   const preprod = await adminGet(`/preproduction/socialOrganic/${preprodId}`);
-  if (!preprod) return "";
-
-  // @@ JEREMY: this is the best-effort shape walk. The exact path
-  // where social-organic captions live needs confirmation against
-  // the actual production data (Verification item #4). The walk
-  // tries the most plausible locations; whichever one Viewix
-  // actually uses, prune the rest.
-  const doc = preprod.preproductionDoc || {};
-  const candidates = [
-    Array.isArray(doc.videos)  ? doc.videos  : null,
-    Array.isArray(doc.scripts) ? doc.scripts : null,
-    Array.isArray(doc.posts)   ? doc.posts   : null,
-    Array.isArray(doc.deliverables) ? doc.deliverables : null,
-  ].filter(Boolean);
-
-  for (const list of candidates) {
-    const hit = list.find(x => x && (
-      x.videoId === videoId ||
-      x.id === videoId ||
-      x.deliveryVideoId === videoId
-    ));
-    if (hit) {
-      // Try caption-shaped fields in priority order.
-      const cap = hit.caption || hit.socialCaption || hit.copy || hit.text || hit.script || "";
-      if (cap) return String(cap);
-    }
-  }
-
-  return "";
+  return captionForVideoId(preprod, videoId);
 }
 
 // Locate the project that links to this delivery. Same reverse-lookup

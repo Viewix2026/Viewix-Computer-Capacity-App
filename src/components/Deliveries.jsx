@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
 import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
 import { StatusSelect } from "./UIComponents";
-import { fbSet, authFetch } from "../firebase";
+import { fbSet, fbSetAsync, authFetch } from "../firebase";
 import { SchedulePostingModal } from "./SchedulePostingModal";
 // Phase 3 — Schedule Posting flow. Banner appears when every video in
 // a delivery is Approved AND the delivery's postingOwner === "viewix"
@@ -154,20 +154,34 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
         // Write each patched field as a leaf path. Firebase echoes
         // back only the leaf, so it can't clobber neighbouring
         // in-flight keystrokes the root listener is delivering.
+        //
+        // Codex audit pass 2 (P1 race): for revision1/revision2 =
+        // "Approved", we MUST wait for the write to land before
+        // firing notifyVideoApproved — the endpoint re-reads the
+        // value to defend against hostile actors, so a notify
+        // before fbSet resolves will 409 with "video_not_approved"
+        // and the side effect (caption snapshot + asset queue)
+        // waits for the daily reconcile cron. Use fbSetAsync and
+        // chain. Other leaves keep using fire-and-forget fbSet
+        // because typing-keystroke writes don't need the round-trip.
+        const approvalKeys = ["revision1", "revision2"];
+        const approvalWrites = [];
         Object.entries(patch).forEach(([k, val]) => {
-          fbSet(`/deliveries/${dId}/videos/${idx}/${k}`, val == null ? "" : val);
+          const safe = val == null ? "" : val;
+          if (approvalKeys.includes(k) && val === "Approved") {
+            approvalWrites.push(fbSetAsync(`/deliveries/${dId}/videos/${idx}/${k}`, safe));
+          } else {
+            fbSet(`/deliveries/${dId}/videos/${idx}/${k}`, safe);
+          }
         });
-        // Codex audit P1: when the producer flips revision1/revision2
-        // to "Approved" directly here, fire the Phase 2B side-effect
-        // POST that snapshots the caption + queues the Mac Mini
-        // transfer. Without this, internal producer approvals would
-        // sit silent until the daily reconcile cron catches them.
-        // Note: the existing video.revision1/2 from the closure
-        // could be stale by a millisecond — the side-effect is
-        // idempotent (the endpoint short-circuits if /socialAssets/
-        // {key} already exists), so an extra fire is harmless.
-        if ((patch.revision1 === "Approved" || patch.revision2 === "Approved")) {
-          notifyVideoApproved(dId, idx);
+        if (approvalWrites.length > 0) {
+          // Wait for the revision leaf to land, THEN fire the side
+          // effect. notifyVideoApproved is idempotent server-side
+          // (skips if /socialAssets/{key} already exists), so an
+          // overlapping client-portal approval is harmless.
+          Promise.all(approvalWrites)
+            .then(() => notifyVideoApproved(dId, idx))
+            .catch(e => console.error("approval leaf write failed:", e));
         }
         const newVideos = del.videos.map(v => v.id === vid ? { ...v, ...patch } : v);
         return { ...del, videos: newVideos };

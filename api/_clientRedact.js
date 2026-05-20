@@ -14,26 +14,37 @@
 //
 // Pinned by api/_clientRedact.test.mjs.
 
+import { extractCaptionsByVideoId } from "./_preprodCaptions.js";
+
 // Client-facing video status vocab is the same as the staff side.
-function videoRow(v, idx) {
+//
+// `preprodCaptions` is a { videoId → caption } map pre-built by
+// redactProjectDetail from the linked /preproduction/socialOrganic
+// doc. We use it as a read-through fallback so the client can SEE
+// the caption alongside the video DURING approval (Codex P1 fix:
+// the caption snapshot itself only fires inside on-video-approved,
+// so without this fallback the client would approve a video without
+// ever seeing the copy they're supposedly approving).
+//
+// Snapshot precedence: delivery's own caption (frozen at approval)
+// → pre-prod read-through (pre-approval state). After approval the
+// delivery wins forever — even if pre-prod gets edited later, the
+// client portal keeps showing the exact text the client signed off.
+function videoRow(v, idx, preprodCaptions) {
+  const videoId = v?.id || v?.videoId || null;
+  const snapshotted = v?.caption ? String(v.caption) : "";
+  const fallback = (videoId && preprodCaptions) ? (preprodCaptions[videoId] || "") : "";
   return {
     n: idx + 1,
     idx,                                   // RTDB array index — write path target
-    id: v?.id || null,                     // video id — write path target
+    id: videoId,                           // video id — write path target
     title: String(v?.name || ""),
     link: v?.link ? String(v.link) : "",
     viewixStatus: String(v?.viewixStatus || ""),
     revision1: String(v?.revision1 || ""),
     revision2: String(v?.revision2 || ""),
     posted: !!v?.posted,
-    // Caption (Phase 2B snapshot from pre-prod). Present once the
-    // video has been approved. Pre-approval the client portal renders
-    // a live read-through from /preproduction/socialOrganic — that
-    // join is done by api/client/project.js (it already loads the
-    // linked preprod doc) and the portal UI picks pre-prod text when
-    // the delivery's caption is empty. From the redactor's
-    // perspective: emit whatever's on the delivery (string or empty).
-    caption: v?.caption ? String(v.caption) : "",
+    caption: snapshotted || fallback,
   };
 }
 
@@ -163,6 +174,12 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
   const videos = Array.isArray(delivery?.videos) ? delivery.videos : [];
   const counts = deliveryCounts(videos);
   const preprodType = project?.links?.preprodType || null; // "metaAds" | "socialOrganic"
+  // Build the pre-prod caption fallback map ONCE per detail-render so
+  // we don't re-walk the preprod doc per video. Only socialOrganic has
+  // captions today — metaAds preprod is ad-scripts, not posting copy.
+  const preprodCaptions = (preprodType === "socialOrganic" && preprod)
+    ? extractCaptionsByVideoId(preprod)
+    : {};
   return {
     projectId: project?.shortId || null,
     orgName: orgName(project, account),
@@ -177,7 +194,7 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
       shortId: delivery.shortId || null,
       url: deliveryUrl || null,
       counts,
-      rows: videos.map((v, i) => videoRow(v, i)),
+      rows: videos.map((v, i) => videoRow(v, i, preprodCaptions)),
     } : { available: false },
     preproduction: preprod && preprodType ? {
       available: true,
