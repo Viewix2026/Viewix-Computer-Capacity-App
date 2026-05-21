@@ -60,17 +60,19 @@ function checkRate(ip) {
 // Look up the caption for `videoId` on the linked pre-production doc.
 // Uses the shared helper in _preprodCaptions.js so the snapshot here
 // matches the read-through fallback the client portal renders pre-
-// approval (Codex P1 pass 2). If neither matches, returns "" — the
-// producer fills it in manually on the delivery side. The asset
-// transfer still queues regardless; an empty caption is an acceptable
-// v1 fallback.
-async function lookupPreprodCaption({ project, videoId }) {
-  if (!project || !videoId) return "";
+// approval (Codex P1 pass 2). videoIdx is the ordinal lookup path
+// scriptTable rows actually support today (Codex pass 3 P1: rows
+// have videoNumber, not videoId). If neither path matches, returns
+// "" — the producer fills it in manually on the delivery side. The
+// asset transfer still queues regardless; an empty caption is an
+// acceptable v1 fallback.
+async function lookupPreprodCaption({ project, videoId, videoIdx }) {
+  if (!project) return "";
   const preprodType = project?.links?.preprodType;
   const preprodId = project?.links?.preprodId;
   if (preprodType !== "socialOrganic" || !preprodId) return "";
   const preprod = await adminGet(`/preproduction/socialOrganic/${preprodId}`);
-  return captionForVideoId(preprod, videoId);
+  return captionForVideoId(preprod, videoId, videoIdx);
 }
 
 // Locate the project that links to this delivery. Same reverse-lookup
@@ -160,7 +162,7 @@ export default async function handler(req, res) {
     //    Best-effort — leaves "" if pre-prod has no caption.
     let snapshottedCaption = "";
     try {
-      snapshottedCaption = await lookupPreprodCaption({ project, videoId });
+      snapshottedCaption = await lookupPreprodCaption({ project, videoId, videoIdx });
     } catch (e) {
       console.warn(`on-video-approved: caption lookup failed for ${assetKey}:`, e.message);
     }

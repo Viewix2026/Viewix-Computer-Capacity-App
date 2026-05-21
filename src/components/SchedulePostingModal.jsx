@@ -75,8 +75,16 @@ export function SchedulePostingModal({
     () => (Array.isArray(delivery?.videos) ? delivery.videos.filter(Boolean) : []),
     [delivery]
   );
+  // Codex pass 3 P2 fix: fail closed. Default to NO platforms when
+  // `accountPlatforms` is missing/empty rather than blindly enabling
+  // all four. Without this, a delivery for an account that was never
+  // onboarded onto YouTube or LinkedIn could schedule a post that
+  // would silently fail at Zernio (or worse, post to a connected
+  // account the producer never meant to touch). The plan's onboarding
+  // rule was always "platforms default empty; producer ticks the ones
+  // in scope on the account record before scheduling can happen."
   const enabledPlatforms = useMemo(() => {
-    if (!accountPlatforms) return ["instagram", "tiktok", "youtube", "linkedin"];
+    if (!accountPlatforms) return [];
     return Object.entries(accountPlatforms)
       .filter(([, v]) => v && v.enabled)
       .map(([k]) => k);
@@ -260,6 +268,27 @@ export function SchedulePostingModal({
           </div>
         </div>
 
+        {/* Fail-closed blocker — Codex pass 3 P2. Modal refuses to
+            render the scheduling fields if the account has no in-
+            scope platforms configured. Forces the producer to onboard
+            the account properly (set account.platforms[*].enabled =
+            true) before scheduling can happen. */}
+        {enabledPlatforms.length === 0 ? (
+          <div style={{ padding: 16, borderRadius: 8, border: "1px solid rgba(245,158,11,0.4)", background: "rgba(245,158,11,0.08)" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#F59E0B", marginBottom: 6 }}>
+              No platforms configured for this account
+            </div>
+            <div style={{ fontSize: 12, color: "var(--fg)", lineHeight: 1.5 }}>
+              Before scheduling, set the in-scope social platforms on the account record (e.g.
+              <code style={{ padding: "1px 4px", margin: "0 4px", borderRadius: 3, background: "var(--bg)", fontFamily: "'JetBrains Mono',monospace" }}>account.platforms.instagram.enabled = true</code>).
+              Open the Accounts tab, find this client, and tick which platforms apply. Then come back here.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button type="button" onClick={onClose} style={{ ...BTN, background: "var(--bg)", color: "var(--fg)", border: "1px solid var(--border)" }}>Close</button>
+            </div>
+          </div>
+        ) : (
+        <>
         {/* Cadence row */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
           <div>
@@ -437,6 +466,8 @@ export function SchedulePostingModal({
             }}
           >{submitting ? "Scheduling…" : "Schedule"}</button>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

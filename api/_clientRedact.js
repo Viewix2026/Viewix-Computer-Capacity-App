@@ -14,26 +14,35 @@
 //
 // Pinned by api/_clientRedact.test.mjs.
 
-import { extractCaptionsByVideoId } from "./_preprodCaptions.js";
+import { extractCaptionsByVideoId, extractCaptionsByOrdinal } from "./_preprodCaptions.js";
 
 // Client-facing video status vocab is the same as the staff side.
 //
-// `preprodCaptions` is a { videoId → caption } map pre-built by
+// `preprodCaptionsById` + `preprodCaptionsByIdx` are pre-built by
 // redactProjectDetail from the linked /preproduction/socialOrganic
-// doc. We use it as a read-through fallback so the client can SEE
-// the caption alongside the video DURING approval (Codex P1 fix:
-// the caption snapshot itself only fires inside on-video-approved,
-// so without this fallback the client would approve a video without
-// ever seeing the copy they're supposedly approving).
+// doc. Read-through fallback so the client SEES the caption while
+// deciding whether to approve. Codex P1 (pass 2) caught the original
+// gap; pass 3 corrected the schema walk (scriptTable, not the
+// nonexistent videos/posts/deliverables lists).
 //
-// Snapshot precedence: delivery's own caption (frozen at approval)
-// → pre-prod read-through (pre-approval state). After approval the
-// delivery wins forever — even if pre-prod gets edited later, the
-// client portal keeps showing the exact text the client signed off.
-function videoRow(v, idx, preprodCaptions) {
+// Snapshot precedence: delivery's own caption (frozen at approval) →
+// pre-prod read-through by videoId (if scriptTable row carries one)
+// → pre-prod read-through by ordinal position (today's reality —
+// scriptTable rows are linked 1:1 to delivery.videos[] by index).
+// After approval the delivery wins forever — even if pre-prod gets
+// edited later, the client portal keeps showing the exact text the
+// client signed off.
+function videoRow(v, idx, preprodCaptionsById, preprodCaptionsByIdx) {
   const videoId = v?.id || v?.videoId || null;
   const snapshotted = v?.caption ? String(v.caption) : "";
-  const fallback = (videoId && preprodCaptions) ? (preprodCaptions[videoId] || "") : "";
+  let fallback = "";
+  if (!snapshotted) {
+    if (videoId && preprodCaptionsById && preprodCaptionsById[videoId]) {
+      fallback = preprodCaptionsById[videoId];
+    } else if (preprodCaptionsByIdx && preprodCaptionsByIdx[idx]) {
+      fallback = preprodCaptionsByIdx[idx];
+    }
+  }
   return {
     n: idx + 1,
     idx,                                   // RTDB array index — write path target
@@ -174,12 +183,14 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
   const videos = Array.isArray(delivery?.videos) ? delivery.videos : [];
   const counts = deliveryCounts(videos);
   const preprodType = project?.links?.preprodType || null; // "metaAds" | "socialOrganic"
-  // Build the pre-prod caption fallback map ONCE per detail-render so
-  // we don't re-walk the preprod doc per video. Only socialOrganic has
+  // Build the pre-prod caption fallback ONCE per detail-render so we
+  // don't re-walk the preprod doc per video. Only socialOrganic has
   // captions today — metaAds preprod is ad-scripts, not posting copy.
-  const preprodCaptions = (preprodType === "socialOrganic" && preprod)
-    ? extractCaptionsByVideoId(preprod)
-    : {};
+  // Two maps because today's scriptTable rows don't carry videoIds —
+  // the ordinal lookup is the working path; the by-id lookup is
+  // future-proofing for when rows do carry explicit videoIds.
+  const preprodCaptionsById  = (preprodType === "socialOrganic" && preprod) ? extractCaptionsByVideoId(preprod) : {};
+  const preprodCaptionsByIdx = (preprodType === "socialOrganic" && preprod) ? extractCaptionsByOrdinal(preprod) : [];
   return {
     projectId: project?.shortId || null,
     orgName: orgName(project, account),
@@ -194,7 +205,7 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
       shortId: delivery.shortId || null,
       url: deliveryUrl || null,
       counts,
-      rows: videos.map((v, i) => videoRow(v, i, preprodCaptions)),
+      rows: videos.map((v, i) => videoRow(v, i, preprodCaptionsById, preprodCaptionsByIdx)),
     } : { available: false },
     preproduction: preprod && preprodType ? {
       available: true,

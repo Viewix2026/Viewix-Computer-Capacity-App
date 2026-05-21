@@ -313,6 +313,13 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
             const allAssetsReady = total > 0 && d.videos.every(v => v && (v.zernioMediaUrl || postingOwner === "client"));
             const dismissed = !!d.scheduleBannerDismissed;
             const justScheduled = lastScheduleResult?.deliveryId === d.id;
+            // Codex pass 3 P2: fail closed — refuse to open the modal
+            // unless the account has at least one platform configured
+            // as in-scope. Without this we'd let the producer schedule
+            // against a brand-new account that's never been onboarded
+            // and the modal would show all four platforms by default.
+            const acctPlatforms = findAcct(d.clientName)?.platforms;
+            const hasAnyPlatform = !!acctPlatforms && Object.values(acctPlatforms).some(p => p && p.enabled);
 
             return (
               <div style={{ marginBottom: 20, padding: "12px 16px", background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
@@ -339,17 +346,26 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                       <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>
                         ✓ All videos approved {allAssetsReady ? "" : "(assets still transferring…)"}
                       </span>
+                      {!hasAnyPlatform && (
+                        <span style={{ fontSize: 11, color: "#F59E0B", fontWeight: 600 }}>
+                          ⚠ Set in-scope platforms on this account first (Accounts tab)
+                        </span>
+                      )}
                       <button
                         onClick={() => setScheduleOpenFor(d.id)}
-                        disabled={!allAssetsReady}
+                        disabled={!allAssetsReady || !hasAnyPlatform}
                         style={{
                           ...BTN,
-                          background: allAssetsReady ? "#10B981" : "#374151",
+                          background: (allAssetsReady && hasAnyPlatform) ? "#10B981" : "#374151",
                           color: "white",
-                          opacity: allAssetsReady ? 1 : 0.5,
-                          cursor: allAssetsReady ? "pointer" : "not-allowed",
+                          opacity: (allAssetsReady && hasAnyPlatform) ? 1 : 0.5,
+                          cursor: (allAssetsReady && hasAnyPlatform) ? "pointer" : "not-allowed",
                         }}
-                        title={allAssetsReady ? "Schedule social posting" : "Waiting for Mac Mini worker to finish moving assets into Zernio."}
+                        title={
+                          !hasAnyPlatform ? "This account has no in-scope platforms configured. Set them on the account record (account.platforms.*.enabled) before scheduling."
+                          : !allAssetsReady ? "Waiting for Mac Mini worker to finish moving assets into Zernio."
+                          : "Schedule social posting"
+                        }
                       >Schedule social posting</button>
                       <button
                         onClick={() => { fbSet(`/deliveries/${d.id}/scheduleBannerDismissed`, true); setD({ scheduleBannerDismissed: true }); }}
