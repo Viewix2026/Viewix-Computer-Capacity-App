@@ -22,12 +22,20 @@ import Confirmation from "./templates/Confirmation.js";
 import ShootTomorrow from "./templates/ShootTomorrow.js";
 import InEditSuite from "./templates/InEditSuite.js";
 import ReadyForReview from "./templates/ReadyForReview.js";
+import SocialReconnect from "./templates/SocialReconnect.js";
+import SocialReconnectInternal from "./templates/SocialReconnectInternal.js";
 
 const TEMPLATES = {
   Confirmation,
   ShootTomorrow,
   InEditSuite,
   ReadyForReview,
+  // Phase 4 — transactional reconnect templates. SocialReconnect → client
+  // (TikTok only; client must reauthorize themselves). SocialReconnectInternal
+  // → project lead (Meta / YouTube / LinkedIn; Viewix team self-links via
+  // Leadsie-granted BM access).
+  SocialReconnect,
+  SocialReconnectInternal,
 };
 
 /**

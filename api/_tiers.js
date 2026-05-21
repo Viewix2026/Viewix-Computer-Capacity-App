@@ -440,3 +440,71 @@ export function scheduleForVideoType(videoType) {
   if (videoType === "custom") return SALE_SCHEDULES.custom;
   return SALE_SCHEDULES[videoType] || SALE_SCHEDULES._default;
 }
+
+// ─── SOCIAL_CADENCE_DEFAULTS ───────────────────────────────────────
+// Default posting cadence (videos per week) per product line + tier.
+// Drives the Schedule Posting modal's pre-filled "Videos per week"
+// input AND the optional client posting preferences form.
+//
+// Precedence used in the modal (see api/schedule-posting-batch.js):
+//   1. Client preference at /deliveries/{id}/postingPreferences (if
+//      the client set one during the post-approval prompt).
+//   2. This tier-driven default.
+//   3. Producer override in the modal.
+//
+// @@ JEREMY: PLACEHOLDER NUMBERS. Confirm the real cadence per tier
+// for socialOrganic + socialPremium before any client-roster go-live.
+// The plan file's open items flag this — these are conservative
+// best-guesses so first production posts don't over-schedule.
+export const SOCIAL_CADENCE_DEFAULTS = {
+  socialOrganic: {
+    starter:         1,
+    brandBuilder:    2,
+    marketLeader:    3,
+    marketDominator: 5,
+  },
+  socialPremium: {
+    starter:         1,
+    brandBuilder:    2,
+    marketLeader:    3,
+    marketDominator: 5,
+  },
+};
+
+// One stop lookup for the modal. Falls back to 1/wk if the tier or
+// product line doesn't match — safe default. Always overridable in
+// the modal.
+export function getDefaultVideosPerWeek(productLine, tier) {
+  return SOCIAL_CADENCE_DEFAULTS?.[productLine]?.[tier] ?? 1;
+}
+
+// Self-audit fix: accounts carry `partnershipType` as a human label
+// (e.g. "Brand Builder - Social Media") — they do NOT carry separate
+// productLine/tier fields. The Phase 3 modal needs the tier key to
+// look up the cadence default. This helper extracts it. Both
+// socialPremium and socialOrganic produce the same partnershipType
+// label by design (see videoTypeToPartnership in this file), so we
+// just return the tier key — the cadence defaults are identical for
+// both product lines anyway.
+//
+// Returns: tier key ("starter" | "brandBuilder" | "marketLeader" |
+// "marketDominator") or null if no match.
+export function tierFromPartnershipType(partnershipType) {
+  if (!partnershipType) return null;
+  const lower = String(partnershipType).toLowerCase();
+  if (lower.includes("market dominator")) return "marketDominator";
+  if (lower.includes("market leader"))    return "marketLeader";
+  if (lower.includes("brand builder"))    return "brandBuilder";
+  if (lower.includes("starter pack") || lower.includes("start pack") || lower.startsWith("starter")) return "starter";
+  return null;
+}
+
+// Default posting days for the modal. Monday/Wednesday/Friday is the
+// canonical 3x/week pattern — works for any cadence ≤ 3. For higher
+// cadences the producer ticks additional days.
+export const SOCIAL_POSTING_DAYS_DEFAULT = ["mon", "wed", "fri"];
+
+// Default Sydney-local time the modal pre-fills if no client
+// preference is set. 9am AEST/AEDT — comfortable engagement window
+// for typical Australian audience hours.
+export const SOCIAL_POSTING_TIME_DEFAULT = "09:00";

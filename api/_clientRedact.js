@@ -14,18 +14,46 @@
 //
 // Pinned by api/_clientRedact.test.mjs.
 
+import { extractCaptionsByVideoId, extractCaptionsByOrdinal } from "./_preprodCaptions.js";
+
 // Client-facing video status vocab is the same as the staff side.
-function videoRow(v, idx) {
+//
+// `preprodCaptionsById` + `preprodCaptionsByIdx` are pre-built by
+// redactProjectDetail from the linked /preproduction/socialOrganic
+// doc. Read-through fallback so the client SEES the caption while
+// deciding whether to approve. Codex P1 (pass 2) caught the original
+// gap; pass 3 corrected the schema walk (scriptTable, not the
+// nonexistent videos/posts/deliverables lists).
+//
+// Snapshot precedence: delivery's own caption (frozen at approval) →
+// pre-prod read-through by videoId (if scriptTable row carries one)
+// → pre-prod read-through by ordinal position (today's reality —
+// scriptTable rows are linked 1:1 to delivery.videos[] by index).
+// After approval the delivery wins forever — even if pre-prod gets
+// edited later, the client portal keeps showing the exact text the
+// client signed off.
+function videoRow(v, idx, preprodCaptionsById, preprodCaptionsByIdx) {
+  const videoId = v?.id || v?.videoId || null;
+  const snapshotted = v?.caption ? String(v.caption) : "";
+  let fallback = "";
+  if (!snapshotted) {
+    if (videoId && preprodCaptionsById && preprodCaptionsById[videoId]) {
+      fallback = preprodCaptionsById[videoId];
+    } else if (preprodCaptionsByIdx && preprodCaptionsByIdx[idx]) {
+      fallback = preprodCaptionsByIdx[idx];
+    }
+  }
   return {
     n: idx + 1,
     idx,                                   // RTDB array index — write path target
-    id: v?.id || null,                     // video id — write path target
+    id: videoId,                           // video id — write path target
     title: String(v?.name || ""),
     link: v?.link ? String(v.link) : "",
     viewixStatus: String(v?.viewixStatus || ""),
     revision1: String(v?.revision1 || ""),
     revision2: String(v?.revision2 || ""),
     posted: !!v?.posted,
+    caption: snapshotted || fallback,
   };
 }
 
@@ -107,6 +135,45 @@ export function redactProjectListItem({ project, account, delivery, preprod, edi
   };
 }
 
+// ─── redactConnectionStatus ────────────────────────────────────────
+// Per-platform social-account connection state served to the client
+// portal Connected Accounts view (/clients/accounts). NEVER leaks any
+// Zernio internals — profileKey, accessUrl, refresh tokens, etc. The
+// client knows: which platform, whether it's connected, when it was
+// last connected, whether action is needed. Nothing more.
+//
+// `refreshBy` is Zernio's proactive token-expiry warning (best-in-
+// class — neither upload-post nor self-host backends have this). When
+// present, the portal can nudge the client BEFORE the token actually
+// dies, instead of finding out via a failed post.
+export function redactConnectionStatus({ platform, status, lastConnected, refreshBy }) {
+  return {
+    platform: String(platform || ""),
+    status: String(status || "unknown"),     // "connected" | "disconnected" | "expiring"
+    lastConnected: lastConnected || null,
+    refreshBy: refreshBy || null,
+  };
+}
+
+// ─── redactScheduleItem ────────────────────────────────────────────
+// One row of the client portal Posting Schedule tab. Strips
+// everything that isn't safe to surface: zernioPostId, zernioMediaUrl,
+// frameioFileId, clientReferenceId, batchId, profileKey. The client
+// sees the post they're getting, when it goes out, where, and its
+// current status — read-only for v1. Reschedule / change-caption from
+// the portal is deferred (Phase 7+).
+export function redactScheduleItem(item, video) {
+  return {
+    videoName: String(video?.name || video?.title || ""),
+    postAt: item?.postAt || null,
+    caption: item?.caption ? String(item.caption) : "",
+    platforms: Array.isArray(item?.platforms) ? item.platforms.map(String) : [],
+    trialReel: !!item?.trialReel,
+    status: String(item?.status || "pending"),  // "pending" | "posted" | "failed" | "cancelled"
+    permalink: item?.permalink ? String(item.permalink) : null,
+  };
+}
+
 // Per-project detail. Deliveries rows + a pre-production handle. The
 // pre-production review itself is rendered by the existing, already
 // client-safe ClientReview cockpit (the same one /p/{shortId} serves
@@ -116,6 +183,14 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
   const videos = Array.isArray(delivery?.videos) ? delivery.videos : [];
   const counts = deliveryCounts(videos);
   const preprodType = project?.links?.preprodType || null; // "metaAds" | "socialOrganic"
+  // Build the pre-prod caption fallback ONCE per detail-render so we
+  // don't re-walk the preprod doc per video. Only socialOrganic has
+  // captions today — metaAds preprod is ad-scripts, not posting copy.
+  // Two maps because today's scriptTable rows don't carry videoIds —
+  // the ordinal lookup is the working path; the by-id lookup is
+  // future-proofing for when rows do carry explicit videoIds.
+  const preprodCaptionsById  = (preprodType === "socialOrganic" && preprod) ? extractCaptionsByVideoId(preprod) : {};
+  const preprodCaptionsByIdx = (preprodType === "socialOrganic" && preprod) ? extractCaptionsByOrdinal(preprod) : [];
   return {
     projectId: project?.shortId || null,
     orgName: orgName(project, account),
@@ -130,7 +205,7 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
       shortId: delivery.shortId || null,
       url: deliveryUrl || null,
       counts,
-      rows: videos.map((v, i) => videoRow(v, i)),
+      rows: videos.map((v, i) => videoRow(v, i, preprodCaptionsById, preprodCaptionsByIdx)),
     } : { available: false },
     preproduction: preprod && preprodType ? {
       available: true,

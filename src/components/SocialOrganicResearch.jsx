@@ -2545,13 +2545,23 @@ function ModeToggle({ label, active, onClick, disabled }) {
 // per-cell UX exactly (src/components/Preproduction.jsx:413-480).
 // ═══════════════════════════════════════════
 const SCRIPT_COLUMNS = [
-  { key: "formatName",   label: "Format",        width: 140, editable: false },
-  { key: "contentStyle", label: "Content Style", width: 180 },
-  { key: "hook",         label: "Hook (spoken)", width: 200 },
-  { key: "textHook",     label: "Text Hook",     width: 140 },
-  { key: "visualHook",   label: "Visual Hook",   width: 160 },
-  { key: "scriptNotes",  label: "Script / Notes",width: 260 },
-  { key: "props",        label: "Props",         width: 100 },
+  { key: "formatName",    label: "Format",        width: 140, editable: false },
+  { key: "contentStyle",  label: "Content Style", width: 180 },
+  { key: "hook",          label: "Hook (spoken)", width: 200 },
+  { key: "textHook",      label: "Text Hook",     width: 140 },
+  { key: "visualHook",    label: "Visual Hook",   width: 160 },
+  { key: "scriptNotes",   label: "Script / Notes",width: 260 },
+  { key: "props",         label: "Props",         width: 100 },
+  // Phase 2B + Codex pass 3 P1: caption authored here in pre-prod.
+  // Snapshotted onto the delivery video at first approval — that
+  // delivery field becomes the immutable record of what the client
+  // signed off. Pre-approval the client portal reads through here
+  // via api/_preprodCaptions.js so the client SEES the caption
+  // alongside the video while deciding whether to approve. Empty
+  // for AI-generated rows; producer fills it in during script
+  // review. Row ↔ delivery video link is ordinal (videoNumber
+  // column maps 1:1 to delivery.videos[idx]).
+  { key: "socialCaption", label: "Caption",       width: 320 },
 ];
 
 // ═══════════════════════════════════════════════════════════════════

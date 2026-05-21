@@ -162,6 +162,15 @@ export function Deliveries({ deliveries, accountManager, narrow }) {
                   {r.link && <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 7, color: "var(--accent)", fontSize: 11, fontWeight: 600, textDecoration: "none", border: "1px solid var(--accent-line)", background: "var(--accent-soft)" }}>View <Icon.external /></a>}
                 </div>
                 <Pill tone={VSTATUS_TONE[r.viewixStatus] || "muted"}>{r.viewixStatus || "—"}</Pill>
+                {/* Phase 2B caption — the copy that goes out alongside
+                    this video on social. Approving the video implicitly
+                    approves this exact text. */}
+                {r.caption && (
+                  <div style={{ padding: "10px 12px", borderRadius: 8, background: "var(--bg-2)", border: "1px solid var(--line)" }}>
+                    <Label style={{ fontSize: 9, display: "block", marginBottom: 4 }}>Caption</Label>
+                    <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{r.caption}</div>
+                  </div>
+                )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <div><Label style={{ fontSize: 9 }}>Round 1</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision1} editable onChange={v => setField(r, "revision1", v)} /></div></div>
                   <div><Label style={{ fontSize: 9 }}>Round 2</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision2} editable={r2editable} onChange={v => setField(r, "revision2", v)} /></div></div>
@@ -184,16 +193,29 @@ export function Deliveries({ deliveries, accountManager, narrow }) {
           {rows.map(r => {
             const r2editable = r.revision1 === "Need Revisions";
             return (
-              <div key={r.id} style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr) 80px 170px 170px 170px 80px", alignItems: "center", gap: 16, padding: "14px 22px", borderTop: "1px solid var(--line)", background: r.viewixStatus === "Ready for Review" ? "rgba(0,130,250,0.04)" : "transparent" }}>
-                <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>{String(r.n).padStart(2, "0")}</span>
-                <div style={{ minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 500, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</div></div>
-                {r.link
-                  ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>View <Icon.external /></a>
-                  : <span style={{ color: "var(--text-3)" }}>—</span>}
-                <div><Pill tone={VSTATUS_TONE[r.viewixStatus] || "muted"}>{r.viewixStatus || "—"}</Pill></div>
-                <div><RevisionSelect value={r.revision1} editable onChange={v => setField(r, "revision1", v)} /></div>
-                <div><RevisionSelect value={r.revision2} editable={r2editable} onChange={v => setField(r, "revision2", v)} /></div>
-                <div style={{ justifySelf: "center" }}><PostedBox checked={r.posted} onChange={v => setField(r, "posted", v)} /></div>
+              <div key={r.id} style={{ borderTop: "1px solid var(--line)", background: r.viewixStatus === "Ready for Review" ? "rgba(0,130,250,0.04)" : "transparent" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr) 80px 170px 170px 170px 80px", alignItems: "center", gap: 16, padding: "14px 22px" }}>
+                  <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>{String(r.n).padStart(2, "0")}</span>
+                  <div style={{ minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 500, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</div></div>
+                  {r.link
+                    ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>View <Icon.external /></a>
+                    : <span style={{ color: "var(--text-3)" }}>—</span>}
+                  <div><Pill tone={VSTATUS_TONE[r.viewixStatus] || "muted"}>{r.viewixStatus || "—"}</Pill></div>
+                  <div><RevisionSelect value={r.revision1} editable onChange={v => setField(r, "revision1", v)} /></div>
+                  <div><RevisionSelect value={r.revision2} editable={r2editable} onChange={v => setField(r, "revision2", v)} /></div>
+                  <div style={{ justifySelf: "center" }}><PostedBox checked={r.posted} onChange={v => setField(r, "posted", v)} /></div>
+                </div>
+                {/* Phase 2B caption — full-width row below the main
+                    controls. Approving the video on the dropdowns
+                    above implicitly approves THIS exact caption text. */}
+                {r.caption && (
+                  <div style={{ padding: "0 22px 14px 78px" }}>
+                    <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--bg-2)", border: "1px solid var(--line)" }}>
+                      <Label style={{ fontSize: 9, display: "block", marginBottom: 4 }}>Caption</Label>
+                      <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{r.caption}</div>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

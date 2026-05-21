@@ -1,0 +1,19 @@
+{
+  "name": "viewix-social-asset-transfer",
+  "version": "1.0.0",
+  "description": "Mac Mini worker — streams approved Frame.io originals into Zernio's media store so the dashboard's social posting scheduler can publish without ever holding a signed URL that might expire.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --env-file=.env index.js",
+    "lint": "node --check index.js worker.js transfer.js frameio.js zernio.js slack.js firebase.js fingerprint.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}
