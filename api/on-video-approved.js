@@ -31,7 +31,7 @@
 // hard to weaponise.
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
-import { REVISION_APPROVED } from "./_constants.js";
+import { REVISION_APPROVED, isPostLaunchDelivery } from "./_constants.js";
 import { parseFrameioFileId } from "./_frameioUrl.js";
 import { captionForVideoId } from "./_preprodCaptions.js";
 
@@ -109,6 +109,15 @@ export default async function handler(req, res) {
     //    a hostile actor could spam the queue.
     const delivery = await adminGet(`/deliveries/${deliveryId}`);
     if (!delivery) return res.status(404).json({ error: "delivery_not_found" });
+
+    // 0. Launch-cutoff gate. Deliveries created at/before the social
+    //    scheduler launch predate this feature — they were posted via
+    //    Metricool and must NEVER queue an asset transfer. Skip
+    //    silently (200, not an error) so a re-approval of an old
+    //    delivery is a clean no-op.
+    if (!isPostLaunchDelivery(delivery)) {
+      return res.status(200).json({ ok: true, skipped: "pre_launch_delivery" });
+    }
 
     const videos = Array.isArray(delivery.videos) ? delivery.videos : [];
     const video = videos[videoIdx];
