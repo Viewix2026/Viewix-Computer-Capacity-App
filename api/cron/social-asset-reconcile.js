@@ -23,7 +23,7 @@
 
 import { adminGet, getAdmin } from "../_fb-admin.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
-import { REVISION_APPROVED } from "../_constants.js";
+import { REVISION_APPROVED, isPostLaunchDelivery } from "../_constants.js";
 import { parseFrameioFileId } from "../_frameioUrl.js";
 
 export default async function handler(req, res) {
@@ -51,9 +51,36 @@ export default async function handler(req, res) {
   let alreadyQueued = 0;
   let skippedNoVideoId = 0;
   let skippedClientPosts = 0;
+  let skippedPreLaunch = 0;
+  let purgedPreLaunch = 0;
 
   for (const [deliveryId, delivery] of Object.entries(deliveries)) {
     if (!delivery || !Array.isArray(delivery.videos)) continue;
+
+    // Launch-cutoff gate. Deliveries created at/before the social
+    // scheduler launch predate this feature (posted via Metricool).
+    // They must NEVER queue a transfer. Two responsibilities here:
+    //   (a) skip queuing for these deliveries, and
+    //   (b) PURGE any /socialAssets row that was written for one
+    //       before this gate existed (e.g. the cron ran post-merge
+    //       but pre-fix). Idempotent: after the first purge there's
+    //       nothing left to delete. This is the self-healing cleanup.
+    if (!isPostLaunchDelivery(delivery)) {
+      skippedPreLaunch++;
+      for (const v of delivery.videos) {
+        if (!v) continue;
+        const videoId = v.videoId || v.id;
+        if (!videoId) continue;
+        const assetKey = `${deliveryId}_${videoId}`;
+        const existing = await adminGet(`/socialAssets/${assetKey}`);
+        if (existing) {
+          await db.ref(`/socialAssets/${assetKey}`).remove();
+          purgedPreLaunch++;
+        }
+      }
+      continue;
+    }
+
     if (delivery.postingOwner === "client") {
       skippedClientPosts++;
       continue;
@@ -102,5 +129,7 @@ export default async function handler(req, res) {
     alreadyQueued,
     skippedNoVideoId,
     skippedClientPosts,
+    skippedPreLaunch,
+    purgedPreLaunch,
   });
 }

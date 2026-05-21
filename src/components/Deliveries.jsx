@@ -20,12 +20,13 @@ import { getDefaultVideosPerWeek, tierFromPartnershipType } from "../../api/_tie
 // public review get for free does NOT happen here. Import the
 // notifier explicitly and hook it from updateVideo.
 import { notifyVideoApproved } from "./deliveryReview/deliveryWrites";
-
-// Phase 3 migration cutoff — only new deliveries get the "Schedule
-// social posting" banner. Pre-cutoff deliveries continue to use the
-// existing manual `posted` checkbox workflow until they finish.
-// Drop this constant once the old roster has cycled through.
-const SCHEDULE_FEATURE_LAUNCH_TS = Date.parse("2026-05-21T00:00:00+10:00");
+// Single source of truth for the migration cutoff — shared with the
+// backend (api/on-video-approved.js + api/cron/social-asset-reconcile.js)
+// so the UI banner, the approval hook, and the reconcile cron all
+// agree on what "a new delivery" means. Only new deliveries get the
+// "Schedule social posting" banner; pre-cutoff deliveries keep the
+// manual `posted` checkbox workflow until they finish.
+import { SOCIAL_SCHEDULE_LAUNCH_TS as SCHEDULE_FEATURE_LAUNCH_TS } from "../../api/_constants.js";
 
 export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDeliveryId }) {
   const [activeDeliveryId, setActiveDeliveryId] = useState(null);
