@@ -98,6 +98,26 @@ export default async function handler(req, res) {
     return res.status(409).json({ error: "client_posts_themselves" });
   }
 
+  // 3b. Server-authority platform check (Codex pass 4 P2). The modal
+  //     fails closed, but the SERVER must independently reject any
+  //     platform not enabled on the account — a stale modal, bad
+  //     client state, or a crafted request must never schedule an
+  //     un-onboarded platform (e.g. posting to a LinkedIn page the
+  //     client never connected). Build the enabled-platform set from
+  //     /accounts/{accountId}/platforms; reject the whole batch if
+  //     none are enabled, and reject any individual item below that
+  //     targets a non-enabled platform.
+  const accountPlatforms = (await adminGet(`/accounts/${accountId}/platforms`)) || {};
+  const enabledPlatformSet = new Set(
+    Object.entries(accountPlatforms).filter(([, v]) => v && v.enabled).map(([k]) => k)
+  );
+  if (enabledPlatformSet.size === 0) {
+    return res.status(409).json({
+      error: "no_platforms_enabled",
+      detail: "This account has no in-scope platforms configured. Set account.platforms[*].enabled before scheduling.",
+    });
+  }
+
   // 4. Compute postAt for each item server-side.
   let scheduled;
   try {
@@ -159,6 +179,16 @@ export default async function handler(req, res) {
     const platforms = Array.isArray(item.platforms) ? item.platforms.map(String) : [];
     if (platforms.length === 0) {
       return res.status(400).json({ error: `item ${i}: at least one platform required` });
+    }
+    // Server-authority per-item platform gate (Codex pass 4 P2).
+    const badPlatforms = platforms.filter(p => !enabledPlatformSet.has(p));
+    if (badPlatforms.length > 0) {
+      return res.status(409).json({
+        error: "platform_not_enabled",
+        detail: `item ${i} (video idx ${idx}): platform(s) ${badPlatforms.join(", ")} are not enabled on this account. Enable them on the account record or remove them from the schedule.`,
+        videoIdx: idx,
+        badPlatforms,
+      });
     }
     assembled.push({
       videoIdx: idx,

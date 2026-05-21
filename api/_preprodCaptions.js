@@ -32,21 +32,22 @@
 // rewrites against the actual scriptTable schema.
 
 const CAPTION_FIELDS = ["socialCaption", "caption", "copy"];
-const SCRIPT_FALLBACK_FIELDS = ["scriptNotes", "script"];
 const VIDEO_ID_FIELDS = ["videoId", "id", "deliveryVideoId"];
 
 // Pull the caption-shaped value out of a single scriptTable row.
-// Prefer explicit caption fields; fall back to scriptNotes ONLY if
-// the producer hasn't written a real caption yet (so the client at
-// least sees the script content instead of an empty cell — better
-// than nothing while authoring is in progress).
+// ONLY explicit caption fields — never the spoken script.
+//
+// Codex pass 4 P1: an earlier version fell back to scriptNotes/script
+// when no caption was authored. That's dangerous — scriptNotes is the
+// SPOKEN script (what's said/shown in the video), NOT the social post
+// caption. Snapshotting it as the approved caption + pre-filling the
+// scheduler with it would publish a wall of internal script text as
+// the public caption. Now: if the producer hasn't authored a
+// socialCaption, this returns "" and the caption shows as missing —
+// the producer authors it on the delivery side before scheduling.
 function captionFromRow(row) {
   if (!row || typeof row !== "object") return "";
   for (const f of CAPTION_FIELDS) {
-    const v = row[f];
-    if (v && String(v).trim()) return String(v);
-  }
-  for (const f of SCRIPT_FALLBACK_FIELDS) {
     const v = row[f];
     if (v && String(v).trim()) return String(v);
   }
