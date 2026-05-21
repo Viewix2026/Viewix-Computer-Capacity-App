@@ -32,7 +32,7 @@
 import { handleOptions, setCors, requireRole, sendAuthError } from "./_requireAuth.js";
 import { getAdmin, adminGet } from "./_fb-admin.js";
 import { computeSchedule } from "./_socialSchedule.js";
-import { createPost as zernioCreatePost } from "./_zernio.js";
+import { createPost as zernioCreatePost, listAccounts, mapPlatformsToAccounts } from "./_zernio.js";
 
 const ALLOWED_ROLES = ["founders", "founder", "manager", "lead", "producer"];
 
@@ -82,13 +82,13 @@ export default async function handler(req, res) {
 
   // 2. Look up Zernio profile.
   const profile = await adminGet(`/zernio/profiles/${accountId}`);
-  if (!profile || !profile.profileKey) {
+  if (!profile || !profile.profileId) {
     return res.status(409).json({
       error: "no_zernio_profile",
       detail: "Provision a Zernio profile for this account first.",
     });
   }
-  const profileKey = profile.profileKey;
+  const profileId = profile.profileId;
 
   // 3. Load delivery so we can read zernioMediaUrl per item.
   const delivery = await adminGet(`/deliveries/${deliveryId}`);
@@ -116,6 +116,20 @@ export default async function handler(req, res) {
       error: "no_platforms_enabled",
       detail: "This account has no in-scope platforms configured. Set account.platforms[*].enabled before scheduling.",
     });
+  }
+
+  // 3c. Fetch Zernio's connected social accounts ONCE for this profile.
+  //     `account.platforms[*].enabled` is the Viewix-side "in scope"
+  //     flag; it does NOT prove the platform is actually connected in
+  //     Zernio. createPost needs the connected account's Zernio `_id`
+  //     per platform, so resolve names → ids here. A targeted platform
+  //     with no connected Zernio account is a hard fail (reconnect
+  //     first) — caught per item below.
+  let zernioAccounts;
+  try {
+    zernioAccounts = await listAccounts(profileId);
+  } catch (e) {
+    return res.status(502).json({ error: "zernio_list_accounts_failed", detail: e.message });
   }
 
   // 4. Compute postAt for each item server-side.
@@ -190,6 +204,18 @@ export default async function handler(req, res) {
         badPlatforms,
       });
     }
+    // Resolve platform NAMES → Zernio connected-account ids. A targeted
+    // platform with no connected Zernio account can't be posted to —
+    // fail loudly so the producer reconnects rather than half-scheduling.
+    const { resolved, missing } = mapPlatformsToAccounts(zernioAccounts, platforms);
+    if (missing.length > 0) {
+      return res.status(409).json({
+        error: "platform_not_connected",
+        detail: `item ${i} (video idx ${idx}): platform(s) ${missing.join(", ")} are enabled on the account but not connected in Zernio. Reconnect them before scheduling.`,
+        videoIdx: idx,
+        missing,
+      });
+    }
     assembled.push({
       videoIdx: idx,
       videoId,
@@ -201,9 +227,14 @@ export default async function handler(req, res) {
       sourceFingerprint: assetRow.sourceFingerprint || null,
       caption: String(item.caption || v.caption || ""),
       platforms,
+      resolvedPlatforms: resolved,
       trialReel: !!item.trialReel,
       tikTokCompliance: item.tikTokCompliance || null,
       postAt: scheduled[i].postAt,
+      // OUR internal stable per-item key — used as Zernio's x-request-id
+      // header (5-min idempotency) and the local idempotency anchor for
+      // the sync cron's resume pass. NOT a Zernio-side durable field;
+      // Zernio has no client_reference_id concept.
       clientReferenceId: `${batchId}::${idx}`,
       status: "pending",
     });
@@ -212,22 +243,24 @@ export default async function handler(req, res) {
   // 6. Push each item to Zernio. We push serially — even though they
   //    could parallelise, serial keeps the failure surface tractable
   //    (if item 4 fails we know items 1-3 are in Zernio + recorded
-  //    locally, items 5+ are not yet attempted). Each item carries
-  //    its own clientReferenceId so Zernio dedupes if we retry.
+  //    locally, items 5+ are not yet attempted). Each item passes its
+  //    clientReferenceId as Zernio's x-request-id so a Vercel retry
+  //    within 5 min dedupes; beyond that the 24h content-hash layer
+  //    catches an identical re-POST.
   const scheduleId = `sch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   for (const item of assembled) {
     try {
-      const resp = await zernioCreatePost({
-        profileKey,
+      const { postId } = await zernioCreatePost({
+        content: item.caption,
+        scheduledFor: item.postAt,
+        timezone: "Australia/Sydney",
+        platforms: item.resolvedPlatforms,
         mediaUrl: item.zernioMediaUrl,
-        caption: item.caption,
-        platforms: item.platforms,
-        postAt: item.postAt,
-        clientReferenceId: item.clientReferenceId,
-        trialParams: item.trialReel ? { graduationStrategy: "MANUAL" } : undefined,
+        requestId: item.clientReferenceId,
+        trialReel: item.platforms.includes("instagram") ? item.trialReel : false,
         tikTokCompliance: item.platforms.includes("tiktok") ? item.tikTokCompliance : undefined,
       });
-      item.zernioPostId = resp?.post_id || resp?.id || null;
+      item.zernioPostId = postId || null;
     } catch (e) {
       console.error("zernio createPost failed for item", item, e);
       // Persist what we've done so far so the producer can see partial

@@ -94,9 +94,8 @@ export async function transferOne({ frameioFileId, priorFingerprint } = {}) {
     // 4. Ask Zernio for an upload target.
     const contentType = fio.fileType || "video/mp4";
     const presign = await presignUpload({
-      contentType,
-      filename: fio.name || `asset-${frameioFileId}.mp4`,
-      fileSize,
+      fileType: contentType,
+      fileName: fio.name || `asset-${frameioFileId}.mp4`,
     });
 
     // 5. PUT the bytes.
@@ -106,12 +105,13 @@ export async function transferOne({ frameioFileId, priorFingerprint } = {}) {
       body,
       contentType,
       contentLength: fileSize,
-      extraHeaders: presign.headers,
     });
 
     return {
+      // publicUrl is the durable handle — the bytes now live in Zernio's
+      // own media store, so there's no media id to track for v1.
       zernioMediaUrl: presign.publicUrl,
-      zernioMediaId:  presign.mediaId || null,
+      zernioMediaId:  null,
       sourceFingerprint,
       fileSize,
       durationSec: meta.durationSec,

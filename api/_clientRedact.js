@@ -138,14 +138,14 @@ export function redactProjectListItem({ project, account, delivery, preprod, edi
 // ─── redactConnectionStatus ────────────────────────────────────────
 // Per-platform social-account connection state served to the client
 // portal Connected Accounts view (/clients/accounts). NEVER leaks any
-// Zernio internals — profileKey, accessUrl, refresh tokens, etc. The
+// Zernio internals — profileId, accessUrl, refresh tokens, etc. The
 // client knows: which platform, whether it's connected, when it was
 // last connected, whether action is needed. Nothing more.
 //
-// `refreshBy` is Zernio's proactive token-expiry warning (best-in-
-// class — neither upload-post nor self-host backends have this). When
-// present, the portal can nudge the client BEFORE the token actually
-// dies, instead of finding out via a failed post.
+// `refreshBy` is a proactive token-expiry hint. Zernio's published
+// event vocabulary doesn't include a dedicated refresh event, so this
+// stays null today; the field is kept so the portal can surface a
+// "reconnect soon" nudge if/when Zernio exposes expiry timing.
 export function redactConnectionStatus({ platform, status, lastConnected, refreshBy }) {
   return {
     platform: String(platform || ""),
@@ -158,7 +158,7 @@ export function redactConnectionStatus({ platform, status, lastConnected, refres
 // ─── redactScheduleItem ────────────────────────────────────────────
 // One row of the client portal Posting Schedule tab. Strips
 // everything that isn't safe to surface: zernioPostId, zernioMediaUrl,
-// frameioFileId, clientReferenceId, batchId, profileKey. The client
+// frameioFileId, clientReferenceId, batchId, profileId. The client
 // sees the post they're getting, when it goes out, where, and its
 // current status — read-only for v1. Reschedule / change-caption from
 // the portal is deferred (Phase 7+).

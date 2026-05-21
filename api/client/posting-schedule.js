@@ -8,7 +8,7 @@
 //
 // Output is REDACTED via redactScheduleItem — never exposes Zernio
 // internals (zernioPostId, zernioMediaUrl, clientReferenceId, batchId,
-// profileKey).
+// profileId, resolvedPlatforms).
 
 import { handleOptions, setCors, requireClientOrStaff, sendAuthError } from "../_requireAuth.js";
 import { getAdmin } from "../_fb-admin.js";

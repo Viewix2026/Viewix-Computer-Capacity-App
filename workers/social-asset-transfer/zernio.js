@@ -4,18 +4,18 @@
 // This wrapper handles the heavy-lifting binary path: ask for a
 // presigned upload URL, then PUT the bytes.
 //
-// Per Zernio docs (verify against live):
+// RECONCILED against the real Zernio contract (llms.txt, 2026-05-21):
 //   POST /media/presign
-//     body: { content_type, filename }
-//     resp: { upload_url, public_url, media_id, expires_at, headers? }
+//     body: { fileName, fileType }
+//     resp: { uploadUrl, publicUrl, expires }
+//   Then PUT the file bytes to `uploadUrl` (S3/GCS-style presigned PUT,
+//   up to 5GB). `publicUrl` is the durable handle we hand to Zernio
+//   createPost as the media URL — the bytes now live in Zernio's own
+//   store, so there's no Frame.io URL-expiry risk at publish time.
 //
-// The `upload_url` is a presigned PUT target (usually S3-style). We
-// stream the file body to it with whatever headers Zernio specifies
-// (typically just Content-Type + Content-Length, but some setups
-// require x-amz-* headers — we respect whatever they return in
-// `headers`).
+// Base URL is https://zernio.com/api/v1 (NOT api.zernio.com).
 
-const DEFAULT_BASE = "https://api.zernio.com/v1";
+const DEFAULT_BASE = "https://zernio.com/api/v1";
 
 function baseUrl() {
   return process.env.ZERNIO_BASE_URL || DEFAULT_BASE;
@@ -33,20 +33,17 @@ function apiKey() {
 
 // Request a presigned upload target. Returns:
 //   {
-//     uploadUrl:   string,  // PUT target
-//     publicUrl:   string,  // what we hand to Zernio createPost as mediaUrl
-//     mediaId:     string,  // Zernio's internal handle (stored for cleanup)
-//     headers:     object,  // any required upload headers
-//     expiresAt:   number,  // ms epoch — for sanity checks
+//     uploadUrl:  string,  // PUT target
+//     publicUrl:  string,  // hand to createPost as the media URL
+//     expires:    string|number|null,  // presign TTL — sanity only
 //   }
-export async function presignUpload({ contentType, filename, fileSize } = {}) {
-  if (!contentType) throw new Error("presignUpload: contentType required");
+export async function presignUpload({ fileType, fileName } = {}) {
+  if (!fileType) throw new Error("presignUpload: fileType required");
   const url = `${baseUrl()}/media/presign`;
   const body = {
-    content_type: contentType,
-    filename: filename || "asset.mp4",
+    fileName: fileName || "asset.mp4",
+    fileType,
   };
-  if (typeof fileSize === "number") body.file_size = fileSize;
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -64,23 +61,20 @@ export async function presignUpload({ contentType, filename, fileSize } = {}) {
   }
   const json = await resp.json();
   return {
-    uploadUrl: json.upload_url || json.uploadUrl,
-    publicUrl: json.public_url || json.publicUrl || json.url,
-    mediaId:   json.media_id   || json.mediaId   || json.id,
-    headers:   json.headers    || {},
-    expiresAt: json.expires_at || json.expiresAt || null,
+    uploadUrl: json.uploadUrl || json.upload_url,
+    publicUrl: json.publicUrl || json.public_url || json.url,
+    expires:   json.expires   || json.expiresAt || json.expires_at || null,
   };
 }
 
 // PUT the body to the presigned upload URL. Body is a readable stream
-// OR a Buffer. Zernio's upload endpoint is the underlying S3-style PUT;
-// it expects Content-Length for chunked uploads on most configurations.
-export async function uploadToPresigned({ uploadUrl, body, contentType, contentLength, extraHeaders }) {
+// OR a Buffer. The presigned PUT is the underlying S3/GCS target; it
+// expects Content-Type and (for stream bodies) Content-Length.
+export async function uploadToPresigned({ uploadUrl, body, contentType, contentLength }) {
   if (!uploadUrl) throw new Error("uploadToPresigned: uploadUrl required");
   if (body == null) throw new Error("uploadToPresigned: body required");
   const headers = {
     "Content-Type": contentType || "application/octet-stream",
-    ...(extraHeaders || {}),
   };
   if (typeof contentLength === "number") {
     headers["Content-Length"] = String(contentLength);
@@ -89,7 +83,7 @@ export async function uploadToPresigned({ uploadUrl, body, contentType, contentL
     method: "PUT",
     headers,
     body,
-    // Node fetch needs this for stream bodies in newer versions
+    // Node fetch needs this for stream bodies in newer versions.
     duplex: "half",
   });
   if (!resp.ok) {
