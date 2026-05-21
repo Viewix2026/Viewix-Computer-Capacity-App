@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     if (!accountId || !platform) return res.status(400).json({ error: "accountId + platform required" });
 
     const profile = await adminGet(`/zernio/profiles/${accountId}`);
-    if (!profile?.profileKey) return res.status(409).json({ error: "no_zernio_profile" });
+    if (!profile?.profileId) return res.status(409).json({ error: "no_zernio_profile" });
     const account = await adminGet(`/accounts/${accountId}`);
 
     // For TikTok, the team can't self-link — fire the client email
@@ -52,8 +52,8 @@ export default async function handler(req, res) {
     if (platform === "tiktok") {
       let connectUrl;
       try {
-        const resp = await getConnectUrl({ profileKey: profile.profileKey, platform });
-        connectUrl = resp?.connect_url || resp?.connectUrl || resp?.url;
+        const resp = await getConnectUrl({ profileId: profile.profileId, platform });
+        connectUrl = resp?.authUrl;
       } catch (e) {
         return res.status(502).json({ error: "zernio_connect_url_failed", detail: e.message });
       }
@@ -83,8 +83,8 @@ export default async function handler(req, res) {
     // it themselves with their Leadsie-granted FB/Google/LinkedIn
     // access on hand.
     try {
-      const resp = await getConnectUrl({ profileKey: profile.profileKey, platform });
-      const url = resp?.connect_url || resp?.connectUrl || resp?.url;
+      const resp = await getConnectUrl({ profileId: profile.profileId, platform });
+      const url = resp?.authUrl;
       if (!url) return res.status(502).json({ error: "zernio_no_url" });
       return res.status(200).json({ ok: true, reconnectUrl: url });
     } catch (e) {
@@ -98,7 +98,7 @@ export default async function handler(req, res) {
   const profiles = (await adminGet("/zernio/profiles")) || {};
   const out = [];
   for (const [accountId, profile] of Object.entries(profiles)) {
-    if (!profile?.profileKey) continue;
+    if (!profile?.profileId) continue;
     const account = await adminGet(`/accounts/${accountId}`);
     const connections = (await adminGet(`/zernio/connections/${accountId}`)) || {};
     const tiles = [];

@@ -2,9 +2,12 @@
 //
 // Producer-side admin endpoint. POST { accountId } → creates a Zernio
 // profile for that Viewix account and writes the mapping at
-// /zernio/profiles/{accountId} = { profileKey, createdAt, createdBy }.
+// /zernio/profiles/{accountId} = { profileId, createdAt, createdBy }.
 //
-// Idempotent: if /zernio/profiles/{accountId}.profileKey already
+// `profileId` is Zernio's profile `_id` (returned as `profile._id` on
+// create). It is the identifier every later call passes.
+//
+// Idempotent: if /zernio/profiles/{accountId}.profileId already
 // exists, returns the existing mapping unchanged. Producers can hit
 // the button twice (network glitch, double-click) without forking
 // duplicate profiles in Zernio.
@@ -41,11 +44,11 @@ export default async function handler(req, res) {
   // the existing record. Producers can mash the button without forking
   // duplicates in Zernio's backend.
   const existing = (await db.ref(`/zernio/profiles/${accountId}`).once("value")).val();
-  if (existing && existing.profileKey) {
+  if (existing && existing.profileId) {
     return res.status(200).json({
       ok: true,
       alreadyProvisioned: true,
-      profileKey: existing.profileKey,
+      profileId: existing.profileId,
       createdAt: existing.createdAt,
     });
   }
@@ -61,15 +64,15 @@ export default async function handler(req, res) {
     name = String(account?.companyName || "").trim() || accountId;
   }
 
-  let zernioResp;
+  let profileId;
   try {
-    zernioResp = await createProfile({
+    // Carry the Viewix accountId across in the description so Zernio's
+    // dashboard shows something recognisable and we can cross-reference.
+    const created = await createProfile({
       name,
-      // Carry the Viewix accountId across to Zernio so their dashboard
-      // and ours can cross-reference without ambiguity. Safe to expose
-      // — accountId is an opaque internal id, not PII.
-      externalRef: accountId,
+      description: `Viewix account ${accountId}`,
     });
+    profileId = created.profileId;
   } catch (e) {
     console.error("zernio-provision-profile createProfile failed:", e);
     return res.status(502).json({
@@ -79,25 +82,19 @@ export default async function handler(req, res) {
     });
   }
 
-  // Zernio's documented response shape returns the profile under a
-  // top-level `profile_key` field (or nested `profile.key` — we accept
-  // either to insulate from minor shape drift). If neither key
-  // appears, fail loud rather than write a half-broken mapping.
-  const profileKey =
-    zernioResp?.profile_key ||
-    zernioResp?.profile?.key ||
-    zernioResp?.key ||
-    null;
-  if (!profileKey) {
-    console.error("zernio-provision-profile: no profileKey in response", zernioResp);
+  // Zernio returns the profile under `profile._id`. createProfile()
+  // normalises that to profileId; if it's missing, fail loud rather
+  // than write a half-broken mapping.
+  if (!profileId) {
+    console.error("zernio-provision-profile: no profile._id in response");
     return res.status(502).json({
-      error: "zernio_response_missing_key",
-      detail: "Zernio responded successfully but no profile_key was found in the body.",
+      error: "zernio_response_missing_id",
+      detail: "Zernio responded successfully but no profile._id was found in the body.",
     });
   }
 
   const record = {
-    profileKey,
+    profileId,
     createdAt: Date.now(),
     createdBy: { uid: actor.uid, email: actor.email || null },
     name,
@@ -107,7 +104,7 @@ export default async function handler(req, res) {
   return res.status(200).json({
     ok: true,
     alreadyProvisioned: false,
-    profileKey,
+    profileId,
     createdAt: record.createdAt,
   });
 }

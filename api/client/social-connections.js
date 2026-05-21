@@ -11,7 +11,7 @@
 //
 // Both modes flow through requireClientOrStaff + clientAccess registry
 // scoping, just like api/client/project.js. Output goes through
-// redactConnectionStatus — never exposes profileKey, raw connect URL
+// redactConnectionStatus — never exposes profileId, raw connect URL
 // without action, refresh tokens, etc.
 
 import { handleOptions, setCors, requireClientOrStaff, sendAuthError } from "../_requireAuth.js";
@@ -65,11 +65,11 @@ export default async function handler(req, res) {
     // non-TikTok URL, fine, they'll just see the same OAuth flow. The
     // important thing is the URL is scoped to THEIR profile.
     const profile = (await db.ref(`/zernio/profiles/${accountId}`).once("value")).val();
-    if (!profile?.profileKey) return res.status(409).json({ error: "no_zernio_profile" });
+    if (!profile?.profileId) return res.status(409).json({ error: "no_zernio_profile" });
 
     try {
-      const resp = await getConnectUrl({ profileKey: profile.profileKey, platform });
-      const url = resp?.connect_url || resp?.connectUrl || resp?.url;
+      const resp = await getConnectUrl({ profileId: profile.profileId, platform });
+      const url = resp?.authUrl;
       if (!url) return res.status(502).json({ error: "zernio_no_url" });
       return res.status(200).json({ ok: true, reconnectUrl: url });
     } catch (e) {

@@ -1,26 +1,38 @@
 // api/cron/social-schedule-sync.js
 //
-// 15-minute reconciliation cron. Two jobs:
+// 15-minute reconciliation cron. Three jobs:
 //
-//   1. Items with postAt in the past + status "pending" — webhook
-//      may have missed delivery. BEFORE doing anything, query Zernio
-//      by clientReferenceId. If Zernio shows the post as published,
-//      flip our local status to match. If Zernio shows the post as
-//      still pending past its scheduled time, log a warning — that's
-//      Zernio-side stuck, not ours.
+//   0. Resume partial batches. schedule-posting-batch.js pushes Zernio
+//      createPost serially; if item N fails, items N+1.. are persisted
+//      with status:"pending" but no zernioPostId. Re-push them. Zernio
+//      has NO durable client_reference_id, so dedup relies on the two
+//      layers createPost() exposes: the 5-min x-request-id window and
+//      the 24h content-hash dedup (identical platform/account/content
+//      → returns the existing post id instead of forking). The cron
+//      runs every 15 min, well inside the 24h window, so a re-push of
+//      an item that actually made it to Zernio binds the existing id
+//      rather than duplicating.
 //
-//   2. Per-profile drift check. Poll Zernio's getProfile / listAccounts
-//      to catch account disconnects that didn't fire a webhook. (Belt-
-//      and-braces — most drops will arrive via webhook, but the cron
-//      catches the small fraction that don't.)
+//   1. Reconcile past-due "pending" items that DO hold a zernioPostId
+//      (webhook may have missed delivery). GET /posts/{postId} and
+//      mirror Zernio's status locally.
 //
-// Never blindly re-creates posts — Codex review caught that risk.
-// The dedupe primitive is findPostByReference: if Zernio has a post
-// with our clientReferenceId, it's already there.
+//   2. Per-profile account drift — poll listAccounts to catch
+//      disconnects that didn't fire a webhook.
 
 import { isAuthorizedCron } from "../_cronAuth.js";
 import { adminGet, getAdmin } from "../_fb-admin.js";
-import { findPostByReference, getProfile, listAccounts, createPost } from "../_zernio.js";
+import { getPost, listAccounts, createPost, mapPlatformsToAccounts } from "../_zernio.js";
+
+// Map a Zernio post status onto our local item status vocabulary.
+function localStatusFor(remoteStatus) {
+  const s = String(remoteStatus || "").toLowerCase();
+  if (s === "published" || s === "posted" || s === "complete" || s === "completed") return "posted";
+  if (s === "failed" || s === "error") return "failed";
+  if (s === "partial") return "partial";
+  if (s === "cancelled" || s === "canceled") return "cancelled";
+  return null; // scheduled / pending / unknown → leave as-is (maybe stuck)
+}
 
 export default async function handler(req, res) {
   const auth = isAuthorizedCron(req);
@@ -40,65 +52,76 @@ export default async function handler(req, res) {
 
   const schedules = (await adminGet("/socialSchedule")) || {};
 
-  // ─── Job 0: resume partial batches (Codex pass 3 P1) ──────────────
-  // schedule-posting-batch.js pushes Zernio createPost serially. If
-  // item N fails, items N+1.. are persisted with status:"pending" but
-  // were never sent to Zernio (no zernioPostId). Without this pass,
-  // a retry of the batchId returns the partial schedule idempotently
-  // and the missing items sit forever — never publishing.
-  //
-  // For each pending item that has NO zernioPostId, call createPost
-  // with the stored fields. clientReferenceId protects against
-  // duplicates: Zernio dedupes server-side on the same reference, so
-  // an overlapping success from a previous retry is harmless.
+  // Lazy per-profile account cache so we don't re-fetch listAccounts
+  // for every item that shares a profile.
+  const accountsCache = new Map(); // accountId -> listAccounts response
+  async function accountsForAccount(accountId, profileId) {
+    if (accountsCache.has(accountId)) return accountsCache.get(accountId);
+    let resp = null;
+    try { resp = await listAccounts(profileId); } catch (e) {
+      console.warn(`sync: listAccounts failed for ${accountId}:`, e.message);
+    }
+    accountsCache.set(accountId, resp);
+    return resp;
+  }
+
+  // Resolve an item's platform names → Zernio account refs. Prefer the
+  // stored resolvedPlatforms; fall back to a live listAccounts lookup.
+  async function resolveItemPlatforms(it, accountId, profileId) {
+    if (Array.isArray(it.resolvedPlatforms) && it.resolvedPlatforms.length) {
+      return { resolved: it.resolvedPlatforms, missing: [] };
+    }
+    const accountsResp = await accountsForAccount(accountId, profileId);
+    if (!accountsResp) return { resolved: [], missing: it.platforms || [] };
+    return mapPlatformsToAccounts(accountsResp, it.platforms || []);
+  }
+
+  // ─── Job 0: resume partial batches ────────────────────────────────
   for (const [scheduleId, schedule] of Object.entries(schedules)) {
     if (scheduleId === "byBatchId") continue;
     const items = Array.isArray(schedule?.items) ? schedule.items : [];
     const accountId = schedule?.accountId;
     if (!accountId) continue;
     const profile = await adminGet(`/zernio/profiles/${accountId}`);
-    const profileKey = profile?.profileKey;
-    if (!profileKey) continue;
+    const profileId = profile?.profileId;
+    if (!profileId) continue;
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (!it) continue;
       if (it.status !== "pending") continue;
       if (it.zernioPostId) continue; // already created
       if (!it.zernioMediaUrl || !it.clientReferenceId || !it.postAt) continue;
-      // Cheap pre-check: if Zernio already has the post (we crashed
-      // *after* createPost but *before* persisting zernioPostId), find
-      // it by reference and bind locally — never re-create.
-      try {
-        const lookup = await findPostByReference(it.clientReferenceId);
-        const posts = lookup?.posts || lookup?.data || (Array.isArray(lookup) ? lookup : []);
-        const existing = posts && posts[0];
-        if (existing && (existing.id || existing.post_id)) {
-          await db.ref(`/socialSchedule/${scheduleId}/items/${i}`).update({
-            zernioPostId: existing.id || existing.post_id,
-            resumedAt: now,
-          });
-          resumedCreates++;
-          continue;
-        }
-      } catch (e) {
-        // Lookup failure doesn't block the retry — just log and continue
-        // to the createPost path.
-        console.warn(`sync resume lookup failed for ${scheduleId}/${i}:`, e.message);
+
+      // Resolve platforms first — without a connected account we can't
+      // create the post.
+      const { resolved, missing } = await resolveItemPlatforms(it, accountId, profileId);
+      if (!resolved.length || missing.length) {
+        await db.ref(`/socialSchedule/${scheduleId}/items/${i}`).update({
+          lastResumeError: `unresolved platforms: ${missing.join(", ") || "none connected"}`,
+          lastResumeAttemptAt: now,
+        });
+        resumedCreateFailures++;
+        continue;
       }
-      // Create it now.
+
+      // Re-push. createPost dedupes server-side (5-min x-request-id or
+      // 24h content-hash) and surfaces the existing post id rather than
+      // forking — so an overlapping success from a previous run is
+      // harmless: we just bind the id.
       try {
-        const resp = await createPost({
-          profileKey,
+        const { postId } = await createPost({
+          content: it.caption,
+          scheduledFor: it.postAt,
+          timezone: "Australia/Sydney",
+          platforms: resolved,
           mediaUrl: it.zernioMediaUrl,
-          caption: it.caption,
-          platforms: it.platforms,
-          postAt: it.postAt,
-          clientReferenceId: it.clientReferenceId,
-          trialParams: it.trialReel ? { graduationStrategy: "MANUAL" } : undefined,
+          requestId: it.clientReferenceId,
+          trialReel: (it.platforms || []).includes("instagram") ? it.trialReel : false,
           tikTokCompliance: (it.platforms || []).includes("tiktok") ? it.tikTokCompliance : undefined,
         });
         await db.ref(`/socialSchedule/${scheduleId}/items/${i}`).update({
-          zernioPostId: resp?.post_id || resp?.id || null,
+          zernioPostId: postId || null,
+          resolvedPlatforms: resolved,
           resumedAt: now,
         });
         resumedCreates++;
@@ -113,80 +136,70 @@ export default async function handler(req, res) {
     }
   }
 
-  // ─── Job 1: pending-past-due posts ────────────────────────────────
+  // ─── Job 1: pending-past-due posts (that hold a postId) ───────────
   for (const [scheduleId, schedule] of Object.entries(schedules)) {
     if (scheduleId === "byBatchId") continue;
     const items = Array.isArray(schedule?.items) ? schedule.items : [];
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (!it || it.status !== "pending") continue;
-      // After Job 0, an item still without a zernioPostId means create
-      // is still failing — skip lookup, Job 0 owns retry. Otherwise we
-      // can look it up by reference.
-      if (!it.zernioPostId && !it.clientReferenceId) continue;
+      // No postId after Job 0 means create is still failing — Job 0 owns
+      // the retry. Without a postId we have nothing to look up (Zernio
+      // has no reference query), so skip.
+      if (!it.zernioPostId) continue;
       const postAtMs = it.postAt ? Date.parse(it.postAt) : NaN;
       if (!Number.isFinite(postAtMs)) continue;
       if (postAtMs > now) continue; // not due yet
 
-      // Look it up on Zernio's side. NEVER blindly re-create.
-      let lookup;
+      let remote;
       try {
-        lookup = await findPostByReference(it.clientReferenceId);
+        remote = await getPost(it.zernioPostId);
       } catch (e) {
-        console.warn(`sync: findPostByReference failed for ${scheduleId}/${i}:`, e.message);
+        console.warn(`sync: getPost failed for ${scheduleId}/${i} (${it.zernioPostId}):`, e.message);
         continue;
       }
-      const posts = lookup?.posts || lookup?.data || (Array.isArray(lookup) ? lookup : []);
-      const remote = posts && posts[0];
+      const post = remote?.post || remote;
+      const mapped = localStatusFor(post?.status);
 
-      if (remote?.status === "published" || remote?.status === "posted") {
+      if (mapped === "posted") {
         await db.ref(`/socialSchedule/${scheduleId}/items/${i}`).update({
           status: "posted",
-          publishedAt: Date.parse(remote.published_at || remote.publishedAt) || now,
-          permalink: remote.permalink || remote.url || null,
-          zernioPostId: remote.id || remote.post_id || it.zernioPostId || null,
+          publishedAt: Date.parse(post.publishedAt || post.published_at) || now,
+          permalink: post.permalink || post.url || null,
         });
         reconciledPosted++;
         continue;
       }
-      if (remote?.status === "failed" || remote?.status === "error") {
+      if (mapped === "failed") {
         await db.ref(`/socialSchedule/${scheduleId}/items/${i}`).update({
           status: "failed",
           failedAt: now,
-          failedReason: String(remote.error || remote.reason || "zernio reported failed via sync").slice(0, 500),
+          failedReason: String(post.error || post.failureReason || "zernio reported failed via sync").slice(0, 500),
         });
         reconciledFailed++;
         continue;
       }
-      // Past-due but Zernio still shows pending — flag as stuck so
-      // we can investigate (don't change status; producer needs to see
-      // it's overdue). Add a stuckSince timestamp the producer
-      // dashboard / Phase 6 admin view can surface.
+      if (mapped === "cancelled" || mapped === "partial") {
+        await db.ref(`/socialSchedule/${scheduleId}/items/${i}`).update({
+          status: mapped,
+          syncedAt: now,
+        });
+        continue;
+      }
+      // Past-due but Zernio still shows scheduled/pending — flag stuck
+      // so the producer dashboard can surface it. Don't change status.
       stuck++;
       await db.ref(`/socialSchedule/${scheduleId}/items/${i}/stuckSince`).set(it.stuckSince || now);
     }
   }
 
-  // Job 1 used to also walk /socialSchedule, but Job 0 pre-walks it.
-  // No restructure needed — the inner loop in Job 1 already opens a
-  // fresh iteration of the same map, so leaving the second `for` in
-  // place above is fine; it just means we read the same map twice. At
-  // Viewix's scale (tens of schedules) this is free; tighter
-  // refactor can come later if the schedule volume ever needs it.
-
   // ─── Job 2: per-profile account drift ─────────────────────────────
   const profiles = (await adminGet("/zernio/profiles")) || {};
   for (const [accountId, p] of Object.entries(profiles)) {
-    if (!p?.profileKey) continue;
+    if (!p?.profileId) continue;
     accountsChecked++;
-    let accounts;
-    try {
-      const resp = await listAccounts(p.profileKey);
-      accounts = resp?.accounts || resp?.data || (Array.isArray(resp) ? resp : []);
-    } catch (e) {
-      console.warn(`sync: listAccounts failed for ${accountId}:`, e.message);
-      continue;
-    }
+    const resp = await accountsForAccount(accountId, p.profileId);
+    const accounts = resp?.accounts || resp?.data || (Array.isArray(resp) ? resp : []);
     if (!Array.isArray(accounts)) continue;
     for (const a of accounts) {
       const platform = String(a.platform || "").toLowerCase();
