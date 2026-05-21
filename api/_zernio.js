@@ -199,12 +199,23 @@ export async function listAccounts(profileId) {
   return zernio(`/accounts?profileId=${encodeURIComponent(profileId)}`);
 }
 
+// A connected account's status is usable only if Zernio reports it as
+// connected/active (or doesn't expose a status at all). Anything else —
+// disconnected, expired, error, pending — is NOT postable. This mirrors
+// the sync cron, which treats every non-active status as disconnected.
+function isUsableAccountStatus(status) {
+  const s = String(status || "").toLowerCase();
+  return s === "" || s === "connected" || s === "active";
+}
+
 // Pure resolver — turn our platform NAME list (["instagram","tiktok"])
 // into the [{platform, accountId}] entries createPost needs, using a
-// previously-fetched listAccounts() response. First connected account
-// per platform wins. Returns { resolved, missing } so the caller can
-// fail loudly if a targeted platform isn't actually connected in
-// Zernio (distinct from "enabled in scope on the Viewix account").
+// previously-fetched listAccounts() response. Fails CLOSED: an account
+// whose status is anything other than connected/active (or unset) is
+// treated as not present, so a disconnected TikTok/IG account surfaces
+// as `missing` here rather than passing validation and only blowing up
+// later at createPost. Returns { resolved, missing } so the caller can
+// fail loudly (distinct from "enabled in scope on the Viewix account").
 export function mapPlatformsToAccounts(accountsResp, platformNames) {
   const accounts = accountsResp?.accounts || accountsResp?.data ||
     (Array.isArray(accountsResp) ? accountsResp : []);
@@ -212,10 +223,11 @@ export function mapPlatformsToAccounts(accountsResp, platformNames) {
   for (const a of accounts) {
     const p = String(a?.platform || "").toLowerCase();
     if (!p) continue;
-    // Prefer a connected/active account if the status is exposed.
     const status = String(a?.status || "").toLowerCase();
     const id = pickId(a);
     if (!id) continue;
+    if (!isUsableAccountStatus(status)) continue; // fail closed on bad status
+    // Prefer an explicitly connected/active account over a status-less one.
     if (!byPlatform[p] || status === "connected" || status === "active") {
       byPlatform[p] = { platform: p, accountId: id };
     }

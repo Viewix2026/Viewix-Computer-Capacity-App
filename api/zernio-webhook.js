@@ -34,6 +34,7 @@ import { getAdmin, adminGet, adminPatch } from "./_fb-admin.js";
 import { send, newCounters, postCronSummary } from "./_email/send.js";
 import { readRawBody } from "./_slack-helpers.js";
 import { getConnectUrl } from "./_zernio.js";
+import { accountManagerBlock } from "./_clientRedact.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -319,7 +320,15 @@ async function onAccountDisconnected(payload, eventId) {
       counters,
     });
   } else {
-    const leadEmail = account?.projectLead?.email || account?.accountManager?.email || process.env.SOCIAL_RECONNECT_FALLBACK_EMAIL || "hello@viewix.com.au";
+    // Resolve the account manager's email the same way the client-safe
+    // contract does: match account.accountManager (a NAME string) to the
+    // /editors roster, falling back to account.accountManagerEmail. The
+    // old `account.accountManager.email` / `projectLead.email` shape
+    // doesn't exist on real records, so it always fell through to the
+    // catch-all address.
+    const editors = (await adminGet("/editors")) || null;
+    const am = accountManagerBlock(account, editors);
+    const leadEmail = am.email || process.env.SOCIAL_RECONNECT_FALLBACK_EMAIL || "hello@viewix.com.au";
     await send({
       template: "SocialReconnectInternal",
       idempotencyKey: `socialReconnectInternal/${accountId}/${platform}/${eventId}`,

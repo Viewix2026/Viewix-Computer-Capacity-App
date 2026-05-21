@@ -61,36 +61,47 @@ export default async function handler(req, res) {
     return res.status(409).json({ error: "no_zernio_profile" });
   }
 
-  // Try the direct edit first — PUT /posts/{id} { scheduledFor }.
-  try {
-    await updatePost(item.zernioPostId, { scheduledFor: newPostAt, timezone: "Australia/Sydney" });
-    await db.ref(`/socialSchedule/${scheduleId}/items/${itemIdx}`).update({
-      postAt: newPostAt,
-      rescheduledAt: Date.now(),
-      rescheduledBy: { uid: actor.uid, email: actor.email || null },
-    });
-    return res.status(200).json({ ok: true, scheduleId, itemIdx, postAt: newPostAt, method: "update" });
-  } catch (e) {
-    // If Zernio doesn't support update OR returns a specific "method
-    // not supported" code, fall through to cancel+recreate. For any
-    // other error, surface up.
-    const supportsUpdate = !(e.code === "ZERNIO_405" || e.code === "ZERNIO_501" || /method not allowed|not supported|not implemented/i.test(e.message));
-    if (supportsUpdate) {
-      console.error("zernio updatePost failed:", e);
-      return res.status(502).json({ error: "zernio_update_failed", detail: e.message });
+  // An item can legitimately be "pending" with NO zernioPostId — that's
+  // the state left by a partial-batch failure (the row was persisted
+  // but its createPost never landed). For those, there's nothing to
+  // update or cancel: go straight to the create path. Only attempt the
+  // in-place edit when we actually hold a post id.
+  if (item.zernioPostId) {
+    // Try the direct edit first — PUT /posts/{id} { scheduledFor }.
+    try {
+      await updatePost(item.zernioPostId, { scheduledFor: newPostAt, timezone: "Australia/Sydney" });
+      await db.ref(`/socialSchedule/${scheduleId}/items/${itemIdx}`).update({
+        postAt: newPostAt,
+        rescheduledAt: Date.now(),
+        rescheduledBy: { uid: actor.uid, email: actor.email || null },
+      });
+      return res.status(200).json({ ok: true, scheduleId, itemIdx, postAt: newPostAt, method: "update" });
+    } catch (e) {
+      // If Zernio doesn't support update OR returns a specific "method
+      // not supported" code, fall through to cancel+recreate. For any
+      // other error, surface up.
+      const supportsUpdate = !(e.code === "ZERNIO_405" || e.code === "ZERNIO_501" || /method not allowed|not supported|not implemented/i.test(e.message));
+      if (supportsUpdate) {
+        console.error("zernio updatePost failed:", e);
+        return res.status(502).json({ error: "zernio_update_failed", detail: e.message });
+      }
+    }
+
+    // Cancel the old post before recreating. (Skipped entirely when
+    // there was no post id — nothing to cancel.)
+    try {
+      await cancelPost(item.zernioPostId);
+    } catch (e) {
+      // Cancel failure isn't terminal — the old post might already be
+      // cancelled, or Zernio may have moved on. Log and continue.
+      console.warn("cancel during reschedule failed (continuing):", e.message);
     }
   }
 
-  // Fallback — cancel + recreate. Resolve platform names → Zernio
+  // Create path — used both for the never-sent case (no post id) and as
+  // the cancel+recreate fallback. Resolve platform names → Zernio
   // connected-account ids (createPost needs them); reuse the stored
   // resolvedPlatforms if present, else re-fetch.
-  try {
-    if (item.zernioPostId) await cancelPost(item.zernioPostId);
-  } catch (e) {
-    // Cancel failure isn't terminal — the old post might already be
-    // cancelled, or Zernio may have moved on. Log and continue.
-    console.warn("cancel during reschedule failed (continuing):", e.message);
-  }
 
   let resolvedPlatforms = Array.isArray(item.resolvedPlatforms) ? item.resolvedPlatforms : null;
   if (!resolvedPlatforms) {
@@ -106,9 +117,13 @@ export default async function handler(req, res) {
     }
   }
 
-  // Fresh requestId so the 5-min idempotency window doesn't collide
-  // with the just-cancelled post.
-  const newRef = `${item.clientReferenceId}::r${Date.now().toString(36)}`;
+  // Pick the requestId. If we just cancelled a live post, use a FRESH
+  // ref so the 5-min idempotency window doesn't collide with it. If the
+  // item never reached Zernio (no post id), reuse the original ref —
+  // it's the natural idempotency anchor and nothing exists to collide.
+  const newRef = item.zernioPostId
+    ? `${item.clientReferenceId}::r${Date.now().toString(36)}`
+    : item.clientReferenceId;
   let postId;
   try {
     const created = await createPost({
