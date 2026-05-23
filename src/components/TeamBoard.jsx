@@ -110,13 +110,41 @@ const startOfWeek = (iso) => {
 // Each lane gets its own CSS Grid sub-row in the parent layout, so
 // lane heights are content-driven (auto-sized) and bars are free to
 // grow as tall as their wrapped text needs.
-function assignLanes(scheduledBars) {
+// Scope a manual day-priority to one editor row + one start day. A
+// subtask renders in every assignee's row and (if multi-day) anchors to
+// its start day, so priority can't be a single scalar — it's a map keyed
+// by this composite. "|" / "-" / ":" are all legal RTDB key chars.
+const pkey = (editorId, dateISO) => `${editorId}|${dateISO}`;
+
+// A bar's manual priority for this editor row, or Infinity when unset so
+// un-prioritised bars sort after explicitly-ordered ones (then fall back
+// to the deterministic endDate/id tiebreak below).
+function dayPriorityOf(bar, editorId) {
+  const v = bar?.dayPriority?.[pkey(editorId, bar.startDate)];
+  return Number.isFinite(v) ? v : Infinity;
+}
+
+function assignLanes(scheduledBars, editorId) {
   const sorted = [...scheduledBars].sort((a, b) => {
     const sa = a.startDate || "";
     const sb = b.startDate || "";
     if (sa !== sb) return sa.localeCompare(sb);
-    return (a.endDate || a.startDate || "").localeCompare(b.endDate || b.startDate || "");
+    // Same start day for THIS editor → honour the manual order the
+    // producer set by dragging the priority badge. Unset → endDate, id.
+    const pa = dayPriorityOf(a, editorId);
+    const pb = dayPriorityOf(b, editorId);
+    if (pa !== pb) return pa - pb;
+    const ea = (a.endDate || a.startDate || "");
+    const eb = (b.endDate || b.startDate || "");
+    if (ea !== eb) return ea.localeCompare(eb);
+    return (a.id || "").localeCompare(b.id || "");
   });
+
+  // Count bars per start day so each bar knows its 1-based rank + the
+  // group size (badge only shows when a day has ≥2 bars for this editor).
+  const daySizes = new Map();
+  for (const bar of sorted) daySizes.set(bar.startDate, (daySizes.get(bar.startDate) || 0) + 1);
+  const daySeen = new Map();
 
   const laneEnds = []; // laneEnds[i] = ISO endDate of the last bar in lane i
   const result = [];
@@ -138,7 +166,9 @@ function assignLanes(scheduledBars) {
       lane = laneEnds.length;
       laneEnds.push(end);
     }
-    result.push({ ...bar, lane });
+    const rank = (daySeen.get(start) || 0) + 1;
+    daySeen.set(start, rank);
+    result.push({ ...bar, lane, dayRank: rank, daySize: daySizes.get(start) || 1 });
   }
   return { bars: result, laneCount: laneEnds.length };
 }
@@ -388,7 +418,7 @@ const FILTER_PILL_BTN = {
 //   - Left-edge handle → "resizeStart": pull startDate to the dropped
 //     day. If the dropped day is AFTER endDate, that day becomes the
 //     new endDate (mirror of the right-flip).
-function GanttBar({ subtask, sourceAssigneeId, onClick }) {
+function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, dayRank = 1 }) {
   // Drag IDs include the sourceAssigneeId so multi-assignee subtasks
   // (which render once per assignee row) each have a unique draggable.
   // Without the suffix dnd-kit would see two useDraggables with the
@@ -406,6 +436,22 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
     id: `resize-start:${subtask.id}:${sourceAssigneeId}`,
     data: { mode: "resizeStart", subtask, sourceAssigneeId },
   });
+  // Day-priority reorder: the priority badge doubles as a drag grip
+  // (mode "reorderDay"), and the whole bar is a drop target for OTHER
+  // bars being reordered (mode "reorderDayTarget"). A mode-filtered
+  // collision strategy on the DndContext keeps these from interfering
+  // with the body "move" / edge "resize" drags. Both only matter when
+  // the bar shares its day with siblings (reorderable).
+  const reorder = useDraggable({
+    id: `reorder:${subtask.id}:${sourceAssigneeId}`,
+    data: { mode: "reorderDay", subtask, sourceAssigneeId },
+  });
+  const reorderTarget = useDroppable({
+    id: `reorderbar:${subtask.id}:${sourceAssigneeId}`,
+    data: { mode: "reorderDayTarget", subtask, editorId: sourceAssigneeId },
+  });
+  // The bar node is both the move draggable and the reorder drop target.
+  const setBarRef = (node) => { setNodeRef(node); reorderTarget.setNodeRef(node); };
 
   const colour = colourFor(subtask);
   const span = (subtask.startDate && subtask.endDate)
@@ -415,9 +461,10 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
   const baseStyle = {
     width: "100%", boxSizing: "border-box",
     margin: 0,
-    // Right padding bumped to leave room for the drag-handle dot
-     // cluster pinned in the top-right corner.
-    padding: "6px 22px 6px 12px",
+    // Right padding leaves room for the drag-handle dot cluster; left
+    // padding widens when the priority badge/grip is shown so the
+    // client name doesn't sit under it.
+    padding: reorderable ? "6px 22px 6px 30px" : "6px 22px 6px 12px",
     borderRadius: 6,
     background: `${colour}38`,
     borderLeft: `3px solid ${colour}`,
@@ -433,13 +480,17 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
     overflow: "visible",
     position: "relative",
     opacity: isDragging ? 0.4 : 1,
+    // When another bar's reorder grip is dragged over this one, ring it
+    // so the producer sees where the drop will land.
+    outline: reorderTarget.isOver ? `2px solid ${colour}` : "none",
+    outlineOffset: reorderTarget.isOver ? 1 : 0,
     transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
     userSelect: "none",
   };
 
   return (
     <div
-      ref={setNodeRef}
+      ref={setBarRef}
       style={baseStyle}
       onClick={(e) => {
         // PointerSensor's 6px activation distance means a real click
@@ -449,6 +500,37 @@ function GanttBar({ subtask, sourceAssigneeId, onClick }) {
       title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\n${subtask.startDate} → ${subtask.endDate}\nStage: ${stageOf(subtask)}`}
       {...listeners}
       {...attributes}>
+      {/* Priority badge — only when this editor has ≥2 tasks starting
+          this day. Shows the 1-based order AND doubles as the reorder
+          drag grip: drag it onto another of the day's bars to reslot.
+          stopPropagation on click so grabbing it never opens the
+          project; the mode-filtered collision strategy keeps the drag
+          from being read as a reschedule. */}
+      {reorderable && (
+        <div
+          ref={reorder.setNodeRef}
+          {...reorder.listeners}
+          {...reorder.attributes}
+          onClick={e => e.stopPropagation()}
+          title="Drag to reorder this day's tasks for this editor"
+          style={{
+            position: "absolute", top: 4, left: 6,
+            width: 18, height: 18, borderRadius: "50%",
+            background: colour, color: "#fff",
+            fontSize: 10, fontWeight: 800, lineHeight: 1,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: reorder.isDragging ? "grabbing" : "grab",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.45)",
+            // Lift + follow the cursor while dragging so the gesture
+            // reads as "moving this task"; the target bar also rings.
+            transform: reorder.transform
+              ? `translate3d(${reorder.transform.x}px, ${reorder.transform.y}px, 0)`
+              : undefined,
+            zIndex: reorder.isDragging ? 1000 : 3,
+            opacity: reorder.isDragging ? 0.9 : 1,
+          }}
+        >{dayRank}</div>
+      )}
       {/* Drag-handle resting cue — small 2-row × 2-col dot grid in
           the top-right corner so producers see the bar is grabbable
           without hovering. Top-RIGHT instead of top-left because the
@@ -858,7 +940,7 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
     const items = editors.map(editor => {
       const row = { id: editor.id, name: editor.name, muted: false };
       const sched = scheduled.get(editor.id) || [];
-      const { bars: laneBars, laneCount } = assignLanes(sched);
+      const { bars: laneBars, laneCount } = assignLanes(sched, editor.id);
       const isCollapsed = collapsed.has(editor.id);
       const startRow = cursor;
       if (isCollapsed) {
@@ -886,6 +968,27 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
     // Same pattern as SocialOrganicSelect.jsx.
     activationConstraint: { distance: 6 },
   }));
+
+  // Mode-filtered collision detection. The board has two disjoint sets
+  // of drop targets: date cells / pool / editor-reorder slots (for
+  // move / resize / reorderEditor), and per-bar reorder targets (for
+  // reorderDay). Without filtering, closestCenter would let a bar's
+  // reorder target steal a normal reschedule drop (or vice-versa). We
+  // keep only the targets relevant to the active drag's mode, and skip
+  // the dragged bar's own reorder target.
+  const collisionStrategy = useCallback((args) => {
+    const mode = args.active?.data?.current?.mode;
+    const activeSubId = args.active?.data?.current?.subtask?.id;
+    const containers = args.droppableContainers.filter(c => {
+      const isReorderTarget = c.data?.current?.mode === "reorderDayTarget";
+      if (mode === "reorderDay") {
+        return isReorderTarget && c.data?.current?.subtask?.id !== activeSubId;
+      }
+      return !isReorderTarget;
+    });
+    return closestCenter({ ...args, droppableContainers: containers });
+  }, []);
+
   const [dragPreview, setDragPreview] = useState(null);
 
   // Inline brain-flag banner shown after a drag commits. Populated by
@@ -952,6 +1055,70 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
         next.splice(toIdx, 0, moved);
         return next;
       });
+      return;
+    }
+
+    // Per-day priority reorder. Drag one bar's badge onto another bar in
+    // the SAME editor row + SAME start day to reslot. We rebuild that
+    // day's ordered list, move the dragged bar to the target's slot, and
+    // rewrite a dense 1..N priority. Optimistic patch first (the
+    // recentlyWroteTo guard would otherwise revert it), then per-leaf
+    // writes to /dayPriority/<editorId|day>.
+    if (activeData.mode === "reorderDay") {
+      if (overData?.mode !== "reorderDayTarget") return;
+      const editorId = activeData.sourceAssigneeId;
+      const dragged = activeData.subtask;
+      const target = overData.subtask;
+      if (!editorId || !dragged || !target || dragged.id === target.id) return;
+      if (overData.editorId !== editorId) return;          // different row
+      const day = dragged.startDate;
+      if (!day || target.startDate !== day) return;        // different day
+
+      const sortDay = (a, b) => {
+        const pa = dayPriorityOf(a, editorId);
+        const pb = dayPriorityOf(b, editorId);
+        if (pa !== pb) return pa - pb;
+        const ea = (a.endDate || a.startDate || "");
+        const eb = (b.endDate || b.startDate || "");
+        if (ea !== eb) return ea.localeCompare(eb);
+        return (a.id || "").localeCompare(b.id || "");
+      };
+      const dayBars = (scheduled.get(editorId) || [])
+        .filter(b => b.startDate === day)
+        .sort(sortDay);
+      const fromIdx = dayBars.findIndex(b => b.id === dragged.id);
+      const toIdx = dayBars.findIndex(b => b.id === target.id);
+      if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+      const reordered = [...dayBars];
+      const [moved] = reordered.splice(fromIdx, 1);
+      reordered.splice(toIdx, 0, moved);
+
+      const key = pkey(editorId, day);
+      const tsR = new Date().toISOString();
+      // [subtaskId, projectId, newPriority] for bars whose value changed.
+      const changed = [];
+      reordered.forEach((b, i) => {
+        const newP = i + 1;
+        if (dayPriorityOf(b, editorId) !== newP) changed.push([b.id, b.projectId, newP]);
+      });
+      if (changed.length === 0) return;
+      if (typeof setProjects === "function") {
+        setProjects(prev => prev.map(p => {
+          if (!p) return p;
+          const mine = changed.filter(c => c[1] === p.id);
+          if (mine.length === 0) return p;
+          const subs = { ...(p.subtasks || {}) };
+          for (const [sid, , newP] of mine) {
+            const cur = subs[sid];
+            if (!cur) continue;
+            subs[sid] = { ...cur, dayPriority: { ...(cur.dayPriority || {}), [key]: newP }, updatedAt: tsR };
+          }
+          return { ...p, subtasks: subs, updatedAt: tsR };
+        }));
+      }
+      for (const [sid, pid, newP] of changed) {
+        fbSet(`/projects/${pid}/subtasks/${sid}/dayPriority/${key}`, newP);
+      }
       return;
     }
 
@@ -1267,7 +1434,7 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
           the producer scrolls. */}
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCenter}
+        collisionDetection={collisionStrategy}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}>
         {/* Outer container = vertical flex column, resizable via the
@@ -1648,6 +1815,8 @@ function Row({ row, editor, weekData, rowIdx, startRow, laneCount, laneBars, dat
             <GanttBar
               subtask={st}
               sourceAssigneeId={row.id}
+              reorderable={st.daySize >= 2}
+              dayRank={st.dayRank}
               onClick={() => onOpenProject?.(st.projectId, st.id)}
             />
           </div>
