@@ -43,8 +43,16 @@ const project = {
 };
 const account = {
   id: "acct-1", companyName: "Acme Co", accountManager: "Jordan Tan",
+  accountManagerPhoto: "https://fallback.test/jordan.jpg",
+  accountManagerPhone: "0400 000 000",
+  accountManagerEmail: "fallback@viewix.test",
+  accountManagerBookingUrl: "https://fallback.test/book",
   projectLead: "Internal Lead Name", attioId: "att-1",
   BRAND_NEW_SECRET_FIELD: "nope",
+};
+const editors = {
+  "ed-other": { id: "ed-other", name: "Someone Else", avatarUrl: "https://x/other.jpg", phone: "0411", email: "other@viewix.test", bookingUrl: "https://cal.test/other" },
+  "ed-jordan": { id: "ed-jordan", name: "Jordan Tan", avatarUrl: "https://x/jordan.jpg", phone: "0422", email: "jordan@viewix.test", bookingUrl: "https://cal.test/jordan" },
 };
 const delivery = {
   id: "del-1", shortId: "dd11", videos: [
@@ -55,7 +63,7 @@ const delivery = {
 const preprod = { id: "social_1", shortId: "pp11", status: "approved", companyName: "Acme Co", dealValue: 48000 };
 
 // 1. list item — no forbidden keys, expected shape
-const li = redactProjectListItem({ project, account, delivery, preprod });
+const li = redactProjectListItem({ project, account, delivery, preprod, editors });
 assertNoForbidden(li, "listItem");
 assert.equal(li.projectId, "ab12cd34");           // shortId, not raw id
 assert.equal(li.orgName, "Acme Co");
@@ -65,20 +73,36 @@ assert.equal(li.counts.total, 2);
 assert.equal(li.counts.posted, 1);
 
 // 2. detail — no forbidden keys, deliveries rows only allowed fields
-const d = redactProjectDetail({ project, account, delivery, preprod, deliveryUrl: "https://x/d/dd11", preprodUrl: "https://x/p/pp11" });
+const d = redactProjectDetail({ project, account, delivery, preprod, deliveryUrl: "https://x/d/dd11", preprodUrl: "https://x/p/pp11", editors });
 assertNoForbidden(d, "detail");
+// Allowlist updated 2026-05-21 — caption added per Phase 2B
+// (pre-prod-authored copy snapshotted onto the delivery at approval,
+// surfaced in the client portal so the client knows exactly what
+// they're approving alongside the video). Adding `caption` is an
+// allowlist EXPANSION, not a forbidden-key leak — it's a producer-
+// authored, client-facing field by design.
 const rowKeys = Object.keys(d.deliveries.rows[0]).sort();
-assert.deepEqual(rowKeys, ["id", "idx", "link", "n", "posted", "revision1", "revision2", "title", "viewixStatus"]);
+assert.deepEqual(rowKeys, ["caption", "id", "idx", "link", "n", "posted", "revision1", "revision2", "title", "viewixStatus"]);
 assert.equal(d.deliveries.deliveryId, "del-1");
 assert.equal(d.preproduction.type, "socialOrganic");
 assert.equal(d.preproduction.embeddable, true);
 
-// 3. accountManager block — exactly 5 fields, never projectLead
-const am = accountManagerBlock(account);
+// 3. accountManager block — exactly 5 fields, editor match wins, never projectLead
+const am = accountManagerBlock(account, editors);
 assert.deepEqual(Object.keys(am).sort(), ["bookingUrl", "email", "name", "phone", "photo"]);
 assert.equal(am.name, "Jordan Tan");
-assert.equal(am.phone, null);
+assert.equal(am.photo, "https://x/jordan.jpg");
+assert.equal(am.phone, "0422");
+assert.equal(am.email, "jordan@viewix.test");
+assert.equal(am.bookingUrl, "https://cal.test/jordan");
 assert.ok(!JSON.stringify(am).includes("Internal Lead Name"));
+
+const fallbackAm = accountManagerBlock({ ...account, accountManager: "No Match" }, editors);
+assert.equal(fallbackAm.name, "No Match");
+assert.equal(fallbackAm.photo, "https://fallback.test/jordan.jpg");
+assert.equal(fallbackAm.phone, "0400 000 000");
+assert.equal(fallbackAm.email, "fallback@viewix.test");
+assert.equal(fallbackAm.bookingUrl, "https://fallback.test/book");
 
 // 4. derivePhase sanity
 assert.equal(derivePhase({ status: "archived" }, null, null), 3);
@@ -96,7 +120,7 @@ assert.equal(c.approved, 1);
 // 6. metaAds preprod → not embeddable
 const dMeta = redactProjectDetail({
   project: { ...project, links: { ...project.links, preprodType: "metaAds" } },
-  account, delivery, preprod: { ...preprod }, deliveryUrl: null, preprodUrl: "https://x/p/pp11",
+  account, delivery, preprod: { ...preprod }, deliveryUrl: null, preprodUrl: "https://x/p/pp11", editors,
 });
 assert.equal(dMeta.preproduction.type, "metaAds");
 assert.equal(dMeta.preproduction.embeddable, false);

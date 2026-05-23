@@ -64,15 +64,15 @@ export const QT = [
 //  - "editor" → needs a suite, counted toward computer capacity
 //  - "crew"   → no suite, doesn't show in weekly schedule (producers, founders, etc.)
 export const DEF_EDS = [
-  { id: "ed-1", name: "Angus", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: false, fri: true } },
-  { id: "ed-2", name: "David", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
-  { id: "ed-3", name: "Billy", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: false, wed: true, thu: true, fri: true } },
-  { id: "ed-4", name: "Jude", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: false, thu: true, fri: true } },
-  { id: "ed-5", name: "Mia", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: false, fri: false } },
-  { id: "ed-6", name: "Matt", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: false } },
-  { id: "ed-7", name: "Luke", phone: "", email: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
-  { id: "ed-jeremy", name: "Jeremy", phone: "", email: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
-  { id: "ed-steve", name: "Steve", phone: "", email: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
+  { id: "ed-1", name: "Angus", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: false, fri: true } },
+  { id: "ed-2", name: "David", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
+  { id: "ed-3", name: "Billy", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: false, wed: true, thu: true, fri: true } },
+  { id: "ed-4", name: "Jude", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: false, thu: true, fri: true } },
+  { id: "ed-5", name: "Mia", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: false, fri: false } },
+  { id: "ed-6", name: "Matt", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: false } },
+  { id: "ed-7", name: "Luke", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
+  { id: "ed-jeremy", name: "Jeremy", phone: "", email: "", bookingUrl: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
+  { id: "ed-steve", name: "Steve", phone: "", email: "", bookingUrl: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
 ];
 
 // ─── Default Inputs ───

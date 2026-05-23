@@ -237,7 +237,7 @@ function DashboardBody({ data, narrow, onOpenProject }) {
         </div>
 
         {!narrow && (
-          <aside style={{ display: "flex", flexDirection: "column", gap: 18, position: "sticky", top: 24 }}>
+          <aside style={{ display: "flex", flexDirection: "column", gap: 18, position: "sticky", top: 24, zIndex: 1 }}>
             <AccountManagerCard am={am} />
           </aside>
         )}

@@ -62,20 +62,26 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: "Not your organisation" });   // fail closed
   }
 
-  const account = accountId ? (await db.ref(`/accounts/${accountId}`).once("value")).val() : null;
-  const delivery = project?.links?.deliveryId
-    ? (await db.ref(`/deliveries/${project.links.deliveryId}`).once("value")).val()
-    : null;
   const ppType = project?.links?.preprodType;
   const ppId = project?.links?.preprodId;
-  const preprod = ppId && (ppType === "metaAds" || ppType === "socialOrganic")
-    ? (await db.ref(`/preproduction/${ppType}/${ppId}`).once("value")).val()
-    : null;
+  const [accountSnap, deliverySnap, preprodSnap, editorsSnap] = await Promise.all([
+    accountId ? db.ref(`/accounts/${accountId}`).once("value") : Promise.resolve({ val: () => null }),
+    project?.links?.deliveryId ? db.ref(`/deliveries/${project.links.deliveryId}`).once("value") : Promise.resolve({ val: () => null }),
+    ppId && (ppType === "metaAds" || ppType === "socialOrganic")
+      ? db.ref(`/preproduction/${ppType}/${ppId}`).once("value")
+      : Promise.resolve({ val: () => null }),
+    db.ref("/editors").once("value"),
+  ]);
+  const account = accountSnap.val() || null;
+  const delivery = deliverySnap.val() || null;
+  const preprod = preprodSnap.val() || null;
+  const editors = editorsSnap.val() || {};
 
   const detail = redactProjectDetail({
     project, account, delivery, preprod,
     deliveryUrl: buildDeliveryUrl(delivery),
     preprodUrl: buildPreproductionUrl(preprod),
+    editors,
   });
 
   return res.status(200).json(detail);

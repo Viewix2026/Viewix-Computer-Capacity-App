@@ -83,3 +83,22 @@ export const CLIENT_GOAL_COLORS = {
   [CLIENT_GOAL_ENGAGEMENT]:     "#F97316", // orange
   [CLIENT_GOAL_BRAND_BUILDING]: "#8B5CF6", // purple
 };
+
+// ─── Social Posting Scheduler launch cutoff ─────────────────────────
+// Single source of truth for the "new deliveries only" migration
+// boundary. Deliveries created at or before this instant predate the
+// social posting scheduler and must NEVER queue an asset transfer —
+// they were posted via Metricool and their Frame.io originals are
+// stale/irrelevant. Used by:
+//   - src/components/Deliveries.jsx   (UI banner gate)
+//   - api/on-video-approved.js        (skip pre-launch approvals)
+//   - api/cron/social-asset-reconcile.js (skip + purge pre-launch rows)
+// ms-epoch so callers compare with Date.parse(delivery.createdAt).
+export const SOCIAL_SCHEDULE_LAUNCH_TS = Date.parse("2026-05-21T00:00:00+10:00");
+
+// True when a delivery is in scope for the social posting scheduler.
+// Pre-launch (or missing createdAt) → false (excluded, fail-safe).
+export function isPostLaunchDelivery(delivery) {
+  const ts = delivery && delivery.createdAt ? Date.parse(delivery.createdAt) : NaN;
+  return Number.isFinite(ts) && ts > SOCIAL_SCHEDULE_LAUNCH_TS;
+}

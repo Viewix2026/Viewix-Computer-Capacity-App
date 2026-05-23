@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { PortalNav, MobileShell, Label, Pill, PhaseTrack, Icon, ViewixLogo, useIsNarrow } from "./ui";
 import { Deliveries } from "./Deliveries";
 import { PreProduction } from "./PreProduction";
+import { PostingSchedule } from "./PostingSchedule";
 
 function clientColor(name) {
   const palette = ["#0082fa", "#f87700", "#1b9b6e", "#7c3aed", "#c2410c", "#0a3c3a", "#be123c"];
@@ -87,6 +88,12 @@ export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, o
           {[
             { k: "deliveries", label: "Deliveries", icon: <Icon.film /> },
             { k: "preprod", label: "Pre-production", icon: <Icon.doc /> },
+            // Phase 5C — Posting Schedule. Read-only in v1; reschedule
+            // requests go through the account manager. We surface the
+            // tab even when no schedule exists yet so the client can
+            // see the empty-state explanation ("Once every video is
+            // approved your AM will line them up…").
+            { k: "schedule", label: "Posting schedule", icon: <Icon.cal /> },
           ].map(t => {
             const a = t.k === tab;
             return (
@@ -106,9 +113,15 @@ export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, o
           </div>
         </div>
 
-        {tab === "deliveries"
-          ? <Deliveries deliveries={d.deliveries ? { ...d.deliveries, orgName: d.orgName } : null} accountManager={d.accountManager} narrow={narrow} />
-          : <PreProduction preproduction={d.preproduction} narrow={narrow} />}
+        {tab === "deliveries" && (
+          <Deliveries deliveries={d.deliveries ? { ...d.deliveries, orgName: d.orgName } : null} accountManager={d.accountManager} narrow={narrow} />
+        )}
+        {tab === "preprod" && (
+          <PreProduction preproduction={d.preproduction} narrow={narrow} />
+        )}
+        {tab === "schedule" && (
+          <PostingSchedule projectShortId={projectShortId} authFetch={authFetch} narrow={narrow} />
+        )}
       </>
     );
   }

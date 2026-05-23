@@ -7,7 +7,26 @@ import { useState, useEffect } from "react";
 import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
 import { StatusSelect } from "./UIComponents";
-import { fbSet, authFetch } from "../firebase";
+import { fbSet, fbSetAsync, authFetch } from "../firebase";
+import { SchedulePostingModal } from "./SchedulePostingModal";
+// Phase 3 — Schedule Posting flow. Banner appears when every video in
+// a delivery is Approved AND the delivery's postingOwner === "viewix"
+// (default) AND createdAt is after the migration cutoff. See
+// api/_tiers.js for getDefaultVideosPerWeek + SOCIAL_CADENCE_DEFAULTS.
+import { getDefaultVideosPerWeek, tierFromPartnershipType } from "../../api/_tiers.js";
+// Codex audit P1: producer-side revision writes go through
+// updateVideo (direct fbSet), not writeDeliveryLeaf, so the
+// auto-fire of /api/on-video-approved that the client portal +
+// public review get for free does NOT happen here. Import the
+// notifier explicitly and hook it from updateVideo.
+import { notifyVideoApproved } from "./deliveryReview/deliveryWrites";
+// Single source of truth for the migration cutoff — shared with the
+// backend (api/on-video-approved.js + api/cron/social-asset-reconcile.js)
+// so the UI banner, the approval hook, and the reconcile cron all
+// agree on what "a new delivery" means. Only new deliveries get the
+// "Schedule social posting" banner; pre-cutoff deliveries keep the
+// manual `posted` checkbox workflow until they finish.
+import { SOCIAL_SCHEDULE_LAUNCH_TS as SCHEDULE_FEATURE_LAUNCH_TS } from "../../api/_constants.js";
 
 export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDeliveryId }) {
   const [activeDeliveryId, setActiveDeliveryId] = useState(null);
@@ -17,6 +36,10 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
   // result banner survives a tab pinball back to the same delivery.
   const [shareOpenFor, setShareOpenFor] = useState(null); // delivery id when open
   const [lastShareResult, setLastShareResult] = useState(null); // { deliveryId, state, batchId, videoCount, at }
+  // Phase 3 schedule-posting modal state. Same lifted-to-parent pattern
+  // as shareOpenFor so the result banner survives a tab pinball back.
+  const [scheduleOpenFor, setScheduleOpenFor] = useState(null);
+  const [lastScheduleResult, setLastScheduleResult] = useState(null); // { deliveryId, scheduleId, at }
 
   // Deep-link receiver — Projects → Delivery linked-record pill drops
   // a hash route like #projects/deliveries/del-1234 which lands here.
@@ -132,9 +155,35 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
         // Write each patched field as a leaf path. Firebase echoes
         // back only the leaf, so it can't clobber neighbouring
         // in-flight keystrokes the root listener is delivering.
+        //
+        // Codex audit pass 2 (P1 race): for revision1/revision2 =
+        // "Approved", we MUST wait for the write to land before
+        // firing notifyVideoApproved — the endpoint re-reads the
+        // value to defend against hostile actors, so a notify
+        // before fbSet resolves will 409 with "video_not_approved"
+        // and the side effect (caption snapshot + asset queue)
+        // waits for the daily reconcile cron. Use fbSetAsync and
+        // chain. Other leaves keep using fire-and-forget fbSet
+        // because typing-keystroke writes don't need the round-trip.
+        const approvalKeys = ["revision1", "revision2"];
+        const approvalWrites = [];
         Object.entries(patch).forEach(([k, val]) => {
-          fbSet(`/deliveries/${dId}/videos/${idx}/${k}`, val == null ? "" : val);
+          const safe = val == null ? "" : val;
+          if (approvalKeys.includes(k) && val === "Approved") {
+            approvalWrites.push(fbSetAsync(`/deliveries/${dId}/videos/${idx}/${k}`, safe));
+          } else {
+            fbSet(`/deliveries/${dId}/videos/${idx}/${k}`, safe);
+          }
         });
+        if (approvalWrites.length > 0) {
+          // Wait for the revision leaf to land, THEN fire the side
+          // effect. notifyVideoApproved is idempotent server-side
+          // (skips if /socialAssets/{key} already exists), so an
+          // overlapping client-portal approval is harmless.
+          Promise.all(approvalWrites)
+            .then(() => notifyVideoApproved(dId, idx))
+            .catch(e => console.error("approval leaf write failed:", e));
+        }
         const newVideos = del.videos.map(v => v.id === vid ? { ...v, ...patch } : v);
         return { ...del, videos: newVideos };
       }));
@@ -211,6 +260,34 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
             }}
           />
         )}
+        {scheduleOpenFor === d.id && (
+          <SchedulePostingModal
+            delivery={d}
+            accountId={findAcct(d.clientName)?.id || null}
+            accountPlatforms={findAcct(d.clientName)?.platforms || null}
+            clientPreferences={d.postingPreferences || null}
+            defaultVideosPerWeek={(() => {
+              // Self-audit fix: accounts don't carry separate
+              // productLine/partnershipTier fields. Parse the tier
+              // out of the partnershipType label. Cadence defaults
+              // are identical for socialOrganic vs socialPremium,
+              // so picking either product line is fine — pass
+              // socialOrganic by default and let the producer
+              // override in the modal if a project skews differently.
+              const tier = tierFromPartnershipType(findAcct(d.clientName)?.partnershipType || "");
+              return getDefaultVideosPerWeek("socialOrganic", tier);
+            })()}
+            onClose={() => setScheduleOpenFor(null)}
+            onSent={(result) => {
+              setLastScheduleResult({
+                deliveryId: d.id,
+                scheduleId: result.scheduleId,
+                at: new Date().toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" }),
+              });
+              setScheduleOpenFor(null);
+            }}
+          />
+        )}
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 28px 60px" }}>
           {/* Project details */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
@@ -223,6 +300,89 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
             <div><span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Client Share Link</span><div style={{ fontSize: 12, color: "var(--accent)", marginTop: 2, fontFamily: "'JetBrains Mono',monospace" }}>{shareUrl(d.id)}</div></div>
             <button onClick={() => copyLink(d.id)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>Copy</button>
           </div>
+
+          {/* Phase 3 — Posting ownership + "Schedule social posting"
+              banner. Lives between the Share Link card and the Videos
+              table because that's the natural producer flow: share
+              with client → client approves → schedule. */}
+          {d.createdAt && Date.parse(d.createdAt) > SCHEDULE_FEATURE_LAUNCH_TS && (() => {
+            const postingOwner = d.postingOwner || "viewix";
+            const total = d.videos?.length || 0;
+            const allApproved = total > 0 && d.videos.every(v =>
+              v && (v.revision1 === "Approved" || v.revision2 === "Approved")
+            );
+            const allAssetsReady = total > 0 && d.videos.every(v => v && (v.zernioMediaUrl || postingOwner === "client"));
+            const dismissed = !!d.scheduleBannerDismissed;
+            const justScheduled = lastScheduleResult?.deliveryId === d.id;
+            // Codex pass 3 P2: fail closed — refuse to open the modal
+            // unless the account has at least one platform configured
+            // as in-scope. Without this we'd let the producer schedule
+            // against a brand-new account that's never been onboarded
+            // and the modal would show all four platforms by default.
+            const acctPlatforms = findAcct(d.clientName)?.platforms;
+            const hasAnyPlatform = !!acctPlatforms && Object.values(acctPlatforms).some(p => p && p.enabled);
+
+            return (
+              <div style={{ marginBottom: 20, padding: "12px 16px", background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Posting</span>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--fg)", cursor: "pointer" }}>
+                      <input
+                        type="radio" name={`postingOwner-${d.id}`} checked={postingOwner === "viewix"}
+                        onChange={() => { fbSet(`/deliveries/${d.id}/postingOwner`, "viewix"); setD({ postingOwner: "viewix" }); }}
+                        style={{ accentColor: "var(--accent)" }}
+                      /> Viewix posts via scheduler
+                    </label>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--fg)", cursor: "pointer" }}>
+                      <input
+                        type="radio" name={`postingOwner-${d.id}`} checked={postingOwner === "client"}
+                        onChange={() => { fbSet(`/deliveries/${d.id}/postingOwner`, "client"); setD({ postingOwner: "client" }); }}
+                        style={{ accentColor: "var(--accent)" }}
+                      /> Client posts themselves
+                    </label>
+                  </div>
+                  {postingOwner === "viewix" && allApproved && !dismissed && !justScheduled && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>
+                        ✓ All videos approved {allAssetsReady ? "" : "(assets still transferring…)"}
+                      </span>
+                      {!hasAnyPlatform && (
+                        <span style={{ fontSize: 11, color: "#F59E0B", fontWeight: 600 }}>
+                          ⚠ Set in-scope platforms on this account first (Accounts tab)
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setScheduleOpenFor(d.id)}
+                        disabled={!allAssetsReady || !hasAnyPlatform}
+                        style={{
+                          ...BTN,
+                          background: (allAssetsReady && hasAnyPlatform) ? "#10B981" : "#374151",
+                          color: "white",
+                          opacity: (allAssetsReady && hasAnyPlatform) ? 1 : 0.5,
+                          cursor: (allAssetsReady && hasAnyPlatform) ? "pointer" : "not-allowed",
+                        }}
+                        title={
+                          !hasAnyPlatform ? "This account has no in-scope platforms configured. Set them on the account record (account.platforms.*.enabled) before scheduling."
+                          : !allAssetsReady ? "Waiting for Mac Mini worker to finish moving assets into Zernio."
+                          : "Schedule social posting"
+                        }
+                      >Schedule social posting</button>
+                      <button
+                        onClick={() => { fbSet(`/deliveries/${d.id}/scheduleBannerDismissed`, true); setD({ scheduleBannerDismissed: true }); }}
+                        style={{ ...BTN, background: "transparent", color: "var(--muted)", border: "1px solid var(--border)" }}
+                      >Dismiss</button>
+                    </div>
+                  )}
+                  {justScheduled && (
+                    <span style={{ fontSize: 12, color: "#10B981", fontWeight: 600 }}>
+                      ✓ Scheduled at {lastScheduleResult.at} · {lastScheduleResult.scheduleId.slice(0, 14)}…
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Videos table */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -242,6 +402,13 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 140 }}>Viewix Status</th>
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 120 }}>Rev Round 1</th>
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 120 }}>Rev Round 2</th>
+                  {/* Phase 2B caption — snapshotted from pre-prod at
+                      approval. Editable here pre-approval so the
+                      producer can fine-tune; the client sees this
+                      exact text alongside the video in the client
+                      portal Deliveries view and approves both
+                      together via the existing revision dropdown. */}
+                  <th style={{ ...TH, textAlign: "left", padding: "8px 12px", width: 200 }}>Caption</th>
                   <th style={{ ...TH, textAlign: "left", padding: "8px 12px", width: 180 }}>Notes</th>
                   {/* Posted — anyone can tick. Client view writes the
                       same /videos/{idx}/posted leaf via anon auth
@@ -258,6 +425,9 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.viewixStatus} options={VIEWIX_STATUSES} colors={VIEWIX_STATUS_COLORS} onChange={val => updateVideo(v.id, { viewixStatus: val })} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val => updateVideo(v.id, { revision1: val })} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val => updateVideo(v.id, { revision2: val })} /></td>
+                    <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)" }}>
+                      <textarea value={v.caption || ""} onChange={e => updateVideo(v.id, { caption: e.target.value })} placeholder="Caption (snapshotted from pre-prod at approval — edit before sharing if needed)" rows={2} style={{ ...inputSt, fontFamily: "inherit", resize: "vertical", minHeight: 38 }} />
+                    </td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)" }}><input value={v.notes || ""} onChange={e => updateVideo(v.id, { notes: e.target.value })} placeholder="Notes..." style={inputSt} /></td>
                     <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}>
                       <input type="checkbox"

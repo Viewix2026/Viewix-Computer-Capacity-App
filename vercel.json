@@ -138,6 +138,18 @@
     {
       "path": "/api/cron/transcript-insights-selfheal",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/social-asset-reconcile",
+      "schedule": "30 22 * * *"
+    },
+    {
+      "path": "/api/cron/social-asset-reconcile",
+      "schedule": "30 23 * * *"
+    },
+    {
+      "path": "/api/cron/social-schedule-sync",
+      "schedule": "*/15 * * * *"
     }
   ],
   "rewrites": [

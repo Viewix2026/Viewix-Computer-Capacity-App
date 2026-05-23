@@ -14,18 +14,46 @@
 //
 // Pinned by api/_clientRedact.test.mjs.
 
+import { extractCaptionsByVideoId, extractCaptionsByOrdinal } from "./_preprodCaptions.js";
+
 // Client-facing video status vocab is the same as the staff side.
-function videoRow(v, idx) {
+//
+// `preprodCaptionsById` + `preprodCaptionsByIdx` are pre-built by
+// redactProjectDetail from the linked /preproduction/socialOrganic
+// doc. Read-through fallback so the client SEES the caption while
+// deciding whether to approve. Codex P1 (pass 2) caught the original
+// gap; pass 3 corrected the schema walk (scriptTable, not the
+// nonexistent videos/posts/deliverables lists).
+//
+// Snapshot precedence: delivery's own caption (frozen at approval) →
+// pre-prod read-through by videoId (if scriptTable row carries one)
+// → pre-prod read-through by ordinal position (today's reality —
+// scriptTable rows are linked 1:1 to delivery.videos[] by index).
+// After approval the delivery wins forever — even if pre-prod gets
+// edited later, the client portal keeps showing the exact text the
+// client signed off.
+function videoRow(v, idx, preprodCaptionsById, preprodCaptionsByIdx) {
+  const videoId = v?.id || v?.videoId || null;
+  const snapshotted = v?.caption ? String(v.caption) : "";
+  let fallback = "";
+  if (!snapshotted) {
+    if (videoId && preprodCaptionsById && preprodCaptionsById[videoId]) {
+      fallback = preprodCaptionsById[videoId];
+    } else if (preprodCaptionsByIdx && preprodCaptionsByIdx[idx]) {
+      fallback = preprodCaptionsByIdx[idx];
+    }
+  }
   return {
     n: idx + 1,
     idx,                                   // RTDB array index — write path target
-    id: v?.id || null,                     // video id — write path target
+    id: videoId,                           // video id — write path target
     title: String(v?.name || ""),
     link: v?.link ? String(v.link) : "",
     viewixStatus: String(v?.viewixStatus || ""),
     revision1: String(v?.revision1 || ""),
     revision2: String(v?.revision2 || ""),
     posted: !!v?.posted,
+    caption: snapshotted || fallback,
   };
 }
 
@@ -56,19 +84,34 @@ export function derivePhase(project, delivery, preprod) {
   return 0;                                            // Kickoff
 }
 
+function clean(v) {
+  const s = String(v || "").trim();
+  return s || null;
+}
+
+function resolveAccountManagerEditor(account, editors) {
+  const target = clean(account?.accountManager)?.toLowerCase();
+  if (!target || !editors) return null;
+  const list = Array.isArray(editors) ? editors : Object.values(editors);
+  // Match account.accountManager to /editors by case-insensitive trimmed name.
+  // First match wins; current AM names are unique in the Viewix roster.
+  return list.find(ed => clean(ed?.name)?.toLowerCase() === target) || null;
+}
+
 // Curated PUBLIC account-manager block. Intentionally client-visible
-// (user-decided brief amendment). Maps ONLY these fields off the
-// account record; everything missing (the data model has no AM
-// photo / phone / booking URL today) returns null and the UI falls
-// back. Never copies projectLead or any other internal owner field.
-export function accountManagerBlock(account) {
-  const name = String(account?.accountManager || "").trim();
+// (user-decided brief amendment). Prefer the matching /editors roster
+// record for rich public details, then fall back to the account-level
+// override fields. Never copies projectLead or any other internal owner
+// field.
+export function accountManagerBlock(account, editors = null) {
+  const editor = resolveAccountManagerEditor(account, editors);
+  const name = clean(editor?.name) || clean(account?.accountManager);
   return {
-    name: name || null,
-    photo: account?.accountManagerPhoto || null,
-    phone: account?.accountManagerPhone || null,
-    email: account?.accountManagerEmail || null,
-    bookingUrl: account?.accountManagerBookingUrl || null,
+    name,
+    photo: clean(editor?.avatarUrl) || clean(account?.accountManagerPhoto),
+    phone: clean(editor?.phone) || clean(account?.accountManagerPhone),
+    email: clean(editor?.email) || clean(account?.accountManagerEmail),
+    bookingUrl: clean(editor?.bookingUrl) || clean(account?.accountManagerBookingUrl),
   };
 }
 
@@ -77,7 +120,7 @@ function orgName(project, account) {
 }
 
 // Dashboard list item. NOT a filtered project — a built projection.
-export function redactProjectListItem({ project, account, delivery, preprod }) {
+export function redactProjectListItem({ project, account, delivery, preprod, editors }) {
   const counts = deliveryCounts(delivery?.videos);
   return {
     projectId: project?.shortId || null,          // shortId, not raw internal id
@@ -88,7 +131,46 @@ export function redactProjectListItem({ project, account, delivery, preprod }) {
     productLine: project?.productLine || null,
     counts,
     needsYou: counts.ready > 0 && counts.approved < counts.total,
-    accountManager: accountManagerBlock(account),
+    accountManager: accountManagerBlock(account, editors),
+  };
+}
+
+// ─── redactConnectionStatus ────────────────────────────────────────
+// Per-platform social-account connection state served to the client
+// portal Connected Accounts view (/clients/accounts). NEVER leaks any
+// Zernio internals — profileId, accessUrl, refresh tokens, etc. The
+// client knows: which platform, whether it's connected, when it was
+// last connected, whether action is needed. Nothing more.
+//
+// `refreshBy` is a proactive token-expiry hint. Zernio's published
+// event vocabulary doesn't include a dedicated refresh event, so this
+// stays null today; the field is kept so the portal can surface a
+// "reconnect soon" nudge if/when Zernio exposes expiry timing.
+export function redactConnectionStatus({ platform, status, lastConnected, refreshBy }) {
+  return {
+    platform: String(platform || ""),
+    status: String(status || "unknown"),     // "connected" | "disconnected" | "expiring"
+    lastConnected: lastConnected || null,
+    refreshBy: refreshBy || null,
+  };
+}
+
+// ─── redactScheduleItem ────────────────────────────────────────────
+// One row of the client portal Posting Schedule tab. Strips
+// everything that isn't safe to surface: zernioPostId, zernioMediaUrl,
+// frameioFileId, clientReferenceId, batchId, profileId. The client
+// sees the post they're getting, when it goes out, where, and its
+// current status — read-only for v1. Reschedule / change-caption from
+// the portal is deferred (Phase 7+).
+export function redactScheduleItem(item, video) {
+  return {
+    videoName: String(video?.name || video?.title || ""),
+    postAt: item?.postAt || null,
+    caption: item?.caption ? String(item.caption) : "",
+    platforms: Array.isArray(item?.platforms) ? item.platforms.map(String) : [],
+    trialReel: !!item?.trialReel,
+    status: String(item?.status || "pending"),  // "pending" | "posted" | "failed" | "cancelled"
+    permalink: item?.permalink ? String(item.permalink) : null,
   };
 }
 
@@ -97,10 +179,18 @@ export function redactProjectListItem({ project, account, delivery, preprod }) {
 // client-safe ClientReview cockpit (the same one /p/{shortId} serves
 // in production today) — so detail returns a handle (type + shortId +
 // url), never the raw /preproduction node.
-export function redactProjectDetail({ project, account, delivery, preprod, deliveryUrl, preprodUrl }) {
+export function redactProjectDetail({ project, account, delivery, preprod, deliveryUrl, preprodUrl, editors }) {
   const videos = Array.isArray(delivery?.videos) ? delivery.videos : [];
   const counts = deliveryCounts(videos);
   const preprodType = project?.links?.preprodType || null; // "metaAds" | "socialOrganic"
+  // Build the pre-prod caption fallback ONCE per detail-render so we
+  // don't re-walk the preprod doc per video. Only socialOrganic has
+  // captions today — metaAds preprod is ad-scripts, not posting copy.
+  // Two maps because today's scriptTable rows don't carry videoIds —
+  // the ordinal lookup is the working path; the by-id lookup is
+  // future-proofing for when rows do carry explicit videoIds.
+  const preprodCaptionsById  = (preprodType === "socialOrganic" && preprod) ? extractCaptionsByVideoId(preprod) : {};
+  const preprodCaptionsByIdx = (preprodType === "socialOrganic" && preprod) ? extractCaptionsByOrdinal(preprod) : [];
   return {
     projectId: project?.shortId || null,
     orgName: orgName(project, account),
@@ -108,14 +198,14 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
     status: project?.status === "archived" ? "archived" : "active",
     phase: derivePhase(project, delivery, preprod),
     productLine: project?.productLine || null,
-    accountManager: accountManagerBlock(account),
+    accountManager: accountManagerBlock(account, editors),
     deliveries: delivery ? {
       available: true,
       deliveryId: delivery.id || null,            // leaf write path target
       shortId: delivery.shortId || null,
       url: deliveryUrl || null,
       counts,
-      rows: videos.map((v, i) => videoRow(v, i)),
+      rows: videos.map((v, i) => videoRow(v, i, preprodCaptionsById, preprodCaptionsByIdx)),
     } : { available: false },
     preproduction: preprod && preprodType ? {
       available: true,
