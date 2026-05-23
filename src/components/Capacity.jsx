@@ -115,7 +115,7 @@ export function Capacity({
     setTeamHome(p => {
       const merged = { ...(p?.videoOfTheWeek || votwSource || {}), ...patch };
       // Persist each patched leaf directly. Object.entries preserves
-      // the field name so e.g. updateVotw({ creator: "Vish",
+      // the field name so e.g. updateVotw({ creator: "Sophie",
       // updatedAt: ts }) writes /teamHome/videoOfTheWeek/creator
       // and /teamHome/videoOfTheWeek/updatedAt independently.
       Object.entries(patch).forEach(([k, v]) => {
@@ -581,7 +581,7 @@ export function Capacity({
                   type="text"
                   value={votwSource?.creator || ""}
                   onChange={e => updateVotw({ creator: e.target.value, updatedAt: new Date().toISOString() })}
-                  placeholder="e.g. Vish + Steve"
+                  placeholder="e.g. Sophie + Steve"
                   style={{ width: "100%", padding: "10px 14px", fontSize: 13, color: "var(--fg)", background: "var(--input-bg)", border: "1px solid var(--border)", borderRadius: 8, outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
                 />
               </div>
