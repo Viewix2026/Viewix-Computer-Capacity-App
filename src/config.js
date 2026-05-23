@@ -73,7 +73,6 @@ export const DEF_EDS = [
   { id: "ed-7", name: "Luke", phone: "", email: "", bookingUrl: "", role: "editor", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
   { id: "ed-jeremy", name: "Jeremy", phone: "", email: "", bookingUrl: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
   { id: "ed-steve", name: "Steve", phone: "", email: "", bookingUrl: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
-  { id: "ed-vish", name: "Vish", phone: "", email: "", bookingUrl: "", role: "crew", defaultDays: { mon: true, tue: true, wed: true, thu: true, fri: true } },
 ];
 
 // ─── Default Inputs ───

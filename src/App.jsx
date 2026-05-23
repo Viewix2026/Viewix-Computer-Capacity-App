@@ -428,14 +428,12 @@ export default function App(){
 
   // [REMOVED 2026-05-18] A useEffect here used to force-re-add
   // Jeremy/Steve/Vish on every `editors.length` change if any were
-  // missing by name. It did NO fresh-DB seeding (it early-returned
-  // when the roster was empty) — `useState(DEF_EDS)` already seeds
-  // Jeremy/Steve/Vish on a fresh workspace. Its only real effect was
-  // making those three permanently undeletable: deleting Vish from
-  // the Team Roster removed him from state, length changed, the
-  // effect fired, and re-added him with a blank record in the same
-  // render — the "delete isn't working" bug Jeremy reported. Removed
-  // so roster deletes of any member actually stick.
+  // missing by name. It made those three permanently undeletable:
+  // deleting one removed it from state, length changed, the effect
+  // fired, and re-added it with a blank record in the same render —
+  // the "delete isn't working" bug Jeremy reported. Removed so roster
+  // deletes of any member actually stick. (Vish is also now gone from
+  // the DEF_EDS seed, so a fresh workspace won't reintroduce him.)
 
   // One-time migration: copy the public Home-page fields (teamQuote +
   // videoOfTheWeek) out of /foundersData into /teamHome where every

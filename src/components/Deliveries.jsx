@@ -781,7 +781,7 @@ function formatEndpointError(status, json) {
     case "delivery_not_found":
       return "This delivery record can't be found in Firebase.";
     case "no_project_for_delivery":
-      return "No project links to this delivery. Open the project record and set links.deliveryId, then retry.";
+      return "Can't match this delivery to a project. We auto-link by exact Client Name + Project Name — check those fields here match the project record exactly (no extra prefixes/typos), then retry.";
     case "no_client_email":
       return "The project has no client email on file. Add clientContact.email to the project before sending.";
     case "no_delivery_url":

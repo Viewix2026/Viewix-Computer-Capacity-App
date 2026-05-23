@@ -34,7 +34,7 @@ import {
 const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null });
 import { BTN } from "../config";
 import { fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
-import { fbSet, fbUpdate } from "../firebase";
+import { fbSet, fbUpdate, getCurrentUserName, getCurrentUserEmail } from "../firebase";
 import { Deliveries } from "./Deliveries";
 import { TeamBoard } from "./TeamBoard";
 import { ClientGoalPill } from "./ClientGoalPill";
@@ -199,17 +199,40 @@ function subtasksAsArray(subtasksObj) {
 // the changed slice) because legacy records often have sparse / null
 // orders and a clean 0-based sequence is easier to reason about. Only
 // the writes that actually change anything are sent.
-function reorderSubtasks(projectId, subtasks, activeId, overId) {
+function reorderSubtasks(projectId, subtasks, activeId, overId, setProjects) {
   if (!activeId || !overId || activeId === overId) return;
   const oldIndex = subtasks.findIndex(s => s.id === activeId);
   const newIndex = subtasks.findIndex(s => s.id === overId);
   if (oldIndex < 0 || newIndex < 0) return;
   const next = arrayMove(subtasks, oldIndex, newIndex);
+  // Only the rows whose index actually changed need a write.
+  const changed = [];
   next.forEach((st, idx) => {
-    if ((st.order ?? -1) !== idx) {
-      fbSet(`/projects/${projectId}/subtasks/${st.id}/order`, idx);
-    }
+    if ((st.order ?? -1) !== idx) changed.push([st.id, idx]);
   });
+  if (changed.length === 0) return;
+  // OPTIMISTIC LOCAL UPDATE — without this the dragged row snaps back to
+  // its original position. The fbSet writes below land in Firebase fine,
+  // but App.jsx's recentlyWroteTo("/projects") guard suppresses the
+  // listener echo for ~1.5s, so the local `projects` array keeps the old
+  // `order` values and the SortableContext re-renders in the old order.
+  // Same fix the Team Board drag (patchSubtaskLocal) and the project-row
+  // commission drag above already apply. Patch local state FIRST, then
+  // persist, so the suppressed echo can't race ahead with a stale snapshot.
+  if (typeof setProjects === "function") {
+    const ts = new Date().toISOString();
+    setProjects(prev => prev.map(p => {
+      if (!p || p.id !== projectId) return p;
+      const subs = { ...(p.subtasks || {}) };
+      for (const [sid, ord] of changed) {
+        if (subs[sid]) subs[sid] = { ...subs[sid], order: ord };
+      }
+      return { ...p, subtasks: subs, updatedAt: ts };
+    }));
+  }
+  for (const [sid, ord] of changed) {
+    fbSet(`/projects/${projectId}/subtasks/${sid}/order`, ord);
+  }
 }
 
 // Resolve a project's Sherpa Doc URL for the chip rendered in the
@@ -924,7 +947,7 @@ function MultiAssigneePicker({ value, editors, onChange }) {
   );
 }
 
-function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects, setDeliveries }) {
+function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects, setDeliveries, highlighted }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
   // useSortable wires this row into whatever <SortableContext> wraps
   // it (project details + the projects sub-tab list each have their
@@ -935,6 +958,17 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
     attributes: dragAttrs, listeners: dragListeners,
     setNodeRef: setDragRef, transform, transition, isDragging,
   } = useSortable({ id: subtask.id });
+  // Merged callback ref — useSortable owns the row node for drag
+  // measurement, but we also need our own handle to scroll the row into
+  // view when it's the one a Team Board click landed on. A second plain
+  // ref on the same <tr> would clobber the sortable wiring, so combine.
+  const rowDomRef = useRef(null);
+  const setRowRef = (node) => { setDragRef(node); rowDomRef.current = node; };
+  useEffect(() => {
+    if (highlighted && rowDomRef.current) {
+      rowDomRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [highlighted]);
   const persist = (field, value) => {
     // Leads can rename video subtasks, but all other view-only writes
     // stay locked.
@@ -1077,10 +1111,11 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
   // is obvious.
   return (
     <tr
-      ref={setDragRef}
+      ref={setRowRef}
       style={{
-        background: baseBg,
+        background: highlighted ? "rgba(0,130,250,0.16)" : baseBg,
         borderBottom: "1px solid var(--border)",
+        boxShadow: highlighted ? "inset 3px 0 0 var(--accent)" : undefined,
         transform: DndCSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.5 : 1,
@@ -1663,7 +1698,7 @@ function ProjectTable({ projects, allProjects, setProjects, setDeliveries, deliv
     if (!owning) return;
     const subs = subtasksAsArray(owning.subtasks);
     if (!subs.some(s => s.id === over.id)) return; // dragged outside the project's group — ignore
-    reorderSubtasks(owning.id, subs, active.id, over.id);
+    reorderSubtasks(owning.id, subs, active.id, over.id, setProjects);
   };
 
   return (
@@ -1948,11 +1983,17 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
     setSaving(true);
     const id = `cm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
+    // authorRole is still stored for the record (and as a display
+    // fallback for legacy entries that predate authorName), but the
+    // thread now labels each comment with the actual person's name —
+    // everyone has an individual login, so "who said this" beats a
+    // generic role badge.
     const authorRole = viewerRole === "founders" || viewerRole === "manager" || viewerRole === "founder"
-      ? "Founder"
+      ? "Manager"
       : viewerRole === "lead" ? "Lead"
       : "Producer";
-    const entry = { id, text, authorRole, createdAt: now };
+    const authorName = getCurrentUserName() || getCurrentUserEmail() || "Unknown";
+    const entry = { id, text, authorRole, authorName, createdAt: now };
     if (typeof setProjects === "function" && project?.id) {
       setProjects(prev => prev.map(p =>
         p && p.id === project.id
@@ -1984,13 +2025,10 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
               borderRadius: 8,
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{
-                  fontSize: 9, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase",
-                  padding: "2px 6px", borderRadius: 3,
-                  background: e.authorRole === "Founder" ? "rgba(0,130,250,0.15)" : "rgba(139,92,246,0.15)",
-                  color: e.authorRole === "Founder" ? "#0082FA" : "#8B5CF6",
-                }}>
-                  {e.authorRole}
+                {/* Name only — the actual commenter (falls back to the
+                    stored role for legacy entries that have no name). */}
+                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)" }}>
+                  {e.authorName || e.authorRole || "Unknown"}
                 </span>
                 <span style={{ fontSize: 10, color: "var(--muted)", fontFamily: "'JetBrains Mono',monospace" }}>
                   {e.createdAt ? new Date(e.createdAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : ""}
@@ -2043,7 +2081,7 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
   );
 }
 
-function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries }) {
+function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries, highlightSubtaskId }) {
   const { viewOnly, canEditKickoff, canEditProducerNotes, role: viewerRole } = useContext(ProjectsAccessContext);
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
@@ -2327,7 +2365,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                     sensors={subtaskDragSensors}
                     collisionDetection={closestCenter}
                     onDragEnd={({ active, over }) => {
-                      if (over) reorderSubtasks(project.id, subtasks, active.id, over.id);
+                      if (over) reorderSubtasks(project.id, subtasks, active.id, over.id, setProjects);
                     }}>
                     <SortableContext items={subtasks.map(s => s.id)} strategy={verticalListSortingStrategy}>
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -2341,6 +2379,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                               editors={editors}
                               deliveries={deliveries}
                               striped={idx % 2 === 1}
+                              highlighted={highlightSubtaskId === st.id}
                               setProjects={setProjects}
                               setDeliveries={setDeliveries}
                               onDelete={(stId) => {
@@ -2384,20 +2423,14 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
         );
       })()}
 
-      <FieldCard label="Producer Notes" hint="Internal — won't be shown to the client.">
-        <InlineTextArea value={project.producerNotes || ""}
-          placeholder="Anything your future self / the editor needs to know about this project…"
-          onSave={(v) => persistField("producerNotes", v)} />
-      </FieldCard>
-
-      {/* Producer Comments thread — append-only chronological log
-          below the free-form Producer Notes scratchpad above. The
-          notes field is the canonical brief the editor reads at the
-          top; this thread is for back-and-forth between the founder
-          / project lead while the work's running. Leads can post
-          here despite being viewOnly elsewhere — they're authoring
-          briefs, not editing project metadata, so the carve-out
-          matches the producer-notes one above. */}
+      {/* Producer Comments thread — append-only chronological log of
+          back-and-forth between the founder / project lead while the
+          work's running. (The old free-form "Producer Notes" textarea
+          that used to sit above this was removed — the comment thread
+          is now the single place for notes on a project.) Leads can
+          post here despite being viewOnly elsewhere — they're authoring
+          briefs, not editing project metadata, so the carve-out is the
+          same one persistField applies to producerNotes. */}
       {canEditProducerNotes && (
         <ProducerCommentsCard
           project={project}
@@ -2423,7 +2456,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries }) {
+function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries, highlightSubtaskId }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -2484,6 +2517,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
           accounts={accounts}
           setProjects={setProjects}
           setDeliveries={setDeliveries}
+          highlightSubtaskId={highlightSubtaskId}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -2514,6 +2548,9 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   // same Firebase paths the full view writes to, so no extra wiring
   // needed for cross-tab sync.
   const [quickViewProjectId, setQuickViewProjectId] = useState(null);
+  // Subtask the Team Board click landed on, so the quick-view detail
+  // panel can scroll to + highlight it. Null when opened any other way.
+  const [quickViewSubtaskId, setQuickViewSubtaskId] = useState(null);
   // Default to "active" so producers land on the workable pipeline
   // (everything except Done + Archived). They can still flip to All
   // / Done / Archived from the filter pills. The Projects sub-tab is
@@ -2907,7 +2944,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
             editors={editors}
             setEditors={setEditors}
             weekData={weekData}
-            onOpenProject={(id) => setQuickViewProjectId(id)}
+            onOpenProject={(id, subtaskId) => { setQuickViewProjectId(id); setQuickViewSubtaskId(subtaskId || null); }}
           />
           {/* Quick-view modal — renders the full ProjectDetail editor
               over the team board. All edits persist to the same
@@ -2928,10 +2965,12 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
                 accounts={accounts}
                 setProjects={setProjects}
                 setDeliveries={setDeliveries}
-                onClose={() => setQuickViewProjectId(null)}
+                highlightSubtaskId={quickViewSubtaskId}
+                onClose={() => { setQuickViewProjectId(null); setQuickViewSubtaskId(null); }}
                 onDelete={async () => {
                   await deleteProject(qv.id);
                   setQuickViewProjectId(null);
+                  setQuickViewSubtaskId(null);
                 }}
               />
             ) : null;
