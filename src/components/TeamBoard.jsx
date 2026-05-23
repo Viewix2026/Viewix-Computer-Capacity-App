@@ -281,6 +281,99 @@ function StageLegend() {
   );
 }
 
+// Modal for the "Filter by client" control. Operates on the blacklist
+// set (hiddenClients): a ticked box = visible = NOT in the set. Default
+// state (empty set) shows everything. Backdrop click or ESC closes.
+function ClientFilterModal({ allClients, hiddenClients, setHiddenClients, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const toggle = (client) => {
+    setHiddenClients(prev => {
+      const next = new Set(prev);
+      if (next.has(client)) next.delete(client); // was hidden → show
+      else next.add(client);                     // was visible → hide
+      return next;
+    });
+  };
+  const selectAll = () => setHiddenClients(new Set());
+  const deselectAll = () => setHiddenClients(new Set(allClients));
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)",
+        zIndex: 100,
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        padding: "8vh 4vw",
+      }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "var(--card)", border: "1px solid var(--border)",
+          borderRadius: 12, width: "min(420px, 100%)", maxHeight: "80vh",
+          display: "flex", flexDirection: "column",
+          boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+        }}>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "16px 18px 12px", borderBottom: "1px solid var(--border)",
+        }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)" }}>Filter by client</span>
+          <button
+            onClick={onClose}
+            aria-label="Close" title="Close (Esc)"
+            style={{
+              width: 28, height: 28, borderRadius: 8, border: "1px solid var(--border)",
+              background: "var(--bg)", color: "var(--fg)", fontSize: 16, fontWeight: 700,
+              cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "inherit",
+            }}>×</button>
+        </div>
+        <div style={{ display: "flex", gap: 8, padding: "10px 18px" }}>
+          <button type="button" onClick={selectAll} style={FILTER_PILL_BTN}>Select all</button>
+          <button type="button" onClick={deselectAll} style={FILTER_PILL_BTN}>Deselect all</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: "0 18px 16px", display: "flex", flexDirection: "column", gap: 2 }}>
+          {allClients.map(client => {
+            const checked = !hiddenClients.has(client);
+            return (
+              <label key={client} style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "7px 6px", borderRadius: 6, cursor: "pointer",
+                fontSize: 13, color: "var(--fg)",
+              }}
+                onMouseEnter={e => { e.currentTarget.style.background = "var(--bg)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(client)}
+                  style={{ accentColor: "var(--accent)", width: 16, height: 16, cursor: "pointer" }}
+                />
+                <span style={{ flex: 1 }}>{client}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const FILTER_PILL_BTN = {
+  flex: 1, padding: "6px 10px", borderRadius: 6,
+  border: "1px solid var(--border)", background: "var(--bg)", color: "var(--fg)",
+  fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+  textTransform: "uppercase", letterSpacing: 0.4,
+};
+
 // ─── Drag-related primitives ───────────────────────────────────────
 
 // A scheduled Gantt bar. The parent passes the grid column span via the
@@ -608,6 +701,44 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
     return out;
   }, [projects]);
 
+  // ── Client filter ──────────────────────────────────────────────────
+  // Blacklist model: we store the set of clients the producer has chosen
+  // to HIDE (not a whitelist of selected ones). Empty set = everything
+  // visible. This means a newly-scheduled client shows by default — you
+  // never silently miss fresh work — and a narrowed view never silently
+  // widens. Local view preference, so it lives in localStorage like the
+  // per-row collapse state below.
+  const HIDDEN_CLIENTS_LS_KEY = "viewix.teamBoard.hiddenClients";
+  const [hiddenClients, setHiddenClients] = useState(() => {
+    try {
+      const raw = localStorage.getItem(HIDDEN_CLIENTS_LS_KEY);
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(HIDDEN_CLIENTS_LS_KEY, JSON.stringify([...hiddenClients]));
+    } catch { /* storage disabled / quota — non-fatal */ }
+  }, [hiddenClients]);
+  const [filterOpen, setFilterOpen] = useState(false);
+
+  // Distinct client names that actually have work on the board, sorted.
+  // "Scheduled clients only" by construction — we read off flatSubtasks.
+  const allClients = useMemo(() => {
+    const set = new Set();
+    for (const st of flatSubtasks) if (st.clientName) set.add(st.clientName);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [flatSubtasks]);
+
+  // Apply the filter once, here, so both the editor-row grouping and the
+  // pool drawer below see the same narrowed set.
+  const visibleSubtasks = useMemo(
+    () => flatSubtasks.filter(st => !hiddenClients.has(st.clientName)),
+    [flatSubtasks, hiddenClients]
+  );
+
   // Two bins:
   //   - scheduled: per-editor list of bars to render in that editor's
   //     row. A multi-assignee subtask appears once in EACH of its
@@ -624,7 +755,7 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
   const { scheduled, pool } = useMemo(() => {
     const scheduled = new Map();
     const pool = [];
-    for (const st of flatSubtasks) {
+    for (const st of visibleSubtasks) {
       const ids = getAssigneeIds(st);
       const validIds = ids.filter(id => editorIds.has(id));
       const hasDates = !!st.startDate;
@@ -658,7 +789,7 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       return (a.clientName || "").localeCompare(b.clientName || "");
     });
     return { scheduled, pool };
-  }, [flatSubtasks, editorIds, editorById]);
+  }, [visibleSubtasks, editorIds, editorById]);
 
   // Rows are just the editor roster now. The "Unassigned" lane has
   // moved out of the main grid into the bottom pool drawer below it.
@@ -1077,25 +1208,60 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
         gap: 16, padding: "0 4px 12px", flexWrap: "wrap",
       }}>
         <StageLegend />
-        {editors.length > 0 && (
-          <button
-            type="button"
-            onClick={allCollapsed ? expandAll : collapseAll}
-            title={allCollapsed ? "Expand every row" : "Collapse every row"}
-            style={{
-              background: "none", border: "none", padding: "2px 4px",
-              margin: 0, cursor: "pointer",
-              color: "var(--fg)", opacity: 0.55,
-              fontSize: 11, fontWeight: 700, lineHeight: 1,
-              fontFamily: "inherit", whiteSpace: "nowrap",
-              textTransform: "uppercase", letterSpacing: 0.4,
-              transition: "opacity 0.12s",
-            }}
-            onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
-            onMouseLeave={e => { e.currentTarget.style.opacity = 0.55; }}
-          >{allCollapsed ? "▾ Expand all" : "▸ Collapse all"}</button>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {allClients.length > 0 && (() => {
+            const visibleCount = allClients.filter(c => !hiddenClients.has(c)).length;
+            const narrowed = hiddenClients.size > 0;
+            return (
+              <button
+                type="button"
+                onClick={() => setFilterOpen(true)}
+                title="Filter the board by client"
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  background: narrowed ? "var(--accent-soft, rgba(0,130,250,0.15))" : "none",
+                  border: `1px solid ${narrowed ? "var(--accent)" : "var(--border)"}`,
+                  borderRadius: 6, padding: "4px 10px", margin: 0, cursor: "pointer",
+                  color: narrowed ? "var(--accent)" : "var(--fg)",
+                  opacity: narrowed ? 1 : 0.7,
+                  fontSize: 11, fontWeight: 700, lineHeight: 1,
+                  fontFamily: "inherit", whiteSpace: "nowrap",
+                  textTransform: "uppercase", letterSpacing: 0.4,
+                  transition: "opacity 0.12s",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+                onMouseLeave={e => { e.currentTarget.style.opacity = narrowed ? 1 : 0.7; }}
+              >⛃ Filter{narrowed ? ` (${visibleCount}/${allClients.length})` : ""}</button>
+            );
+          })()}
+          {editors.length > 0 && (
+            <button
+              type="button"
+              onClick={allCollapsed ? expandAll : collapseAll}
+              title={allCollapsed ? "Expand every row" : "Collapse every row"}
+              style={{
+                background: "none", border: "none", padding: "2px 4px",
+                margin: 0, cursor: "pointer",
+                color: "var(--fg)", opacity: 0.55,
+                fontSize: 11, fontWeight: 700, lineHeight: 1,
+                fontFamily: "inherit", whiteSpace: "nowrap",
+                textTransform: "uppercase", letterSpacing: 0.4,
+                transition: "opacity 0.12s",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+              onMouseLeave={e => { e.currentTarget.style.opacity = 0.55; }}
+            >{allCollapsed ? "▾ Expand all" : "▸ Collapse all"}</button>
+          )}
+        </div>
       </div>
+      {filterOpen && (
+        <ClientFilterModal
+          allClients={allClients}
+          hiddenClients={hiddenClients}
+          setHiddenClients={setHiddenClients}
+          onClose={() => setFilterOpen(false)}
+        />
+      )}
       {/* No toolbar — the calendar is purely scroll-driven. The grid
           starts on the Monday of the current week and extends right as
           the producer scrolls. */}
@@ -1482,7 +1648,7 @@ function Row({ row, editor, weekData, rowIdx, startRow, laneCount, laneBars, dat
             <GanttBar
               subtask={st}
               sourceAssigneeId={row.id}
-              onClick={() => onOpenProject?.(st.projectId)}
+              onClick={() => onOpenProject?.(st.projectId, st.id)}
             />
           </div>
         );
@@ -1547,7 +1713,7 @@ function PoolDrawer({ poolId, pool, editors, onOpenProject }) {
               key={st.id}
               subtask={st}
               editors={editors}
-              onClick={() => onOpenProject?.(st.projectId)}
+              onClick={() => onOpenProject?.(st.projectId, st.id)}
             />
           ))}
         </div>

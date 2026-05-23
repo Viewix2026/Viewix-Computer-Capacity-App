@@ -53,11 +53,11 @@ const ringColorFor = (acct, milestoneKey) => {
   return rule && rule.milestoneKey === milestoneKey ? rule.color : null;
 };
 
-const ACCOUNT_MANAGERS = ["Jeremy", "Steve", "Vish"];
+const ACCOUNT_MANAGERS = ["Jeremy", "Steve", "Sophie"];
 const MANAGER_COLORS = {
   "Jeremy": { bg: "rgba(0,130,250,0.12)", color: "#0082FA" },
   "Steve": { bg: "rgba(139,92,246,0.12)", color: "#8B5CF6" },
-  "Vish": { bg: "rgba(16,185,129,0.12)", color: "#10B981" },
+  "Sophie": { bg: "rgba(16,185,129,0.12)", color: "#10B981" },
 };
 
 const STATUSES = ["Scheduled", "Completed", "Skipped", "TBC", "N/A"];
@@ -207,6 +207,21 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
       return { ...prev, [id]: acct };
     });
   };
+
+  // One-time data migration: the account manager formerly named "Vish"
+  // is now "Sophie". Re-map any existing account still pointing at the
+  // old name. Routed through updateAccount (not a raw fbUpdate) so the
+  // matching /clients record gets the same change via syncToSherpas.
+  // Naturally idempotent: once an account flips to Sophie it no longer
+  // matches, so re-runs are no-ops.
+  useEffect(() => {
+    for (const a of Object.values(accounts || {})) {
+      if (a && a.id && a.accountManager === "Vish") {
+        updateAccount(a.id, { accountManager: "Sophie" });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts]);
 
   const updateMilestone = (id, milestoneKey, patch) => {
     setAccounts(prev => {

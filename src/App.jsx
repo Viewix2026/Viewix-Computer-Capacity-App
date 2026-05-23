@@ -422,8 +422,11 @@ export default function App(){
     });
   }, [projects, deliveries]);
 
-  // Backfill missing crew members (Jeremy/Steve/Vish) into the roster — one-time per workspace.
-  useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"},{id:"ed-vish",name:"Vish"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);
+  // Backfill missing permanent crew (Jeremy/Steve) into the roster.
+  // Vish was removed from this list — he kept reappearing after deletion
+  // because this effect re-added anyone missing whenever the roster
+  // length changed, undoing the delete before it could persist.
+  useEffect(()=>{if(!editors.length)return;const required=[{id:"ed-jeremy",name:"Jeremy"},{id:"ed-steve",name:"Steve"}];const existingNames=new Set(editors.map(e=>(e.name||"").toLowerCase()));const toAdd=required.filter(r=>!existingNames.has(r.name.toLowerCase()));if(toAdd.length===0)return;setEditors(prev=>[...prev,...toAdd.map(r=>({id:r.id,name:r.name,phone:"",email:"",role:"crew",defaultDays:{mon:true,tue:true,wed:true,thu:true,fri:true}}))]);},[editors.length]);
 
   // One-time migration: copy the public Home-page fields (teamQuote +
   // videoOfTheWeek) out of /foundersData into /teamHome where every
