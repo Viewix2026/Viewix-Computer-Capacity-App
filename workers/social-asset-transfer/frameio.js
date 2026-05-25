@@ -103,21 +103,25 @@ export async function getOriginalMediaUrl(fileId) {
     throw err;
   }
   const json = await resp.json();
+  // V4 wraps the entity in a `data` envelope (same shape GET /v4/accounts
+  // returns). Read media_links + metadata from `data`; tolerate a bare
+  // object too, in case of response-shape drift.
+  const file = json?.data || json;
   const downloadUrl =
-    json?.media_links?.original?.download_url ||
-    json?.original?.download_url ||
+    file?.media_links?.original?.download_url ||
+    file?.original?.download_url ||
     null;
   if (!downloadUrl) {
-    const err = new Error(`Frame.io file ${fileId} response missing media_links.original.download_url`);
+    const err = new Error(`Frame.io file ${fileId} response missing data.media_links.original.download_url`);
     err.code = "FRAMEIO_NO_DOWNLOAD_URL";
     err.body = json;
     throw err;
   }
   return {
     downloadUrl,
-    name: json.name || null,
-    versionId: json.current_version_id || json.version_id || null,
-    fileType: json.file_type || json.mime_type || null,
-    fileSize: typeof json.file_size === "number" ? json.file_size : null,
+    name: file.name || null,
+    versionId: file.current_version_id || file.version_id || null,
+    fileType: file.file_type || file.media_type || file.mime_type || null,
+    fileSize: typeof file.file_size === "number" ? file.file_size : null,
   };
 }
