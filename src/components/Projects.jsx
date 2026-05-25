@@ -21,6 +21,7 @@ import {
   STAGE_MAP as SUBTASK_STAGE_MAP,
   inferStage,
 } from "../../shared/scheduling/stages.js";
+import { isActiveProject, isOverdueEdit, effectiveDueDate } from "../../shared/scheduling/overdue.js";
 
 // View-only context — Lead role gets read-only access to the Projects
 // tab (PR #N). Every editable surface inside this file reads from
@@ -2792,6 +2793,47 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
 
       {subTab === "projects" && !active && (
         <div style={{ padding: "16px 28px 60px" }}>
+          {/* Phase 3 (#5): "Overdue" — active-section projects with at
+              least one edit dated beyond the effective due date. Pinned
+              at the very top for visibility (this is NOT "Behind
+              Schedule" — that term now means the per-edit roll-over). */}
+          {(() => {
+            const overdueProjects = (projects || []).filter(p =>
+              isActiveProject(p) && Object.values(p.subtasks || {}).some(st => isOverdueEdit(st, p))
+            );
+            if (overdueProjects.length === 0) return null;
+            return (
+              <div style={{
+                marginBottom: 14, padding: "12px 14px", borderRadius: 8,
+                border: "1px solid rgba(234,179,8,0.5)", background: "rgba(234,179,8,0.10)",
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#EAB308", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+                  ⚠ Overdue · {overdueProjects.length}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {overdueProjects.map(p => {
+                    const due = effectiveDueDate(p);
+                    const n = Object.values(p.subtasks || {}).filter(st => isOverdueEdit(st, p)).length;
+                    return (
+                      <button key={p.id} type="button" onClick={() => setActiveProjectId(p.id)}
+                        title={`${n} edit${n === 1 ? "" : "s"} past due${due ? ` · due ${due}` : ""}`}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8,
+                          padding: "6px 10px", borderRadius: 6, cursor: "pointer",
+                          border: "1px solid var(--border)", background: "var(--card)",
+                          color: "var(--fg)", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = "#EAB308"; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
+                        <span>{p.clientName ? `${p.clientName}: ` : ""}{p.projectName || "Untitled"}</span>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: "#EAB308", background: "rgba(234,179,8,0.18)", borderRadius: 10, padding: "1px 7px" }}>{n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
           {/* Live count of active parent projects — projects whose
               status normalises to anything except done / archived,
               regardless of which filter pill is currently selected.
