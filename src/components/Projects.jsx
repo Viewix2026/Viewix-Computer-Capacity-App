@@ -21,6 +21,7 @@ import {
   STAGE_MAP as SUBTASK_STAGE_MAP,
   inferStage,
 } from "../../shared/scheduling/stages.js";
+import { computeSelectsTimelineWrites } from "../../shared/scheduling/selects.js";
 
 // View-only context — Lead role gets read-only access to the Projects
 // tab (PR #N). Every editable surface inside this file reads from
@@ -947,7 +948,7 @@ function MultiAssigneePicker({ value, editors, onChange }) {
   );
 }
 
-function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects, setDeliveries, highlighted }) {
+function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects, setDeliveries, highlighted, onShootScheduled }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
   // useSortable wires this row into whatever <SortableContext> wraps
   // it (project details + the projects sub-tab list each have their
@@ -1102,6 +1103,26 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
         if (idx >= 0) {
           fbSet(`/deliveries/${delId}/videos/${idx}/viewixStatus`, "Ready for Review");
         }
+      }
+    }
+
+    // Phase 2 (#3): when a SHOOT subtask's date is set/changed, keep the
+    // project's Selects Timeline subtask in sync (shoot+1, lead-assigned,
+    // top priority). The actual computation needs accounts/weekData/all-
+    // projects context that ProjectDetail holds, so we hand the freshly-
+    // updated project up via onShootScheduled and let it run the shared
+    // helper + open the picker modal when the lead is unavailable.
+    if (field === "startDate" && value && typeof onShootScheduled === "function") {
+      const isShoot = subtask.stage === "shoot" || (subtask.name || "").toLowerCase().includes("shoot");
+      if (isShoot) {
+        const updatedProject = {
+          ...project,
+          subtasks: {
+            ...(project?.subtasks || {}),
+            [subtask.id]: { ...subtask, startDate: value },
+          },
+        };
+        onShootScheduled(updatedProject);
       }
     }
   };
@@ -2081,12 +2102,70 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
   );
 }
 
-function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries, highlightSubtaskId }) {
+function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries, highlightSubtaskId, weekData, allProjects }) {
   const { viewOnly, canEditKickoff, canEditProducerNotes, role: viewerRole } = useContext(ProjectsAccessContext);
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
+  // Phase 2 (#3): picker modal state when the Selects-timeline auto-sync
+  // can't safely place the task on the Project Lead (lead off / has
+  // another shoot that day). Null when closed.
+  const [selectsPicker, setSelectsPicker] = useState(null);
+
+  // Apply the leaf writes the Selects helper returned: optimistic local
+  // update first (echo guard), then per-leaf fbSet.
+  const applySelectsWrites = (writes) => {
+    if (!writes?.length) return;
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== project.id) return p;
+        const subs = { ...(p.subtasks || {}) };
+        for (const w of writes) {
+          const m = w.path.match(/\/subtasks\/([^/]+)\/(.+)$/);
+          if (!m) continue;
+          const sid = m[1];
+          const field = m[2];
+          const cur = { ...(subs[sid] || {}) };
+          if (field.startsWith("dayPriority/")) {
+            const key = field.slice("dayPriority/".length);
+            cur.dayPriority = { ...(cur.dayPriority || {}), [key]: w.value };
+          } else {
+            cur[field] = w.value;
+          }
+          subs[sid] = cur;
+        }
+        return { ...p, subtasks: subs };
+      }));
+    }
+    for (const w of writes) fbSet(w.path, w.value);
+  };
+
+  // Run the shared Selects-timeline sync against a freshly-updated project
+  // (passed up from SubtaskRow after a shoot date change). overrideAssignee
+  // is supplied when the producer picks someone in the modal.
+  const runSelectsSync = (updatedProject, overrideAssigneeId) => {
+    const leadId = resolveProjectLeadId(updatedProject, accounts, editors);
+    const res = computeSelectsTimelineWrites(updatedProject, {
+      allProjects: allProjects || [],
+      editors: editors || [],
+      weekData: weekData || {},
+      leadId,
+      overrideAssigneeId: overrideAssigneeId || null,
+    });
+    if (res.writes) { applySelectsWrites(res.writes); setSelectsPicker(null); }
+    else if (res.needsPicker) {
+      setSelectsPicker({
+        updatedProject,
+        selectsDate: res.selectsDate,
+        candidates: res.candidates || [],
+      });
+    }
+    // res.noop → nothing to do
+  };
+  // Only wire the auto-sync when we have the full context (the Team Board
+  // quick-view doesn't pass weekData/allProjects yet — see PR notes).
+  const onShootScheduled = allProjects ? runSelectsSync : undefined;
 
   // dnd-kit sensor for the subtasks list. 6px activation distance keeps
   // a producer's casual click on the drag handle from being read as a
@@ -2382,6 +2461,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
                               highlighted={highlightSubtaskId === st.id}
                               setProjects={setProjects}
                               setDeliveries={setDeliveries}
+                              onShootScheduled={onShootScheduled}
                               onDelete={(stId) => {
                                 // Optimistic local delete — same as the
                                 // ProjectTable's onDelete above. Without
@@ -2447,6 +2527,68 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
           </button>
         </div>
       )}
+
+      {selectsPicker && (
+        <SelectsPickerModal
+          selectsDate={selectsPicker.selectsDate}
+          candidates={selectsPicker.candidates}
+          editors={editors}
+          onPick={(editorId) => runSelectsSync(selectsPicker.updatedProject, editorId)}
+          onClose={() => setSelectsPicker(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Phase 2 (#3) picker — shown when the Selects-timeline auto-sync can't
+// place the task on the Project Lead (lead off or has another shoot that
+// day). Lets the scheduler pick the best-suited person; the choice flows
+// back through runSelectsSync as overrideAssigneeId.
+function SelectsPickerModal({ selectsDate, candidates, editors, onPick, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const editorById = new Map((editors || []).map(e => [e.id, e]));
+  const list = (candidates || []).map(id => editorById.get(id)).filter(Boolean);
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)",
+      backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", zIndex: 120,
+      display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "10vh 4vw",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12,
+        width: "min(420px,100%)", maxHeight: "75vh", display: "flex", flexDirection: "column",
+        boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+      }}>
+        <div style={{ padding: "16px 18px 12px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)" }}>Assign Selects Timeline</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+            The project lead is unavailable on {selectsDate || "the selected day"}. Pick who should do the Selects timeline (~half a day, top priority that day).
+          </div>
+        </div>
+        <div style={{ overflowY: "auto", padding: "10px 14px 16px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {list.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic", padding: "8px 6px" }}>
+              No editors are free that day — pick later from the Team Board, or move the shoot.
+            </div>
+          ) : list.map(ed => (
+            <button key={ed.id} type="button" onClick={() => onPick(ed.id)}
+              style={{
+                textAlign: "left", padding: "10px 12px", borderRadius: 8,
+                border: "1px solid var(--border)", background: "var(--bg)", color: "var(--fg)",
+                fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}>
+              {ed.name}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2933,7 +3075,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
       )}
 
       {subTab === "projects" && active && (
-        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} setProjects={setProjects} setDeliveries={setDeliveries} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
+        <ProjectDetail project={active} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} setProjects={setProjects} setDeliveries={setDeliveries} weekData={weekData} allProjects={projects} onBack={() => setActiveProjectId(null)} onDelete={() => deleteProject(active.id)}/>
       )}
 
       {subTab === "teamBoard" && !active && (
