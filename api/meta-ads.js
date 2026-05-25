@@ -1319,9 +1319,26 @@ async function handlePushToRunsheet(req, res) {
         const row = scriptTable[i];
         const stId = `st-vid-${Date.now()}-${i}`;
         const videoName = (row.videoName || "").trim() || (row.formatName || "").trim() || `Video ${i + 1}`;
+        // Phase 5 (#B): stamp a canonical videoId + carry the creative
+        // format + mark this as the 16:9 master edit. The videoId is also
+        // written back to the scriptTable row so the same id lands on the
+        // delivery video whenever the delivery is (re)built. (NOTE: this
+        // tabbed/server flow currently creates a runsheet, not a delivery
+        // — see PR notes; the cross-link completes once delivery creation
+        // for tabbed Meta projects is settled.)
+        const videoId = row.videoId || `v-${Math.random().toString(36).slice(2, 12)}`;
+        if (!row.videoId) {
+          await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${i}/videoId`, videoId);
+        }
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
-          name: videoName,
+          videoId,
+          // First edit per video = the 16:9 master (Meta Ads process).
+          name: `${videoName} — 16:9 Edit`,
+          aspectRatio: "16:9",
+          isMasterEdit: true,
+          // Creative format (alias formatName) for the Phase 6 scheduler.
+          creativeFormat: row.creativeFormat || row.formatName || null,
           status: "stuck",
           stage: "edit",
           startDate: null, endDate: null, startTime: null, endTime: null,
