@@ -171,6 +171,21 @@ export async function extractAndMergeInsights({
 
   // 3. Build the user message and call Claude.
   const fullTranscript = String(transcript);
+
+  // Verbatim-quote guard (salvaged from PR #156). The extraction prompt
+  // instructs the model to copy quotes verbatim, but a prompt is not a
+  // guarantee — a hallucinated quote presented as evidence poisons trust
+  // in the KB closers study. So enforce it in code: an insight whose
+  // quote is NOT actually a span of the transcript is skipped entirely,
+  // not softened. Whitespace- and case-insensitive so ordinary
+  // transcription/formatting differences don't cause false rejections.
+  const quoteInTranscript = (quote) => {
+    const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const q = norm(quote);
+    if (!q) return false; // no quote → no evidence → skip
+    return norm(fullTranscript).includes(q);
+  };
+
   const userMessage =
     `Call meta: salesperson=${salesperson || "Unknown"} | client=${clientName || "Unknown"} | type=${meetingType || "general"}\n` +
     (analysisSummary ? `Analysis summary (context only): ${String(analysisSummary).slice(0, 600)}\n` : "") +
@@ -228,6 +243,7 @@ export async function extractAndMergeInsights({
   for (const inc of increments) {
     const id = inc && typeof inc.id === "string" ? inc.id : null;
     if (!id || !activeById.has(id)) { skipped++; continue; }
+    if (!quoteInTranscript(inc.quote)) { skipped++; continue; }
     await bump(id, inc.severity, inc.quote);
   }
 
@@ -235,6 +251,7 @@ export async function extractAndMergeInsights({
   //     was capped). Same type + normalized-title match → increment.
   for (const item of created) {
     if (!item || !TYPES.includes(item.type) || !item.title) { skipped++; continue; }
+    if (!quoteInTranscript(item.quote)) { skipped++; continue; }
     const norm = normalizeTitle(item.title);
     let dupId = null;
     for (const [id, v] of activeById) {
