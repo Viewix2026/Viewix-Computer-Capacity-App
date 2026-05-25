@@ -55,6 +55,60 @@ Tail logs:
 pm2 logs social-asset-transfer
 ```
 
+## Frame.io authentication
+
+Frame.io V4 has three auth paths. Which one applies is decided by how the
+account is governed, not by preference:
+
+1. **S2S OAuth** — the clean daemon path (long-lived client credentials,
+   short-lived minted access tokens). **Only available to accounts
+   administered through the Adobe Admin Console.**
+2. **Legacy Developer Token** — a non-expiring token from the Frame.io
+   developer site, usable by **V4-migrated accounts that are NOT on the
+   Adobe Admin Console**. Requires the request header
+   `x-frameio-legacy-token-auth: true`. Transitional, but fully working.
+3. **User OAuth** — stores a human's refresh token. Avoid.
+
+**Viewix is on path 2 (legacy).** Verified 2026-05-21: the account is
+V4-migrated and Frame-managed (no Frame.io product in the Adobe Admin
+Console), and `GET /v4/accounts` returns 200 with the legacy header. So
+the worker runs with:
+
+```
+FRAMEIO_AUTH_MODE=legacy
+FRAMEIO_DEVELOPER_TOKEN=<read-only legacy token from developer.frame.io>
+FRAMEIO_ACCOUNT_ID=<UUID from GET /v4/accounts>
+```
+
+`FRAMEIO_AUTH_MODE=s2s` is a documented future mode — it is **not
+implemented** and throws `FRAMEIO_S2S_NOT_IMPLEMENTED` if selected. It
+only becomes relevant if the Frame.io account is ever migrated under the
+Adobe Admin Console.
+
+### Determining account type (if this ever needs re-checking)
+
+- Are Frame.io users/seats managed in the **Adobe Admin Console** (→
+  Adobe-managed → S2S) or in the **Frame.io web app** (→ Frame-managed →
+  legacy)?
+- In the Adobe Developer Console, does adding the Frame.io API offer an
+  **"OAuth Server-to-Server"** credential? If not, you're on legacy.
+
+### Preflight (run before starting the worker)
+
+Proves the configured token actually authenticates and pulls media —
+from your laptop, before PM2 ever runs:
+
+```bash
+# auth-only — lists accounts, prints the account id:
+npm run preflight:frameio
+
+# full media-path test against one real file:
+node --env-file=.env preflight-frameio.mjs <frameioFileId>
+# (or set FRAMEIO_TEST_FILE_ID in .env)
+```
+
+Exit 0 = PASS. It never prints the token or a full signed URL.
+
 ## Failure modes
 
 - **Frame.io download fails** — bumps `attempts`, returns row to
