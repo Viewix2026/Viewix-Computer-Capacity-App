@@ -21,6 +21,7 @@ import { useClientDashboardData } from "./hooks/useClientDashboardData";
 import { PLATFORMS } from "./config/constants";
 import { normaliseHandle, displayHandle } from "./utils/displayFormatters";
 import { authFetch } from "../../firebase";
+import { slugify } from "../../utils";
 import { StatusHeader } from "./components/StatusHeader";
 import { WinningVideos } from "./components/WinningVideos";
 import { NicheIntel } from "./components/NicheIntel";
@@ -74,6 +75,7 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <PortalLinkButton accountId={accountId} enabled={!!config?.enabled} />
           <RecomputeButton accountId={accountId} enabled={!!config?.enabled} />
           <RefreshButton accountId={accountId} enabled={!!config?.enabled} />
         </div>
@@ -620,6 +622,90 @@ function RecomputeButton({ accountId, enabled }) {
           fontSize: 10,
           color: status === "error" ? "#EF4444" : "var(--muted)",
           maxWidth: 240,
+          textAlign: "right",
+        }}>
+          {message}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Founder/lead-only "Copy client portal link". Calls the
+// getPortalLink action (mints the per-client token on first ask),
+// builds the external /r/{token}/slug URL, copies it to the
+// clipboard. Warns if no projection exists yet (no recompute has
+// run) so the founder doesn't hand a client an empty portal.
+function PortalLinkButton({ accountId, enabled }) {
+  const [status, setStatus] = useState(null); // null | "pending" | "done" | "warn" | "error"
+  const [message, setMessage] = useState("");
+
+  const onClick = async () => {
+    if (!enabled) return;
+    setStatus("pending");
+    setMessage("");
+    try {
+      const res = await authFetch("/api/analytics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getPortalLink", accountId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.portalShortId) {
+        setStatus("error");
+        setMessage(data?.error || `HTTP ${res.status}`);
+        return;
+      }
+      const slug = slugify(data.companyName || "") || "report";
+      const url = `${window.location.origin}/r/${data.portalShortId}/${slug}`;
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        // Clipboard can fail on non-secure contexts — still show the URL.
+      }
+      if (data.hasProjection) {
+        setStatus("done");
+        setMessage("Link copied — ready to share.");
+      } else {
+        setStatus("warn");
+        setMessage("Link copied — but run Refresh/Recompute first so it isn't empty.");
+      }
+    } catch (err) {
+      setStatus("error");
+      setMessage(err?.message || "Network error");
+    }
+  };
+
+  const tooltip = enabled
+    ? "Copy the client's magic-link portal URL (/r/…). Founder/lead only."
+    : "Enable analytics for this account first.";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <button
+        onClick={onClick}
+        disabled={!enabled || status === "pending"}
+        title={tooltip}
+        style={{
+          padding: "8px 14px",
+          borderRadius: 8,
+          border: "1px solid var(--border)",
+          background: "transparent",
+          color: "var(--text)",
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: enabled && status !== "pending" ? "pointer" : "not-allowed",
+          opacity: enabled ? 1 : 0.5,
+          fontFamily: "inherit",
+        }}
+      >
+        {status === "pending" ? "Getting link…" : "Client portal link"}
+      </button>
+      {message && (
+        <span style={{
+          fontSize: 10,
+          color: status === "error" ? "#EF4444" : status === "warn" ? "#F59E0B" : "var(--muted)",
+          maxWidth: 260,
           textAlign: "right",
         }}>
           {message}
