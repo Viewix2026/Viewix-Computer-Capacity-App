@@ -100,4 +100,19 @@ test("no lead resolvable → needsPicker", () => {
   assert.equal(r.reason, "no_lead");
 });
 
+test("priority: takes #1 when the day is free", () => {
+  const r = computeSelectsTimelineWrites(projectWith("2026-05-25"), { editors, weekData: {}, leadId: "ed-lead", allProjects: [] });
+  assert.equal(findWrite(r.writes, `/dayPriority/ed-lead|2026-05-26`), 1);
+});
+
+test("priority: appends (max+1) when something already holds #1", () => {
+  const sibling = { id: "p9", subtasks: {
+    a: { id: "a", dayPriority: { "ed-lead|2026-05-26": 1 } },
+    b: { id: "b", dayPriority: { "ed-lead|2026-05-26": 2 } },
+  } };
+  const r = computeSelectsTimelineWrites(projectWith("2026-05-25"), { editors, weekData: {}, leadId: "ed-lead", allProjects: [sibling] });
+  assert.ok(r.writes, "expected writes");
+  assert.equal(findWrite(r.writes, `/dayPriority/ed-lead|2026-05-26`), 3); // max(2)+1, does not displace #1
+});
+
 console.log(`\n${passed} passed`);

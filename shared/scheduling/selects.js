@@ -161,6 +161,28 @@ export function computeSelectsTimelineWrites(project, ctx = {}) {
     return { needsPicker: true, selectsId: selects.id, selectsDate, leadId, candidates, reason };
   }
 
+  // Priority placement (Codex #3): Selects is the day's TOP priority
+  // UNLESS another task already holds priority 1 on this editor+day — in
+  // which case we append at the end (max+1) rather than displacing the
+  // existing #1. Locked Phase-2 rule ("top priority unless something
+  // already holds 1") — DELIBERATELY different from the behind-schedule
+  // cron, which bumps existing priorities to insert at the front.
+  const priKey = selectsPkey(assigneeId, selectsDate);
+  let existingMax = 0;
+  let oneTaken = false;
+  for (const p of allProjects) {
+    const subs = p?.subtasks ? Object.values(p.subtasks) : [];
+    for (const st of subs) {
+      if (st.id === selects.id) continue;
+      const v = st?.dayPriority?.[priKey];
+      if (Number.isFinite(v)) {
+        if (v > existingMax) existingMax = v;
+        if (v === 1) oneTaken = true;
+      }
+    }
+  }
+  const selectsPriority = oneTaken ? existingMax + 1 : 1;
+
   // Build the writes. All under /projects/{id}/subtasks/{selectsId}.
   const base = `/projects/${project.id}/subtasks/${selects.id}`;
   const now = new Date().toISOString();
@@ -170,8 +192,8 @@ export function computeSelectsTimelineWrites(project, ctx = {}) {
     { path: `${base}/assigneeIds`, value: assigneeId ? [assigneeId] : [] },
     { path: `${base}/assigneeId`, value: assigneeId || null },
     { path: `${base}/status`, value: "scheduled" },
-    // Top priority for that editor on that day (Phase #179 dayPriority).
-    { path: `${base}/dayPriority/${selectsPkey(assigneeId, selectsDate)}`, value: 1 },
+    // Top priority that day, unless something already holds #1 (see above).
+    { path: `${base}/dayPriority/${priKey}`, value: selectsPriority },
     // Provenance so the auto-management is debuggable later.
     { path: `${base}/selectsAutoManaged`, value: true },
     { path: `${base}/selectsGeneratedFromShootId`, value: shootId || null },
