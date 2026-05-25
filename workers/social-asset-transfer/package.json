@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --env-file=.env index.js",
-    "lint": "node --check index.js worker.js transfer.js frameio.js zernio.js slack.js firebase.js fingerprint.js"
+    "preflight:frameio": "node --env-file=.env preflight-frameio.mjs",
+    "lint": "node --check index.js worker.js transfer.js frameio.js zernio.js slack.js firebase.js fingerprint.js preflight-frameio.mjs"
   },
   "dependencies": {
     "firebase-admin": "^12.0.0"
