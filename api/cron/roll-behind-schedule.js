@@ -21,7 +21,7 @@
 // Test overrides (valid secret only): &force=1, &today=YYYY-MM-DD,
 // &dryRunReport=1 (compute the moves, write nothing).
 
-import { adminGet, adminSet } from "../_fb-admin.js";
+import { adminGet, adminPatch } from "../_fb-admin.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
 import { nowInSydney, todaySydney, nextWorkingDayFor } from "../../shared/scheduling/availability.js";
 import { isActiveProject, isUnfinishedPastEdit } from "../../shared/scheduling/overdue.js";
@@ -92,23 +92,62 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, dryRun: true, today, moveCount: moves.length, moves, skipped });
   }
 
+  if (moves.length === 0) return res.status(200).json({ ok: true, today, moved: 0, skipped });
+
+  // Build ONE atomic multi-location update (Codex #4 — sequential writes
+  // could leave a task moved without its flag/priority). Keys are paths
+  // from root; Firebase update() applies them all-or-nothing.
   const now = new Date().toISOString();
-  let written = 0;
+  const updates = {};
+  const movedIds = new Set(moves.map(m => m.subtaskId));
+
+  // Group by editor+day so rolled edits insert at the FRONT (priorities
+  // 1..k in their existing order) and pre-existing work on that day is
+  // bumped down by k — the locked "bump existing priorities" rule, not a
+  // raw dayPriority=1 that collides (Codex #3).
+  const groups = new Map();
   for (const m of moves) {
-    const base = `/projects/${m.projectId}/subtasks/${m.subtaskId}`;
-    try {
+    const gk = pkey(m.editorId, m.toDate);
+    if (!groups.has(gk)) groups.set(gk, []);
+    groups.get(gk).push(m);
+  }
+
+  for (const [, groupMoves] of groups) {
+    const editorId = groupMoves[0].editorId;
+    const toDate = groupMoves[0].toDate;
+    const key = pkey(editorId, toDate);
+    const k = groupMoves.length;
+
+    groupMoves.forEach((m, idx) => {
+      const base = `projects/${m.projectId}/subtasks/${m.subtaskId}`;
       // Clean 1-day move — NEVER widen the span (PR#84 regression guard).
-      await adminSet(`${base}/startDate`, m.toDate);
-      await adminSet(`${base}/endDate`, m.toDate);
-      await adminSet(`${base}/dayPriority/${pkey(m.editorId, m.toDate)}`, 1);
-      await adminSet(`${base}/behindSchedule`, true);
-      await adminSet(`${base}/rolledFromDate`, m.fromDate);
-      await adminSet(`${base}/updatedAt`, now);
-      written += 1;
-    } catch (e) {
-      skipped.push({ projectId: m.projectId, subtaskId: m.subtaskId, reason: `write_failed: ${e.message}` });
+      updates[`${base}/startDate`] = m.toDate;
+      updates[`${base}/endDate`] = m.toDate;
+      updates[`${base}/dayPriority/${key}`] = idx + 1; // rolled edits take the front
+      updates[`${base}/behindSchedule`] = true;
+      updates[`${base}/rolledFromDate`] = m.fromDate;
+      updates[`${base}/updatedAt`] = now;
+    });
+
+    // Bump existing siblings on this editor+day (anything not being rolled
+    // that already holds a priority) down by k so the rolled edits sit ahead.
+    for (const p of projects) {
+      const subs = p.subtasks ? Object.values(p.subtasks) : [];
+      for (const st of subs) {
+        if (movedIds.has(st.id)) continue;
+        const v = st?.dayPriority?.[key];
+        if (Number.isFinite(v)) {
+          updates[`projects/${p.id}/subtasks/${st.id}/dayPriority/${key}`] = v + k;
+        }
+      }
     }
   }
 
-  return res.status(200).json({ ok: true, today, moved: written, skipped });
+  try {
+    await adminPatch("/", updates); // atomic: all moves + bumps, or none
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: `atomic write failed: ${e.message}`, attempted: moves.length });
+  }
+
+  return res.status(200).json({ ok: true, today, moved: moves.length, skipped });
 }
