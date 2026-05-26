@@ -35,6 +35,55 @@ function listProjects(raw) {
   return Object.entries(raw).map(([id, p]) => (p && typeof p === "object" ? { id, ...p } : null)).filter(Boolean);
 }
 
+// PURE: build the single atomic multi-location update object for a set of
+// moves. Exported so the priority-bump / move-construction logic is unit
+// tested without Firebase (Codex round 2 #3). Each move = { projectId,
+// subtaskId, editorId, toDate, fromDate }. Rolled edits insert at the
+// FRONT of their editor+day (priorities 1..k in order); pre-existing
+// priorities on that day shift down by k. Keys are root-relative paths.
+export function buildRollUpdates(moves, projects, now) {
+  const updates = {};
+  if (!Array.isArray(moves) || moves.length === 0) return updates;
+  const movedIds = new Set(moves.map(m => m.subtaskId));
+
+  const groups = new Map();
+  for (const m of moves) {
+    const gk = pkey(m.editorId, m.toDate);
+    if (!groups.has(gk)) groups.set(gk, []);
+    groups.get(gk).push(m);
+  }
+
+  for (const [, groupMoves] of groups) {
+    const key = pkey(groupMoves[0].editorId, groupMoves[0].toDate);
+    const k = groupMoves.length;
+
+    groupMoves.forEach((m, idx) => {
+      const base = `projects/${m.projectId}/subtasks/${m.subtaskId}`;
+      // Clean 1-day move — NEVER widen the span (PR#84 regression guard).
+      updates[`${base}/startDate`] = m.toDate;
+      updates[`${base}/endDate`] = m.toDate;
+      updates[`${base}/dayPriority/${key}`] = idx + 1; // rolled edits take the front
+      updates[`${base}/behindSchedule`] = true;
+      updates[`${base}/rolledFromDate`] = m.fromDate;
+      updates[`${base}/updatedAt`] = now;
+    });
+
+    // Bump existing siblings on this editor+day (anything not being rolled
+    // that already holds a priority) down by k so the rolled edits sit ahead.
+    for (const p of (projects || [])) {
+      const subs = p.subtasks ? Object.values(p.subtasks) : [];
+      for (const st of subs) {
+        if (movedIds.has(st.id)) continue;
+        const v = st?.dayPriority?.[key];
+        if (Number.isFinite(v)) {
+          updates[`projects/${p.id}/subtasks/${st.id}/dayPriority/${key}`] = v + k;
+        }
+      }
+    }
+  }
+  return updates;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ error: "GET only" });
   const auth = isAuthorizedCron(req);
@@ -95,53 +144,10 @@ export default async function handler(req, res) {
   if (moves.length === 0) return res.status(200).json({ ok: true, today, moved: 0, skipped });
 
   // Build ONE atomic multi-location update (Codex #4 — sequential writes
-  // could leave a task moved without its flag/priority). Keys are paths
-  // from root; Firebase update() applies them all-or-nothing.
+  // could leave a task moved without its flag/priority). Pure builder is
+  // unit-tested in __tests__/roll-behind-schedule.test.mjs (Codex #3).
   const now = new Date().toISOString();
-  const updates = {};
-  const movedIds = new Set(moves.map(m => m.subtaskId));
-
-  // Group by editor+day so rolled edits insert at the FRONT (priorities
-  // 1..k in their existing order) and pre-existing work on that day is
-  // bumped down by k — the locked "bump existing priorities" rule, not a
-  // raw dayPriority=1 that collides (Codex #3).
-  const groups = new Map();
-  for (const m of moves) {
-    const gk = pkey(m.editorId, m.toDate);
-    if (!groups.has(gk)) groups.set(gk, []);
-    groups.get(gk).push(m);
-  }
-
-  for (const [, groupMoves] of groups) {
-    const editorId = groupMoves[0].editorId;
-    const toDate = groupMoves[0].toDate;
-    const key = pkey(editorId, toDate);
-    const k = groupMoves.length;
-
-    groupMoves.forEach((m, idx) => {
-      const base = `projects/${m.projectId}/subtasks/${m.subtaskId}`;
-      // Clean 1-day move — NEVER widen the span (PR#84 regression guard).
-      updates[`${base}/startDate`] = m.toDate;
-      updates[`${base}/endDate`] = m.toDate;
-      updates[`${base}/dayPriority/${key}`] = idx + 1; // rolled edits take the front
-      updates[`${base}/behindSchedule`] = true;
-      updates[`${base}/rolledFromDate`] = m.fromDate;
-      updates[`${base}/updatedAt`] = now;
-    });
-
-    // Bump existing siblings on this editor+day (anything not being rolled
-    // that already holds a priority) down by k so the rolled edits sit ahead.
-    for (const p of projects) {
-      const subs = p.subtasks ? Object.values(p.subtasks) : [];
-      for (const st of subs) {
-        if (movedIds.has(st.id)) continue;
-        const v = st?.dayPriority?.[key];
-        if (Number.isFinite(v)) {
-          updates[`projects/${p.id}/subtasks/${st.id}/dayPriority/${key}`] = v + k;
-        }
-      }
-    }
-  }
+  const updates = buildRollUpdates(moves, projects, now);
 
   try {
     await adminPatch("/", updates); // atomic: all moves + bumps, or none
