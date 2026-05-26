@@ -22,7 +22,7 @@ import {
   inferStage,
 } from "../../shared/scheduling/stages.js";
 import { isActiveProject, isOverdueEdit, effectiveDueDate } from "../../shared/scheduling/overdue.js";
-import { computeSelectsTimelineWrites } from "../../shared/scheduling/selects.js";
+import { computeSelectsTimelineWrites, isSelectsSubtask, latestShootDate } from "../../shared/scheduling/selects.js";
 import { SelectsPickerModal } from "./SelectsPickerModal";
 
 // View-only context — Lead role gets read-only access to the Projects
@@ -122,6 +122,53 @@ function resolveProjectLeadId(project, accounts, editors) {
   if (!leadName) return null;
   const ed = (editors || []).find(e => (e?.name || "").trim().toLowerCase() === leadName);
   return ed?.id || null;
+}
+
+// Shared Selects-timeline sync: resolve the lead, run the pure helper, and
+// apply the writes (optimistic setProjects + per-leaf fbSet) — or return a
+// picker descriptor when the lead is unavailable. ONE implementation used
+// by ProjectDetail, the ProjectTable inline drawer, and the backfill, so
+// the behaviour can't drift between surfaces. `updatedProject` is the
+// project with the new shoot date already applied.
+//   returns { applied: bool, picker: {updatedProject, selectsDate, candidates}|null }
+function runSelectsSyncFor({ updatedProject, accounts, editors, weekData, allProjects, overrideAssigneeId, setProjects }) {
+  const leadId = resolveProjectLeadId(updatedProject, accounts, editors);
+  const res = computeSelectsTimelineWrites(updatedProject, {
+    allProjects: allProjects || [],
+    editors: editors || [],
+    weekData: weekData || {},
+    leadId,
+    overrideAssigneeId: overrideAssigneeId || null,
+  });
+  if (res.writes) {
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== updatedProject.id) return p;
+        const subs = { ...(p.subtasks || {}) };
+        for (const w of res.writes) {
+          const m = w.path.match(/\/subtasks\/([^/]+)\/(.+)$/);
+          if (!m) continue;
+          const sid = m[1];
+          const field = m[2];
+          const cur = { ...(subs[sid] || {}) };
+          if (field.startsWith("dayPriority/")) {
+            const key = field.slice("dayPriority/".length);
+            cur.dayPriority = { ...(cur.dayPriority || {}), [key]: w.value };
+          } else {
+            cur[field] = w.value;
+          }
+          subs[sid] = cur;
+        }
+        return { ...p, subtasks: subs };
+      }));
+    }
+    for (const w of res.writes) fbSet(w.path, w.value);
+    return { applied: true, picker: null };
+  }
+  if (res.needsPicker) {
+    return { applied: false, picker: { updatedProject, selectsDate: res.selectsDate, candidates: res.candidates || [] } };
+  }
+  return { applied: false, picker: null };
 }
 
 // Seed the phase-default subtasks onto a project that has none yet.
@@ -1639,8 +1686,20 @@ const dateCellStyle = {
   fontFamily: "'JetBrains Mono',monospace", minWidth: 60,
 };
 
-function ProjectTable({ projects, allProjects, setProjects, setDeliveries, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors }) {
+function ProjectTable({ projects, allProjects, setProjects, setDeliveries, deliveries, accounts, onOpen, onStatusChange, selectedIds, onToggleSelect, onToggleSelectAll, expandedIds, onToggleExpand, editors, weekData }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
+  // Selects-timeline auto-sync for the inline expand-row drawer (same as
+  // the full ProjectDetail view), so setting a shoot date HERE also fires.
+  const [tableSelectsPicker, setTableSelectsPicker] = useState(null);
+  const tableOnShootScheduled = weekData
+    ? (updatedProject, overrideAssigneeId) => {
+        const { picker } = runSelectsSyncFor({
+          updatedProject, accounts, editors, weekData,
+          allProjects: allProjects || projects, overrideAssigneeId, setProjects,
+        });
+        setTableSelectsPicker(picker);
+      }
+    : undefined;
   // Header checkbox is tri-state: empty / checked (all) / indeterminate
   // (some). Browsers don't have a CSS-only indeterminate state — set
   // it on the DOM via ref.
@@ -1726,6 +1785,15 @@ function ProjectTable({ projects, allProjects, setProjects, setDeliveries, deliv
 
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", position: "relative" }}>
+      {tableSelectsPicker && (
+        <SelectsPickerModal
+          selectsDate={tableSelectsPicker.selectsDate}
+          candidates={tableSelectsPicker.candidates}
+          editors={editors}
+          onPick={(editorId) => tableOnShootScheduled(tableSelectsPicker.updatedProject, editorId)}
+          onClose={() => setTableSelectsPicker(null)}
+        />
+      )}
       {/* Thin pink accent stripe on the left — matches the Monday-style
           "this is a project table" affordance in Jeremy's reference. */}
       <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "#EC4899" }} />
@@ -1810,6 +1878,7 @@ function ProjectTable({ projects, allProjects, setProjects, setDeliveries, deliv
                           striped={idx % 2 === 1}
                           setProjects={setProjects}
                           setDeliveries={setDeliveries}
+                          onShootScheduled={tableOnShootScheduled}
                           onDelete={(stId) => {
                             // Optimistic local delete — same reason
                             // the inline + add paths above do it.
@@ -2115,59 +2184,18 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
   // another shoot that day). Null when closed.
   const [selectsPicker, setSelectsPicker] = useState(null);
 
-  // Apply the leaf writes the Selects helper returned: optimistic local
-  // update first (echo guard), then per-leaf fbSet.
-  const applySelectsWrites = (writes) => {
-    if (!writes?.length) return;
-    if (typeof setProjects === "function") {
-      setProjects(prev => prev.map(p => {
-        if (!p || p.id !== project.id) return p;
-        const subs = { ...(p.subtasks || {}) };
-        for (const w of writes) {
-          const m = w.path.match(/\/subtasks\/([^/]+)\/(.+)$/);
-          if (!m) continue;
-          const sid = m[1];
-          const field = m[2];
-          const cur = { ...(subs[sid] || {}) };
-          if (field.startsWith("dayPriority/")) {
-            const key = field.slice("dayPriority/".length);
-            cur.dayPriority = { ...(cur.dayPriority || {}), [key]: w.value };
-          } else {
-            cur[field] = w.value;
-          }
-          subs[sid] = cur;
-        }
-        return { ...p, subtasks: subs };
-      }));
-    }
-    for (const w of writes) fbSet(w.path, w.value);
-  };
-
   // Run the shared Selects-timeline sync against a freshly-updated project
   // (passed up from SubtaskRow after a shoot date change). overrideAssignee
   // is supplied when the producer picks someone in the modal.
   const runSelectsSync = (updatedProject, overrideAssigneeId) => {
-    const leadId = resolveProjectLeadId(updatedProject, accounts, editors);
-    const res = computeSelectsTimelineWrites(updatedProject, {
-      allProjects: allProjects || [],
-      editors: editors || [],
-      weekData: weekData || {},
-      leadId,
-      overrideAssigneeId: overrideAssigneeId || null,
+    const { picker } = runSelectsSyncFor({
+      updatedProject, accounts, editors, weekData, allProjects, overrideAssigneeId, setProjects,
     });
-    if (res.writes) { applySelectsWrites(res.writes); setSelectsPicker(null); }
-    else if (res.needsPicker) {
-      setSelectsPicker({
-        updatedProject,
-        selectsDate: res.selectsDate,
-        candidates: res.candidates || [],
-      });
-    }
-    // res.noop → nothing to do
+    setSelectsPicker(picker);
   };
-  // Only wire the auto-sync when we have the full context (the Team Board
-  // quick-view doesn't pass weekData/allProjects yet — see PR notes).
-  const onShootScheduled = allProjects ? runSelectsSync : undefined;
+  // Wire the auto-sync whenever we have the full context (weekData is the
+  // tell — the quick-view now passes it too, so this fires there as well).
+  const onShootScheduled = weekData ? runSelectsSync : undefined;
 
   // dnd-kit sensor for the subtasks list. 6px activation distance keeps
   // a producer's casual click on the drag handle from being read as a
@@ -2551,7 +2579,7 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 // calendar. Click outside or press ESC to close. The modal stops click
 // propagation on its content so clicks on inputs inside the editor
 // don't accidentally trigger the backdrop close.
-function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries, highlightSubtaskId }) {
+function ProjectQuickView({ project, onClose, onDelete, editors, clients, deliveries, accounts, setProjects, setDeliveries, highlightSubtaskId, weekData, allProjects }) {
   // ESC closes — registered globally so it works regardless of which
   // input has focus. Cleaned up on unmount.
   useEffect(() => {
@@ -2613,6 +2641,8 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
           setProjects={setProjects}
           setDeliveries={setDeliveries}
           highlightSubtaskId={highlightSubtaskId}
+          weekData={weekData}
+          allProjects={allProjects}
           onBack={onClose}
           onDelete={onDelete}
         />
@@ -2636,6 +2666,29 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   const canEditProducerNotes = role === "lead" || role === "manager" || role === "founder" || role === "founders";
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
+
+  // One-time backfill: existing projects whose shoot was dated BEFORE the
+  // Selects auto-schedule shipped never fired the sync (it's event-driven
+  // on a date change). Catch them up once on load. Conservative — only
+  // touches a Selects subtask that has NO startDate yet (never scheduled),
+  // so it can't clobber a manually-placed one; picker-needed cases are
+  // skipped (left for the producer). Runs once via the ref guard.
+  const selectsBackfillDone = useRef(false);
+  useEffect(() => {
+    if (selectsBackfillDone.current) return;
+    if (!Array.isArray(projects) || projects.length === 0 || !Array.isArray(editors) || editors.length === 0) return;
+    selectsBackfillDone.current = true;
+    for (const p of projects) {
+      if (!p?.subtasks) continue;
+      const selects = Object.values(p.subtasks).find(isSelectsSubtask);
+      if (!selects || selects.startDate || selects.status === "done") continue; // only un-dated Selects
+      if (!latestShootDate(p)?.date) continue; // needs a shoot date to sync from
+      // Clean cases apply; picker-needed cases just return (no modal in backfill).
+      runSelectsSyncFor({ updatedProject: p, accounts, editors, weekData, allProjects: projects, setProjects });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, editors, accounts, weekData]);
+
   // Quick-view modal — opened when a producer clicks a bar on the
   // Team Board. Renders the same <ProjectDetail> as the full sub-tab
   // view, but inside a backdrop overlay so the user stays on the Team
@@ -3037,6 +3090,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
                 setDeliveries={setDeliveries}
                 deliveries={deliveries}
                 accounts={accounts}
+                weekData={weekData}
                 onOpen={(id) => setActiveProjectId(id)}
                 onStatusChange={(id, status) => {
                   // Write the status leaf directly so the change lands before
@@ -3103,6 +3157,8 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
                 setProjects={setProjects}
                 setDeliveries={setDeliveries}
                 highlightSubtaskId={quickViewSubtaskId}
+                weekData={weekData}
+                allProjects={projects}
                 onClose={() => { setQuickViewProjectId(null); setQuickViewSubtaskId(null); }}
                 onDelete={async () => {
                   await deleteProject(qv.id);
