@@ -1235,10 +1235,26 @@ async function handlePushToRunsheet(req, res) {
   // rows missing the field. The seven Hormozi-blueprint columns map
   // 1:1 onto the Runsheet schema; the SO-only fields (textHook,
   // visualHook, scriptNotes, props, contentStyle) stay empty.
+  // Phase 5 (#B): assign a CANONICAL videoId per row up front so the
+  // SAME id lands on the runsheet video, the scriptTable row, AND the
+  // project subtask below — runsheets / projects / (future) deliveries /
+  // analytics all resolve to one identity. Persist any freshly-minted id
+  // back onto the scriptTable so it's stable across re-pushes.
+  const rowVideoIds = scriptTable.map(row => row.videoId || `v-${Math.random().toString(36).slice(2, 12)}`);
+  for (let i = 0; i < scriptTable.length; i++) {
+    if (!scriptTable[i].videoId) {
+      await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${i}/videoId`, rowVideoIds[i]);
+    }
+  }
+
   const videos = scriptTable.map((row, i) => ({
     id: `v-${Date.now()}-${i}`,
+    // Canonical cross-system id (distinct from the runsheet-row `id`).
+    videoId: rowVideoIds[i],
     videoName: row.videoName || `Video ${i + 1}`,
     formatName: row.formatName || "",
+    // Creative format under the unified name too (alias of formatName).
+    creativeFormat: row.creativeFormat || row.formatName || null,
     contentStyle: "",
     hook: row.hook || "",
     textHook: "",
@@ -1314,14 +1330,61 @@ async function handlePushToRunsheet(req, res) {
     const linkedEntry = Object.entries(allProjects).find(([, pr]) => (pr?.links || {}).preprodId === projectId);
     if (linkedEntry) {
       const [parentId, parent] = linkedEntry;
+
+      // Phase 5 (#B) — approving a Meta Ads pre-production now AUTO-CREATES
+      // the delivery for the project (Jeremy's call). Idempotent: only if
+      // the project isn't already linked to one (re-push is 409-guarded
+      // above too).
+      //
+      // ⚠️ CRITICAL: also set project.links.deliveryId. Without it, the
+      // Deliveries↔Projects link is broken and "Share with client" fails
+      // with no_project_for_delivery — the exact bug this session opened
+      // with. The legacy Preproduction path never set it; this one does.
+      if (!parent.links?.deliveryId) {
+        const deliveryId = `del-${Date.now()}`;
+        const shortId = Math.random().toString(36).slice(2, 12);
+        const deliveryVideos = scriptTable.map((row, i) => ({
+          id: `vid-${Date.now()}-${i}`,
+          videoId: rowVideoIds[i],                 // canonical cross-system id
+          name: (row.videoName || "").trim() || `Video ${i + 1}`,
+          creativeFormat: row.creativeFormat || row.formatName || null,
+          link: "",
+          viewixStatus: "In Development",
+          revision1: "",
+          revision2: "",
+        }));
+        await fbSet(`/deliveries/${deliveryId}`, {
+          id: deliveryId,
+          shortId,
+          clientName: project.companyName || "",
+          projectName: `${project.companyName || ""} Meta Ads`,
+          logoUrl: "",
+          notes: "",
+          videos: deliveryVideos,
+          createdAt: now,
+        });
+        await fbSet(`/projects/${parentId}/links/deliveryId`, deliveryId);
+      }
+
       const existingCount = Object.keys(parent.subtasks || {}).length;
       for (let i = 0; i < scriptTable.length; i++) {
         const row = scriptTable[i];
         const stId = `st-vid-${Date.now()}-${i}`;
         const videoName = (row.videoName || "").trim() || (row.formatName || "").trim() || `Video ${i + 1}`;
+        // Phase 5 (#B): reuse the SAME canonical videoId minted above for
+        // the runsheet video + scriptTable row + delivery video, so
+        // runsheet ↔ project ↔ delivery all share one identity. Carry the
+        // creative format + mark this as the 16:9 master edit.
+        const videoId = rowVideoIds[i];
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
-          name: videoName,
+          videoId,
+          // First edit per video = the 16:9 master (Meta Ads process).
+          name: `${videoName} — 16:9 Edit`,
+          aspectRatio: "16:9",
+          isMasterEdit: true,
+          // Creative format (alias formatName) for the Phase 6 scheduler.
+          creativeFormat: row.creativeFormat || row.formatName || null,
           status: "stuck",
           stage: "edit",
           startDate: null, endDate: null, startTime: null, endTime: null,
