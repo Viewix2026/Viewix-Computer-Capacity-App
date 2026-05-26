@@ -6,7 +6,7 @@
 //
 // RECONCILED against the real Zernio contract (llms.txt, 2026-05-21):
 //   POST /media/presign
-//     body: { fileName, fileType }
+//     body: { filename, contentType }
 //     resp: { uploadUrl, publicUrl, expires }
 //   Then PUT the file bytes to `uploadUrl` (S3/GCS-style presigned PUT,
 //   up to 5GB). `publicUrl` is the durable handle we hand to Zernio
@@ -41,8 +41,8 @@ export async function presignUpload({ fileType, fileName } = {}) {
   if (!fileType) throw new Error("presignUpload: fileType required");
   const url = `${baseUrl()}/media/presign`;
   const body = {
-    fileName: fileName || "asset.mp4",
-    fileType,
+    filename: fileName || "asset.mp4",
+    contentType: fileType,
   };
   const resp = await fetch(url, {
     method: "POST",
