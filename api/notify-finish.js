@@ -96,6 +96,20 @@ function clamp(s, max) {
   return String(s == null ? "" : s).slice(0, max);
 }
 
+// Format a URL for Slack mrkdwn. Wrap it in <...> so Slack treats the
+// content as a literal link target and does NOT run mrkdwn parsing
+// over it. escapeSlack() must never touch a URL: it injects a
+// zero-width space before mrkdwn chars like `_`, which silently breaks
+// frame.io slugs (e.g. fikQ_lox -> fikQ​_lox) so the link Slack
+// auto-links is truncated/invalid. Only & < > need escaping inside the
+// angle brackets.
+function slackLink(url) {
+  const u = String(url == null ? "" : url).trim();
+  if (!u) return "";
+  const safe = u.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<${safe}>`;
+}
+
 // Resolve a roster name to a Slack member ID via /editors. Producers
 // paste the Slack ID into the Team Roster's "Slack ID" column once
 // per editor; this read is the only place we use it. Any name with
@@ -127,7 +141,7 @@ async function buildSlackText({ reviewType, projectName, clientName, videoName, 
   const safeEditor = escapeSlack(editorName);
   const safeLead    = escapeSlack(projectLead);
   const safeManager = escapeSlack(accountManager);
-  const safeLink    = escapeSlack(frameioLink);
+  const safeLink    = slackLink(frameioLink);
 
   const [leadSlackId, managerSlackId] = await Promise.all([
     lookupSlackId(projectLead),

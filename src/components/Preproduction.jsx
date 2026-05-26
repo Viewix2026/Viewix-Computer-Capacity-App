@@ -760,6 +760,12 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     id: `vid-${Date.now()}-${i}`,
                     videoId: row.videoId,
                     name: row.videoName || `Video ${i + 1}`,
+                    // Phase 5 (#B): carry the creative format through onto the
+                    // delivery video so it rides the videoId into Deliveries
+                    // /Projects/Analytics. Legacy alias: existing rows use
+                    // `formatName`. (creativeFormat = creative type, distinct
+                    // from aspectRatio which lives on the edit deliverables.)
+                    creativeFormat: row.creativeFormat || row.formatName || null,
                     link: "",
                     viewixStatus: "In Development",
                     revision1: "",
@@ -804,7 +810,18 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                         // delivery video — this is the cross-system link
                         // that lets automations resolve subtask <-> video.
                         videoId: row.videoId,
-                        name: videoName,
+                        // Phase 5 (#B): Meta Ads edit process. The FIRST edit
+                        // per video is the 16:9 master — labelled in the name
+                        // + aspectRatio. The reformat (9:16/1:1) is a separate
+                        // edit-stage subtask created only after this master is
+                        // approved in Deliveries (see Deliveries reformat hook).
+                        name: `${videoName} — 16:9 Edit`,
+                        aspectRatio: "16:9",
+                        isMasterEdit: true,
+                        // Creative format carried from the script row (alias
+                        // formatName) — used by the Phase 6 format-aware
+                        // scheduler to group same-format videos to one editor.
+                        creativeFormat: row.creativeFormat || row.formatName || null,
                         status: "stuck",
                         // Default Edit — by the time scripts are
                         // approved and a subtask is being seeded for a

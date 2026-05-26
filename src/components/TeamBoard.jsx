@@ -13,11 +13,14 @@
 
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { fbSet, authFetch } from "../firebase";
+import { resolveAccountForProject } from "../utils";
+import { computeSelectsTimelineWrites } from "../../shared/scheduling/selects.js";
+import { SelectsPickerModal } from "./SelectsPickerModal";
 import TeamBoardFlagBanner from "./TeamBoardFlagBanner.jsx";
 import { isOverdueEdit, isBehindScheduleFlagged } from "../../shared/scheduling/overdue.js";
 import {
   DndContext, PointerSensor, useSensor, useSensors,
-  useDraggable, useDroppable, useDndContext, closestCenter, DragOverlay,
+  useDraggable, useDroppable, useDndContext, closestCenter, pointerWithin, DragOverlay,
 } from "@dnd-kit/core";
 
 // ─── Subtask stage palette ────────────────────────────────────────
@@ -312,15 +315,27 @@ function StageLegend() {
   );
 }
 
-// Modal for the "Filter by client" control. Operates on the blacklist
-// set (hiddenClients): a ticked box = visible = NOT in the set. Default
-// state (empty set) shows everything. Backdrop click or ESC closes.
-function ClientFilterModal({ allClients, hiddenClients, setHiddenClients, onClose }) {
+// Searchable "Filter by client" dropdown (replaces the old modal).
+// Operates on the blacklist set (hiddenClients): a ticked box = visible
+// = NOT in the set. Empty set shows everything; new clients show by
+// default. Self-contained — owns its open + search state. The trigger
+// shows the active count; the panel has a live search, Select/Deselect
+// All, and a multi-select checkbox list. Outside-click or ESC closes.
+function ClientFilterDropdown({ allClients, hiddenClients, setHiddenClients }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    if (!open) return;
+    const onDown = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    const t = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("keydown", onKey); clearTimeout(t); };
+  }, [open]);
 
   const toggle = (client) => {
     setHiddenClients(prev => {
@@ -333,67 +348,85 @@ function ClientFilterModal({ allClients, hiddenClients, setHiddenClients, onClos
   const selectAll = () => setHiddenClients(new Set());
   const deselectAll = () => setHiddenClients(new Set(allClients));
 
+  const visibleCount = allClients.filter(c => !hiddenClients.has(c)).length;
+  const narrowed = hiddenClients.size > 0;
+  const q = query.trim().toLowerCase();
+  const filtered = q ? allClients.filter(c => (c || "").toLowerCase().includes(q)) : allClients;
+
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0,
-        background: "rgba(0,0,0,0.65)",
-        backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)",
-        zIndex: 100,
-        display: "flex", alignItems: "flex-start", justifyContent: "center",
-        padding: "8vh 4vw",
-      }}>
-      <div
-        onClick={e => e.stopPropagation()}
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        title="Filter the board by client"
         style={{
-          background: "var(--card)", border: "1px solid var(--border)",
-          borderRadius: 12, width: "min(420px, 100%)", maxHeight: "80vh",
-          display: "flex", flexDirection: "column",
-          boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
-        }}>
+          display: "inline-flex", alignItems: "center", gap: 6,
+          background: narrowed ? "var(--accent-soft, rgba(0,130,250,0.15))" : "none",
+          border: `1px solid ${narrowed || open ? "var(--accent)" : "var(--border)"}`,
+          borderRadius: 6, padding: "4px 10px", margin: 0, cursor: "pointer",
+          color: narrowed ? "var(--accent)" : "var(--fg)",
+          opacity: narrowed || open ? 1 : 0.7,
+          fontSize: 11, fontWeight: 700, lineHeight: 1,
+          fontFamily: "inherit", whiteSpace: "nowrap",
+          textTransform: "uppercase", letterSpacing: 0.4,
+          transition: "opacity 0.12s",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+        onMouseLeave={e => { e.currentTarget.style.opacity = (narrowed || open) ? 1 : 0.7; }}
+      >⛃ Filter{narrowed ? ` (${visibleCount}/${allClients.length})` : ""}</button>
+      {open && (
         <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "16px 18px 12px", borderBottom: "1px solid var(--border)",
+          position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 200,
+          width: 280, maxHeight: 380, background: "var(--card)",
+          border: "1px solid var(--border)", borderRadius: 10,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
+          display: "flex", flexDirection: "column",
         }}>
-          <span style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)" }}>Filter by client</span>
-          <button
-            onClick={onClose}
-            aria-label="Close" title="Close (Esc)"
-            style={{
-              width: 28, height: 28, borderRadius: 8, border: "1px solid var(--border)",
-              background: "var(--bg)", color: "var(--fg)", fontSize: 16, fontWeight: 700,
-              cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center",
-              fontFamily: "inherit",
-            }}>×</button>
-        </div>
-        <div style={{ display: "flex", gap: 8, padding: "10px 18px" }}>
-          <button type="button" onClick={selectAll} style={FILTER_PILL_BTN}>Select all</button>
-          <button type="button" onClick={deselectAll} style={FILTER_PILL_BTN}>Deselect all</button>
-        </div>
-        <div style={{ overflowY: "auto", padding: "0 18px 16px", display: "flex", flexDirection: "column", gap: 2 }}>
-          {allClients.map(client => {
-            const checked = !hiddenClients.has(client);
-            return (
-              <label key={client} style={{
-                display: "flex", alignItems: "center", gap: 10,
-                padding: "7px 6px", borderRadius: 6, cursor: "pointer",
-                fontSize: 13, color: "var(--fg)",
+          <div style={{ padding: 10, borderBottom: "1px solid var(--border)" }}>
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search clients…"
+              style={{
+                width: "100%", padding: "7px 10px", borderRadius: 6,
+                border: "1px solid var(--border)", background: "var(--input-bg)",
+                color: "var(--fg)", fontSize: 13, outline: "none",
+                fontFamily: "inherit", boxSizing: "border-box",
               }}
-                onMouseEnter={e => { e.currentTarget.style.background = "var(--bg)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggle(client)}
-                  style={{ accentColor: "var(--accent)", width: 16, height: 16, cursor: "pointer" }}
-                />
-                <span style={{ flex: 1 }}>{client}</span>
-              </label>
-            );
-          })}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button type="button" onClick={selectAll} style={FILTER_PILL_BTN}>Select all</button>
+              <button type="button" onClick={deselectAll} style={FILTER_PILL_BTN}>Deselect all</button>
+            </div>
+          </div>
+          <div style={{ overflowY: "auto", padding: "6px 10px 10px", display: "flex", flexDirection: "column", gap: 2 }}>
+            {filtered.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--muted)", padding: "8px 6px", fontStyle: "italic" }}>No clients match.</div>
+            ) : filtered.map(client => {
+              const checked = !hiddenClients.has(client);
+              return (
+                <label key={client} style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "6px", borderRadius: 6, cursor: "pointer",
+                  fontSize: 13, color: "var(--fg)",
+                }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "var(--bg)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggle(client)}
+                    style={{ accentColor: "var(--accent)", width: 16, height: 16, cursor: "pointer" }}
+                  />
+                  <span style={{ flex: 1 }}>{client}</span>
+                </label>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -720,7 +753,7 @@ function DropCell({
 
 // ─── Main board ────────────────────────────────────────────────────
 
-export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, onOpenProject }) {
+export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, accounts = {}, onOpenProject }) {
   // The board opens centred on the Monday of the current week so the
   // producer sees the full current week (including past days they may
   // have already worked) without scrolling left. From there:
@@ -826,7 +859,6 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       localStorage.setItem(HIDDEN_CLIENTS_LS_KEY, JSON.stringify([...hiddenClients]));
     } catch { /* storage disabled / quota — non-fatal */ }
   }, [hiddenClients]);
-  const [filterOpen, setFilterOpen] = useState(false);
 
   // Distinct client names that actually have work on the board, sorted.
   // "Scheduled clients only" by construction — we read off flatSubtasks.
@@ -1008,7 +1040,17 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       }
       return !isReorderTarget;
     });
-    return closestCenter({ ...args, droppableContainers: containers });
+    const scoped = { ...args, droppableContainers: containers };
+    // reorderDay = bar-to-bar; closestCenter is right (small same-day targets).
+    if (mode === "reorderDay") return closestCenter(scoped);
+    // move / resize onto date cells: cells span the editor's FULL lane
+    // height, so on tall multi-lane rows closestCenter (dragged-center →
+    // cell-center) mis-targets the adjacent editor near a row's top/bottom
+    // (bug #2). pointerWithin returns the cell geometrically under the
+    // cursor — drop registers anywhere over the lane. Fall back to
+    // closestCenter when the pointer is briefly outside all cells (fast drags).
+    const within = pointerWithin(scoped);
+    return within.length ? within : closestCenter(scoped);
   }, []);
 
   const [dragPreview, setDragPreview] = useState(null);
@@ -1038,6 +1080,84 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       })
       .catch(err => console.warn("scheduling-brain-check:", err?.message || err));
   }, []);
+
+  // ── Phase 2 (#3): Selects-timeline sync on shoot drag ──────────────
+  // When a shoot bar is dragged/resized to a new day, keep the project's
+  // Selects subtask in sync (shoot+1, lead-assigned, top priority) — the
+  // same rule the Projects-detail date edit already applies, via the same
+  // pure helper. If the lead is unavailable that day, open the picker.
+  const [selectsPicker, setSelectsPicker] = useState(null);
+
+  const resolveLeadIdTB = (project) => {
+    const acct = resolveAccountForProject(project, accounts);
+    const leadName = (acct?.projectLead || "").trim().toLowerCase();
+    if (!leadName) return null;
+    const ed = (editors || []).find(e => (e?.name || "").trim().toLowerCase() === leadName);
+    return ed?.id || null;
+  };
+
+  // Apply the helper's leaf writes: optimistic setProjects (echo guard)
+  // then per-leaf fbSet. Same shape as the Projects-detail applier.
+  const applySelectsWritesTB = (projectId, writes) => {
+    if (!writes?.length) return;
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== projectId) return p;
+        const subs = { ...(p.subtasks || {}) };
+        for (const w of writes) {
+          const m = w.path.match(/\/subtasks\/([^/]+)\/(.+)$/);
+          if (!m) continue;
+          const sid = m[1];
+          const field = m[2];
+          const cur = { ...(subs[sid] || {}) };
+          if (field.startsWith("dayPriority/")) {
+            const key = field.slice("dayPriority/".length);
+            cur.dayPriority = { ...(cur.dayPriority || {}), [key]: w.value };
+          } else {
+            cur[field] = w.value;
+          }
+          subs[sid] = cur;
+        }
+        return { ...p, subtasks: subs };
+      }));
+    }
+    for (const w of writes) fbSet(w.path, w.value);
+  };
+
+  // Run the sync against a project whose shoot date just changed. Wrapped
+  // so a failure here can NEVER break the drag that triggered it.
+  const runSelectsSyncTB = (updatedProject, overrideAssigneeId) => {
+    try {
+      const leadId = resolveLeadIdTB(updatedProject);
+      const res = computeSelectsTimelineWrites(updatedProject, {
+        allProjects: projects, editors, weekData, leadId,
+        overrideAssigneeId: overrideAssigneeId || null,
+      });
+      if (res.writes) { applySelectsWritesTB(updatedProject.id, res.writes); setSelectsPicker(null); }
+      else if (res.needsPicker) {
+        setSelectsPicker({ updatedProject, selectsDate: res.selectsDate, candidates: res.candidates || [] });
+      }
+    } catch (e) {
+      console.warn("Selects sync (Team Board) failed:", e?.message || e);
+    }
+  };
+
+  // Build the post-write project snapshot for a shoot subtask whose date
+  // changed, then run the sync. No-op for non-shoot subtasks.
+  const maybeSyncSelectsAfterShootMove = (subtask, newStart, newEnd) => {
+    const isShoot = subtask.stage === "shoot" || (subtask.name || "").toLowerCase().includes("shoot");
+    if (!isShoot) return;
+    const proj = projects.find(p => p.id === subtask.projectId);
+    if (!proj) return;
+    const updatedProject = {
+      ...proj,
+      subtasks: {
+        ...(proj.subtasks || {}),
+        [subtask.id]: { ...(proj.subtasks?.[subtask.id] || subtask), startDate: newStart, endDate: newEnd ?? newStart },
+      },
+    };
+    runSelectsSyncTB(updatedProject);
+  };
 
   const onDragStart = (e) => {
     // Only show the floating preview for "move" drags. Resize gestures
@@ -1233,6 +1353,8 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
         patch: { startDate: newStart, endDate: newEnd },
         affectedDate: mode === "resizeEnd" ? newEnd : newStart,
       });
+      // Keep the Selects timeline in sync if this was a shoot resize.
+      maybeSyncSelectsAfterShootMove(subtask, newStart, newEnd);
       return;
     }
 
@@ -1336,6 +1458,8 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       },
       affectedDate: newDate,
     });
+    // Keep the Selects timeline in sync if this move was a shoot reschedule.
+    maybeSyncSelectsAfterShootMove(subtask, newDate, newEnd);
   };
 
   // ─── Layout maths ────────────────────────────────────────────────
@@ -1389,6 +1513,15 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
           onDismiss={() => setBrainFlags(null)}
         />
       )}
+      {selectsPicker && (
+        <SelectsPickerModal
+          selectsDate={selectsPicker.selectsDate}
+          candidates={selectsPicker.candidates}
+          editors={editors}
+          onPick={(editorId) => runSelectsSyncTB(selectsPicker.updatedProject, editorId)}
+          onClose={() => setSelectsPicker(null)}
+        />
+      )}
       {/* Stage colour key (left) + collapse-all toggle (right). The
           wrapper owns the row padding; StageLegend's own padding was
           zeroed so both sit on one baseline. */}
@@ -1398,31 +1531,13 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       }}>
         <StageLegend />
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          {allClients.length > 0 && (() => {
-            const visibleCount = allClients.filter(c => !hiddenClients.has(c)).length;
-            const narrowed = hiddenClients.size > 0;
-            return (
-              <button
-                type="button"
-                onClick={() => setFilterOpen(true)}
-                title="Filter the board by client"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  background: narrowed ? "var(--accent-soft, rgba(0,130,250,0.15))" : "none",
-                  border: `1px solid ${narrowed ? "var(--accent)" : "var(--border)"}`,
-                  borderRadius: 6, padding: "4px 10px", margin: 0, cursor: "pointer",
-                  color: narrowed ? "var(--accent)" : "var(--fg)",
-                  opacity: narrowed ? 1 : 0.7,
-                  fontSize: 11, fontWeight: 700, lineHeight: 1,
-                  fontFamily: "inherit", whiteSpace: "nowrap",
-                  textTransform: "uppercase", letterSpacing: 0.4,
-                  transition: "opacity 0.12s",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
-                onMouseLeave={e => { e.currentTarget.style.opacity = narrowed ? 1 : 0.7; }}
-              >⛃ Filter{narrowed ? ` (${visibleCount}/${allClients.length})` : ""}</button>
-            );
-          })()}
+          {allClients.length > 0 && (
+            <ClientFilterDropdown
+              allClients={allClients}
+              hiddenClients={hiddenClients}
+              setHiddenClients={setHiddenClients}
+            />
+          )}
           {editors.length > 0 && (
             <button
               type="button"
@@ -1443,14 +1558,6 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
           )}
         </div>
       </div>
-      {filterOpen && (
-        <ClientFilterModal
-          allClients={allClients}
-          hiddenClients={hiddenClients}
-          setHiddenClients={setHiddenClients}
-          onClose={() => setFilterOpen(false)}
-        />
-      )}
       {/* No toolbar — the calendar is purely scroll-driven. The grid
           starts on the Monday of the current week and extends right as
           the producer scrolls. */}
