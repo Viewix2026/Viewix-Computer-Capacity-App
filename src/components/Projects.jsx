@@ -2235,7 +2235,10 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
       </FieldCard>
 
       <FieldCard label="Scope of Work">
+        {/* Taller default (rows=10) so the scope reads as a paragraph
+            without dragging; the resize handle still works for more. */}
         <InlineTextArea value={project.description || ""}
+          rows={10}
           placeholder="What's being produced, key talking points, anything specific the client called out…"
           onSave={(v) => persistField("description", v)} />
         {/* Sherpa doc — surfaced as an inline link directly under
