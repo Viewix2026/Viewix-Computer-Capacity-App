@@ -1330,18 +1330,51 @@ async function handlePushToRunsheet(req, res) {
     const linkedEntry = Object.entries(allProjects).find(([, pr]) => (pr?.links || {}).preprodId === projectId);
     if (linkedEntry) {
       const [parentId, parent] = linkedEntry;
+
+      // Phase 5 (#B) — approving a Meta Ads pre-production now AUTO-CREATES
+      // the delivery for the project (Jeremy's call). Idempotent: only if
+      // the project isn't already linked to one (re-push is 409-guarded
+      // above too).
+      //
+      // ⚠️ CRITICAL: also set project.links.deliveryId. Without it, the
+      // Deliveries↔Projects link is broken and "Share with client" fails
+      // with no_project_for_delivery — the exact bug this session opened
+      // with. The legacy Preproduction path never set it; this one does.
+      if (!parent.links?.deliveryId) {
+        const deliveryId = `del-${Date.now()}`;
+        const shortId = Math.random().toString(36).slice(2, 12);
+        const deliveryVideos = scriptTable.map((row, i) => ({
+          id: `vid-${Date.now()}-${i}`,
+          videoId: rowVideoIds[i],                 // canonical cross-system id
+          name: (row.videoName || "").trim() || `Video ${i + 1}`,
+          creativeFormat: row.creativeFormat || row.formatName || null,
+          link: "",
+          viewixStatus: "In Development",
+          revision1: "",
+          revision2: "",
+        }));
+        await fbSet(`/deliveries/${deliveryId}`, {
+          id: deliveryId,
+          shortId,
+          clientName: project.companyName || "",
+          projectName: `${project.companyName || ""} Meta Ads`,
+          logoUrl: "",
+          notes: "",
+          videos: deliveryVideos,
+          createdAt: now,
+        });
+        await fbSet(`/projects/${parentId}/links/deliveryId`, deliveryId);
+      }
+
       const existingCount = Object.keys(parent.subtasks || {}).length;
       for (let i = 0; i < scriptTable.length; i++) {
         const row = scriptTable[i];
         const stId = `st-vid-${Date.now()}-${i}`;
         const videoName = (row.videoName || "").trim() || (row.formatName || "").trim() || `Video ${i + 1}`;
         // Phase 5 (#B): reuse the SAME canonical videoId minted above for
-        // the runsheet video + scriptTable row, so runsheet ↔ project ↔
-        // (future) delivery all share one identity. Carry the creative
-        // format + mark this as the 16:9 master edit. (NOTE: this tabbed/
-        // server flow currently creates a runsheet, not a delivery — see
-        // PR notes; the delivery cross-link completes once delivery
-        // creation for tabbed Meta projects is settled.)
+        // the runsheet video + scriptTable row + delivery video, so
+        // runsheet ↔ project ↔ delivery all share one identity. Carry the
+        // creative format + mark this as the 16:9 master edit.
         const videoId = rowVideoIds[i];
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
