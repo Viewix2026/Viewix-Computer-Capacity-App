@@ -17,6 +17,7 @@ import { resolveAccountForProject } from "../utils";
 import { computeSelectsTimelineWrites } from "../../shared/scheduling/selects.js";
 import { SelectsPickerModal } from "./SelectsPickerModal";
 import TeamBoardFlagBanner from "./TeamBoardFlagBanner.jsx";
+import { isOverdueEdit, isBehindScheduleFlagged } from "../../shared/scheduling/overdue.js";
 import {
   DndContext, PointerSensor, useSensor, useSensors,
   useDraggable, useDroppable, useDndContext, closestCenter, pointerWithin, DragOverlay,
@@ -487,6 +488,12 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
   const setBarRef = (node) => { setNodeRef(node); reorderTarget.setNodeRef(node); };
 
   const colour = colourFor(subtask);
+  // Phase 3 (#5): overdue (dated past the project's due date) → yellow/
+  // black hazard stripes. behind-schedule (rolled by the overnight cron)
+  // → red priority badge. The two are independent and can co-occur.
+  const overdue = !!subtask.isOverdue;
+  const behind = isBehindScheduleFlagged(subtask);
+  const showBadge = reorderable || behind;
   const span = (subtask.startDate && subtask.endDate)
     ? Math.max(1, daysBetween(subtask.startDate, subtask.endDate) + 1)
     : 1;
@@ -497,10 +504,14 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
     // Right padding leaves room for the drag-handle dot cluster; left
     // padding widens when the priority badge/grip is shown so the
     // client name doesn't sit under it.
-    padding: reorderable ? "6px 22px 6px 30px" : "6px 22px 6px 12px",
+    padding: showBadge ? "6px 22px 6px 30px" : "6px 22px 6px 12px",
     borderRadius: 6,
-    background: `${colour}38`,
-    borderLeft: `3px solid ${colour}`,
+    // Overdue → translucent yellow/black hazard stripes (kept low-opacity
+    // so the light bar text stays readable on the dark board).
+    background: overdue
+      ? "repeating-linear-gradient(45deg, rgba(234,179,8,0.32) 0, rgba(234,179,8,0.32) 9px, rgba(0,0,0,0.42) 9px, rgba(0,0,0,0.42) 18px)"
+      : `${colour}38`,
+    borderLeft: `3px solid ${overdue ? "#EAB308" : colour}`,
     color: "var(--fg)",
     fontSize: 11,
     fontWeight: 600,
@@ -539,28 +550,35 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
           stopPropagation on click so grabbing it never opens the
           project; the mode-filtered collision strategy keeps the drag
           from being read as a reschedule. */}
-      {reorderable && (
+      {showBadge && (
         <div
-          ref={reorder.setNodeRef}
-          {...reorder.listeners}
-          {...reorder.attributes}
+          // Draggable reorder grip only when there are siblings to
+          // reorder; a lone behind-schedule edit shows a static red
+          // badge (no drag).
+          ref={reorderable ? reorder.setNodeRef : undefined}
+          {...(reorderable ? reorder.listeners : {})}
+          {...(reorderable ? reorder.attributes : {})}
           onClick={e => e.stopPropagation()}
-          title="Drag to reorder this day's tasks for this editor"
+          title={behind
+            ? "Behind schedule — this edit was due before and rolled to its editor's next working day"
+            : "Drag to reorder this day's tasks for this editor"}
           style={{
             position: "absolute", top: 4, left: 6,
             width: 18, height: 18, borderRadius: "50%",
-            background: colour, color: "#fff",
+            // Red = behind schedule; otherwise the stage colour.
+            background: behind ? "#EF4444" : colour,
+            color: "#fff",
             fontSize: 10, fontWeight: 800, lineHeight: 1,
             display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: reorder.isDragging ? "grabbing" : "grab",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.45)",
+            cursor: reorderable ? (reorder.isDragging ? "grabbing" : "grab") : "default",
+            boxShadow: behind ? "0 0 0 2px rgba(239,68,68,0.35), 0 1px 3px rgba(0,0,0,0.45)" : "0 1px 3px rgba(0,0,0,0.45)",
             // Lift + follow the cursor while dragging so the gesture
             // reads as "moving this task"; the target bar also rings.
-            transform: reorder.transform
+            transform: reorderable && reorder.transform
               ? `translate3d(${reorder.transform.x}px, ${reorder.transform.y}px, 0)`
               : undefined,
-            zIndex: reorder.isDragging ? 1000 : 3,
-            opacity: reorder.isDragging ? 0.9 : 1,
+            zIndex: reorderable && reorder.isDragging ? 1000 : 3,
+            opacity: reorderable && reorder.isDragging ? 0.9 : 1,
           }}
         >{dayRank}</div>
       )}
@@ -810,6 +828,10 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
           projectId: p.id,
           projectName: p.projectName || "Untitled project",
           clientName: p.clientName || "—",
+          // Phase 3 (#5): overdue = edit dated beyond the project's
+          // effective due date. Computed here where the parent project
+          // (dueDate + shoots) is in scope; the bar reads `isOverdue`.
+          isOverdue: isOverdueEdit(st, p),
         });
       }
     }
