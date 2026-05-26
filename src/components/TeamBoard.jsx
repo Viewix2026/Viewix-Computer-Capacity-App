@@ -13,6 +13,9 @@
 
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { fbSet, authFetch } from "../firebase";
+import { resolveAccountForProject } from "../utils";
+import { computeSelectsTimelineWrites } from "../../shared/scheduling/selects.js";
+import { SelectsPickerModal } from "./SelectsPickerModal";
 import TeamBoardFlagBanner from "./TeamBoardFlagBanner.jsx";
 import {
   DndContext, PointerSensor, useSensor, useSensors,
@@ -702,7 +705,7 @@ function DropCell({
 
 // ─── Main board ────────────────────────────────────────────────────
 
-export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, onOpenProject }) {
+export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, accounts = {}, onOpenProject }) {
   // The board opens centred on the Monday of the current week so the
   // producer sees the full current week (including past days they may
   // have already worked) without scrolling left. From there:
@@ -1017,6 +1020,84 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       .catch(err => console.warn("scheduling-brain-check:", err?.message || err));
   }, []);
 
+  // ── Phase 2 (#3): Selects-timeline sync on shoot drag ──────────────
+  // When a shoot bar is dragged/resized to a new day, keep the project's
+  // Selects subtask in sync (shoot+1, lead-assigned, top priority) — the
+  // same rule the Projects-detail date edit already applies, via the same
+  // pure helper. If the lead is unavailable that day, open the picker.
+  const [selectsPicker, setSelectsPicker] = useState(null);
+
+  const resolveLeadIdTB = (project) => {
+    const acct = resolveAccountForProject(project, accounts);
+    const leadName = (acct?.projectLead || "").trim().toLowerCase();
+    if (!leadName) return null;
+    const ed = (editors || []).find(e => (e?.name || "").trim().toLowerCase() === leadName);
+    return ed?.id || null;
+  };
+
+  // Apply the helper's leaf writes: optimistic setProjects (echo guard)
+  // then per-leaf fbSet. Same shape as the Projects-detail applier.
+  const applySelectsWritesTB = (projectId, writes) => {
+    if (!writes?.length) return;
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== projectId) return p;
+        const subs = { ...(p.subtasks || {}) };
+        for (const w of writes) {
+          const m = w.path.match(/\/subtasks\/([^/]+)\/(.+)$/);
+          if (!m) continue;
+          const sid = m[1];
+          const field = m[2];
+          const cur = { ...(subs[sid] || {}) };
+          if (field.startsWith("dayPriority/")) {
+            const key = field.slice("dayPriority/".length);
+            cur.dayPriority = { ...(cur.dayPriority || {}), [key]: w.value };
+          } else {
+            cur[field] = w.value;
+          }
+          subs[sid] = cur;
+        }
+        return { ...p, subtasks: subs };
+      }));
+    }
+    for (const w of writes) fbSet(w.path, w.value);
+  };
+
+  // Run the sync against a project whose shoot date just changed. Wrapped
+  // so a failure here can NEVER break the drag that triggered it.
+  const runSelectsSyncTB = (updatedProject, overrideAssigneeId) => {
+    try {
+      const leadId = resolveLeadIdTB(updatedProject);
+      const res = computeSelectsTimelineWrites(updatedProject, {
+        allProjects: projects, editors, weekData, leadId,
+        overrideAssigneeId: overrideAssigneeId || null,
+      });
+      if (res.writes) { applySelectsWritesTB(updatedProject.id, res.writes); setSelectsPicker(null); }
+      else if (res.needsPicker) {
+        setSelectsPicker({ updatedProject, selectsDate: res.selectsDate, candidates: res.candidates || [] });
+      }
+    } catch (e) {
+      console.warn("Selects sync (Team Board) failed:", e?.message || e);
+    }
+  };
+
+  // Build the post-write project snapshot for a shoot subtask whose date
+  // changed, then run the sync. No-op for non-shoot subtasks.
+  const maybeSyncSelectsAfterShootMove = (subtask, newStart, newEnd) => {
+    const isShoot = subtask.stage === "shoot" || (subtask.name || "").toLowerCase().includes("shoot");
+    if (!isShoot) return;
+    const proj = projects.find(p => p.id === subtask.projectId);
+    if (!proj) return;
+    const updatedProject = {
+      ...proj,
+      subtasks: {
+        ...(proj.subtasks || {}),
+        [subtask.id]: { ...(proj.subtasks?.[subtask.id] || subtask), startDate: newStart, endDate: newEnd ?? newStart },
+      },
+    };
+    runSelectsSyncTB(updatedProject);
+  };
+
   const onDragStart = (e) => {
     // Only show the floating preview for "move" drags. Resize gestures
     // are an edge-pull on a bar that stays put — a floating preview
@@ -1211,6 +1292,8 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
         patch: { startDate: newStart, endDate: newEnd },
         affectedDate: mode === "resizeEnd" ? newEnd : newStart,
       });
+      // Keep the Selects timeline in sync if this was a shoot resize.
+      maybeSyncSelectsAfterShootMove(subtask, newStart, newEnd);
       return;
     }
 
@@ -1314,6 +1397,8 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       },
       affectedDate: newDate,
     });
+    // Keep the Selects timeline in sync if this move was a shoot reschedule.
+    maybeSyncSelectsAfterShootMove(subtask, newDate, newEnd);
   };
 
   // ─── Layout maths ────────────────────────────────────────────────
@@ -1365,6 +1450,15 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
         <TeamBoardFlagBanner
           flags={brainFlags}
           onDismiss={() => setBrainFlags(null)}
+        />
+      )}
+      {selectsPicker && (
+        <SelectsPickerModal
+          selectsDate={selectsPicker.selectsDate}
+          candidates={selectsPicker.candidates}
+          editors={editors}
+          onPick={(editorId) => runSelectsSyncTB(selectsPicker.updatedProject, editorId)}
+          onClose={() => setSelectsPicker(null)}
         />
       )}
       {/* Stage colour key (left) + collapse-all toggle (right). The
