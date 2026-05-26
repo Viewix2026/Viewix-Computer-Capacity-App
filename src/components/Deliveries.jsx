@@ -171,6 +171,23 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
           const safe = val == null ? "" : val;
           if (approvalKeys.includes(k) && val === "Approved") {
             approvalWrites.push(fbSetAsync(`/deliveries/${dId}/videos/${idx}/${k}`, safe));
+          } else if (k === "viewixStatus" && val === "Completed") {
+            // Phase 5 (#B): a 16:9 MASTER reaching "Completed" triggers
+            // auto-creation of its 9:16/1:1 reformat edit on the linked
+            // project. Write the status leaf first (the endpoint re-reads
+            // it), then fire fire-and-forget — the endpoint is idempotent
+            // and no-ops for non-master / already-reformatted videos.
+            const canonicalVideoId = del.videos[idx]?.videoId;
+            fbSetAsync(`/deliveries/${dId}/videos/${idx}/${k}`, safe)
+              .then(() => {
+                if (!canonicalVideoId) return;
+                return authFetch("/api/reformat-on-approval", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ deliveryId: dId, videoId: canonicalVideoId }),
+                });
+              })
+              .catch(e => console.warn("reformat-on-approval trigger failed:", e?.message || e));
           } else {
             fbSet(`/deliveries/${dId}/videos/${idx}/${k}`, safe);
           }
