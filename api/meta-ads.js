@@ -1235,10 +1235,26 @@ async function handlePushToRunsheet(req, res) {
   // rows missing the field. The seven Hormozi-blueprint columns map
   // 1:1 onto the Runsheet schema; the SO-only fields (textHook,
   // visualHook, scriptNotes, props, contentStyle) stay empty.
+  // Phase 5 (#B): assign a CANONICAL videoId per row up front so the
+  // SAME id lands on the runsheet video, the scriptTable row, AND the
+  // project subtask below — runsheets / projects / (future) deliveries /
+  // analytics all resolve to one identity. Persist any freshly-minted id
+  // back onto the scriptTable so it's stable across re-pushes.
+  const rowVideoIds = scriptTable.map(row => row.videoId || `v-${Math.random().toString(36).slice(2, 12)}`);
+  for (let i = 0; i < scriptTable.length; i++) {
+    if (!scriptTable[i].videoId) {
+      await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${i}/videoId`, rowVideoIds[i]);
+    }
+  }
+
   const videos = scriptTable.map((row, i) => ({
     id: `v-${Date.now()}-${i}`,
+    // Canonical cross-system id (distinct from the runsheet-row `id`).
+    videoId: rowVideoIds[i],
     videoName: row.videoName || `Video ${i + 1}`,
     formatName: row.formatName || "",
+    // Creative format under the unified name too (alias of formatName).
+    creativeFormat: row.creativeFormat || row.formatName || null,
     contentStyle: "",
     hook: row.hook || "",
     textHook: "",
@@ -1319,17 +1335,14 @@ async function handlePushToRunsheet(req, res) {
         const row = scriptTable[i];
         const stId = `st-vid-${Date.now()}-${i}`;
         const videoName = (row.videoName || "").trim() || (row.formatName || "").trim() || `Video ${i + 1}`;
-        // Phase 5 (#B): stamp a canonical videoId + carry the creative
-        // format + mark this as the 16:9 master edit. The videoId is also
-        // written back to the scriptTable row so the same id lands on the
-        // delivery video whenever the delivery is (re)built. (NOTE: this
-        // tabbed/server flow currently creates a runsheet, not a delivery
-        // — see PR notes; the cross-link completes once delivery creation
-        // for tabbed Meta projects is settled.)
-        const videoId = row.videoId || `v-${Math.random().toString(36).slice(2, 12)}`;
-        if (!row.videoId) {
-          await fbSet(`/preproduction/metaAds/${projectId}/scriptTable/${i}/videoId`, videoId);
-        }
+        // Phase 5 (#B): reuse the SAME canonical videoId minted above for
+        // the runsheet video + scriptTable row, so runsheet ↔ project ↔
+        // (future) delivery all share one identity. Carry the creative
+        // format + mark this as the 16:9 master edit. (NOTE: this tabbed/
+        // server flow currently creates a runsheet, not a delivery — see
+        // PR notes; the delivery cross-link completes once delivery
+        // creation for tabbed Meta projects is settled.)
+        const videoId = rowVideoIds[i];
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
           videoId,
