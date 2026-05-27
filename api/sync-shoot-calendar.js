@@ -59,6 +59,11 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, ...result });
   } catch (e) {
     console.error("sync-shoot-calendar error:", e);
+    // TEMP diagnostic — surface top-level crashes in Firebase too.
+    try {
+      const { db } = getAdmin();
+      if (db) await db.ref("calendarSyncDebug/lastError").set({ error: e?.message || String(e), stack: (e?.stack || "").slice(0, 800), at: new Date().toISOString() });
+    } catch { /* ignore */ }
     return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 }
@@ -82,8 +87,10 @@ async function runWorker() {
     .sort(([, a], [, b]) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
     .slice(0, BATCH_CAP);
 
-  // TEMP diagnostic (calendar-sync go-live) — remove once confirmed.
-  console.log("[cal-sync diag]", JSON.stringify({
+  // TEMP diagnostic (calendar-sync go-live) — written to Firebase
+  // (/calendarSyncDebug) so it can be read without Vercel log access.
+  // Remove once confirmed.
+  const diag = {
     now: new Date(nowMs).toISOString(),
     queueDepth,
     dueCount: due.length,
@@ -96,7 +103,9 @@ async function runWorker() {
       attempts: e?.attempts || 0,
       locked: !!e?.lockedUntil,
     })),
-  }));
+  };
+  console.log("[cal-sync diag]", JSON.stringify(diag));
+  try { await db.ref("calendarSyncDebug/lastScan").set(diag); } catch (e) { console.warn("diag write failed", e?.message); }
 
   let processed = 0;
   let failed = 0;
@@ -174,8 +183,9 @@ async function runWorker() {
   }
 
   const result = { processedCount: processed, failedCount: failed, queueDepth, dueCount: due.length, failedDeletes, recent };
-  // TEMP diagnostic (calendar-sync go-live) — remove once confirmed.
+  // TEMP diagnostic (calendar-sync go-live) — Firebase + console.
   console.log("[cal-sync result]", JSON.stringify(result));
+  try { await db.ref("calendarSyncDebug/lastResult").set({ ...result, at: new Date().toISOString() }); } catch (e) { console.warn("result write failed", e?.message); }
   return result;
 }
 
