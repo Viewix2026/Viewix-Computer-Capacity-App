@@ -59,11 +59,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, ...result });
   } catch (e) {
     console.error("sync-shoot-calendar error:", e);
-    // TEMP diagnostic — surface top-level crashes in Firebase too.
-    try {
-      const { db } = getAdmin();
-      if (db) await db.ref("calendarSyncDebug/lastError").set({ error: e?.message || String(e), stack: (e?.stack || "").slice(0, 800), at: new Date().toISOString() });
-    } catch { /* ignore */ }
     return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 }
@@ -71,32 +66,6 @@ export default async function handler(req, res) {
 async function runWorker() {
   const { db, err } = getAdmin();
   if (err) throw new Error(err);
-
-  // TEMP env fingerprint (calendar-sync go-live) — diagnoses the
-  // invalid_client error WITHOUT exposing full secrets. client_id is
-  // semi-public (it travels in the OAuth URL); secret/refresh show
-  // only length + a short prefix. Remove once sync is confirmed.
-  try {
-    const cid = process.env.GOOGLE_CLIENT_ID || "";
-    const sec = process.env.GOOGLE_CLIENT_SECRET || "";
-    const ref = process.env.GOOGLE_REFRESH_TOKEN || "";
-    const cal = process.env.VIEWIX_CALENDAR_ID || "";
-    const h = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(0, 16);
-    await db.ref("calendarSyncDebug/env").set({
-      at: new Date().toISOString(),
-      clientId: cid,
-      clientIdLen: cid.length,
-      clientIdHash: h(cid),       // known-good: bd4f7fef98a432c2
-      clientIdTrimmedDiff: cid !== cid.trim(),
-      secretLen: sec.length,
-      secretHash: h(sec),         // known-good: 823033028f176678
-      secretTrimmedDiff: sec !== sec.trim(),
-      refreshLen: ref.length,
-      refreshHash: h(ref),        // known-good: 1908c99cc13c893f
-      refreshTrimmedDiff: ref !== ref.trim(),
-      calId: cal,
-    });
-  } catch (e) { console.warn("env fingerprint write failed", e?.message); }
 
   const nowMs = Date.now();
   const queueRaw = (await adminGet("/calendarSyncQueue")) || {};
@@ -112,26 +81,6 @@ async function runWorker() {
     })
     .sort(([, a], [, b]) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
     .slice(0, BATCH_CAP);
-
-  // TEMP diagnostic (calendar-sync go-live) — written to Firebase
-  // (/calendarSyncDebug) so it can be read without Vercel log access.
-  // Remove once confirmed.
-  const diag = {
-    now: new Date(nowMs).toISOString(),
-    queueDepth,
-    dueCount: due.length,
-    keys: Object.keys(queueRaw),
-    sample: Object.entries(queueRaw).slice(0, 5).map(([k, e]) => ({
-      k,
-      action: e?.action,
-      dueAt: e?.dueAt,
-      dueDeltaMs: e?.dueAt ? Date.parse(e.dueAt) - nowMs : null,
-      attempts: e?.attempts || 0,
-      locked: !!e?.lockedUntil,
-    })),
-  };
-  console.log("[cal-sync diag]", JSON.stringify(diag));
-  try { await db.ref("calendarSyncDebug/lastScan").set(diag); } catch (e) { console.warn("diag write failed", e?.message); }
 
   let processed = 0;
   let failed = 0;
@@ -163,19 +112,6 @@ async function runWorker() {
       processError = e?.message || String(e);
       failed++;
       const errAt = new Date().toISOString();
-      // TEMP: capture the FULL error detail (Google's error_description,
-      // status, body) to diagnose the prod-only invalid_client. Remove
-      // once sync is confirmed.
-      try {
-        await db.ref("calendarSyncDebug/lastError").set({
-          at: errAt,
-          message: String(e?.message || e),
-          code: e?.code ?? null,
-          status: e?.response?.status ?? null,
-          data: e?.response?.data ? JSON.stringify(e.response.data).slice(0, 800) : null,
-          stack: String(e?.stack || "").split("\n").slice(0, 4).join(" | "),
-        });
-      } catch {}
       const errSnap = await ref.once("value");
       const errCur = errSnap.val();
       if (errCur && errCur.lockOwner === lockOwner) {
@@ -224,11 +160,7 @@ async function runWorker() {
     });
   }
 
-  const result = { processedCount: processed, failedCount: failed, queueDepth, dueCount: due.length, failedDeletes, recent };
-  // TEMP diagnostic (calendar-sync go-live) — Firebase + console.
-  console.log("[cal-sync result]", JSON.stringify(result));
-  try { await db.ref("calendarSyncDebug/lastResult").set({ ...result, at: new Date().toISOString() }); } catch (e) { console.warn("result write failed", e?.message); }
-  return result;
+  return { processedCount: processed, failedCount: failed, queueDepth, dueCount: due.length, failedDeletes, recent };
 }
 
 // Claim a queue entry by stamping lockOwner + lockedUntil, after
