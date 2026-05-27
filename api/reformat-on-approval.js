@@ -61,10 +61,13 @@ export default async function handler(req, res) {
   if (vid.viewixStatus !== "Completed") return res.status(200).json({ ok: true, skipped: "not_completed" });
 
   // Find the linked project (project.links.deliveryId === deliveryId).
+  // Keep the full list — dayPriority is per editor|date ACROSS ALL
+  // projects, so the priority-append below must scan all of them.
   let project = null;
+  let allProjectsList = [];
   try {
-    const projects = listProjects(await adminGet("/projects"));
-    project = projects.find(p => (p.links || {}).deliveryId === deliveryId) || null;
+    allProjectsList = listProjects(await adminGet("/projects"));
+    project = allProjectsList.find(p => (p.links || {}).deliveryId === deliveryId) || null;
   } catch (e) {
     return res.status(500).json({ ok: false, error: `project lookup failed: ${e.message}` });
   }
@@ -125,15 +128,19 @@ export default async function handler(req, res) {
     createdAt: now, updatedAt: now,
   };
   if (scheduled) {
-    // Append at the END of that editor+day rather than a raw =1 that
-    // would silently collide with / displace existing priorities (Codex
-    // safety fix). max(existing)+1 across this project's subtasks for the
-    // editor+day. (Cross-project stacking is the Phase 6 capacity job.)
+    // Append at the END of that editor+day rather than a raw =1 that would
+    // collide with existing priorities. dayPriority is per editor|date
+    // ACROSS ALL projects (the Team Board stacks an editor's whole day),
+    // so scan EVERY project's subtasks for the key — not just this one
+    // (Codex P1: a different project can already hold #1 that day).
     const key = pkey(editorId, startDate);
     let maxP = 0;
-    for (const s of subs) {
-      const v = s?.dayPriority?.[key];
-      if (Number.isFinite(v) && v > maxP) maxP = v;
+    for (const p of allProjectsList) {
+      const psubs = p?.subtasks ? Object.values(p.subtasks) : [];
+      for (const s of psubs) {
+        const v = s?.dayPriority?.[key];
+        if (Number.isFinite(v) && v > maxP) maxP = v;
+      }
     }
     reformat.dayPriority = { [key]: maxP + 1 };
   }
