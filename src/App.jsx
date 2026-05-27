@@ -28,6 +28,7 @@ import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
 import { useSalesSync } from "./sync/useSalesSync";
 import { useProjectsSync } from "./sync/useProjectsSync";
+import { useCalendarSyncQueue } from "./sync/useCalendarSyncQueue";
 import { isAdminRole, isFounderRole, normalizeRole } from "./lib/roles";
 
 // Lazy imports — heavy tab components only mount when their tool is
@@ -243,6 +244,13 @@ export default function App(){
   const isFounders=isFounderRole(normalizedRole);
   const isFounder=isAdminRole(normalizedRole);
   const isLead=normalizedRole==="lead";
+
+  // Calendar sync queue listener — gated by role (E6). The
+  // /calendarSyncQueue rule only grants founder/manager/lead read
+  // access, so for editor/trial/closer users we never attach the
+  // listener (avoids permission-denied log spam). Threaded into
+  // Projects + TeamBoard so shoot rows can render sync-status pills.
+  const{calendarSyncQueue}=useCalendarSyncQueue({enabled:isFounder||isLead});
 
   // Firebase data listeners — gated on auth being ready so the root listener
   // doesn't attach before the auth token is available (prevents listener lockout
@@ -823,10 +831,10 @@ export default function App(){
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
-    {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
+    {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null}/>)}
 
     {/* Legacy direct-to-Deliveries route (kept so old bookmarks still resolve). */}
-    {tool==="deliveries"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} route={route.tool==="projects"?route:null}/>)}
+    {tool==="deliveries"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null}/>)}
 
 
     {/* ═══ TRAINING ═══ */}

@@ -11,9 +11,14 @@
 // Projects.jsx subtask drawer reads. Per-leaf fbSet writes so concurrent
 // webhook patches don't clobber producer drags.
 
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
-import { fbSet, authFetch } from "../firebase";
+import { useMemo, useState, useRef, useCallback, useEffect, useContext } from "react";
+import { fbSet, fbUpdate, authFetch } from "../firebase";
 import { resolveAccountForProject } from "../utils";
+import {
+  CalendarSyncContext,
+  enqueueCalendarSync,
+  CANCELLATION_PROMPT_DAYS,
+} from "../calendar-sync";
 import { computeSelectsTimelineWrites } from "../../shared/scheduling/selects.js";
 import { SelectsPickerModal } from "./SelectsPickerModal";
 import TeamBoardFlagBanner from "./TeamBoardFlagBanner.jsx";
@@ -458,6 +463,11 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
   // Without the suffix dnd-kit would see two useDraggables with the
   // same id and only the last would respond to events.
   const dragId = `bar:${subtask.id}:${sourceAssigneeId}`;
+  // Calendar-sync status for the corner dot (shoot bars only).
+  const calendarSyncQueue = useContext(CalendarSyncContext);
+  const calQueueEntry = calendarSyncQueue?.get?.(`${subtask.projectId}__${subtask.id}`) || null;
+  const calPendingSync = !!(calQueueEntry && calQueueEntry.dueAt && Date.parse(calQueueEntry.dueAt) > Date.now());
+  const calSyncFailed = !!subtask.calendarSyncError;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: dragId,
     data: { mode: "move", subtask, sourceAssigneeId },
@@ -601,6 +611,27 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
         `,
         pointerEvents: "none",
       }}/>
+      {/* Calendar-sync dot (shoot bars only). Bottom-right, colour-coded:
+          red = sync error (incl. the loud "event still live, no crew"
+          state) · amber = pending (debouncing / in flight) · green =
+          on calendar. */}
+      {subtask.stage === "shoot" && (calPendingSync || calSyncFailed || subtask.calendarEventId) && (
+        <div
+          title={
+            calSyncFailed
+              ? `Calendar: ${subtask.calendarSyncError}`
+              : calPendingSync
+                ? `Syncs to Viewix calendar at ${calQueueEntry?.dueAt ? new Date(calQueueEntry.dueAt).toLocaleTimeString() : "soon"}.`
+                : "On Viewix calendar."
+          }
+          style={{
+            position: "absolute", bottom: 4, right: 8,
+            width: 8, height: 8, borderRadius: 999,
+            background: calSyncFailed ? "#EF4444" : calPendingSync ? "#F59E0B" : "#10B981",
+            boxShadow: "0 0 0 2px rgba(0,0,0,0.25)",
+            pointerEvents: "none",
+          }}/>
+      )}
       {/* Line 1: client name + project name. Bold so the row is
           identifiable at a glance even when the bar is short. */}
       <div style={{
@@ -754,6 +785,13 @@ function DropCell({
 // ─── Main board ────────────────────────────────────────────────────
 
 export function TeamBoard({ projects = [], setProjects, editors = [], setEditors, weekData = {}, accounts = {}, onOpenProject }) {
+  // Calendar-sync queue (via the Provider in Projects.jsx) — used for
+  // the Gantt-bar sync dot + drag-drop intercepts.
+  const calendarSyncQueue = useContext(CalendarSyncContext);
+  // Modal state — drop-time entry + 7-day cancellation confirm. Set by
+  // the onDragEnd intercept, cleared on close.
+  const [shootDropModal, setShootDropModal] = useState(null);
+  const [cancelConfirmModal, setCancelConfirmModal] = useState(null);
   // The board opens centred on the Monday of the current week so the
   // producer sees the full current week (including past days they may
   // have already worked) without scrolling left. From there:
@@ -1288,18 +1326,6 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       }));
     };
 
-    // Helper: write a new assignee list back to Firebase, keeping the
-    // legacy `assigneeId` field in sync as the first entry so any code
-    // that still reads it gets a sensible value. Pass null/empty to
-    // unassign entirely. Patches local state in the same call so the
-    // Gantt bar moves immediately, not on the next listener fire.
-    const writeAssignees = (nextIds) => {
-      const cleaned = (nextIds || []).filter(Boolean);
-      patchSubtaskLocal({ assigneeIds: cleaned, assigneeId: cleaned[0] || null });
-      fbSet(`${path}/assigneeIds`, cleaned);
-      fbSet(`${path}/assigneeId`, cleaned[0] || null);
-    };
-
     if (mode === "resizeEnd" || mode === "resizeStart") {
       // Pool drop on a resize handle is a no-op.
       if (over.id === POOL_ID) return;
@@ -1344,9 +1370,9 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       }
 
       patchSubtaskLocal({ startDate: newStart, endDate: newEnd });
-      fbSet(`${path}/startDate`, newStart);
-      fbSet(`${path}/endDate`, newEnd);
-      fbSet(`${path}/updatedAt`, now);
+      // Atomic multi-leaf write — single fbUpdate so a blip can't
+      // leave the bar with a new start but old end.
+      fbUpdate(path, { startDate: newStart, endDate: newEnd, updatedAt: now });
       triggerBrainCheck({
         projectId: subtask.projectId,
         subtaskId: subtask.id,
@@ -1355,11 +1381,31 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       });
       // Keep the Selects timeline in sync if this was a shoot resize.
       maybeSyncSelectsAfterShootMove(subtask, newStart, newEnd);
+      // Calendar sync — fires alongside Selects, writes nothing here.
+      enqueueCalendarSync({
+        projectId: subtask.projectId,
+        prevSubtask: subtask,
+        nextSubtask: { ...subtask, startDate: newStart, endDate: newEnd },
+      });
       return;
     }
 
     // mode === "move"
     if (over.id === POOL_ID) {
+      // 7-day cancellation prompt — a synced shoot scheduled within
+      // CANCELLATION_PROMPT_DAYS needs a confirm before we tear down
+      // the calendar event + email the client a cancellation. Far-
+      // future drops skip the prompt (common reshuffle, less risk).
+      if (subtask.stage === "shoot" && subtask.calendarEventId && subtask.startDate) {
+        const startMs = Date.parse(`${subtask.startDate}T00:00:00`);
+        const daysOut = Number.isFinite(startMs)
+          ? Math.ceil((startMs - Date.now()) / (24 * 60 * 60 * 1000))
+          : Infinity;
+        if (daysOut <= CANCELLATION_PROMPT_DAYS) {
+          setCancelConfirmModal({ subtask, path, daysOut: Math.max(0, daysOut) });
+          return;
+        }
+      }
       // Drop into the pool drawer = unschedule. Keeps the assigneeIds
       // intact so the producer can drop the card back into a date cell
       // later without re-picking everyone — pool cards still show all
@@ -1371,9 +1417,12 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
         oldStart: subtask.startDate, oldEnd: subtask.endDate,
       });
       patchSubtaskLocal({ startDate: null, endDate: null });
-      fbSet(`${path}/startDate`, null);
-      fbSet(`${path}/endDate`, null);
-      fbSet(`${path}/updatedAt`, now);
+      fbUpdate(path, { startDate: null, endDate: null, updatedAt: now });
+      enqueueCalendarSync({
+        projectId: subtask.projectId,
+        prevSubtask: subtask,
+        nextSubtask: { ...subtask, startDate: null, endDate: null },
+      });
       return;
     }
 
@@ -1400,11 +1449,9 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
     // preserving its old span. The audit log line above shows
     // newStart === newEnd, matching what gets written.
     const newEnd = newDate;
-    patchSubtaskLocal({ startDate: newDate, endDate: newEnd });
-    fbSet(`${path}/startDate`, newDate);
-    fbSet(`${path}/endDate`, newEnd);
 
-    // Assignee logic for multi-assignee subtasks:
+    // Assignee logic for multi-assignee subtasks (hoisted ahead of the
+    // write so the shoot-times modal can carry the full payload):
     //   - If the producer dragged from an editor row's bar, sourceAssigneeId
     //     identifies which assignee the bar represented.
     //   - Drop on the SAME editor row → only the date changed; assignees stay.
@@ -1419,47 +1466,61 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
       const stripped = currentIds.filter(id => id !== sourceAssigneeId);
       nextIds = stripped.includes(newAssignee) ? stripped : [...stripped, newAssignee];
     } else if (!sourceAssigneeId) {
-      // From the pool — transfer to target, don't append.
-      //   - target IS already in assigneeIds → reschedule with same
-      //     crew, no assignee change. Common for multi-assignee
-      //     shoots that got unscheduled and dragged back to one of
-      //     the crew's row.
-      //   - target is NOT in assigneeIds → REPLACE with just
-      //     [target]. Single-assignee transfer flow: producer drops
-      //     to pool, drags to a new editor = ownership moves to
-      //     that editor. The bug Jeremy hit was the old "append"
-      //     behaviour leaving both original AND new owner
-      //     assigned — append-not-replace silently doubled up.
-      // Producers who actually want to ADD a crew member (vs
-      // transfer) use the multi-assignee picker on the task row —
-      // drag-and-drop is for transfer / scheduling, not for
-      // editing the assignee list.
+      // From the pool — transfer to target, don't append (see history
+      // in git blame: append-not-replace silently doubled up owners).
       nextIds = currentIds.includes(newAssignee) ? currentIds : [newAssignee];
     } else {
-      // sourceAssigneeId === newAssignee → just a date change, no assignee change.
+      // sourceAssigneeId === newAssignee → just a date change.
       nextIds = currentIds;
     }
-    if (JSON.stringify(nextIds) !== JSON.stringify(currentIds)) {
-      writeAssignees(nextIds);
-    }
-    fbSet(`${path}/updatedAt`, now);
+    const assigneeChanged = JSON.stringify(nextIds) !== JSON.stringify(currentIds);
 
-    // Brain check on the resulting state. proposedPatch carries the
-    // fields the drag just wrote so the backend can evaluate the
-    // virtual world without racing the per-leaf fbSet calls.
+    // Shoot-times intercept — dropping a shoot onto a date cell without
+    // valid start+end times defers the write to a modal that captures
+    // the times (+ optional location) and writes everything atomically.
+    // Calendar sync can't proceed without explicit times.
+    if (subtask.stage === "shoot") {
+      const haveTimes = !!subtask.startTime && !!subtask.endTime;
+      const timesOk = haveTimes && `${newEnd}T${subtask.endTime}` > `${newDate}T${subtask.startTime}`;
+      if (!timesOk) {
+        setShootDropModal({
+          subtask, path, newDate, newEnd, newAssignee, sourceAssigneeId,
+          nextIds, assigneeChanged,
+          defaults: { startTime: subtask.startTime || "", endTime: subtask.endTime || "", location: subtask.location || "" },
+        });
+        return;
+      }
+    }
+
+    patchSubtaskLocal({ startDate: newDate, endDate: newEnd });
+    // Atomic multi-leaf write — single fbUpdate replaces the previous
+    // per-leaf fbSet sequence so a blip can't half-update the row.
+    const updates = { startDate: newDate, endDate: newEnd, updatedAt: now };
+    if (assigneeChanged) {
+      const cleaned = (nextIds || []).filter(Boolean);
+      patchSubtaskLocal({ assigneeIds: cleaned, assigneeId: cleaned[0] || null });
+      updates.assigneeIds = cleaned;
+      updates.assigneeId = cleaned[0] || null;
+    }
+    fbUpdate(path, updates);
+
     triggerBrainCheck({
       projectId: subtask.projectId,
       subtaskId: subtask.id,
-      patch: {
-        startDate: newDate,
-        endDate: newEnd,
-        assigneeIds: nextIds,
-        assigneeId: nextIds[0] || null,
-      },
+      patch: { startDate: newDate, endDate: newEnd, assigneeIds: nextIds, assigneeId: nextIds[0] || null },
       affectedDate: newDate,
     });
     // Keep the Selects timeline in sync if this move was a shoot reschedule.
     maybeSyncSelectsAfterShootMove(subtask, newDate, newEnd);
+    // Calendar sync — fires alongside Selects.
+    enqueueCalendarSync({
+      projectId: subtask.projectId,
+      prevSubtask: subtask,
+      nextSubtask: {
+        ...subtask, startDate: newDate, endDate: newEnd,
+        ...(assigneeChanged ? { assigneeIds: nextIds, assigneeId: nextIds[0] || null } : {}),
+      },
+    });
   };
 
   // ─── Layout maths ────────────────────────────────────────────────
@@ -1731,9 +1792,167 @@ export function TeamBoard({ projects = [], setProjects, editors = [], setEditors
           )}
         </DragOverlay>
       </DndContext>
+      {shootDropModal && (
+        <ShootDropTimeModal
+          state={shootDropModal}
+          setProjects={setProjects}
+          onScheduled={maybeSyncSelectsAfterShootMove}
+          onClose={() => setShootDropModal(null)}
+        />
+      )}
+      {cancelConfirmModal && (
+        <ShootCancellationConfirmModal
+          state={cancelConfirmModal}
+          setProjects={setProjects}
+          onClose={() => setCancelConfirmModal(null)}
+        />
+      )}
     </div>
   );
 }
+
+// ─── Drop-time modal ───────────────────────────────────────────────
+// Opens when a shoot is dropped on a date cell without valid times.
+// Captures start/end/optional location, writes all fields (dates +
+// times + location + assignees) in ONE atomic fbUpdate, then enqueues
+// the calendar sync. Single-write so a blip can't leave new dates with
+// old times — the worker would otherwise read inconsistent data.
+function ShootDropTimeModal({ state, setProjects, onScheduled, onClose }) {
+  const [startTime, setStartTime] = useState(state.defaults.startTime || "");
+  const [endTime, setEndTime] = useState(state.defaults.endTime || "");
+  const [location, setLocation] = useState(state.defaults.location || "");
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const submit = () => {
+    if (!startTime || !endTime) { setError("Both start and end times are required."); return; }
+    if (`${state.newEnd}T${endTime}` <= `${state.newDate}T${startTime}`) { setError("End must be after start."); return; }
+    const now = new Date().toISOString();
+    const cleaned = (state.nextIds || []).filter(Boolean);
+    const updates = {
+      startDate: state.newDate, endDate: state.newEnd,
+      startTime, endTime, location: location.trim() || null, updatedAt: now,
+    };
+    if (state.assigneeChanged) { updates.assigneeIds = cleaned; updates.assigneeId = cleaned[0] || null; }
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== state.subtask.projectId) return p;
+        const subs = { ...(p.subtasks || {}) };
+        subs[state.subtask.id] = { ...(subs[state.subtask.id] || {}), ...updates };
+        return { ...p, subtasks: subs, updatedAt: now };
+      }));
+    }
+    fbUpdate(state.path, updates);
+    enqueueCalendarSync({
+      projectId: state.subtask.projectId,
+      prevSubtask: state.subtask,
+      nextSubtask: { ...state.subtask, ...updates },
+    });
+    // Keep the Selects timeline auto-schedule in sync — scheduling a
+    // shoot via this modal sets the shoot date, same as a direct drop.
+    onScheduled?.({ ...state.subtask, ...updates }, state.newDate, state.newEnd);
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={calModalBackdrop}>
+      <div onClick={e => e.stopPropagation()} style={{ ...calModalCard, width: "min(440px, 100%)" }}>
+        <h3 style={{ margin: "0 0 6px", fontSize: 16 }}>Shoot times required</h3>
+        <p style={{ margin: "0 0 16px", fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>
+          Set the start and end times before scheduling this shoot. The Viewix
+          calendar event won't sync until both are filled in and end is after start.
+        </p>
+        <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+          <label style={{ flex: 1, fontSize: 11, color: "var(--muted)" }}>Start
+            <input type="time" value={startTime} onChange={e => { setStartTime(e.target.value); setError(null); }} style={calModalInput} />
+          </label>
+          <label style={{ flex: 1, fontSize: 11, color: "var(--muted)" }}>End
+            <input type="time" value={endTime} onChange={e => { setEndTime(e.target.value); setError(null); }} style={calModalInput} />
+          </label>
+        </div>
+        <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>Location (optional)
+          <input type="text" value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Bondi Beach" style={calModalInput} />
+        </label>
+        {error && <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 12 }}>{error}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} style={calBtnSubtle}>Cancel</button>
+          <button onClick={submit} style={calBtnPrimary}>Schedule shoot</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 7-day cancellation confirm ────────────────────────────────────
+function ShootCancellationConfirmModal({ state, setProjects, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const confirm = () => {
+    const now = new Date().toISOString();
+    if (typeof setProjects === "function") {
+      setProjects(prev => prev.map(p => {
+        if (!p || p.id !== state.subtask.projectId) return p;
+        const subs = { ...(p.subtasks || {}) };
+        subs[state.subtask.id] = { ...(subs[state.subtask.id] || {}), startDate: null, endDate: null, updatedAt: now };
+        return { ...p, subtasks: subs, updatedAt: now };
+      }));
+    }
+    fbUpdate(state.path, { startDate: null, endDate: null, updatedAt: now });
+    enqueueCalendarSync({
+      projectId: state.subtask.projectId,
+      prevSubtask: state.subtask,
+      nextSubtask: { ...state.subtask, startDate: null, endDate: null },
+    });
+    onClose();
+  };
+
+  const dateLabel = state.subtask.startDate || "(unknown)";
+  const daysLabel = state.daysOut === 0 ? "today" : state.daysOut === 1 ? "1 day away" : `${state.daysOut} days away`;
+
+  return (
+    <div onClick={onClose} style={calModalBackdrop}>
+      <div onClick={e => e.stopPropagation()} style={{ ...calModalCard, width: "min(460px, 100%)" }}>
+        <h3 style={{ margin: "0 0 6px", fontSize: 16 }}>Cancel calendar event?</h3>
+        <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.5, color: "var(--muted)" }}>
+          This shoot is on <b style={{ color: "var(--fg)" }}>{dateLabel}</b> ({daysLabel}).
+          Unscheduling will delete the Viewix calendar event and email the
+          cancellation to the client and crew.
+        </p>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} style={calBtnSubtle}>Cancel</button>
+          <button onClick={confirm} style={calBtnDanger}>Confirm cancellation</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const calModalBackdrop = {
+  position: "fixed", inset: 0, zIndex: 200,
+  background: "rgba(0,0,0,0.65)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)",
+  display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+};
+const calModalCard = {
+  background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12,
+  padding: 20, boxShadow: "0 24px 60px rgba(0,0,0,0.5)", color: "var(--fg)", fontFamily: "inherit",
+};
+const calModalInput = {
+  display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 13,
+  fontFamily: "inherit", background: "var(--bg)", color: "var(--fg)",
+  border: "1px solid var(--border)", borderRadius: 6,
+};
+const calBtnBase = { fontFamily: "inherit", cursor: "pointer", padding: "8px 14px", fontSize: 13, fontWeight: 600, borderRadius: 8 };
+const calBtnSubtle = { ...calBtnBase, background: "transparent", color: "var(--fg)", border: "1px solid var(--border)" };
+const calBtnPrimary = { ...calBtnBase, background: "var(--accent)", color: "#fff", border: "1px solid var(--accent)" };
+const calBtnDanger = { ...calBtnBase, background: "#EF4444", color: "#fff", border: "1px solid #EF4444" };
 
 // Sticky-left editor label. Draggable (drag the ⋮⋮ grip — or just the
 // row — to reorder editors) and droppable (drop another editor's
