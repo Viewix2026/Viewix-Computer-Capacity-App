@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { normaliseImageUrl } from "../utils";
 
-// Top-right "who's logged in" chip. Shows the signed-in user's name and
-// avatar, sourced from the Team Roster (/editors) by matching the Google
-// account email against each roster entry's `email`. Falls back to the
-// Google profile (displayName / photoURL) when there's no roster match,
-// then to the email local-part, so the chip never renders blank.
+// "Who's logged in" chip. Shows the signed-in user's name and avatar,
+// sourced from the Team Roster (/editors) by matching the Google account
+// email against each roster entry's `email`. Falls back to the Google
+// profile (displayName / photoURL) when there's no roster match, then to
+// the email local-part, so the chip never renders blank.
 //
-// Display-only — logout still lives in the sidebar. Fixed to the viewport
-// top-right so it stays put across tabs (each tab renders its own
-// left-aligned header, leaving the top-right corner free).
+// Display-only — logout still lives in the sidebar. Rendered inline at the
+// far right of the app header bar (see App.jsx), so it occupies its own
+// space and never overlaps tab content/buttons.
 export function UserBadge({ editors, email, name, photoURL }) {
   const [imgFailed, setImgFailed] = useState(false);
 
@@ -43,18 +43,9 @@ export function UserBadge({ editors, email, name, photoURL }) {
     <div
       title={email || displayName}
       style={{
-        position: "fixed",
-        top: 12,
-        right: 16,
-        zIndex: 50,
-        display: "flex",
+        display: "inline-flex",
         alignItems: "center",
         gap: 9,
-        padding: "5px 12px 5px 5px",
-        borderRadius: 999,
-        background: "var(--card)",
-        border: "1px solid var(--border)",
-        boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
         maxWidth: 240,
       }}
     >

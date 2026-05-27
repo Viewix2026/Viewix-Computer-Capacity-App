@@ -556,11 +556,6 @@ export default function App(){
 
   return(<div style={{fontFamily:"'DM Sans',-apple-system,sans-serif",background:"var(--bg)",color:"var(--fg)",minHeight:"100vh",display:"flex"}}><style>{CSS}</style>
 
-    {/* Logged-in user chip — fixed to the viewport top-right. Name +
-        avatar come from the Team Roster (/editors) matched by Google
-        email, with a Google-profile fallback. */}
-    <UserBadge editors={editors} email={getCurrentUserEmail()} name={getCurrentUserName()} photoURL={getCurrentUserPhotoURL()}/>
-
     {/* Sidebar */}
     <div style={{width:72,background:"var(--card)",borderRight:"1px solid var(--border)",display:"flex",flexDirection:"column",alignItems:"center",padding:"16px 8px",gap:4,flexShrink:0}}>
       <div style={{marginBottom:12}}><Logo h={20}/></div>
@@ -591,7 +586,18 @@ export default function App(){
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
 
-    {/* Main content. Wrapped in Suspense so lazy-loaded tab modules
+    {/* Main content. A column: a fixed header bar on top (logged-in user
+        chip at the far right) and the scrollable tab area below. The chip
+        lives in normal flow here — not a fixed overlay — so it never
+        covers tab content/buttons. */}
+    <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,overflow:"hidden"}}>
+
+    {/* App header bar */}
+    <div style={{flexShrink:0,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"8px 16px",borderBottom:"1px solid var(--border)",background:"var(--card)"}}>
+      <UserBadge editors={editors} email={getCurrentUserEmail()} name={getCurrentUserName()} photoURL={getCurrentUserPhotoURL()}/>
+    </div>
+
+    {/* Scrollable tab area. Wrapped in Suspense so lazy-loaded tab modules
         can fetch their chunk on first activation without blocking the
         sidebar render. The fallback re-uses the dashboard "Loading…"
         screen so the visual transition is consistent. */}
@@ -859,6 +865,7 @@ export default function App(){
 
     </Suspense>
     </ErrorBoundary>
+    </div>
     </div>
   </div>);
 }
