@@ -50,12 +50,13 @@ export default async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "GET (cron) or POST (manual audit) only" });
   }
-  // Auth via the shared cron helper (api/_cronAuth.js). Accepts the
-  // Vercel-injected `Authorization: Bearer ${CRON_SECRET}` OR the
-  // presence of the `x-vercel-cron` header OR `?secret=CRON_TEST_SECRET`.
-  // The earlier hand-rolled Bearer-only check silently 401'd every real
-  // cron invocation (same incident class documented in _cronAuth.js,
-  // 2026-05-16) — the queue entry sat unprocessed with attempts:0.
+  // Auth via the shared cron helper (api/_cronAuth.js). With
+  // CRON_SECRET set (production) it accepts ONLY the Vercel-injected
+  // `Authorization: Bearer ${CRON_SECRET}` or a manual
+  // `?secret=${CRON_TEST_SECRET}`. A forged `x-vercel-cron` header is
+  // rejected (it's only honoured as a fallback when CRON_SECRET is
+  // unset). The earlier hand-rolled Bearer-only check here silently
+  // 401'd every real cron invocation, so we defer to the shared helper.
   const auth = isAuthorizedCron(req);
   if (!auth.ok) return res.status(401).json({ error: "Unauthorized" });
   try {
