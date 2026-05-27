@@ -243,7 +243,16 @@ export default async function handler(req, res) {
     // it now waits for a producer/AM to explicitly batch and send
     // via api/send-review-batch.js. Editor's Finish flow is back to
     // its original Slack-notification-only behaviour.
-    const slack = await postSlack(slackWebhook, slackText);
+    //
+    // Phase 4 switch (Codex): the per-video pings are being replaced by
+    // project-level aggregate alerts (internal-review-ready / client-
+    // ready). Keep them ON by default; flip PER_VIDEO_PINGS_ENABLED=false
+    // in env once the aggregate alerts are proven, to silence the spam
+    // without a redeploy. Default-on so nothing changes until you decide.
+    const perVideoEnabled = process.env.PER_VIDEO_PINGS_ENABLED !== "false";
+    const slack = perVideoEnabled
+      ? await postSlack(slackWebhook, slackText)
+      : { ok: false, reason: "per_video_pings_disabled" };
 
     // Tip: payload fields projectId/subtaskId/videoId/deliveryId are
     // accepted (and validated/clamped above) for forward compatibility
