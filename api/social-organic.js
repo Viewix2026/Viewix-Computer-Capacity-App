@@ -2992,10 +2992,24 @@ async function handlePushToRunsheet(req, res) {
   // in the unassigned pool + assigned-slot chips. Previously videoName
   // collapsed into formatName which lost the "which of the N videos is
   // this" identity producers need on set.
+  // Phase 5 carry-through: mint a CANONICAL videoId per row up front,
+  // persist it back to the scriptTable row, and carry it + the creative
+  // format onto the runsheet video AND the project subtask below — so
+  // runsheet ↔ project (↔ delivery, once SO deliveries carry it) all
+  // resolve to one identity, and the Phase 6 scheduler can group by format.
+  const rowVideoIds = scriptTable.map(row => row.videoId || `v-${Math.random().toString(36).slice(2, 12)}`);
+  for (let i = 0; i < scriptTable.length; i++) {
+    if (!scriptTable[i].videoId) {
+      await fbSet(`/preproduction/socialOrganic/${projectId}/scriptTable/${i}/videoId`, rowVideoIds[i]);
+    }
+  }
+
   const videos = scriptTable.map((row, i) => ({
     id: `v-${Date.now()}-${i}`,
+    videoId: rowVideoIds[i],
     videoName: `Video ${i + 1}`,
     formatName: row.formatName || "",
+    creativeFormat: row.creativeFormat || row.formatName || null,
     contentStyle: row.contentStyle || "",
     hook: row.hook || "",
     textHook: row.textHook || "",
@@ -3080,7 +3094,13 @@ async function handlePushToRunsheet(req, res) {
           || `Video ${i + 1}`;
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
+          // Same canonical id as the runsheet video + scriptTable row.
+          videoId: rowVideoIds[i],
           name: videoName,
+          // Creative format (alias formatName) for the Phase 6 scheduler's
+          // per-format editor grouping. (SO videos aren't Meta-style 16:9
+          // masters, so no aspectRatio / isMasterEdit / reformat here.)
+          creativeFormat: row.creativeFormat || row.formatName || null,
           status: "stuck",
           // Mirrors the Meta Ads handler in src/components/Preproduction.jsx
           // — by the time scripts are approved and a subtask is being
