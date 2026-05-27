@@ -124,7 +124,19 @@ export default async function handler(req, res) {
     order: orderBase,
     createdAt: now, updatedAt: now,
   };
-  if (scheduled) reformat.dayPriority = { [pkey(editorId, startDate)]: 1 };
+  if (scheduled) {
+    // Append at the END of that editor+day rather than a raw =1 that
+    // would silently collide with / displace existing priorities (Codex
+    // safety fix). max(existing)+1 across this project's subtasks for the
+    // editor+day. (Cross-project stacking is the Phase 6 capacity job.)
+    const key = pkey(editorId, startDate);
+    let maxP = 0;
+    for (const s of subs) {
+      const v = s?.dayPriority?.[key];
+      if (Number.isFinite(v) && v > maxP) maxP = v;
+    }
+    reformat.dayPriority = { [key]: maxP + 1 };
+  }
 
   try {
     await adminSet(`/projects/${project.id}/subtasks/${stId}`, reformat);

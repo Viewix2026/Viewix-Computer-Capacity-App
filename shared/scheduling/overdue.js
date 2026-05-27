@@ -30,10 +30,15 @@ function isShootStage(st) {
 // kept local so this module has no cross-import beyond availability.
 export function isEditStage(st) {
   if (!st) return false;
+  // The "Selects timeline + kick off video" task is stage:"edit" but it's
+  // LEAD PREP, not a video edit — it must NOT be hazard-striped as overdue
+  // or rolled by the behind-schedule cron (Codex safety fix). Exclude it
+  // explicitly (the explicit stage==="edit" below would otherwise catch it).
+  if (lc(st.name).includes("selects")) return false;
   if (st.stage === "edit") return true;
   const n = lc(st.name);
   if (st.stage) return false; // explicit non-edit stage wins
-  return n.includes("edit") || n.includes("timeline");
+  return n.includes("edit");
 }
 
 export function addDaysISO(iso, n) {
