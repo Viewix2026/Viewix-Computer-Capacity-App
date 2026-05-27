@@ -25,12 +25,16 @@
 //      when a `CRON_SECRET` env var is set on the project. This is
 //      Vercel's documented, stable, secure mechanism — preferred.
 //
-//   2. The `x-vercel-cron` header is PRESENT (any value).
-//      Vercel always adds this header to cron invocations. Presence
-//      (not a brittle value match) is the reliable signal that the
-//      request originated from Vercel's cron infrastructure. This lets
-//      the fix work on the very next deploy with zero env changes,
-//      while CRON_SECRET is rolled out as the hardened layer.
+//   2. The `x-vercel-cron` header is PRESENT (any value) — ONLY when
+//      `CRON_SECRET` is NOT configured. Vercel always adds this header
+//      to cron invocations, but ANY internet client can forge it, so
+//      it is NOT a real auth boundary. It survives here purely as a
+//      graceful fallback for the incident-era window before
+//      `CRON_SECRET` was rolled out. Once `CRON_SECRET` is set (the
+//      production state) this path is DISABLED and a forged
+//      `x-vercel-cron` header is rejected. (Security fix 2026-05-27 —
+//      Codex audit found the unconditional header path made every cron
+//      publicly triggerable.)
 //
 //   3. `?secret=${CRON_TEST_SECRET}` matches.
 //      Manual / scripted runs (curl, the canary, fixture testing).
@@ -73,8 +77,10 @@ export function isAuthorizedCron(req) {
     return { ok: true, via: "test_secret", secretValid: true };
   }
 
-  // (2) Vercel cron header present (any value). Reliable origin signal.
-  if (headers["x-vercel-cron"] != null) {
+  // (2) Vercel cron header present — ONLY honoured when CRON_SECRET is
+  // NOT configured (forgeable header; not a real auth boundary). With
+  // CRON_SECRET set (production), a forged x-vercel-cron is rejected.
+  if (!cronSecret && headers["x-vercel-cron"] != null) {
     return { ok: true, via: "vercel_cron_header", secretValid: false };
   }
 

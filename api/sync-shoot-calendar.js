@@ -11,17 +11,21 @@
 // • Queue-based, not per-tick scan. Producers push entries on edit;
 //   worker only reads /calendarSyncQueue. Survives subtask deletion
 //   (delete entries cache the eventId).
-// • Atomic lock acquire + release via RTDB transactions. Closes the
-//   duplicate-worker race AND the "newer-edit clobbered on release"
-//   race in one primitive. dueAt + backoff re-checked INSIDE the
-//   transaction so a producer re-enqueue between scan and lock can't
-//   be claimed early.
+// • Read-then-write lock (lockOwner + lockedUntil), NOT a transaction.
+//   acquireLock reads the live entry, validates (exists / not locked /
+//   due / not in backoff), then stamps the lock. Release/error re-read
+//   and only mutate if lockOwner still matches. This is the deliberate
+//   model: a Vercel cron never overlaps itself (sub-second runs, 60s
+//   cap), and deterministic event IDs make a double-process idempotent,
+//   so the stricter RTDB transaction (which aborted on a cold-cache
+//   null first-call and silently skipped every due entry) isn't needed.
 // • Deterministic event IDs → idempotent create (409 → adopt existing)
 //   and self-healing patch (404/410 → recreate same id).
 // • Decision function (sync/delete/hold-error) is the single source of
 //   truth — see api/_calendar-utils.js. Empty crew = hold-error (E1):
 //   event stays live, error pill surfaces, no cancellation email.
-// • CRON_SECRET Bearer auth (Vercel forwards it; handler verifies).
+// • Auth via isAuthorizedCron (api/_cronAuth.js): Vercel-injected
+//   Bearer CRON_SECRET, or ?secret=CRON_TEST_SECRET for manual runs.
 // • Slack alert on persistent action:"delete" failures (subtask gone,
 //   no UI row to show the error).
 
