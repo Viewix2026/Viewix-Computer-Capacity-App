@@ -20,7 +20,7 @@
 import admin from "firebase-admin";
 import { writeFileSync, mkdirSync } from "fs";
 import { renderEmailHtml } from "../api/_email/render.js";
-import { buildShootContext } from "../api/_email/getProjectContext.js";
+import { buildShootContext, normalizeAvatarUrl } from "../api/_email/getProjectContext.js";
 import { buildDeliveryUrl, slugify } from "../api/_email/deliveryUrl.js";
 
 const DB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -116,7 +116,7 @@ function pickAccountManager(project, accounts, editors) {
   return {
     name,
     role: "Account Manager",
-    avatar: editor?.avatarUrl || editor?.avatar || null,
+    avatar: normalizeAvatarUrl(editor?.avatarUrl || editor?.avatar),
     phone: (editor?.phone || "").trim() || null,
   };
 }
