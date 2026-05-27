@@ -82,6 +82,24 @@ async function runWorker() {
     .sort(([, a], [, b]) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
     .slice(0, BATCH_CAP);
 
+  // TEMP diagnostic (calendar-sync go-live): log exactly what the worker
+  // sees so we can tell whether a stuck entry is being seen as due.
+  // Remove once sync is confirmed working in production.
+  console.log("[cal-sync diag]", JSON.stringify({
+    now: new Date(nowMs).toISOString(),
+    queueDepth,
+    dueCount: due.length,
+    keys: Object.keys(queueRaw),
+    sample: Object.entries(queueRaw).slice(0, 5).map(([k, e]) => ({
+      k,
+      action: e?.action,
+      dueAt: e?.dueAt,
+      dueDelta: e?.dueAt ? Date.parse(e.dueAt) - nowMs : null,
+      attempts: e?.attempts || 0,
+      locked: !!e?.lockedUntil,
+    })),
+  }));
+
   let processed = 0;
   let failed = 0;
   const failedDeletes = [];
