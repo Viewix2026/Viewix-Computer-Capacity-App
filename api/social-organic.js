@@ -3076,6 +3076,23 @@ async function handlePushToRunsheet(req, res) {
     if (linkedEntry) {
       const [parentId, parent] = linkedEntry;
       const existingCount = Object.keys(parent.subtasks || {}).length;
+
+      // ── Canonical videoId carry-through (Codex P1) ──────────────────
+      // SO subtasks are named from formatName (e.g. "Talking Head"), but
+      // the deal-won delivery videos are named "Video 1:", so the App.jsx
+      // name-match backfill can NEVER link them. Bind by INDEX instead:
+      // ensure each delivery video has a canonical videoId, then stamp the
+      // SAME id (and creativeFormat) onto the subtask seeded for that row.
+      // Index alignment is the natural 1:1 — one ordered script row per
+      // ordered delivery video; we only bind where both sides exist.
+      const deliveryId = (parent.links || {}).deliveryId || null;
+      let deliveryVideos = [];
+      if (deliveryId) {
+        const delivery = await fbGet(`/deliveries/${deliveryId}`);
+        deliveryVideos = Array.isArray(delivery?.videos) ? delivery.videos : [];
+      }
+      const mintVideoId = () => `v-${Math.random().toString(36).slice(2, 12)}`;
+
       for (let i = 0; i < scriptTable.length; i++) {
         const row = scriptTable[i];
         const stId = `st-vid-${Date.now()}-${i}`;
@@ -3086,14 +3103,35 @@ async function handlePushToRunsheet(req, res) {
         const videoName = (row.videoName || "").trim()
           || (row.formatName || "").trim()
           || `Video ${i + 1}`;
+        const creativeFormat = row.creativeFormat || row.formatName || null;
+
+        // Resolve the canonical videoId from the matching delivery video
+        // by index; mint + persist one if that video lacks it. Also carry
+        // creativeFormat onto the delivery video so Deliveries/Analytics
+        // (which key on videoId) see the format too.
+        let videoId = null;
+        const delVid = deliveryId ? deliveryVideos[i] : null;
+        if (delVid) {
+          videoId = delVid.videoId || mintVideoId();
+          if (!delVid.videoId) {
+            await fbSet(`/deliveries/${deliveryId}/videos/${i}/videoId`, videoId);
+          }
+          if (creativeFormat && delVid.creativeFormat !== creativeFormat) {
+            await fbSet(`/deliveries/${deliveryId}/videos/${i}/creativeFormat`, creativeFormat);
+          }
+        }
+
         await fbSet(`/projects/${parentId}/subtasks/${stId}`, {
           id: stId,
           name: videoName,
+          // Canonical videoId bound by index from the delivery video (the
+          // single source of identity) — NOT name-matched, which fails for
+          // SO. Falls back to null if there's no delivery video at this
+          // index (best-effort; better than the guaranteed name-match miss).
+          videoId: videoId || null,
           // Creative format (alias formatName) for the Phase 6 scheduler's
-          // per-format editor grouping. videoId is intentionally NOT set
-          // here — the App.jsx backfill name-matches the delivery video's
-          // canonical id onto this subtask, so it stays the single source.
-          creativeFormat: row.creativeFormat || row.formatName || null,
+          // per-format editor grouping; also written onto the delivery video.
+          creativeFormat,
           status: "stuck",
           // Mirrors the Meta Ads handler in src/components/Preproduction.jsx
           // — by the time scripts are approved and a subtask is being
