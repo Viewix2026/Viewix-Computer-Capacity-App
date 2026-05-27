@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
-import { initFB, onFB, fbSet, fbListen, recentlyWroteTo, onAuthReady, signOutUser, authFetch, getCurrentUserEmail, getCurrentUserName } from "./firebase";
+import { initFB, onFB, fbSet, fbListen, recentlyWroteTo, onAuthReady, signOutUser, authFetch, getCurrentUserEmail, getCurrentUserName, getCurrentUserPhotoURL } from "./firebase";
 import {
   CONTENT_CATEGORIES, CAT_COLORS,
   VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS,
@@ -22,6 +22,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { Home } from "./components/Home";
 import { Login } from "./components/Login";
+import { UserBadge } from "./components/UserBadge";
 import { Analytics } from "./components/Analytics";
 import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
@@ -554,6 +555,11 @@ export default function App(){
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
 
   return(<div style={{fontFamily:"'DM Sans',-apple-system,sans-serif",background:"var(--bg)",color:"var(--fg)",minHeight:"100vh",display:"flex"}}><style>{CSS}</style>
+
+    {/* Logged-in user chip — fixed to the viewport top-right. Name +
+        avatar come from the Team Roster (/editors) matched by Google
+        email, with a Google-profile fallback. */}
+    <UserBadge editors={editors} email={getCurrentUserEmail()} name={getCurrentUserName()} photoURL={getCurrentUserPhotoURL()}/>
 
     {/* Sidebar */}
     <div style={{width:72,background:"var(--card)",borderRight:"1px solid var(--border)",display:"flex",flexDirection:"column",alignItems:"center",padding:"16px 8px",gap:4,flexShrink:0}}>
