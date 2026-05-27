@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { fbListenSafe, fbSet } from "../firebase";
+import { fanOutForEditorEmail } from "../calendar-sync";
 import {
   DK, DL, QT, TH, TD, BTN, NB,
   CONTENT_CATEGORIES, CAT_COLORS,
@@ -433,7 +434,23 @@ export function Capacity({
                           <button onClick={() => setEditors(prev => prev.map(e => e.id === ed.id ? { ...e, role: edRole === "editor" ? "crew" : "editor" } : e))} title={edRole === "editor" ? "Occupies an edit suite — counted in weekly schedule" : "No edit suite — hidden from weekly schedule"} style={{ padding: "3px 10px", borderRadius: 10, border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: edRole === "editor" ? "rgba(34,197,94,0.15)" : "rgba(90,107,133,0.15)", color: edRole === "editor" ? "#22C55E" : "#5A6B85" }}>{edRole === "editor" ? "✓ Yes" : "— No"}</button>
                         </td>
                         <td style={TD}><input type="text" value={ed.phone || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, phone: e.target.value } : x))} placeholder="Phone..." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit" }} /></td>
-                        <td style={TD}><input type="text" value={ed.email || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, email: e.target.value } : x))} placeholder="Email..." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit" }} /></td>
+                        <td style={TD}><input
+                          type="text"
+                          value={ed.email || ""}
+                          onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, email: e.target.value } : x))}
+                          /* Calendar fan-out on BLUR (not per keystroke):
+                             stamp the pre-edit email on focus, compare on
+                             blur, and re-sync the editor's future shoots
+                             only when the email actually changed. */
+                          onFocus={e => { e.currentTarget.dataset.prevEmail = ed.email || ""; }}
+                          onBlur={e => {
+                            const prev = (e.currentTarget.dataset.prevEmail || "").trim().toLowerCase();
+                            const next = (ed.email || "").trim().toLowerCase();
+                            if (prev !== next && next) fanOutForEditorEmail({ editorId: ed.id, projects });
+                          }}
+                          placeholder="Email..."
+                          style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit" }}
+                        /></td>
                         <td style={TD}><input type="url" value={ed.bookingUrl || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, bookingUrl: e.target.value.trim() } : x))} placeholder="https://calendly.com/..." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit" }} /></td>
                         <td style={TD}><input type="text" value={ed.slackUserId || ""} onChange={e => setEditors(prev => prev.map(x => x.id === ed.id ? { ...x, slackUserId: e.target.value.trim() } : x))} placeholder="U02ABC123" title="Slack member ID for @-mentions in the project-lead and video-deliveries notifications. Get it from Slack: profile photo → ⋮ → Copy member ID." style={{ width: "100%", padding: "3px 6px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "'JetBrains Mono',monospace" }} /></td>
                         {DK.map(day => <td key={day} onClick={() => rosterToggle(ed.id, day)} style={{ ...TD, textAlign: "center", cursor: "pointer", userSelect: "none", background: ed.defaultDays[day] ? "var(--accent-soft)" : "transparent", color: ed.defaultDays[day] ? "var(--accent)" : "#3A4558", fontWeight: 700 }}>{ed.defaultDays[day] ? "IN" : "-"}</td>)}

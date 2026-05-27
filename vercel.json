@@ -80,6 +80,9 @@
     },
     "api/update-custom-schedule.js": {
       "maxDuration": 30
+    },
+    "api/sync-shoot-calendar.js": {
+      "maxDuration": 60
     }
   },
   "crons": [
@@ -158,6 +161,10 @@
     {
       "path": "/api/cron/social-schedule-sync",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/sync-shoot-calendar",
+      "schedule": "* * * * *"
     }
   ],
   "rewrites": [

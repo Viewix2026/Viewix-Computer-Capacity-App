@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:redact": "node api/_clientRedact.test.mjs",
-    "test:captions": "node api/_preprodCaptions.test.mjs"
+    "test:captions": "node api/_preprodCaptions.test.mjs",
+    "test:calendar": "node --test tests/*.test.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -23,6 +24,7 @@
     "docx": "^9.6.1",
     "file-saver": "^2.0.5",
     "firebase-admin": "^13.8.0",
+    "googleapis": "^172.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "resend": "^6.12.3",
