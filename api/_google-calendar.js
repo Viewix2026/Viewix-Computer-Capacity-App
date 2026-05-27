@@ -81,11 +81,14 @@ export function buildEventPayload({ project, subtask, attendees, eventId }) {
     end: { dateTime: end, timeZone: "Australia/Sydney" },
     attendees,
     reminders: { useDefault: true },
-    // Privacy guards. Default Google behaviour leaks crew emails to
-    // the client and lets attendees forward invites to anyone —
-    // neither is appropriate for client-facing shoot invites.
+    // Attendees can SEE each other (client + crew) — Jeremy's call
+    // 2026-05-27: crew addresses are work emails from the team
+    // dashboard, so exposing them to the client is fine and reads
+    // friendlier than Google's "guest list hidden" line. They still
+    // can't INVITE others — drag-and-drop / the roster is the only
+    // way crew get added.
     guestsCanInviteOthers: false,
-    guestsCanSeeOtherGuests: false,
+    guestsCanSeeOtherGuests: true,
     extendedProperties: {
       private: {
         source: "viewix-dashboard",
