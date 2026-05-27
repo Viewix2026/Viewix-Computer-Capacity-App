@@ -14,7 +14,11 @@ Phase 6 treatment.
     video edit (stage edit + `videoId`, **excluding reformats**) and all
     are `done`. This is the gate for kicking off the internal review.
   - `earliestCommonAvailableDay(attendeeIds, editors, weekData, fromDate)`
-    — soonest day every confirmed attendee is working; for auto-booking.
+    — returns the soonest **day candidate** on which every confirmed
+    attendee is IN the edit suite (excludes shoot days). This is a DAY
+    PICKER only, **not** a full auto-booker: it does not check intra-day
+    timed conflicts or pick a real 30-min slot. The (unbuilt) booking step
+    must still verify a free slot on the candidate day before committing.
   - `isVideoEditSubtask` — the shared definition.
 - `api/notify-finish.js` — per-video pings now behind
   `PER_VIDEO_PINGS_ENABLED` (default **on**; set `=false` to silence once
