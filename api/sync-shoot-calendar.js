@@ -27,6 +27,7 @@
 
 import crypto from "crypto";
 import { getAdmin, adminGet, adminPatch } from "./_fb-admin.js";
+import { isAuthorizedCron } from "./_cronAuth.js";
 import { computeBackoff, eventIdFor, getCalendarSyncDecision } from "./_calendar-utils.js";
 import {
   createShootEvent,
@@ -42,13 +43,17 @@ const LOCK_TTL_MS = 5 * 60 * 1000;
 const SLACK_ALERT_THRESHOLD = 5;
 
 export default async function handler(req, res) {
-  const expected = process.env.CRON_SECRET;
-  const authHeader = req.headers.authorization || "";
-  if (!expected) return res.status(500).json({ error: "CRON_SECRET env var is not set" });
-  if (authHeader !== `Bearer ${expected}`) return res.status(401).json({ error: "Unauthorized" });
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "GET (cron) or POST (manual audit) only" });
   }
+  // Auth via the shared cron helper (api/_cronAuth.js). Accepts the
+  // Vercel-injected `Authorization: Bearer ${CRON_SECRET}` OR the
+  // presence of the `x-vercel-cron` header OR `?secret=CRON_TEST_SECRET`.
+  // The earlier hand-rolled Bearer-only check silently 401'd every real
+  // cron invocation (same class of incident documented in _cronAuth.js,
+  // 2026-05-16) — the queue entry sat unprocessed with attempts:0.
+  const auth = isAuthorizedCron(req);
+  if (!auth.ok) return res.status(401).json({ error: "Unauthorized" });
   try {
     const result = await runWorker();
     return res.status(200).json({ ok: true, ...result });
