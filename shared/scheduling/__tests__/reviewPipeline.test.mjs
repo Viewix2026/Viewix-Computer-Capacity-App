@@ -3,7 +3,7 @@
 // 2026-05-25 = Monday, 2026-05-30/31 = Sat/Sun, 2026-06-01 = Monday.
 
 import assert from "node:assert/strict";
-import { isVideoEditSubtask, projectEditsAllFinished, earliestCommonWorkingDay } from "../reviewPipeline.js";
+import { isVideoEditSubtask, projectEditsAllFinished, earliestCommonAvailableDay } from "../reviewPipeline.js";
 
 let passed = 0;
 function test(name, fn) {
@@ -52,26 +52,35 @@ test("projectEditsAllFinished: reformats don't gate the review", () => {
 const ed = (id, days) => ({ id, name: id, defaultDays: days });
 const allWeek = { mon: true, tue: true, wed: true, thu: true, fri: true };
 
-test("earliestCommonWorkingDay: all working same weekday", () => {
+test("earliestCommonAvailableDay: all working same weekday", () => {
   const editors = [ed("a", allWeek), ed("b", allWeek)];
   // from Mon 2026-05-25 → all work Monday → 2026-05-25
-  assert.equal(earliestCommonWorkingDay(["a", "b"], editors, {}, "2026-05-25"), "2026-05-25");
+  assert.equal(earliestCommonAvailableDay(["a", "b"], editors, {}, "2026-05-25"), "2026-05-25");
 });
 
-test("earliestCommonWorkingDay: skips a day someone's off", () => {
+test("earliestCommonAvailableDay: skips a day someone's off", () => {
   const editors = [ed("a", allWeek), ed("b", { mon: false, tue: true, wed: true, thu: true, fri: true })];
   // b off Monday → first common day is Tue 2026-05-26
-  assert.equal(earliestCommonWorkingDay(["a", "b"], editors, {}, "2026-05-25"), "2026-05-26");
+  assert.equal(earliestCommonAvailableDay(["a", "b"], editors, {}, "2026-05-25"), "2026-05-26");
 });
 
-test("earliestCommonWorkingDay: skips weekend to Monday", () => {
+test("earliestCommonAvailableDay: skips weekend to Monday", () => {
   const editors = [ed("a", allWeek), ed("b", allWeek)];
   // from Fri 2026-05-29: Fri works → returns Fri (everyone in). Use Sat start to test skip.
-  assert.equal(earliestCommonWorkingDay(["a", "b"], editors, {}, "2026-05-30"), "2026-06-01");
+  assert.equal(earliestCommonAvailableDay(["a", "b"], editors, {}, "2026-05-30"), "2026-06-01");
 });
 
-test("earliestCommonWorkingDay: empty attendees → null", () => {
-  assert.equal(earliestCommonWorkingDay([], [ed("a", allWeek)], {}, "2026-05-25"), null);
+test("earliestCommonAvailableDay: empty attendees → null", () => {
+  assert.equal(earliestCommonAvailableDay([], [ed("a", allWeek)], {}, "2026-05-25"), null);
+});
+
+test("earliestCommonAvailableDay: skips a SHOOT day (don't book over a shoot)", () => {
+  const editors = [ed("a", allWeek), ed("b", allWeek)];
+  // weekData marks editor a as on a SHOOT Monday 2026-05-25 → that day is
+  // not "in", so the helper must skip to Tue 2026-05-26. (A weekData entry
+  // is authoritative for the whole week, so set every weekday.)
+  const weekData = { "2026-05-25": { editors: [{ id: "a", days: { mon: "shoot", tue: "in", wed: "in", thu: "in", fri: "in" } }] } };
+  assert.equal(earliestCommonAvailableDay(["a", "b"], editors, weekData, "2026-05-25"), "2026-05-26");
 });
 
 console.log(`\n${passed} passed`);

@@ -7,10 +7,13 @@
 //   projectEditsAllFinished — "all video edits done" gate for kicking off
 //     the internal review (16:9 masters / SO video edits; reformats are a
 //     post-review step and don't gate it).
-//   earliestCommonWorkingDay — the soonest day every confirmed attendee
-//     is working, for auto-booking the 30-min review.
+//   earliestCommonAvailableDay — the soonest day every confirmed attendee
+//     is IN the edit suite (excludes shoot days). This is a DAY CANDIDATE,
+//     not a real 30-min free-slot finder — the Phase 4 build must still
+//     check intra-day timed conflicts (existing scheduled work) before
+//     committing a booking. See docs/phase4-internal-review-design.md.
 
-import { isWorkingOnDate, fmtDate } from "./availability.js";
+import { isEditorInOnDate, fmtDate } from "./availability.js";
 
 const lc = (s) => (s || "").toString().trim().toLowerCase();
 const isDone = (st) => lc(st?.status) === "done";
@@ -38,9 +41,12 @@ export function projectEditsAllFinished(project) {
 }
 
 // Earliest day (from `fromDate`, inclusive, 21-day cap) on which ALL of
-// the given attendee editors are working. Returns YYYY-MM-DD or null.
-// Used to auto-book the 30-min internal review once attendance is known.
-export function earliestCommonWorkingDay(attendeeEditorIds, editors, weekDataByKey, fromDate) {
+// the given attendee editors are IN the edit suite. Uses isEditorInOnDate
+// (strict "in" — EXCLUDES shoot days) so we never propose a review over
+// someone's shoot. Returns YYYY-MM-DD or null. NOTE: this is a day
+// CANDIDATE only — it does NOT check intra-day timed conflicts; the Phase
+// 4 booking build must verify a real 30-min free slot before committing.
+export function earliestCommonAvailableDay(attendeeEditorIds, editors, weekDataByKey, fromDate) {
   const ids = (attendeeEditorIds || []).filter(Boolean);
   if (ids.length === 0) return null;
   const byId = new Map((editors || []).map(e => [e.id, e]));
@@ -52,7 +58,7 @@ export function earliestCommonWorkingDay(attendeeEditorIds, editors, weekDataByK
   for (let i = 0; i <= 21; i++) {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
-    if (attendees.every(e => isWorkingOnDate(e, d, weekDataByKey))) {
+    if (attendees.every(e => isEditorInOnDate(e, d, weekDataByKey))) {
       return fmtDate(d);
     }
   }

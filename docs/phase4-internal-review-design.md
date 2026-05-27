@@ -13,7 +13,7 @@ Phase 6 treatment.
   - `projectEditsAllFinished(project)` — true iff the project has ≥1
     video edit (stage edit + `videoId`, **excluding reformats**) and all
     are `done`. This is the gate for kicking off the internal review.
-  - `earliestCommonWorkingDay(attendeeIds, editors, weekData, fromDate)`
+  - `earliestCommonAvailableDay(attendeeIds, editors, weekData, fromDate)`
     — soonest day every confirmed attendee is working; for auto-booking.
   - `isVideoEditSubtask` — the shared definition.
 - `api/notify-finish.js` — per-video pings now behind
@@ -44,7 +44,7 @@ an edit subtask is set to `done` (POST `{ projectId }`).
   `yes|no`, and `slackUpdateMessage` the card to show running RSVPs.
 - **Booking trigger:** a short response window (default ~3h — store
   `attendanceOpenedAt`; a tiny cron tick OR the last-of-3 response closes
-  it). On close, `earliestCommonWorkingDay(confirmedAttendeeIds, …)` from
+  it). On close, `earliestCommonAvailableDay(confirmedAttendeeIds, …)` from
   tomorrow; write the review subtask `startDate`/`endDate` + a default
   `startTime`/`endTime` (e.g. 09:30–10:00) + `status: scheduled`.
 - **Calendar invite:** call the calendar module (`createShootEvent` /
