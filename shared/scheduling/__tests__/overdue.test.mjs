@@ -49,6 +49,9 @@ test("isEditStage", () => {
   assert.equal(isEditStage({ stage: "shoot" }), false);
   assert.equal(isEditStage({ name: "Edit — Video 1" }), true);
   assert.equal(isEditStage({ name: "Pre Production" }), false);
+  // Safety fix: the Selects-timeline task is stage:"edit" but is NOT a
+  // video edit — must be excluded from overdue / behind-schedule.
+  assert.equal(isEditStage({ stage: "edit", name: "Selects timeline + kick off video" }), false);
 });
 
 test("isOverdueEdit: edit beyond due date (proactive)", () => {
