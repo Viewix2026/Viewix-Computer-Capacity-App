@@ -163,6 +163,19 @@ async function runWorker() {
       processError = e?.message || String(e);
       failed++;
       const errAt = new Date().toISOString();
+      // TEMP: capture the FULL error detail (Google's error_description,
+      // status, body) to diagnose the prod-only invalid_client. Remove
+      // once sync is confirmed.
+      try {
+        await db.ref("calendarSyncDebug/lastError").set({
+          at: errAt,
+          message: String(e?.message || e),
+          code: e?.code ?? null,
+          status: e?.response?.status ?? null,
+          data: e?.response?.data ? JSON.stringify(e.response.data).slice(0, 800) : null,
+          stack: String(e?.stack || "").split("\n").slice(0, 4).join(" | "),
+        });
+      } catch {}
       const errSnap = await ref.once("value");
       const errCur = errSnap.val();
       if (errCur && errCur.lockOwner === lockOwner) {
