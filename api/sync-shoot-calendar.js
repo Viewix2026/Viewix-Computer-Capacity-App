@@ -72,6 +72,30 @@ async function runWorker() {
   const { db, err } = getAdmin();
   if (err) throw new Error(err);
 
+  // TEMP env fingerprint (calendar-sync go-live) — diagnoses the
+  // invalid_client error WITHOUT exposing full secrets. client_id is
+  // semi-public (it travels in the OAuth URL); secret/refresh show
+  // only length + a short prefix. Remove once sync is confirmed.
+  try {
+    const cid = process.env.GOOGLE_CLIENT_ID || "";
+    const sec = process.env.GOOGLE_CLIENT_SECRET || "";
+    const ref = process.env.GOOGLE_REFRESH_TOKEN || "";
+    const cal = process.env.VIEWIX_CALENDAR_ID || "";
+    await db.ref("calendarSyncDebug/env").set({
+      at: new Date().toISOString(),
+      clientId: cid,
+      clientIdLen: cid.length,
+      clientIdTrimmedDiff: cid !== cid.trim(),
+      secretLen: sec.length,
+      secretPrefix: sec.slice(0, 7),
+      secretTrimmedDiff: sec !== sec.trim(),
+      refreshLen: ref.length,
+      refreshPrefix: ref.slice(0, 4),
+      refreshTrimmedDiff: ref !== ref.trim(),
+      calId: cal,
+    });
+  } catch (e) { console.warn("env fingerprint write failed", e?.message); }
+
   const nowMs = Date.now();
   const queueRaw = (await adminGet("/calendarSyncQueue")) || {};
   const queueDepth = Object.keys(queueRaw).length;
