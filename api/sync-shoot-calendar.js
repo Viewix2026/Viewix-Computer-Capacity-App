@@ -81,16 +81,18 @@ async function runWorker() {
     const sec = process.env.GOOGLE_CLIENT_SECRET || "";
     const ref = process.env.GOOGLE_REFRESH_TOKEN || "";
     const cal = process.env.VIEWIX_CALENDAR_ID || "";
+    const h = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(0, 16);
     await db.ref("calendarSyncDebug/env").set({
       at: new Date().toISOString(),
       clientId: cid,
       clientIdLen: cid.length,
+      clientIdHash: h(cid),       // known-good: bd4f7fef98a432c2
       clientIdTrimmedDiff: cid !== cid.trim(),
       secretLen: sec.length,
-      secretPrefix: sec.slice(0, 7),
+      secretHash: h(sec),         // known-good: 823033028f176678
       secretTrimmedDiff: sec !== sec.trim(),
       refreshLen: ref.length,
-      refreshPrefix: ref.slice(0, 4),
+      refreshHash: h(ref),        // known-good: 1908c99cc13c893f
       refreshTrimmedDiff: ref !== ref.trim(),
       calId: cal,
     });
