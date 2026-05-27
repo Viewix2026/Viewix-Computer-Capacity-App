@@ -122,31 +122,34 @@ async function runWorker() {
     let resultStatus = null;
     try {
       resultStatus = await processQueueEntry(claimed);
-      // Release — only delete if we still own the lock (newer edit
-      // re-claims → lockOwner mismatch → leave for next tick).
-      await ref.transaction((cur) => {
-        if (!cur) return;
-        if (cur.lockOwner !== lockOwner) return;
-        return null;
-      });
+      // Release — only delete if we still own the lock (a newer edit
+      // re-claims by overwriting lockOwner → we leave it for next tick).
+      // Read-then-write rather than a transaction: the admin SDK's
+      // transaction first-call ran against a cold cache (cur=null) and
+      // the `if (!cur) return` aborted it, silently skipping every due
+      // entry. The cron never overlaps itself, so a plain guarded
+      // write is safe and correct.
+      const relSnap = await ref.once("value");
+      const relCur = relSnap.val();
+      if (relCur && relCur.lockOwner === lockOwner) await ref.set(null);
       processed++;
     } catch (e) {
       processError = e?.message || String(e);
       failed++;
       const errAt = new Date().toISOString();
-      await ref.transaction((cur) => {
-        if (!cur) return;
-        if (cur.lockOwner !== lockOwner) return cur;
-        return {
-          ...cur,
-          attempts: (cur.attempts || 0) + 1,
+      const errSnap = await ref.once("value");
+      const errCur = errSnap.val();
+      if (errCur && errCur.lockOwner === lockOwner) {
+        await ref.set({
+          ...errCur,
+          attempts: (errCur.attempts || 0) + 1,
           lockedUntil: null,
           lockOwner: null,
           lastError: processError,
           lastErrorAt: errAt,
           updatedAt: errAt,
-        };
-      });
+        });
+      }
       if (claimed.action === "sync") {
         try {
           const subtaskPath = `/projects/${claimed.projectId}/subtasks/${claimed.subtaskId}`;
@@ -189,24 +192,30 @@ async function runWorker() {
   return result;
 }
 
-// ALL checks (exists / locked elsewhere / due / backoff) live inside
-// the transaction so the queue entry can drift between scan and lock
-// without false-positives. Returns the claimed snapshot.
+// Claim a queue entry by stamping lockOwner + lockedUntil, after
+// re-checking (against the live server value) that it still exists,
+// isn't locked elsewhere, is due, and isn't in backoff.
+//
+// Read-then-write, NOT a transaction. The admin SDK's transaction
+// invoked the update callback against a cold local cache (cur=null)
+// on the first pass; the `if (!cur) return` aborted it before any
+// server read, so acquireLock returned null and EVERY due entry was
+// silently skipped (processedCount:0, failedCount:0 — the go-live
+// bug). A Vercel cron never overlaps itself (sub-second runs, 60s
+// cap), and the deterministic event IDs make a double-process
+// idempotent anyway, so a plain guarded write is safe and correct.
 async function acquireLock(ref, lockOwner) {
-  let claimed = null;
-  const tx = await ref.transaction((cur) => {
-    if (!cur) return;
-    const nowMs = Date.now();
-    if (cur.lockedUntil && Date.parse(cur.lockedUntil) > nowMs) return;
-    if (Date.parse(cur.dueAt) > nowMs) return;
-    const attempts = cur.attempts || 0;
-    if (attempts > 0 && Date.parse(cur.updatedAt || 0) + computeBackoff(attempts) > nowMs) return;
-    const next = { ...cur, lockOwner, lockedUntil: new Date(nowMs + LOCK_TTL_MS).toISOString() };
-    claimed = next;
-    return next;
-  });
-  if (!tx.committed || !claimed) return null;
-  return claimed;
+  const snap = await ref.once("value");
+  const cur = snap.val();
+  if (!cur) return null;
+  const nowMs = Date.now();
+  if (cur.lockedUntil && Date.parse(cur.lockedUntil) > nowMs) return null;
+  if (Date.parse(cur.dueAt) > nowMs) return null;
+  const attempts = cur.attempts || 0;
+  if (attempts > 0 && Date.parse(cur.updatedAt || 0) + computeBackoff(attempts) > nowMs) return null;
+  const next = { ...cur, lockOwner, lockedUntil: new Date(nowMs + LOCK_TTL_MS).toISOString() };
+  await ref.set(next);
+  return next;
 }
 
 async function processQueueEntry(entry) {
