@@ -82,6 +82,22 @@ async function runWorker() {
     .sort(([, a], [, b]) => Date.parse(a.dueAt) - Date.parse(b.dueAt))
     .slice(0, BATCH_CAP);
 
+  // TEMP diagnostic (calendar-sync go-live) — remove once confirmed.
+  console.log("[cal-sync diag]", JSON.stringify({
+    now: new Date(nowMs).toISOString(),
+    queueDepth,
+    dueCount: due.length,
+    keys: Object.keys(queueRaw),
+    sample: Object.entries(queueRaw).slice(0, 5).map(([k, e]) => ({
+      k,
+      action: e?.action,
+      dueAt: e?.dueAt,
+      dueDeltaMs: e?.dueAt ? Date.parse(e.dueAt) - nowMs : null,
+      attempts: e?.attempts || 0,
+      locked: !!e?.lockedUntil,
+    })),
+  }));
+
   let processed = 0;
   let failed = 0;
   const failedDeletes = [];
@@ -157,7 +173,10 @@ async function runWorker() {
     });
   }
 
-  return { processedCount: processed, failedCount: failed, queueDepth, dueCount: due.length, failedDeletes, recent };
+  const result = { processedCount: processed, failedCount: failed, queueDepth, dueCount: due.length, failedDeletes, recent };
+  // TEMP diagnostic (calendar-sync go-live) — remove once confirmed.
+  console.log("[cal-sync result]", JSON.stringify(result));
+  return result;
 }
 
 // ALL checks (exists / locked elsewhere / due / backoff) live inside
