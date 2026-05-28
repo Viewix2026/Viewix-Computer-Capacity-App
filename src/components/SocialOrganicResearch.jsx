@@ -2939,10 +2939,14 @@ function ScriptStep({ project, onPatch }) {
                         </div>
                       </td>
                       {SCRIPT_COLUMNS.map(c => {
-                        // Client-feedback cell key: matches what the public
-                        // view writes — `scriptTable.{i}.{c.key}`.
+                        // Client-feedback cell key: the public view writes
+                        // `scriptTable.{i}.{c.key}` but Firebase RTDB disallows
+                        // `.` in keys, so PreproductionPublicView.submitFeedback
+                        // replaces dots with underscores before writing. Mirror
+                        // the same replacement on read or the lookup misses and
+                        // the yellow feedback dot never appears (Picup Media bug).
                         const cellKey = `scriptTable.${i}.${c.key}`;
-                        const cellFeedback = feedback[cellKey] || null;
+                        const cellFeedback = feedback[cellKey.replace(/\./g, "_")] || null;
                         return (
                           <td key={c.key} style={tdStyle}>
                             {c.editable === false ? (
@@ -3188,6 +3192,12 @@ const tdStyle = {
   padding: "4px 4px",
   fontSize: 12,
   color: "var(--fg)",
+  // Preserve blank-line paragraph breaks the AI emits and any manual
+  // line spacing the producer enters via the Manual edit modal — without
+  // pre-wrap the script-notes column collapses to a single block of
+  // text and the producer can't scan beats.
+  whiteSpace: "pre-wrap",
+  lineHeight: 1.5,
 };
 
 function SectionCard({ title, children }) {
