@@ -91,15 +91,35 @@ export default async function handler(req, res) {
     const delSnap = await db.ref(`/deliveries/${deliveryId}`).once("value");
     if (!delSnap.exists()) return res.status(200).json(NO_AM);
 
-    // Reverse-lookup the owning project (RTDB has no query-by-child for our
-    // layout). Same scan pattern as api/notify-revision.js. Fail closed on
-    // ambiguity — a guessed AM contact is worse than none.
+    // Resolve the owning account in two passes.
+    // (a) Preferred: reverse-lookup the project via /projects/*.links.deliveryId.
+    //     This is the canonical link the deal-won webhook writes.
+    // (b) Fallback: match `delivery.clientName` to /accounts/*.companyName
+    //     (case-insensitive trim). Necessary for older / manually-created
+    //     deliveries whose project never got `links.deliveryId` set.
+    // Both passes still fail closed on ambiguity (>1 match) — a guessed
+    // AM is worse than none.
     const projectsObj = (await db.ref("/projects").once("value")).val() || {};
-    const { project, ambiguous } = findOwningProject(projectsObj, deliveryId);
-    if (ambiguous) {
+    const { project, ambiguous: projectAmbiguous } = findOwningProject(projectsObj, deliveryId);
+    if (projectAmbiguous) {
       console.warn(`[delivery-am] multiple projects share deliveryId=${deliveryId}; refusing to guess AM`);
     }
-    const accountId = project?.links?.accountId;
+
+    let accountId = project?.links?.accountId || null;
+    if (!accountId) {
+      const clientName = String(delSnap.val()?.clientName || "").trim().toLowerCase();
+      if (clientName) {
+        const accountsObj = (await db.ref("/accounts").once("value")).val() || {};
+        const matches = Object.entries(accountsObj).filter(
+          ([, a]) => String(a?.companyName || "").trim().toLowerCase() === clientName
+        );
+        if (matches.length === 1) {
+          accountId = matches[0][0];
+        } else if (matches.length > 1) {
+          console.warn(`[delivery-am] multiple accounts match clientName="${clientName}"; refusing to guess AM`);
+        }
+      }
+    }
     if (!accountId) return res.status(200).json(NO_AM);
 
     const [acctSnap, editorsSnap] = await Promise.all([

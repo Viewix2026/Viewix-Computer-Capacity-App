@@ -155,15 +155,25 @@ export function DeliveryPublicView() {
 
   const adapted = toDeliveriesProp(delivery);
 
+  const clientLogoSize = narrow ? 32 : 40;
   const header = (
     // Full-width border / background, but inner content constrained to
     // the same maxWidth as the body grid below so left/right edges align.
     <div style={{ borderBottom: "1px solid var(--line)", background: "var(--surface)" }}>
       <div style={{ maxWidth: 1340, margin: "0 auto", padding: narrow ? "16px 18px" : "20px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
         <ViewixLogo size={narrow ? 22 : 28} />
-        <div style={{ minWidth: 0, textAlign: "right" }}>
-          <div style={{ fontSize: narrow ? 16 : 19, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{delivery.projectName || "Your videos"}</div>
-          <div style={{ fontSize: 13, color: "var(--text-3)" }}>{delivery.clientName || ""}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          {delivery.logoUrl && (
+            <img
+              src={delivery.logoUrl}
+              alt={delivery.clientName || ""}
+              style={{ width: clientLogoSize, height: clientLogoSize, borderRadius: 8, objectFit: "contain", background: "var(--bg-2)", border: "1px solid var(--line)", flexShrink: 0 }}
+            />
+          )}
+          <div style={{ minWidth: 0, textAlign: "right" }}>
+            <div style={{ fontSize: narrow ? 16 : 19, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{delivery.projectName || "Your videos"}</div>
+            <div style={{ fontSize: 13, color: "var(--text-3)" }}>{delivery.clientName || ""}</div>
+          </div>
         </div>
       </div>
     </div>
