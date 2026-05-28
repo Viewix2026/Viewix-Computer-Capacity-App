@@ -61,6 +61,29 @@ function normaliseInstagramPost(raw, handleHint) {
   const comments = raw.commentsCount ?? 0;
   const followers = raw.ownerFollowersCount ?? raw.owner?.followersCount ?? null;
   const engagementRate = followers && followers > 0 ? +(((likes + comments) / followers) * 100).toFixed(3) : null;
+  // Diagnostic logging gated on APIFY_DEBUG so producers can verify
+  // scraped numbers against instagram.com for one handle without
+  // permanently spamming Vercel logs. Dumps raw keys + extracted
+  // engagement so a field rename in Apify's response shows up
+  // immediately. Set env APIFY_DEBUG=true on the Vercel project,
+  // re-scrape the affected handle, pull the logs.
+  if (process.env.APIFY_DEBUG === "true") {
+    console.log("apifyProcess.normaliseInstagramPost", JSON.stringify({
+      shortCode,
+      owner,
+      isVideo,
+      extracted: { views, likes, comments, followers, engagementRate },
+      rawCandidateKeys: {
+        videoViewCount: raw.videoViewCount ?? null,
+        videoPlayCount: raw.videoPlayCount ?? null,
+        viewsCount: raw.viewsCount ?? null,
+        playCount: raw.playCount ?? null,
+        likesCount: raw.likesCount ?? null,
+        commentsCount: raw.commentsCount ?? null,
+        ownerFollowersCount: raw.ownerFollowersCount ?? null,
+      },
+    }));
+  }
   // Every field defaulted to a non-undefined value. Firebase-safe out of
   // the box, no post-processing required.
   return {

@@ -169,6 +169,30 @@ function normaliseInstagramPost(raw, handleHint) {
   // engagement rate: prefer views as denominator for videos, fall back to likes*10 for photos
   const denom = views && views > 0 ? views : Math.max(likes * 10, 1);
   const engagementRate = +((likes + comments) / denom).toFixed(4);
+  // Diagnostic logging gated on APIFY_DEBUG. Producers can flip the
+  // env var on Vercel, re-scrape the affected handle, and compare the
+  // extracted engagement to instagram.com to spot Apify field renames.
+  // Mirrors the same block in api/_apifyProcess.js — keep the two in
+  // sync (or extract a shared helper if a third normaliser ever appears).
+  if (process.env.APIFY_DEBUG === "true") {
+    console.log("social-organic.normaliseInstagramPost", JSON.stringify({
+      shortCode: raw.shortCode || raw.shortcode || null,
+      owner,
+      isVideo,
+      extracted: { views, likes, comments, engagementRate },
+      rawCandidateKeys: {
+        videoViewCount: raw.videoViewCount ?? null,
+        videoPlayCount: raw.videoPlayCount ?? null,
+        viewsCount: raw.viewsCount ?? null,
+        plays: raw.plays ?? null,
+        playCount: raw.playCount ?? null,
+        likesCount: raw.likesCount ?? null,
+        likes: raw.likes ?? null,
+        commentsCount: raw.commentsCount ?? null,
+        comments: raw.comments ?? null,
+      },
+    }));
+  }
 
   return {
     id: raw.id || raw.shortCode || raw.shortcode || raw.url || `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
