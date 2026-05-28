@@ -601,6 +601,21 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
           // Logged for the producer-side console; doesn't surface to UI.
           console.warn("Slack notify-finish failed (non-blocking):", slackErr);
         }
+
+        // Phase 4 — fire-and-forget project-level review trigger. The
+        // endpoint is idempotent server-side (gated by
+        // projectEditsAllFinished + a notifications.internalReady stamp)
+        // so multiple editors finishing the same project's last edits
+        // all hit it harmlessly. Only the first call that observes the
+        // gate passing actually creates the Internal Review subtask
+        // and posts to #scheduling. Non-blocking — UI doesn't wait.
+        if (task.projectId) {
+          authFetch("/api/trigger-internal-review", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: task.projectId }),
+          }).catch(err => console.warn("trigger-internal-review failed (non-blocking):", err));
+        }
       }
       onSubmitted?.();
       onClose();
