@@ -54,6 +54,7 @@ import { adminGet, adminPatch, adminSet } from "../_fb-admin.js";
 import { send, newCounters, postCronSummary, postCronPassError } from "../_email/send.js";
 import { getProjectContext, buildShootContext } from "../_email/getProjectContext.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
+import { reconcileDeliveryStatus, maybePingAccountManager } from "../_deliveryReconcile.js";
 
 // Subject lines (locked 2026-05-13 per Codex audit — these match the
 // template body headlines and Jeremy's approved copy):
@@ -453,6 +454,35 @@ export default async function handler(req, res) {
     console.error("daily-09 Pass 3 failed:", e);
     summary.pass3 = { error: e.message };
     await postCronPassError("daily-09 · Pass 3 InEditSuite", e.message);
+  }
+
+  // Pass 4 — Delivery reconciler. Catches the debounce-gap case where
+  // the client approved on the public review page but closed the tab
+  // before notify-revision's 2-minute debounce fired. Re-derives every
+  // delivery's viewixStatus from settled revision state, and pings
+  // the AM channel for any delivery that became fully Completed.
+  // Per-delivery try/catch so one bad record can't kill the pass.
+  try {
+    const deliveriesObj = (await adminGet("/deliveries")) || {};
+    let reconciled = 0;
+    let amPinged = 0;
+    for (const [did, d] of Object.entries(deliveriesObj)) {
+      if (!d || !d.id) continue;
+      try {
+        const { flipped, allCompleted, delivery } = await reconcileDeliveryStatus(did);
+        if (flipped.length) reconciled += flipped.length;
+        if (allCompleted) {
+          const r = await maybePingAccountManager({ deliveryId: did, delivery });
+          if (r?.posted) amPinged++;
+        }
+      } catch (e) {
+        console.error(`daily-09 Pass 4: reconcile failed for delivery ${did}:`, e.message);
+      }
+    }
+    summary.pass4 = { reconciledVideos: reconciled, amPinged };
+  } catch (e) {
+    console.error("daily-09 Pass 4 failed:", e);
+    summary.pass4 = { error: e.message };
   }
 
   if (dryRunReport) return res.status(200).json({ ok: true, summary });
