@@ -16,7 +16,11 @@
 // signature verification and only then URL-decode + JSON-parse.
 
 import { waitUntil } from "@vercel/functions";
-import { adminGet, getAdmin } from "./_fb-admin.js";
+import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { earliestCommonAvailableDay } from "../shared/scheduling/reviewPipeline.js";
+import { nextWorkingDayFor } from "../shared/scheduling/availability.js";
+import { getCalendarClient } from "./_google-calendar.js";
+import { combineDateTimeSydney } from "./_calendar-utils.js";
 import { runBrainPassForScheduling } from "./_scheduling-brain-pass.js";
 import { runPlanProposal } from "./_scheduling-planner.js";
 import { applyPlanCore } from "./scheduling-plan-apply.js";
@@ -176,6 +180,19 @@ async function processInteraction(payload) {
   }
   if (id === "open_project_link" || id === "open_team_board_link") {
     return; // URL buttons — no server action needed
+  }
+  // ── Phase 4 internal-review actions ─────────────────────────────────
+  // Attendance (Yes / Can't attend) on the trigger-internal-review post.
+  // Outcome (Approve / Needs changes) on the booked-review follow-up.
+  // Each action_id encodes the projectId + subtaskId so the handler can
+  // resolve the right subtask without state hidden in payload.value.
+  if (id.startsWith("review_attend_yes:") || id.startsWith("review_attend_no:")) {
+    await handleReviewAttend({ payload, botToken });
+    return;
+  }
+  if (id.startsWith("review_outcome_approve:") || id.startsWith("review_outcome_changes:")) {
+    await handleReviewOutcome({ payload, botToken });
+    return;
   }
   console.warn("slack-interactivity: unknown action_id", id);
 }
@@ -1136,4 +1153,355 @@ function truncate(s, n) {
   if (!s) return "";
   s = String(s);
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// ─── Phase 4: internal-review handlers ─────────────────────────────
+// Triggered by api/trigger-internal-review.js. The attendance handler
+// records a Yes/No from an invitee, updates the Slack card with the
+// running tally, and — once every invitee has responded — runs the
+// booking step (pick a day all confirmed attendees are in the suite,
+// stamp the subtask, create a Google Calendar invite, post outcome
+// buttons). The outcome handler (Approve / Needs changes) closes the
+// loop: Approve fires the client-ready alert; Needs changes spawns an
+// "Internal Changes" subtask for the project lead.
+
+function parseReviewActionId(id) {
+  // "review_attend_yes:{projectId}:{subtaskId}" → { kind, projectId, subtaskId }
+  const m = String(id || "").match(/^(review_(?:attend_yes|attend_no|outcome_approve|outcome_changes)):([^:]+):([^:]+)$/);
+  if (!m) return null;
+  return { kind: m[1], projectId: m[2], subtaskId: m[3] };
+}
+
+async function handleReviewAttend({ payload, botToken }) {
+  const action = payload.actions?.[0];
+  const parsed = parseReviewActionId(action?.action_id);
+  if (!parsed) return;
+  const { kind, projectId, subtaskId } = parsed;
+  const slackUserId = payload.user?.id;
+  if (!slackUserId) return;
+  const choice = kind === "review_attend_yes" ? "yes" : "no";
+
+  // Re-read project so we have the latest subtask state.
+  const project = await adminGet(`/projects/${projectId}`);
+  if (!project) return;
+  const subtask = (project.subtasks || {})[subtaskId];
+  if (!subtask || !subtask.isInternalReview) return;
+  const ir = subtask.internalReview || {};
+  const invitees = Array.isArray(ir.invitees) ? ir.invitees : [];
+
+  // Only invitees may click. Anyone else gets a soft ephemeral nudge.
+  const isInvitee = invitees.some(i => i.slackId === slackUserId);
+  if (!isInvitee) {
+    await slackPostEphemeral({
+      channel: payload.channel?.id,
+      user: slackUserId,
+      text: "You're not on the invitee list for this internal review.",
+      botToken,
+    });
+    return;
+  }
+
+  // Record the vote — idempotent per invitee.
+  const attendance = { ...(ir.attendance || {}), [slackUserId]: choice };
+  await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}/internalReview`, {
+    attendance,
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Update the original message with the running tally so everyone sees
+  // who's in / out without scrolling thread replies.
+  const tallyLines = invitees.map(i => {
+    const v = attendance[i.slackId];
+    const mark = v === "yes" ? "✅ in" : v === "no" ? "🚫 out" : "⏳ pending";
+    const who = i.slackId ? `<@${i.slackId}>` : `*${i.name}*`;
+    return `• ${who} — ${mark}`;
+  });
+  const allResponded = invitees.length > 0 && invitees.every(i => i.slackId && !!attendance[i.slackId]);
+  const headline = allResponded
+    ? "All invitees have responded — booking the review…"
+    : "Attendance so far:";
+  const tallyBlocks = [
+    { type: "section", text: { type: "mrkdwn", text: `*${(project.clientName ? project.clientName + ": " : "") + (project.projectName || "Untitled project")}* — internal review` } },
+    { type: "section", text: { type: "mrkdwn", text: [headline, ...tallyLines].join("\n") } },
+  ];
+  // Only keep the attendance buttons while someone is still pending —
+  // once everyone has responded the row would be misleading.
+  if (!allResponded) {
+    tallyBlocks.push({
+      type: "actions",
+      elements: [
+        { type: "button", style: "primary", text: { type: "plain_text", text: "Yes I'll attend" }, action_id: `review_attend_yes:${projectId}:${subtaskId}`, value: `${projectId}:${subtaskId}` },
+        { type: "button", text: { type: "plain_text", text: "Can't attend" }, action_id: `review_attend_no:${projectId}:${subtaskId}`, value: `${projectId}:${subtaskId}` },
+      ],
+    });
+  }
+  if (ir.slackChannel && ir.slackTs) {
+    try {
+      await slackUpdateMessage({ channel: ir.slackChannel, ts: ir.slackTs, blocks: tallyBlocks, text: "Internal review attendance update", botToken });
+    } catch (e) {
+      console.warn("review attendance: slack update failed:", e.message);
+    }
+  }
+
+  if (allResponded) {
+    await bookInternalReview({ projectId, subtaskId, project, attendance, invitees, botToken });
+  }
+}
+
+// Pick a day, stamp the subtask, create the Calendar invite, post the
+// outcome buttons. Defensive: idempotency check on internalReview.state,
+// so two simultaneous "last-vote" clicks don't double-book.
+async function bookInternalReview({ projectId, subtaskId, project, attendance, invitees, botToken }) {
+  // Re-read latest state — guard against the rare double-fire from two
+  // last-vote clicks landing nearly simultaneously.
+  const fresh = await adminGet(`/projects/${projectId}/subtasks/${subtaskId}`);
+  if (!fresh || !fresh.isInternalReview) return;
+  if (fresh.internalReview?.state && fresh.internalReview.state !== "awaitingAttendance") return;
+
+  // Resolve invitees who said yes -> editor records (id + email).
+  let editors = [];
+  try {
+    const raw = await adminGet("/editors");
+    editors = Array.isArray(raw) ? raw : Object.values(raw || {});
+  } catch (e) {
+    console.warn("bookInternalReview: editor lookup failed:", e.message);
+  }
+  const confirmedSlackIds = invitees.filter(i => attendance[i.slackId] === "yes").map(i => i.slackId);
+  const confirmedEditors = invitees
+    .filter(i => attendance[i.slackId] === "yes")
+    .map(i => editors.find(e => e?.id === i.id))
+    .filter(Boolean);
+  const confirmedEditorIds = confirmedEditors.map(e => e.id);
+
+  // No-one available — leave the subtask stuck and surface to the
+  // channel so a producer reschedules manually.
+  if (confirmedEditorIds.length === 0) {
+    await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}/internalReview`, {
+      state: "noAttendees",
+      updatedAt: new Date().toISOString(),
+    });
+    if (fresh.internalReview?.slackChannel && fresh.internalReview?.slackTs) {
+      try {
+        await slackPostMessage({
+          channel: fresh.internalReview.slackChannel,
+          thread_ts: fresh.internalReview.slackTs,
+          text: ":warning: No invitees confirmed attendance — please reschedule manually.",
+          botToken,
+        });
+      } catch (e) { console.warn("noAttendees post failed:", e.message); }
+    }
+    return;
+  }
+
+  // Pick the soonest day every confirmed attendee is in the suite
+  // (shoot days excluded). Default 9:30am Sydney, 30-min slot.
+  const weekData = (await adminGet("/weekData")) || {};
+  const fromDate = todaySydney();
+  const pickedDay = earliestCommonAvailableDay(confirmedEditorIds, editors, weekData, fromDate);
+
+  // Stamp the subtask + invite. Status -> scheduled, status set on the
+  // subtask itself (assigneeIds = confirmed editors) so it appears on
+  // the Team Board / Project tabs immediately.
+  const now = new Date().toISOString();
+  const subtaskPatch = {
+    status: pickedDay ? "scheduled" : "stuck",
+    startDate: pickedDay,
+    endDate: pickedDay,
+    startTime: pickedDay ? "09:30" : null,
+    endTime: pickedDay ? "10:00" : null,
+    assigneeIds: confirmedEditorIds,
+    assigneeId: confirmedEditorIds[0] || null,
+    updatedAt: now,
+  };
+  await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}`, subtaskPatch);
+
+  // Best-effort Google Calendar invite. Attendee emails come off the
+  // /editors roster; missing emails are silently omitted.
+  let calendarEventId = null;
+  let calendarHtmlLink = null;
+  if (pickedDay) {
+    try {
+      const start = combineDateTimeSydney(pickedDay, "09:30");
+      const end = combineDateTimeSydney(pickedDay, "10:00");
+      const attendees = confirmedEditors
+        .map(e => (e.email && String(e.email).includes("@")) ? { email: e.email } : null)
+        .filter(Boolean);
+      if (start && end) {
+        const cal = getCalendarClient();
+        const summary = `Internal review — ${project.clientName ? project.clientName + ": " : ""}${project.projectName || "Project"}`;
+        const description = [
+          `30-min internal review for ${project.projectName || "this project"}.`,
+          attendees.length ? `Attendees: ${attendees.map(a => a.email).join(", ")}` : "",
+          `\n— Auto-booked from #scheduling by the Viewix dashboard.`,
+        ].filter(Boolean).join("\n");
+        const calendarId = process.env.VIEWIX_CALENDAR_ID;
+        if (!calendarId) throw new Error("VIEWIX_CALENDAR_ID not set");
+        const ev = await cal.events.insert({
+          calendarId,
+          sendUpdates: "all",
+          requestBody: {
+            summary,
+            description,
+            start: { dateTime: start, timeZone: "Australia/Sydney" },
+            end: { dateTime: end, timeZone: "Australia/Sydney" },
+            attendees,
+            reminders: { useDefault: true },
+            guestsCanInviteOthers: false,
+            guestsCanSeeOtherGuests: true,
+            extendedProperties: { private: { source: "viewix-dashboard", projectId: String(projectId), subtaskId: String(subtaskId), kind: "internal-review" } },
+          },
+        });
+        calendarEventId = ev?.data?.id || null;
+        calendarHtmlLink = ev?.data?.htmlLink || null;
+      }
+    } catch (e) {
+      console.warn("bookInternalReview: calendar invite failed:", e.message);
+    }
+  }
+
+  await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}/internalReview`, {
+    state: pickedDay ? "booked" : "noCommonDay",
+    bookedSlot: pickedDay ? { date: pickedDay, startTime: "09:30", endTime: "10:00", confirmedSlackIds } : null,
+    calendarEventId,
+    calendarHtmlLink,
+    updatedAt: now,
+  });
+
+  // Update the Slack card to show the booking + add outcome buttons.
+  if (fresh.internalReview?.slackChannel && fresh.internalReview?.slackTs) {
+    const headerLine = pickedDay
+      ? `:white_check_mark: *Internal review booked* — ${project.clientName ? project.clientName + ": " : ""}${project.projectName || "Project"}`
+      : `:warning: *Internal review couldn't pick a day* — manual reschedule needed`;
+    const detailLine = pickedDay
+      ? `*${pickedDay}* · 9:30–10:00am Sydney · Attendees: ${confirmedSlackIds.map(s => `<@${s}>`).join(" ")}${calendarHtmlLink ? ` · <${calendarHtmlLink}|Calendar invite>` : ""}`
+      : "No common in-suite day found for the confirmed attendees in the next 21 days.";
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: headerLine } },
+      { type: "section", text: { type: "mrkdwn", text: detailLine } },
+    ];
+    if (pickedDay) {
+      blocks.push({
+        type: "actions",
+        elements: [
+          { type: "button", style: "primary", text: { type: "plain_text", text: "Approve" }, action_id: `review_outcome_approve:${projectId}:${subtaskId}`, value: `${projectId}:${subtaskId}` },
+          { type: "button", text: { type: "plain_text", text: "Needs changes" }, action_id: `review_outcome_changes:${projectId}:${subtaskId}`, value: `${projectId}:${subtaskId}` },
+        ],
+      });
+    }
+    try {
+      await slackUpdateMessage({ channel: fresh.internalReview.slackChannel, ts: fresh.internalReview.slackTs, blocks, text: "Internal review booked", botToken });
+    } catch (e) { console.warn("booking update failed:", e.message); }
+  }
+}
+
+async function handleReviewOutcome({ payload, botToken }) {
+  const action = payload.actions?.[0];
+  const parsed = parseReviewActionId(action?.action_id);
+  if (!parsed) return;
+  const { kind, projectId, subtaskId } = parsed;
+  const slackUserId = payload.user?.id;
+
+  const project = await adminGet(`/projects/${projectId}`);
+  if (!project) return;
+  const subtask = (project.subtasks || {})[subtaskId];
+  if (!subtask || !subtask.isInternalReview) return;
+  const ir = subtask.internalReview || {};
+  // Outcome can only be set once the review was actually booked.
+  if (ir.state !== "booked") {
+    await slackPostEphemeral({
+      channel: payload.channel?.id, user: slackUserId,
+      text: "This review isn't booked yet — can't record an outcome.",
+      botToken,
+    });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  if (kind === "review_outcome_approve") {
+    // Mark approved + done; fire client-ready alert (idempotent via the
+    // notifications.clientReady key inside notify-client-ready.js).
+    await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}`, { status: "done", updatedAt: now });
+    await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}/internalReview`, { state: "approved", outcomeBy: slackUserId || null, outcomeAt: now });
+    // Fire client-ready fire-and-forget (in-process call; cron-safe). The
+    // helper is internal so we can call it directly without an HTTP hop.
+    try {
+      const { fireClientReady } = await import("./notify-client-ready.js");
+      await fireClientReady({ projectId });
+    } catch (e) {
+      console.warn("approve: client-ready fan-out failed:", e.message);
+    }
+    if (ir.slackChannel && ir.slackTs) {
+      try {
+        await slackPostMessage({
+          channel: ir.slackChannel, thread_ts: ir.slackTs,
+          text: `:white_check_mark: *Approved* by <@${slackUserId}> — videos flipped to Ready for Client. Account Manager has been pinged.`,
+          botToken,
+        });
+      } catch (e) { console.warn("approve thread post failed:", e.message); }
+    }
+    return;
+  }
+
+  // Needs changes — spawn an Internal Changes subtask on the project lead's
+  // next available working day at dayPriority 1 (bumping anything below).
+  let editors = [];
+  try {
+    const raw = await adminGet("/editors");
+    editors = Array.isArray(raw) ? raw : Object.values(raw || {});
+  } catch (e) { console.warn("needs-changes editor lookup failed:", e.message); }
+  const leadEditor = editors.find(e => e && (e.name || "").trim().toLowerCase() === (project.projectLead || "").trim().toLowerCase()) || null;
+  const weekData = (await adminGet("/weekData")) || {};
+  const startDate = leadEditor ? nextWorkingDayFor(leadEditor, todaySydney(), weekData) : null;
+  const stId = `st-internal-changes-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const subs = project.subtasks ? Object.values(project.subtasks) : [];
+  const orderBase = subs.reduce((m, s) => Math.max(m, s?.order ?? 0), 0) + 1;
+  const assigneeIds = leadEditor ? [leadEditor.id] : [];
+  // dayPriority = 1 (bump any existing 1+ on that editor|date by reading
+  // every project's subtasks for the same key — mirrors the reformat
+  // priority append shipped in #203).
+  let dayPriority = null;
+  if (leadEditor && startDate) {
+    const pkey = `${leadEditor.id}|${startDate}`;
+    let maxP = 0;
+    try {
+      const projectsRaw = (await adminGet("/projects")) || {};
+      const all = Array.isArray(projectsRaw) ? projectsRaw : Object.values(projectsRaw);
+      for (const p of all) {
+        const psubs = p?.subtasks ? Object.values(p.subtasks) : [];
+        for (const s of psubs) {
+          const v = s?.dayPriority?.[pkey];
+          if (Number.isFinite(v) && v > maxP) maxP = v;
+        }
+      }
+    } catch (e) { console.warn("dayPriority scan failed:", e.message); }
+    dayPriority = { [pkey]: maxP + 1 };
+  }
+
+  const changes = {
+    id: stId,
+    name: "Internal Changes",
+    stage: "revisions",
+    status: (assigneeIds.length && startDate) ? "scheduled" : "stuck",
+    startDate, endDate: startDate, startTime: null, endTime: null,
+    assigneeIds, assigneeId: assigneeIds[0] || null,
+    source: "internal-changes",
+    fromInternalReviewSubtaskId: subtaskId,
+    order: orderBase,
+    createdAt: now, updatedAt: now,
+  };
+  if (dayPriority) changes.dayPriority = dayPriority;
+  await adminSet(`/projects/${projectId}/subtasks/${stId}`, changes);
+
+  await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}`, { status: "done", updatedAt: now });
+  await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}/internalReview`, { state: "needsChanges", outcomeBy: slackUserId || null, outcomeAt: now, spawnedSubtaskId: stId });
+
+  if (ir.slackChannel && ir.slackTs) {
+    try {
+      await slackPostMessage({
+        channel: ir.slackChannel, thread_ts: ir.slackTs,
+        text: `:memo: *Needs changes* by <@${slackUserId}> — spawned "Internal Changes" subtask for *${project.projectLead || "the project lead"}*${startDate ? ` on ${startDate}` : ""} (priority 1).`,
+        botToken,
+      });
+    } catch (e) { console.warn("needs-changes thread post failed:", e.message); }
+  }
 }
