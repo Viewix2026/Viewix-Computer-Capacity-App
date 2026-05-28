@@ -93,7 +93,13 @@ export function createRevisionNotifier({ getClientName, getDeliveryId }) {
     timer = setTimeout(flush, 120000);
   };
 
-  const dispose = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  // Final flush on dispose — was previously just `clearTimeout(timer)`,
+  // which dropped any pending changes if the client changed a revision
+  // and then navigated away before the 120 s debounce fired. The
+  // data persists (the leaf write is its own promise), but the producer
+  // Slack notification was lost. Codex audit, 2026-05-28. `flush()`
+  // itself clears the timer and resets `pending`, so this is idempotent.
+  const dispose = () => { flush(); };
 
   return { queue, flush, dispose };
 }

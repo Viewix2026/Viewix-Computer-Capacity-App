@@ -53,17 +53,36 @@ export default async function handler(req, res) {
 
   // ─── Reconnect-URL subroute ─────────────────────────────────────
   if (req.method === "POST" || req.query.action === "reconnect-url") {
-    const accountId = String((req.body && req.body.accountId) || req.query.accountId || "");
     const platform = String((req.body && req.body.platform) || req.query.platform || "").toLowerCase();
-    if (!accountId || !platform) return res.status(400).json({ error: "accountId + platform required" });
-    if (!allowed.has(accountId)) return res.status(403).json({ error: "Not your organisation" });
+    if (!platform) return res.status(400).json({ error: "platform required" });
+
+    // Resolve the target account by the public `orgName` (clients) or
+    // by `?accountId=` (staff support mode). The browser never sees
+    // the internal accountId; sending it back would have weakened the
+    // redaction contract (Codex audit 2026-05-28). Fail closed if two
+    // orgs the caller can see have the same companyName.
+    const requestedOrgName = String((req.body && req.body.orgName) || req.query.orgName || "").trim().toLowerCase();
+    const staffAccountId = String(req.query.accountId || "");
+    let accountId = null;
+    if (staffAccountId && allowed.has(staffAccountId)) {
+      accountId = staffAccountId;
+    } else if (requestedOrgName) {
+      const candidates = [];
+      for (const id of allowed) {
+        const acct = (await db.ref(`/accounts/${id}`).once("value")).val();
+        if (String(acct?.companyName || "").trim().toLowerCase() === requestedOrgName) candidates.push(id);
+      }
+      if (candidates.length === 1) accountId = candidates[0];
+      else if (candidates.length > 1) {
+        console.warn(`[social-connections] multiple accounts match orgName="${requestedOrgName}" for caller; refusing to guess`);
+        return res.status(409).json({ error: "org_name_ambiguous" });
+      }
+    }
+    if (!accountId) return res.status(400).json({ error: "orgName + platform required" });
 
     // Only TikTok needs a client-facing reconnect link. For Meta /
     // YouTube / LinkedIn, the producer-side admin uses a different
     // endpoint to mint a connect URL they (not the client) opens.
-    // We don't gate strictly here — if a client somehow asks for a
-    // non-TikTok URL, fine, they'll just see the same OAuth flow. The
-    // important thing is the URL is scoped to THEIR profile.
     const profile = (await db.ref(`/zernio/profiles/${accountId}`).once("value")).val();
     if (!profile?.profileId) return res.status(409).json({ error: "no_zernio_profile" });
 
@@ -73,7 +92,11 @@ export default async function handler(req, res) {
       if (!url) return res.status(502).json({ error: "zernio_no_url" });
       return res.status(200).json({ ok: true, reconnectUrl: url });
     } catch (e) {
-      return res.status(502).json({ error: "zernio_connect_url_failed", detail: e.message });
+      // Log the real error server-side; return a generic code. Third-
+      // party error messages can leak request context, provider IDs,
+      // or config hints. Codex audit 2026-05-28.
+      console.error("[social-connections] Zernio getConnectUrl failed:", e?.message || e);
+      return res.status(502).json({ error: "zernio_connect_url_failed" });
     }
   }
 
@@ -104,8 +127,12 @@ export default async function handler(req, res) {
         refreshBy: conn.refreshBy || null,
       }));
     }
+    // Drop accountId from the response — internal IDs stay server-side.
+    // The browser identifies its orgs by `orgName`, which is uniquely
+    // resolvable within the caller's `allowed` set (an agency with
+    // multiple Viewix accounts on the same companyName is implausible;
+    // we fail closed if it ever happens). Codex audit 2026-05-28.
     out.push({
-      accountId,
       orgName: account?.companyName || "(unnamed)",
       tiles,
     });

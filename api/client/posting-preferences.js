@@ -19,6 +19,30 @@ import { handleOptions, setCors, requireClientOrStaff, sendAuthError } from "../
 import { getAdmin } from "../_fb-admin.js";
 import { emailKeyFor } from "../auth-google.js";
 import { parseFrameioFileId } from "../_frameioUrl.js";
+import { findOwningProject } from "../_findOwningProject.js";
+
+// Clamp a client-posted `times` object to the shape the producer
+// scheduler can use: keys ∈ day codes, values matching HH:mm, payload
+// capped. Returns null if nothing survives (the producer modal will
+// fall back to tier defaults). Codex audit 2026-05-28 caught that the
+// raw object was being persisted unchecked.
+const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+function cleanTimes(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out = {};
+  let count = 0;
+  for (const [k, v] of Object.entries(raw)) {
+    if (count >= 7) break;                                          // hard cap: one entry per day
+    const day = String(k || "").toLowerCase().slice(0, 3);
+    if (!VALID_DAYS.has(day) || out[day]) continue;                 // unknown day OR duplicate → skip
+    const time = String(v || "").trim();
+    if (!TIME_RE.test(time)) continue;                              // not HH:mm → skip
+    out[day] = time;
+    count++;
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 export default async function handler(req, res) {
   if (handleOptions(req, res, "POST, OPTIONS")) return;
@@ -60,8 +84,15 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: "No portal access" });
   }
 
+  // Use the shared fail-closed reverse-lookup helper so duplicate
+  // `links.deliveryId` data can't smuggle preferences/asset writes onto
+  // the wrong account. Codex audit 2026-05-28.
   const projects = (await db.ref("/projects").once("value")).val() || {};
-  const project = Object.values(projects).find(p => p && (p.links || {}).deliveryId === deliveryId);
+  const { project, ambiguous } = findOwningProject(projects, deliveryId);
+  if (ambiguous) {
+    console.warn(`[posting-preferences] multiple projects share deliveryId=${deliveryId}; refusing to write`);
+    return res.status(409).json({ error: "delivery_link_ambiguous" });
+  }
   if (!project) return res.status(404).json({ error: "delivery_not_found_for_caller" });
   const accountId = project?.links?.accountId;
   if (!accountId || !allowed.has(accountId)) return res.status(403).json({ error: "Not your organisation" });
@@ -109,7 +140,7 @@ export default async function handler(req, res) {
       daysOfWeek: Array.isArray(preferences.daysOfWeek)
         ? preferences.daysOfWeek.map(String).map(s => s.toLowerCase().slice(0, 3)).filter(d => ["mon","tue","wed","thu","fri","sat","sun"].includes(d))
         : null,
-      times: (preferences.times && typeof preferences.times === "object") ? preferences.times : null,
+      times: cleanTimes(preferences.times),
       source: "client",
       confirmedAt: Date.now(),
       confirmedBy: who.email || null,

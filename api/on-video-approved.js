@@ -34,6 +34,7 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { REVISION_APPROVED, isPostLaunchDelivery } from "./_constants.js";
 import { parseFrameioFileId } from "./_frameioUrl.js";
 import { captionForVideoId } from "./_preprodCaptions.js";
+import { findOwningProject } from "./_findOwningProject.js";
 
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT = 30;
@@ -75,15 +76,19 @@ async function lookupPreprodCaption({ project, videoId, videoIdx }) {
   return captionForVideoId(preprod, videoId, videoIdx);
 }
 
-// Locate the project that links to this delivery. Same reverse-lookup
-// pattern api/notify-revision.js uses — RTDB has no native query by
-// child for this layout, so we scan /projects once. Fine at Viewix's
-// scale.
+// Locate the project that links to this delivery via the shared
+// fail-closed helper (api/_findOwningProject.js). Returns null on no
+// match OR ambiguous (>1) match — we refuse to write to /socialAssets,
+// snapshot a caption, or otherwise act on a duplicate-link delivery,
+// because attributing the asset to the wrong account is worse than
+// the no-op. Codex audit 2026-05-28.
 async function findProjectForDelivery(deliveryId) {
   const projectsObj = (await adminGet("/projects")) || {};
-  return Object.values(projectsObj).find(p =>
-    p && p.id && (p.links || {}).deliveryId === deliveryId
-  ) || null;
+  const { project, ambiguous } = findOwningProject(projectsObj, deliveryId);
+  if (ambiguous) {
+    console.warn(`[on-video-approved] multiple projects share deliveryId=${deliveryId}; refusing to act`);
+  }
+  return project;
 }
 
 export default async function handler(req, res) {
