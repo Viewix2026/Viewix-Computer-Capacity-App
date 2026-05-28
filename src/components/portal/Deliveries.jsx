@@ -41,9 +41,11 @@ function RevisionSelect({ value, editable, onChange }) {
       onChange={e => onChange(e.target.value)}
       className="mono"
       style={{
-        minWidth: 150, padding: "8px 10px", borderRadius: 8,
+        // Fit the grid column (140px) with breathing room — no more
+        // minWidth: 150 overflowing into the next column.
+        width: "100%", minWidth: 0, padding: "6px 8px", borderRadius: 8,
         border: `1px solid ${borderColor}`, background: statusTone.bg, color: statusTone.fg,
-        fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600,
+        fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 600,
         cursor: editable ? "pointer" : "not-allowed", appearance: "auto",
       }}
     >
@@ -248,7 +250,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
                   {r.link
                     ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>View <Icon.external /></a>
                     : <span style={{ color: "var(--text-3)" }}>—</span>}
-                  <div><Pill tone={VSTATUS_TONE[r.viewixStatus] || "muted"}>{r.viewixStatus || "—"}</Pill></div>
+                  <div><Pill tone={VSTATUS_TONE[r.viewixStatus] || "muted"} style={{ width: "100%", justifyContent: "center", fontSize: 9, padding: "4px 8px", whiteSpace: "nowrap", letterSpacing: "0.03em" }}>{r.viewixStatus || "—"}</Pill></div>
                   <div><RevisionSelect value={r.revision1} editable={writeEnabled} onChange={v => setField(r, "revision1", v)} /></div>
                   <div><RevisionSelect value={r.revision2} editable={writeEnabled} onChange={v => setField(r, "revision2", v)} /></div>
                   <div style={{ justifySelf: "center" }}><PostedBox checked={r.posted} disabled={!writeEnabled} onChange={v => setField(r, "posted", v)} /></div>
