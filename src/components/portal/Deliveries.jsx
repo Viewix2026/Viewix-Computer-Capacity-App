@@ -19,7 +19,10 @@ function RevisionSelect({ value, editable, onChange }) {
   const statusTone = value === "Approved" ? { fg: "var(--ok)", bg: "rgba(27,155,110,0.08)" }
     : value === "Need Revisions" ? { fg: "var(--danger)", bg: "var(--orange-soft)" }
       : { fg: "var(--text-3)", bg: editable ? "var(--accent-soft)" : "transparent" };
-  const borderColor = editable ? "var(--accent-line)" : "var(--line-2)";
+  // 1px stroke in the full brand blue (`--accent` = #0082fa) reads cleanly
+  // on white while staying thin enough to feel light. `--accent-line` was
+  // a soft tint that disappeared on wide screens / low-contrast displays.
+  const borderColor = editable ? "var(--accent)" : "var(--line-2)";
   return (
     <select
       value={value || ""}
@@ -28,7 +31,7 @@ function RevisionSelect({ value, editable, onChange }) {
       className="mono"
       style={{
         minWidth: 150, padding: "8px 10px", borderRadius: 8,
-        border: `1.5px solid ${borderColor}`, background: statusTone.bg, color: statusTone.fg,
+        border: `1px solid ${borderColor}`, background: statusTone.bg, color: statusTone.fg,
         fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600,
         cursor: editable ? "pointer" : "not-allowed", appearance: "auto",
       }}
@@ -51,7 +54,7 @@ const PostedBox = ({ checked, onChange, disabled }) => {
       style={{
         display: "inline-flex", alignItems: "center", justifyContent: "center",
         width: 44, height: 32, borderRadius: 8,
-        border: `1.5px solid ${editable ? "var(--accent-line)" : "var(--line-2)"}`,
+        border: `1px solid ${editable ? "var(--accent)" : "var(--line-2)"}`,
         background: checked ? "rgba(27,155,110,0.10)" : (editable ? "var(--accent-soft)" : "transparent"),
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.5 : 1,
@@ -187,7 +190,6 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
       {narrow ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {rows.map(r => {
-            const r2editable = r.revision1 === "Need Revisions";
             return (
               <div key={r.id} style={{ padding: "14px", borderRadius: 12, border: `1px solid ${r.viewixStatus === "Ready for Review" ? "var(--accent-line)" : "var(--line)"}`, background: r.viewixStatus === "Ready for Review" ? "rgba(0,130,250,0.04)" : "var(--surface)", display: "flex", flexDirection: "column", gap: 10 }}>
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
@@ -209,7 +211,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
                 )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <div><Label style={{ fontSize: 9 }}>Round 1</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision1} editable={writeEnabled} onChange={v => setField(r, "revision1", v)} /></div></div>
-                  <div><Label style={{ fontSize: 9 }}>Round 2</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision2} editable={writeEnabled && r2editable} onChange={v => setField(r, "revision2", v)} /></div></div>
+                  <div><Label style={{ fontSize: 9 }}>Round 2</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision2} editable={writeEnabled} onChange={v => setField(r, "revision2", v)} /></div></div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 10, marginTop: 2, borderTop: "1px solid var(--line)" }}>
                   <Label color={r.posted ? "var(--accent)" : "var(--text-3)"} style={{ fontSize: 10 }}>{r.posted ? "Posted" : "Not posted yet"}</Label>
@@ -227,7 +229,6 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
             ))}
           </div>
           {rows.map(r => {
-            const r2editable = r.revision1 === "Need Revisions";
             return (
               <div key={r.id} style={{ borderTop: "1px solid var(--line)", background: r.viewixStatus === "Ready for Review" ? "rgba(0,130,250,0.04)" : "transparent" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr) 80px 170px 170px 170px 80px", alignItems: "center", gap: 16, padding: "14px 22px" }}>
@@ -238,7 +239,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
                     : <span style={{ color: "var(--text-3)" }}>—</span>}
                   <div><Pill tone={VSTATUS_TONE[r.viewixStatus] || "muted"}>{r.viewixStatus || "—"}</Pill></div>
                   <div><RevisionSelect value={r.revision1} editable={writeEnabled} onChange={v => setField(r, "revision1", v)} /></div>
-                  <div><RevisionSelect value={r.revision2} editable={writeEnabled && r2editable} onChange={v => setField(r, "revision2", v)} /></div>
+                  <div><RevisionSelect value={r.revision2} editable={writeEnabled} onChange={v => setField(r, "revision2", v)} /></div>
                   <div style={{ justifySelf: "center" }}><PostedBox checked={r.posted} disabled={!writeEnabled} onChange={v => setField(r, "posted", v)} /></div>
                 </div>
                 {/* Phase 2B caption — full-width row below the main
