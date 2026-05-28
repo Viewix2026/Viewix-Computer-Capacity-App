@@ -24,6 +24,7 @@ import {
 import { isActiveProject, isOverdueEdit, effectiveDueDate } from "../../shared/scheduling/overdue.js";
 import { computeSelectsTimelineWrites, isSelectsSubtask, latestShootDate } from "../../shared/scheduling/selects.js";
 import { SelectsPickerModal } from "./SelectsPickerModal";
+import { ScheduleEditsModal } from "./ScheduleEditsModal";
 
 // View-only context — Lead role gets read-only access to the Projects
 // tab (PR #N). Every editable surface inside this file reads from
@@ -2480,6 +2481,8 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
   // can't safely place the task on the Project Lead (lead off / has
   // another shoot that day). Null when closed.
   const [selectsPicker, setSelectsPicker] = useState(null);
+  // Phase 6 — scheduler modal toggle.
+  const [scheduleEditsOpen, setScheduleEditsOpen] = useState(false);
 
   // Run the shared Selects-timeline sync against a freshly-updated project
   // (passed up from SubtaskRow after a shoot date change). overrideAssignee
@@ -2574,8 +2577,21 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
     <div style={{ maxWidth: 1000, margin: "0 auto", padding: "24px 28px 60px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
         <button onClick={onBack} style={{ ...BTN, background: "var(--bg)", color: "var(--muted)", border: "1px solid var(--border)" }}>← Back to projects</button>
-        {saveState === "saving" && <span style={{ fontSize: 11, color: "var(--muted)" }}>Saving…</span>}
-        {saveState === "saved"  && <span style={{ fontSize: 11, color: "#10B981", fontWeight: 600 }}>Saved ✓</span>}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {saveState === "saving" && <span style={{ fontSize: 11, color: "var(--muted)" }}>Saving…</span>}
+          {saveState === "saved"  && <span style={{ fontSize: 11, color: "#10B981", fontWeight: 600 }}>Saved ✓</span>}
+          {/* Phase 6 — open the format-aware scheduler. Only useful when
+              there are videos to schedule; hidden for view-only viewers. */}
+          {!viewOnly && Number(project.numberOfVideos) > 0 && (
+            <button
+              onClick={() => setScheduleEditsOpen(true)}
+              title="Auto-schedule edits across the team — same-format videos stick with one editor"
+              style={{ ...BTN, background: "#2563EB", color: "white", border: "1px solid #2563EB", fontWeight: 700 }}
+            >
+              Schedule edits
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, gap: 16 }}>
@@ -2864,6 +2880,14 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
           editors={editors}
           onPick={(editorId) => runSelectsSync(selectsPicker.updatedProject, editorId)}
           onClose={() => setSelectsPicker(null)}
+        />
+      )}
+      {scheduleEditsOpen && (
+        <ScheduleEditsModal
+          project={project}
+          editors={editors}
+          onApplied={() => { /* /projects listener fans out the writes — no local action needed */ }}
+          onClose={() => setScheduleEditsOpen(false)}
         />
       )}
     </div>
