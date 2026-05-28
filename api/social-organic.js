@@ -932,6 +932,7 @@ The \`scriptNotes\` field is where most of the value lives. Default mode is FULL
 
 DO (default mode):
 - Write the spoken script verbatim, paragraph by paragraph, 120-220 words typical for a 30-60s video.
+- EVERY paragraph (each beat / shot / voiceover) MUST be separated by a BLANK LINE (two newlines). Producers scan the script table cell by cell; without blank-line breaks the whole script reads as one wall of text. No bullets, no numbering — just paragraphs separated by blank lines.
 - Use [brackets] for visual cues and b-roll notes inline. Example: "Most people think sleep quality is about duration. [cut to stock footage of someone tossing in bed] It isn't. [cut to host, direct to camera] It's about the first 90 minutes."
 - Include specific numbers, names, places, and quotes wherever the Brand Truth / research provides them. A script without specifics is a failed script.
 - If you genuinely don't have enough research to write a full script on a topic, say so explicitly in the script with a [RESEARCH NEEDED: specific question] marker, rather than falling back to generic filler.
@@ -1203,9 +1204,32 @@ RULES:
 - Titles must be distinct, not restatements of each other.
 - Return ONLY a JSON object: { "ideas": [{ "title": "...", "text": "..." }, ...] }. No markdown, no preamble, no code fences.`;
 
+  const TARGET_PER_FORMAT = 10;
+
   const runs = await Promise.all(selected.map(async (s) => {
     const fmt = await fbGet(`/formatLibrary/${s.formatLibraryId}`);
     if (!fmt) return { formatLibraryId: s.formatLibraryId, error: "Format not found in library" };
+
+    // Identity-based partition (replaces the old title-match preserve).
+    // Any idea the producer has ticked is KEPT VERBATIM through the
+    // regenerate — original id, title, text, selected:true. The new
+    // batch fills only the remaining slots, so a Claude title rewrite
+    // can no longer silently drop the producer's selection.
+    const existingForFormat = existingIdeas[s.formatLibraryId]?.ideas || [];
+    const kept = existingForFormat.filter(i => i && i.selected);
+    const needed = Math.max(0, TARGET_PER_FORMAT - kept.length);
+
+    // If everything is already ticked, skip Claude entirely.
+    if (needed === 0) {
+      return { formatLibraryId: s.formatLibraryId, ideas: kept.slice(0, TARGET_PER_FORMAT) };
+    }
+
+    // Tell Claude about the kept ideas so it doesn't regenerate
+    // near-duplicates of them. Empty when nothing is kept (first run
+    // or producer un-ticked everything).
+    const keptBlock = kept.length
+      ? `\nAVOID PRODUCING IDEAS SIMILAR TO THESE ALREADY-KEPT ONES:\n${kept.map(k => `- ${k.title}: ${k.text}`).join("\n")}\n`
+      : "";
 
     const userMessage = `CLIENT: ${project.companyName}
 ${project.numberOfVideos ? `ROUND TOTAL: ${project.numberOfVideos} videos` : ""}
@@ -1218,14 +1242,24 @@ ${fmt.category ? `Category: ${fmt.category}` : ""}
 ${fmt.videoAnalysis ? `Analysis: ${fmt.videoAnalysis}` : ""}
 ${fmt.structureInstructions ? `Structure: ${fmt.structureInstructions}` : ""}
 ${fmt.filmingInstructions ? `Filming: ${fmt.filmingInstructions}` : ""}
+${keptBlock}
+Produce ${needed} distinct idea concept${needed === 1 ? "" : "s"} tailored to this format's structure + the brand truth. JSON only.`;
 
-Produce 10 distinct idea concepts tailored to this format's structure + the brand truth. JSON only.`;
+    // Adjust the system prompt's "10" count to match the requested
+    // batch size so Claude doesn't ignore the user-message count.
+    const dynamicSystemPrompt = systemPrompt.replace(
+      /generating 10 video idea concepts/,
+      `generating ${needed} video idea concept${needed === 1 ? "" : "s"}`
+    ).replace(
+      /Produce exactly 10 distinct idea concepts/,
+      `Produce exactly ${needed} distinct idea concept${needed === 1 ? "" : "s"}`
+    );
 
     let raw;
     try {
       raw = await callClaude({
         model: "claude-opus-4-6",
-        systemPrompt,
+        systemPrompt: dynamicSystemPrompt,
         userMessage,
         maxTokens: 3000,
         apiKey: ANTHROPIC_KEY,
@@ -1241,22 +1275,15 @@ Produce 10 distinct idea concepts tailored to this format's structure + the bran
     }
 
     const rawIdeas = Array.isArray(parsed.ideas) ? parsed.ideas : [];
-    // Preserve `selected` flags from the existing ideas if this is a
-    // regeneration and a previously-ticked idea's title matches. Prevents
-    // the producer losing their selections on a re-roll. Simple title
-    // match — good enough for regen within the same brief.
-    const existingForFormat = existingIdeas[s.formatLibraryId]?.ideas || [];
-    const priorSelectedTitles = new Set(
-      existingForFormat.filter(i => i?.selected).map(i => (i?.title || "").trim().toLowerCase())
-    );
-
-    const ideas = rawIdeas.slice(0, 10).map((it, i) => {
-      const title = String(it?.title || "").trim() || `Idea ${i + 1}`;
+    const newIdeas = rawIdeas.slice(0, needed).map((it, i) => {
+      const title = String(it?.title || "").trim() || `Idea ${kept.length + i + 1}`;
       const text  = String(it?.text || "").trim();
-      const wasSelected = priorSelectedTitles.has(title.toLowerCase());
-      return { id: `idea_${Date.now()}_${i}`, title, text, selected: wasSelected };
+      return { id: `idea_${Date.now()}_${i}`, title, text, selected: false };
     });
 
+    // Kept ideas first so the producer's already-vetted concepts
+    // anchor the top of the list. New ones fill the remaining slots.
+    const ideas = [...kept, ...newIdeas].slice(0, TARGET_PER_FORMAT);
     return { formatLibraryId: s.formatLibraryId, ideas };
   }));
 
@@ -1550,7 +1577,16 @@ async function handleRewriteScriptSection(req, res) {
   });
   const sherpaBlock = buildSherpaPromptBlock(sherpaCtx);
 
-  const systemPrompt = `You rewrite a single field of a social video preproduction doc for Viewix. Return ONLY the rewritten value as plain text. No markdown, no preamble, no code fences. Never use em dashes; use commas or full stops instead. Keep length comparable to the current value unless the instruction asks otherwise.`;
+  // Detect script-notes fields so the prompt can require blank-line
+  // paragraph breaks for them. Other fields (hook, textHook, caption)
+  // stay single-line.
+  const isLongFormField = /scriptNotes|notes|description|brandTruth/i.test(String(path || ""));
+
+  const systemPrompt = `You rewrite a single field of a social video preproduction doc for Viewix. Return ONLY the rewritten value as plain text. No markdown, no preamble, no code fences. Never use em dashes; use commas or full stops instead. Keep length comparable to the current value unless the instruction asks otherwise.${
+    isLongFormField
+      ? `\n\nThis field is a long-form script / notes block. Separate every beat, shot, or voiceover line with a BLANK LINE (two newlines). Each beat sits in its own paragraph so the producer can scan it. Do NOT use bullet points, headings, or any markdown formatting, just paragraphs separated by blank lines.`
+      : ""
+  }`;
 
   const userMessage = `CLIENT: ${project.companyName}
 ${sherpaBlock}FIELD PATH: ${path}
@@ -1639,7 +1675,7 @@ RULES:
 - Keep "hook" to one spoken line under 18 words.
 - "textHook" is the on-screen caption overlay, under 8 words.
 - "visualHook" describes what the viewer SEES in the first 2 seconds.
-- "scriptNotes" is the structural beat-by-beat plan — 3-8 short lines.
+- "scriptNotes" is the structural beat-by-beat plan — 3-8 paragraphs. EACH BEAT MUST BE SEPARATED BY A BLANK LINE (two newlines) so the producer can scan them. No bullets, no numbering, just paragraphs.
 - "props" is a comma-separated short list.
 - "contentStyle" is a one-sentence tone/approach description.
 
