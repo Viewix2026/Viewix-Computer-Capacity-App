@@ -7,6 +7,7 @@
 import { buildSystemPrompt, buildRewritePrompt, PACKAGE_CONFIGS } from "./preproduction-prompt.js";
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { todaySydney } from "./_slack-helpers.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
@@ -94,6 +95,153 @@ function feedbackSummary(project, flavour) {
   const comments  = scripts.reduce((n, s) => n + Object.keys(s?.comments || {}).length, 0);
   const legacyCount = Object.keys(doc.clientFeedback || project?.clientFeedback || {}).length;
   return { approvals, changes, reactions, comments, legacyCount, flavour };
+}
+
+// Schedule a Meta Ads pre-production revision subtask on the project
+// linked to the given preproduction record. Reverse-lookup is by
+// `links.preprodId === metaAdsProjectId` because the preproduction
+// record's key (e.g. "meta_1737022...") is NOT the project id (e.g.
+// "proj-..."). Codex flagged that the original "same id" assumption
+// would auto-create work against the wrong project.
+//
+// Returns { nextAvailable, plMention } on success, null when the
+// linked project / PL / editor record can't be resolved (caller
+// silently skips the schedule line in the Slack message — the
+// notification still fires).
+//
+// Idempotency: the new subtask id is derived from the metaAds project
+// id + the latest feedback batch timestamp so a retry of the same
+// notify call produces the same subtask id and fbSet on an existing
+// path overwrites without duplicating. New batches of feedback get
+// new subtasks (by design — each batch is a new revision round).
+async function scheduleMetaAdsRevisionSubtask({ metaAdsProjectId, project }) {
+  if (!metaAdsProjectId || !project) return null;
+
+  // Reverse lookup the linked /projects record.
+  const projectsObj = (await fbGet("/projects")) || {};
+  const linkedProject = Object.values(projectsObj).find(p =>
+    p && p.links && p.links.preprodId === metaAdsProjectId
+  );
+  if (!linkedProject || !linkedProject.id) {
+    console.warn(`scheduleMetaAdsRevisionSubtask: no project links preprodId=${metaAdsProjectId}`);
+    return null;
+  }
+
+  // Resolve the PL via the linked account's projectLead string, then
+  // look up the editor record for the Slack mention.
+  const accountId = linkedProject.links?.accountId;
+  const accountsObj = (await fbGet("/accounts")) || {};
+  const acct = accountId ? accountsObj[accountId] : null;
+  const plName = (acct?.projectLead || linkedProject.projectLead || "").trim();
+  if (!plName) {
+    console.warn(`scheduleMetaAdsRevisionSubtask: no PL name on project ${linkedProject.id}`);
+    return null;
+  }
+  const editorsArr = (await fbGet("/editors")) || [];
+  const editorsList = Array.isArray(editorsArr) ? editorsArr.filter(Boolean) : Object.values(editorsArr || {}).filter(Boolean);
+  const plEditor = editorsList.find(e => (e?.name || "").trim().toLowerCase() === plName.toLowerCase());
+  const plEditorId = plEditor?.id || null;
+  const plSlackId = plEditor?.slackUserId || null;
+  const plMention = plSlackId ? `<@${plSlackId}>` : `*${plName}*`;
+
+  // Compute "next available day for PL" — first weekday from
+  // tomorrow Sydney-local with no existing scheduled subtask for
+  // this editor. Cap the scan at 30 days; fall back to tomorrow if
+  // nothing fits.
+  const today = todaySydney();
+  const editorDefaultDays = plEditor?.defaultDays || null;
+  const subtasksAssignedToPl = collectAssignedDates(projectsObj, plEditorId);
+  const nextAvailable = findNextAvailableWeekday({
+    fromIso: addIsoDays(today, 1),
+    defaultDays: editorDefaultDays,
+    occupiedDates: subtasksAssignedToPl,
+    capDays: 30,
+  });
+
+  // Idempotent stable id per metaAds projectId + feedback batch ts.
+  // Feedback batches are bucketed loosely by the largest submittedAt
+  // in the current feedback object so a retry within the same window
+  // returns the same id; a new batch of feedback fires a new id.
+  const feedbackTimes = project.clientFeedback
+    ? Object.values(project.clientFeedback).map(f => f?.submittedAt || "").filter(Boolean)
+    : [];
+  const batchSignal = feedbackTimes.length > 0
+    ? feedbackTimes.sort().slice(-1)[0].replace(/[^0-9]/g, "").slice(-12)
+    : Date.now().toString();
+  const stId = `st-metaRev-${batchSignal}`;
+  const now = new Date().toISOString();
+
+  const subtask = {
+    id: stId,
+    name: `Pre-production revision — ${linkedProject.projectName || "Untitled project"}`,
+    stage: "preProduction",
+    status: "scheduled",
+    startDate: nextAvailable,
+    endDate: nextAvailable,
+    startTime: null,
+    endTime: null,
+    assigneeIds: plEditorId ? [plEditorId] : [],
+    assigneeId: plEditorId,
+    source: "metaAdsRevision",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await fbSet(`/projects/${linkedProject.id}/subtasks/${stId}`, subtask);
+
+  return { nextAvailable, plMention };
+}
+
+// Collect every date a given editor is already scheduled for, as a
+// Set of YYYY-MM-DD strings. Used to pick the next free day.
+function collectAssignedDates(projectsObj, editorId) {
+  const dates = new Set();
+  if (!editorId) return dates;
+  for (const p of Object.values(projectsObj || {})) {
+    if (!p || !p.subtasks) continue;
+    for (const st of Object.values(p.subtasks)) {
+      if (!st || st.status === "done") continue;
+      const ids = Array.isArray(st.assigneeIds) ? st.assigneeIds : (st.assigneeId ? [st.assigneeId] : []);
+      if (!ids.includes(editorId)) continue;
+      const start = st.startDate || st.endDate;
+      const end = st.endDate || st.startDate;
+      if (!start) continue;
+      let d = start;
+      // Span both endpoints inclusive.
+      while (d <= end) {
+        dates.add(d);
+        d = addIsoDays(d, 1);
+        if (d > "9999-12-31") break;
+      }
+    }
+  }
+  return dates;
+}
+
+// Find the first weekday from `fromIso` that:
+//   - is a Mon–Fri (or one of the editor's defaultDays if provided)
+//   - has no existing scheduled subtask in `occupiedDates`.
+// Caps the scan at `capDays`; returns `fromIso` as the safety
+// fallback so callers always get a date even when the lookup fails.
+const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+function findNextAvailableWeekday({ fromIso, defaultDays, occupiedDates, capDays }) {
+  let iso = fromIso;
+  for (let i = 0; i < capDays; i++) {
+    const d = new Date(iso + "T00:00:00");
+    const dow = d.getDay(); // 0=Sun … 6=Sat
+    const isWeekend = dow === 0 || dow === 6;
+    const inDefaultDays = defaultDays
+      ? !!defaultDays[DAY_KEYS[dow]]
+      : !isWeekend;
+    if (inDefaultDays && !occupiedDates.has(iso)) return iso;
+    iso = addIsoDays(iso, 1);
+  }
+  return fromIso;
+}
+
+function addIsoDays(iso, n) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
 }
 
 export default async function handler(req, res) {
@@ -425,6 +573,14 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
     // preproductionDoc). Public action: fires 2 min after the client's
     // last keystroke via the client-side debounce. Submission of an
     // explicit "Submit review" goes through submitReview instead.
+    //
+    // For Meta Ads only, ALSO auto-create a pre-production revision
+    // subtask on the linked /projects record (reverse lookup via
+    // links.preprodId, since the preproduction record key is NOT the
+    // project id), scheduled for the PL's next available day. SMO keeps
+    // its existing flow because revision subtasks are already
+    // auto-created downstream of the revisions public view in
+    // notify-revision.js.
     if (action === "notifyFeedback") {
       const { projectId, type } = req.body;
       if (!projectId) return res.status(400).json({ error: "Missing projectId" });
@@ -441,9 +597,31 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
       }
       if (!project) return res.status(404).json({ error: "Project not found" });
 
+      const feedback = flavour === "socialOrganic"
+        ? project.preproductionDoc?.clientFeedback
+        : project.clientFeedback;
+      const feedbackCount = feedback ? Object.keys(feedback).length : 0;
+      const label = flavour === "socialOrganic" ? "Social Organic scripts" : "Meta Ads scripts";
+
+      // Meta Ads only: auto-schedule a pre-production revision subtask
+      // on the linked project. Best-effort — Slack still fires even if
+      // any step here trips.
+      let scheduledFor = null;
+      let plMention = null;
+      if (flavour === "metaAds") {
+        try {
+          const scheduled = await scheduleMetaAdsRevisionSubtask({ metaAdsProjectId: projectId, project });
+          if (scheduled) {
+            scheduledFor = scheduled.nextAvailable;
+            plMention = scheduled.plMention;
+          }
+        } catch (e) {
+          console.error("notifyFeedback: schedule Meta Ads revision failed:", e.message);
+        }
+      }
+
       const slackUrl = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
       if (slackUrl) {
-        const label = flavour === "socialOrganic" ? "Social Organic scripts" : "Meta Ads scripts";
         let text;
         if (flavour === "socialOrganic") {
           const s = feedbackSummary(project, flavour);
@@ -455,11 +633,13 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
           const summary = parts.length > 0 ? parts.join(" · ") : "feedback saved";
           text = `${project.companyName} has left feedback on their ${label}: ${summary}. Review in dashboard: planner.viewix.com.au`;
         } else {
-          // metaAds keeps the legacy per-cell count — its review page
-          // hasn't been redesigned yet, so sectionFeedback / scriptFeedback
-          // don't exist there.
-          const feedbackCount = Object.keys(project.clientFeedback || {}).length;
-          text = `${project.companyName} has left feedback on their ${label} (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}). Review in dashboard: planner.viewix.com.au`;
+          // metaAds keeps the legacy per-cell count (its review page
+          // hasn't been redesigned, so sectionFeedback / scriptFeedback
+          // don't exist there) and appends the new auto-schedule line.
+          const scheduleSuffix = scheduledFor
+            ? ` Pre-production revision scheduled for *${scheduledFor}*${plMention ? ` · cc ${plMention}` : ""}.`
+            : "";
+          text = `:speech_balloon: *${project.companyName}* has left feedback on their ${label} (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}).${scheduleSuffix} Review in dashboard: planner.viewix.com.au`;
         }
         await fetch(slackUrl, {
           method: "POST",
@@ -468,7 +648,7 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
         });
       }
 
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ success: true, scheduledFor });
     }
 
     // ─── SUBMIT REVIEW: client explicitly clicked "Submit review" ───
