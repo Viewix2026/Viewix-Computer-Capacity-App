@@ -6,12 +6,16 @@
 // project. Fired fire-and-forget from Deliveries.updateVideo; idempotent
 // server-side so an overlapping approval / re-approval is harmless.
 //
-// Scheduling (locked): assign the reformat to the master's editor on
-// their next available working day. NOTE: the fuller rule — "if that
-// editor is fully stacked, reassign; stack ALL of a project's reformats
-// onto one person's day" — needs the Phase 6 capacity grid and is left
-// as a follow-up; here we do the simple master's-editor / next-working-
-// day placement (unscheduled + stuck if the master had no assignee).
+// Scheduling (locked, Phase 6): assign the reformat to the master's
+// editor on their next available working day, BUT:
+//   - Stack ALL of this project's reformats onto the same editor's day
+//     (so they flow through the resizes in one sitting); and
+//   - If the master's editor is "fully stacked" (≥ FULLY_STACKED_THRESHOLD
+//     non-done subtasks already pinned on that date across ALL projects),
+//     reassign the reformat to another editor whose next-working-day is
+//     less stacked. Same-project stacking wins over reassignment — once
+//     one of this project's reformats is committed to an editor's day,
+//     subsequent reformats join that day rather than scattering.
 //
 // Request (POST JSON): { deliveryId, videoId }
 //   200 { ok:true, created|skipped }   200 even on no-op (idempotent)
@@ -81,15 +85,30 @@ export default async function handler(req, res) {
   const existingReformat = subs.find(s => s && s.videoId === videoId && s.reformatOfSubtaskId);
   if (existingReformat) return res.status(200).json({ ok: true, skipped: "reformat_exists" });
 
-  // Schedule: master's editor on their next working day, BUT stack all
-  // of this project's reformats onto one editor's day (Phase 6 design
-  // — see docs/phase6-auto-scheduler-design.md). If another reformat on
-  // this project is already scheduled and assigned to the same editor,
-  // we land on that same day so the editor flows through every reformat
-  // in one sitting instead of context-switching across days.
-  const editorId = (Array.isArray(master.assigneeIds) && master.assigneeIds[0]) || master.assigneeId || null;
+  // "Fully stacked" threshold — once an editor has 3+ non-done subtasks
+  // pinned to a date across ALL projects, taking on another item there
+  // pushes them into context-switching hell. The reformat is reassigned
+  // to the next editor with capacity instead of piled higher.
+  const FULLY_STACKED_THRESHOLD = 3;
+  const stackCountForEditorOnDate = (edId, date) => {
+    let n = 0;
+    for (const p of allProjectsList) {
+      const psubs = p?.subtasks ? Object.values(p.subtasks) : [];
+      for (const s of psubs) {
+        if (!s || s.status === "done" || s.status === "archived") continue;
+        if (s.startDate !== date) continue;
+        const ids = Array.isArray(s.assigneeIds) ? s.assigneeIds : (s.assigneeId ? [s.assigneeId] : []);
+        if (ids.includes(edId)) n += 1;
+      }
+    }
+    return n;
+  };
+
+  const masterEditorId = (Array.isArray(master.assigneeIds) && master.assigneeIds[0]) || master.assigneeId || null;
+  let editorId = masterEditorId;
   let startDate = null;
   let assigneeIds = [];
+  let reassignReason = null;
   if (editorId) {
     try {
       const editorsRaw = await adminGet("/editors");
@@ -97,8 +116,10 @@ export default async function handler(req, res) {
       const editor = editors.find(e => e && e.id === editorId);
       const weekData = (await adminGet("/weekData")) || {};
       if (editor) {
-        // Look for an existing reformat in THIS project also assigned to
-        // the master's editor — stack onto the latest one's date.
+        // Same-project stacking: if a sibling reformat is already on
+        // the master's editor, land on its date. Stacking wins over the
+        // fully-stacked reassign — once the editor's committed to this
+        // project's reformat day, sibling reformats join them.
         const sameEditorReformats = subs.filter(s =>
           s && s.reformatOfSubtaskId && s.startDate &&
           ((Array.isArray(s.assigneeIds) && s.assigneeIds.includes(editorId)) || s.assigneeId === editorId)
@@ -108,6 +129,25 @@ export default async function handler(req, res) {
           startDate = sameEditorReformats[sameEditorReformats.length - 1].startDate;
         } else {
           startDate = nextWorkingDayFor(editor, todaySydney(), weekData);
+          // Fully-stacked cold-start: if this would be the FIRST reformat
+          // and the master's editor is already maxed on that date, hand
+          // the reformat to another editor whose next-working-day is
+          // less stacked. Deterministic ordering for replay-safe scheduling.
+          if (startDate && stackCountForEditorOnDate(editorId, startDate) >= FULLY_STACKED_THRESHOLD) {
+            const others = editors
+              .filter(e => e && e.id && e.role === "editor" && e.id !== editorId)
+              .sort((a, b) => (a.id < b.id ? -1 : 1));
+            for (const cand of others) {
+              const candDate = nextWorkingDayFor(cand, todaySydney(), weekData);
+              if (!candDate) continue;
+              if (stackCountForEditorOnDate(cand.id, candDate) < FULLY_STACKED_THRESHOLD) {
+                editorId = cand.id;
+                startDate = candDate;
+                reassignReason = `master-editor-fully-stacked`;
+                break;
+              }
+            }
+          }
         }
         assigneeIds = [editorId];
       }
@@ -143,6 +183,10 @@ export default async function handler(req, res) {
     order: orderBase,
     createdAt: now, updatedAt: now,
   };
+  if (reassignReason) {
+    reformat.reassignedFromEditorId = masterEditorId;
+    reformat.reassignReason = reassignReason;
+  }
   if (scheduled) {
     // Append at the END of that editor+day rather than a raw =1 that would
     // collide with existing priorities. dayPriority is per editor|date
@@ -167,5 +211,11 @@ export default async function handler(req, res) {
     return res.status(500).json({ ok: false, error: `write failed: ${e.message}` });
   }
 
-  return res.status(200).json({ ok: true, created: stId, scheduled, assignedTo: assigneeIds[0] || null, startDate });
+  return res.status(200).json({
+    ok: true, created: stId, scheduled,
+    assignedTo: assigneeIds[0] || null,
+    startDate,
+    reassignedFromEditorId: reassignReason ? masterEditorId : null,
+    reassignReason: reassignReason || null,
+  });
 }
