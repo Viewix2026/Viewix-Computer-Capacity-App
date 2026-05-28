@@ -28,6 +28,37 @@
 import { adminGet } from "../_fb-admin.js";
 import { buildDeliveryUrl, slugify } from "./deliveryUrl.js";
 
+// Normalise an avatar URL into something an email <img> can actually
+// render. The Team Roster lets producers paste any URL; the common
+// failure (reported 2026-05-19: crew photos broken in ShootTomorrow)
+// is a Google Drive SHARE link like
+//   https://drive.google.com/file/d/{ID}/view?usp=drive_link
+// which is an HTML viewer page, not image bytes — <img> shows a broken
+// icon. Rewrite known Drive forms to the thumbnail endpoint
+//   https://drive.google.com/thumbnail?id={ID}&sz=w200
+// which returns real image/jpeg bytes and is the most email-client-
+// friendly Drive form (uc?export=view is heavier and increasingly
+// rate-limited by Google). Requires the file to be shared "anyone with
+// the link" — true for the current crew photos.
+//
+// Non-Drive URLs (Slack CDN ca.slack-edge.com, dashboard /public, any
+// other host) pass through untouched. Empty -> null.
+export function normalizeAvatarUrl(url) {
+  const u = (url || "").trim();
+  if (!u) return null;
+  if (!/drive\.google\.com/i.test(u)) return u; // not Drive — leave as-is
+  let id = null;
+  const fileMatch = u.match(/\/file\/d\/([\w-]+)/);
+  if (fileMatch) {
+    id = fileMatch[1];
+  } else {
+    const idParam = u.match(/[?&]id=([\w-]+)/);
+    if (idParam) id = idParam[1];
+  }
+  if (!id) return u; // unrecognised Drive form — best-effort, leave as-is
+  return `https://drive.google.com/thumbnail?id=${id}&sz=w200`;
+}
+
 // Normalise /editors. Stored shape varies between an array and an
 // object-keyed-by-index (Firebase RTDB array semantics quirk). Either
 // way we collapse to an array of entries with at least { id, name }.
@@ -81,7 +112,7 @@ export function resolveCrew(editors, assigneeIds) {
       // next to each crew row in the ShootTomorrow email's
       // "Who you'll meet" block. Falls back to initials in the
       // template when missing.
-      avatar: ed.avatarUrl || ed.avatar || null,
+      avatar: normalizeAvatarUrl(ed.avatarUrl || ed.avatar),
     });
   }
   return { crew, gaps };
@@ -119,7 +150,7 @@ export function resolveAccountManagerChip({ project, accounts, editors }) {
   return {
     name,
     role: "Account Manager",
-    avatar: editor?.avatarUrl || editor?.avatar || null,
+    avatar: normalizeAvatarUrl(editor?.avatarUrl || editor?.avatar),
     phone: (editor?.phone || "").trim() || null,
   };
 }
