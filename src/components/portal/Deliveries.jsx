@@ -223,7 +223,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
         </div>
       ) : (
         <div style={{ border: "1px solid var(--line)", borderRadius: 14, overflow: "hidden", background: "var(--surface)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr) 80px 170px 170px 170px 80px", gap: 16, padding: "14px 22px", background: "var(--bg-2)", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "32px minmax(180px,1.8fr) 64px 130px 145px 145px 64px", gap: 12, padding: "14px 22px", background: "var(--bg-2)", borderBottom: "1px solid var(--line)" }}>
             {["#", "Video name", "Link", "Viewix status", "Revision round 1", "Revision round 2", "Posted"].map((c, i) => (
               <span key={i} className="mono" style={{ fontSize: 10, color: "var(--text-3)", letterSpacing: "0.08em", textTransform: "uppercase", justifySelf: i === 6 ? "center" : "flex-start" }}>{c}</span>
             ))}
