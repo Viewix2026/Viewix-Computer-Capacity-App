@@ -21,24 +21,19 @@
 
 import { getAdmin } from "../_fb-admin.js";
 import { accountManagerBlock } from "../_clientRedact.js";
+import { findOwningProject } from "../_findOwningProject.js";
+
+// Re-exported for back-compat — `delivery-am.test.mjs` imports it from
+// here. The implementation lives in `api/_findOwningProject.js` so every
+// reverse-lookup endpoint (this, on-video-approved, posting-preferences)
+// uses the same fail-closed semantics. Codex audit 2026-05-28.
+export { findOwningProject };
 
 // Delivery ids are minted as `del-${Date.now()}` (api/webhook-deal-won.js);
 // allow base36-ish legacy variants but keep it bounded. Exported for tests.
 export const DELIVERY_ID_RE = /^del-[A-Za-z0-9]{1,40}$/;
 
 // ── Pure helpers (DB-free, unit-tested by delivery-am.test.mjs) ──
-
-// Find the single project that owns this delivery. RTDB has no
-// query-by-child for our layout, so the caller passes the whole
-// /projects object and we scan. Returns { project, ambiguous }.
-// Fail closed: >1 match → ambiguous (a guessed AM is worse than none).
-export function findOwningProject(projects, deliveryId) {
-  const matches = Object.values(projects || {}).filter(
-    p => p && (p.links || {}).deliveryId === deliveryId
-  );
-  if (matches.length === 1) return { project: matches[0], ambiguous: false };
-  return { project: null, ambiguous: matches.length > 1 };
-}
 
 // Build the response envelope from a resolved account + editors. The
 // only keys that ever leave the server are `accountManager` (root) and

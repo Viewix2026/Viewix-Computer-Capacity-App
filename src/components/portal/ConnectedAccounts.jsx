@@ -23,7 +23,7 @@ const STATUS_TONE = {
   unknown:      { tone: "muted",  label: "Unknown" },
 };
 
-function PlatformTile({ accountId, tile, onReconnect, reconnecting }) {
+function PlatformTile({ orgName, tile, onReconnect, reconnecting }) {
   const status = STATUS_TONE[tile.status] || STATUS_TONE.unknown;
   const canReconnect = tile.platform === "tiktok" && (tile.status === "disconnected" || tile.status === "expiring");
   return (
@@ -46,7 +46,7 @@ function PlatformTile({ accountId, tile, onReconnect, reconnecting }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <Pill tone={status.tone}>{status.label}</Pill>
         {canReconnect && (
-          <BtnPrimary onClick={() => onReconnect(accountId, tile.platform)} disabled={reconnecting}>
+          <BtnPrimary onClick={() => onReconnect(orgName, tile.platform)} disabled={reconnecting}>
             {reconnecting ? "Opening…" : "Reconnect"}
           </BtnPrimary>
         )}
@@ -62,7 +62,7 @@ export function ConnectedAccounts({ user, theme, onTheme, onSignOut, onBack }) {
   const narrow = useIsNarrow();
   const [menuOpen, setMenuOpen] = useState(false);
   const [state, setState] = useState({ loading: true, accounts: [], error: null });
-  const [reconnecting, setReconnecting] = useState(null); // `${accountId}::${platform}` when in-flight
+  const [reconnecting, setReconnecting] = useState(null); // `${orgName}::${platform}` when in-flight
 
   useEffect(() => {
     let cancelled = false;
@@ -80,14 +80,17 @@ export function ConnectedAccounts({ user, theme, onTheme, onSignOut, onBack }) {
     return () => { cancelled = true; };
   }, []);
 
-  const onReconnect = async (accountId, platform) => {
-    const key = `${accountId}::${platform}`;
+  // `orgName` (not `accountId`) is the public identifier the server
+  // resolves back to an internal account. Internal IDs stay server-side
+  // — see api/client/social-connections.js. Codex audit 2026-05-28.
+  const onReconnect = async (orgName, platform) => {
+    const key = `${orgName}::${platform}`;
     setReconnecting(key);
     try {
       const r = await authFetch("/api/client/social-connections?action=reconnect-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId, platform }),
+        body: JSON.stringify({ orgName, platform }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.reconnectUrl) {
@@ -126,7 +129,7 @@ export function ConnectedAccounts({ user, theme, onTheme, onSignOut, onBack }) {
       {state.error && <div style={{ padding: 16, borderRadius: 10, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", color: "var(--danger)", fontSize: 13 }}>{state.error}</div>}
 
       {state.accounts.map(acct => (
-        <div key={acct.accountId} style={{ marginBottom: 28 }}>
+        <div key={acct.orgName} style={{ marginBottom: 28 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "var(--heading)" }}>{acct.orgName}</h2>
           </div>
@@ -138,10 +141,10 @@ export function ConnectedAccounts({ user, theme, onTheme, onSignOut, onBack }) {
             <div style={{ display: "grid", gap: 10 }}>
               {acct.tiles.map(tile => (
                 <PlatformTile
-                  key={`${acct.accountId}::${tile.platform}`}
-                  accountId={acct.accountId}
+                  key={`${acct.orgName}::${tile.platform}`}
+                  orgName={acct.orgName}
                   tile={tile}
-                  reconnecting={reconnecting === `${acct.accountId}::${tile.platform}`}
+                  reconnecting={reconnecting === `${acct.orgName}::${tile.platform}`}
                   onReconnect={onReconnect}
                 />
               ))}
