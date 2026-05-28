@@ -251,6 +251,83 @@ test("planEdits tie-break: requested editor beats auto-pick on equal earliest", 
     "explicitly-requested editor wins tier 1 even though ed-alex sorts first by id");
 });
 
+// ─── 4b. Phase 6 — format grouping ─────────────────────────────────
+
+test("planEdits: same creativeFormat → second video sticks with first video's editor", () => {
+  // 2 videos sharing creativeFormat "talkingHead", both candidates feasible
+  // any day. The first pick goes to ed-alex (id-asc tie-break). The second
+  // video should ALSO go to ed-alex thanks to the format-grouping bias —
+  // not split to ed-luke (which would have happened pre-Phase-6).
+  const p = project("p", 2, {
+    e1: subtask("e1", { stage: "edit", _videoIndex: 1, creativeFormat: "talkingHead" }),
+    e2: subtask("e2", { stage: "edit", _videoIndex: 2, creativeFormat: "talkingHead" }),
+  });
+  const units = buildVideoUnits(p);
+  assert.equal(units[0].creativeFormat, "talkingHead", "unit carries creativeFormat from existing edit");
+  const cands = [editorAlex, editorLuke];
+  const grid = buildCapacityGrid({
+    candidateEditors: cands, projects: {}, weekData: {},
+    planWindow: { start: today, end: "2026-05-15" },
+  });
+  const { proposed } = planEdits({
+    videoUnits: units, candidateEditors: cands, grid, project: p,
+    videoTypeStats: {}, planWindow: { start: today, end: "2026-05-15" },
+    today, deadline: "2026-05-15",
+    requestedEditorIds: [],
+    planGroupId: PG, idFor,
+  });
+  assert.equal(proposed.length, 2);
+  assert.equal(proposed[0].assigneeId, "ed-alex");
+  assert.equal(proposed[1].assigneeId, "ed-alex",
+    "second same-format video stays with the editor picked for the first (Phase 6 grouping)");
+});
+
+test("planEdits: different creativeFormats → second video goes to a different editor", () => {
+  // 2 videos with DIFFERENT creativeFormats. Tier 0 doesn't fire for the
+  // second video (no prior pick for "kineticType"); tier 2 earliest-finish
+  // sends it to ed-luke since ed-alex's first slot is already eaten.
+  const p = project("p", 2, {
+    e1: subtask("e1", { stage: "edit", _videoIndex: 1, creativeFormat: "talkingHead" }),
+    e2: subtask("e2", { stage: "edit", _videoIndex: 2, creativeFormat: "kineticType" }),
+  });
+  const units = buildVideoUnits(p);
+  const cands = [editorAlex, editorLuke];
+  // Single-day window so ed-alex's first edit eats their capacity and
+  // ed-luke becomes the earliest-finish candidate for video 2.
+  const grid = {
+    "ed-alex": { [today]: FALLBACKS.edit }, // exactly enough for one edit
+    "ed-luke": { [today]: FALLBACKS.edit },
+  };
+  const { proposed } = planEdits({
+    videoUnits: units, candidateEditors: cands, grid, project: p,
+    videoTypeStats: {}, planWindow: { start: today, end: today },
+    today, deadline: today,
+    requestedEditorIds: [],
+    planGroupId: PG, idFor,
+  });
+  assert.equal(proposed[0].assigneeId, "ed-alex", "video 1 → first editor by id-asc");
+  assert.equal(proposed[1].assigneeId, "ed-luke", "video 2 (different format) → other editor (capacity forces it)");
+});
+
+test("planEdits: carries videoId + creativeFormat onto proposed write", () => {
+  const p = project("p", 1, {
+    e1: subtask("e1", { stage: "edit", _videoIndex: 1, creativeFormat: "talkingHead", videoId: "v-canonical-001" }),
+  });
+  const units = buildVideoUnits(p);
+  const cands = [editorAlex];
+  const grid = buildCapacityGrid({
+    candidateEditors: cands, projects: {}, weekData: {},
+    planWindow: { start: today, end: today },
+  });
+  const { proposed } = planEdits({
+    videoUnits: units, candidateEditors: cands, grid, project: p,
+    videoTypeStats: {}, planWindow: { start: today, end: today },
+    today, deadline: today, requestedEditorIds: [], planGroupId: PG, idFor,
+  });
+  assert.equal(proposed[0].videoId, "v-canonical-001", "videoId threaded through proposed write");
+  assert.equal(proposed[0].creativeFormat, "talkingHead", "creativeFormat threaded through proposed write");
+});
+
 // ─── 5. planExtraShoot ─────────────────────────────────────────────
 
 test("planExtraShoot: places on first feasible day, zeroes crew edit grid", () => {

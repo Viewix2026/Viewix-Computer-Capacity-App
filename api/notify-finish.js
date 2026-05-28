@@ -255,11 +255,23 @@ export default async function handler(req, res) {
       ? await postSlack(slackWebhook, slackText)
       : { ok: false, reason: "per_video_pings_disabled" };
 
-    // Tip: payload fields projectId/subtaskId/videoId/deliveryId are
-    // accepted (and validated/clamped above) for forward compatibility
-    // — the dashboard already sends them, and a future enhancement may
-    // want them on the Slack post. We don't act on them today.
-    void projectId; void subtaskId; void videoId; void payloadDeliveryId;
+    // Phase 4 (#D / Codex gap): when an editor finishes the LAST video
+    // for a project's client-review pass, fire ONE AM-tagged client-ready
+    // alert. Gate is "all delivery videos at Ready for Review or
+    // Completed" (the just-finished videoId is overlaid to dodge the
+    // brief write-propagation race). Idempotent server-side via
+    // notifications.clientReady. Fire-and-forget — never blocks the
+    // editor's Finish response.
+    if (reviewType === "client" && projectId) {
+      // Dynamic import keeps the cold-path light when reviewType=internal.
+      import("./notify-client-ready.js")
+        .then(({ fireClientReadyIfAllVideosReady }) =>
+          fireClientReadyIfAllVideosReady({ projectId, justSetVideoId: videoId || null })
+        )
+        .then(r => { if (r && !r.ok && r.error) console.warn("client-ready gate:", r.error); })
+        .catch(e => console.warn("client-ready gate fan-out failed:", e.message));
+    }
+    void subtaskId; void payloadDeliveryId;
 
     return res.status(200).json({
       ok: true,

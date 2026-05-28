@@ -68,6 +68,35 @@ async function postWebhook(text) {
   }
 }
 
+// Gate variant — fires the project-level client-ready alert only if
+// the linked delivery is fully marked Ready for Review / Completed.
+// Used by the editor Finish reviewType=client path so the AM ping
+// lands when the LAST video flips, not on every per-video finish.
+// `justSetVideoId` is overlaid as "Ready for Review" in the check —
+// avoids the brief race window where the editor's delivery write may
+// not yet be visible to a fresh admin read.
+export async function fireClientReadyIfAllVideosReady({ projectId, justSetVideoId }) {
+  if (!projectId) return { ok: false, error: "projectId required" };
+  const project = await adminGet(`/projects/${projectId}`);
+  if (!project) return { ok: false, error: "project_not_found" };
+  if (project.notifications && project.notifications.clientReady) {
+    return { ok: true, skipped: "already_sent" };
+  }
+  const deliveryId = (project.links || {}).deliveryId;
+  if (!deliveryId) return { ok: true, skipped: "no_delivery_link" };
+  const delivery = await adminGet(`/deliveries/${deliveryId}`);
+  const vids = Array.isArray(delivery?.videos) ? delivery.videos : [];
+  if (vids.length === 0) return { ok: true, skipped: "no_delivery_videos" };
+  const allReady = vids.every(v => {
+    if (!v) return false;
+    if (justSetVideoId && v.videoId === justSetVideoId) return true;
+    const s = (v.viewixStatus || "").trim();
+    return s === "Ready for Review" || s === "Completed";
+  });
+  if (!allReady) return { ok: true, skipped: "not_all_ready" };
+  return await fireClientReady({ projectId });
+}
+
 // Internal entrypoint used by api/slack-interactivity.js (Approve outcome).
 // Re-checks idempotency + resolves the AM each call so it's safe to invoke
 // from any path. Returns { ok, skipped|sent, slack:{ok, reason} }.
