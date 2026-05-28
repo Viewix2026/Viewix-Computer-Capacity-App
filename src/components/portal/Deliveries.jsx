@@ -147,13 +147,19 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
   const setField = (row, field, value) => {
     if (!writeEnabled || !deliveryId || row.idx == null) return;
     const prev = row[field];
-    setRows(rs => rs.map(r => r.id === row.id ? { ...r, [field]: value } : r));
+    const prevViewixStatus = row.viewixStatus;
+    // Mirror the server-side side-effect in /api/on-video-approved:
+    // a revision1/2 flip to "Approved" also bumps viewixStatus to
+    // "Completed" (one-way, idempotent). Optimistically update locally
+    // so the UI stays in sync without a refetch; revert on failure.
+    const isApprovalFlip = (field === "revision1" || field === "revision2") && value === "Approved" && row.viewixStatus !== "Completed";
+    setRows(rs => rs.map(r => r.id === row.id ? { ...r, [field]: value, ...(isApprovalFlip ? { viewixStatus: "Completed" } : {}) } : r));
     setSaving(true);
     writeDeliveryLeaf(deliveryId, row.idx, field, value)
       .then(() => setTimeout(() => setSaving(false), 600))
       .catch(() => {
         setSaving(false);
-        setRows(rs => rs.map(r => r.id === row.id ? { ...r, [field]: prev } : r)); // revert
+        setRows(rs => rs.map(r => r.id === row.id ? { ...r, [field]: prev, viewixStatus: prevViewixStatus } : r)); // revert (incl. status)
       });
     if (field === "revision1" || field === "revision2") {
       notifier.current.queue({ videoName: row.title || "Video", field, oldValue: prev || "", newValue: value });
