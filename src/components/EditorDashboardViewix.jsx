@@ -113,6 +113,15 @@ function tasksForEditor(projects, editorId, sherpaIdx, accounts) {
         endTime: st.endTime || null,
         stage: st.stage || "preProduction",
         status: st.status || "stuck",
+        // Per-editor, per-start-day priority rank — the same value the
+        // Team Board priority badge shows (set by dragging that badge;
+        // see TeamBoard.jsx dayPriorityOf). Keyed by editor + startDate.
+        // Drives the editor's day sort so their list mirrors the board's
+        // priority order (item 4). null when unset → sorted last.
+        dayPriority: (() => {
+          const v = st.dayPriority?.[`${editorId}|${st.startDate || ""}`];
+          return typeof v === "number" && Number.isFinite(v) ? v : null;
+        })(),
         sherpaUrl,
         clientGoal,
         // Cross-system fields the Finish modal needs: videoId routes the
@@ -176,7 +185,10 @@ function classifyTasks(tasks, today) {
     const end = t.endDate || t.startDate;
     const onToday = t.startDate <= today && today <= end;
     if (onToday) {
-      todayTasks.push(t);
+      // Finished tasks drop out of "Today" so the day's allocated focus
+      // shrinks as work completes (items 2/17). They still exist on the
+      // project; they just stop cluttering the list once done.
+      if (t.status !== "done") todayTasks.push(t);
       continue;
     }
     if (end < today && t.status !== "done") {
@@ -188,9 +200,14 @@ function classifyTasks(tasks, today) {
     }
   }
 
-  // Sort each list by startDate then name for stable display.
+  // Sort each list by startDate, then by the Team Board day-priority rank
+  // (item 4 — so the editor's day mirrors the board's priority order),
+  // then name as the final stable tiebreaker. dayPriority is per-editor +
+  // per-start-day, so grouping by startDate first lines it up exactly
+  // with how the board ranks same-start-day bars.
   const sortFn = (a, b) =>
     (a.startDate || "").localeCompare(b.startDate || "") ||
+    ((a.dayPriority ?? Infinity) - (b.dayPriority ?? Infinity)) ||
     (a.name || "").localeCompare(b.name || "");
   todayTasks.sort(sortFn);
   upcomingTasks.sort(sortFn);
@@ -899,6 +916,18 @@ function TaskRow({
         </div>
       </div>
       {!dim && (
+        task.status === "done" ? (
+          // A finished task hides the Start/Stop/±Time/Finish/Reset cluster
+          // and shows a large green tick instead (item 2). After item 17's
+          // Today filter, a done row only ever renders in the Upcoming
+          // bucket — a future-dated task the editor finished early.
+          <div
+            title="Done"
+            aria-label="Done"
+            style={{ fontSize: 32, color: "#10B981", lineHeight: 1, padding: "0 12px", flexShrink: 0 }}>
+            ✅
+          </div>
+        ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           {isRunning ? (
             <>
@@ -964,6 +993,7 @@ function TaskRow({
             </button>
           )}
         </div>
+        )
       )}
     </div>
     {expanded && <TaskDetailsPanel task={task} onOpenProject={onOpenProject} />}
