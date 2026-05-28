@@ -156,12 +156,16 @@ export function DeliveryPublicView() {
   const adapted = toDeliveriesProp(delivery);
 
   const header = (
-    <div style={{ padding: narrow ? "16px 18px" : "20px 32px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, background: "var(--surface)" }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: narrow ? 16 : 19, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{delivery.projectName || "Your videos"}</div>
-        <div style={{ fontSize: 13, color: "var(--text-3)" }}>{delivery.clientName || ""}</div>
+    // Full-width border / background, but inner content constrained to
+    // the same maxWidth as the body grid below so left/right edges align.
+    <div style={{ borderBottom: "1px solid var(--line)", background: "var(--surface)" }}>
+      <div style={{ maxWidth: 1340, margin: "0 auto", padding: narrow ? "16px 18px" : "20px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+        <ViewixLogo size={narrow ? 22 : 28} />
+        <div style={{ minWidth: 0, textAlign: "right" }}>
+          <div style={{ fontSize: narrow ? 16 : 19, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{delivery.projectName || "Your videos"}</div>
+          <div style={{ fontSize: 13, color: "var(--text-3)" }}>{delivery.clientName || ""}</div>
+        </div>
       </div>
-      <ViewixLogo size={22} />
     </div>
   );
 

@@ -110,15 +110,10 @@ export default async function handler(req, res) {
     const delivery = await adminGet(`/deliveries/${deliveryId}`);
     if (!delivery) return res.status(404).json({ error: "delivery_not_found" });
 
-    // 0. Launch-cutoff gate. Deliveries created at/before the social
-    //    scheduler launch predate this feature — they were posted via
-    //    Metricool and must NEVER queue an asset transfer. Skip
-    //    silently (200, not an error) so a re-approval of an old
-    //    delivery is a clean no-op.
-    if (!isPostLaunchDelivery(delivery)) {
-      return res.status(200).json({ ok: true, skipped: "pre_launch_delivery" });
-    }
-
+    // Verify approval BEFORE any side-effect (incl. the viewixStatus
+    // flip below). The UI tells us about an approval transition but we
+    // don't trust it — we re-read Firebase. Without this gate, a
+    // hostile actor could flip status on arbitrary delivery videos.
     const videos = Array.isArray(delivery.videos) ? delivery.videos : [];
     const video = videos[videoIdx];
     if (!video) return res.status(404).json({ error: "video_idx_out_of_range" });
@@ -131,6 +126,30 @@ export default async function handler(req, res) {
         revision1: video.revision1 || null,
         revision2: video.revision2 || null,
       });
+    }
+
+    // Universal side-effect: a verified-approved video flips its
+    // viewixStatus to "Completed" so the client portal and the staff
+    // Deliveries view stay aligned ("you approved it → status reflects
+    // that"). Idempotent — skip the write if already "Completed".
+    // Applies to ALL delivery types (incl. pre-launch) since this
+    // semantic is independent of the asset-transfer pipeline.
+    // One-way only: un-approving does NOT auto-revert the status; staff
+    // can correct it from the producer Deliveries tab if needed.
+    let viewixStatusUpdated = false;
+    if (video.viewixStatus !== "Completed") {
+      await adminPatch(`/deliveries/${deliveryId}/videos/${videoIdx}`, { viewixStatus: "Completed" });
+      viewixStatusUpdated = true;
+    }
+
+    // 0. Launch-cutoff gate (asset-transfer-specific). Deliveries
+    //    created at/before the social scheduler launch predate Phase 2A
+    //    — they were posted via Metricool and must NEVER queue an
+    //    asset transfer. Skip silently (200, not an error) so a re-
+    //    approval of an old delivery is a clean no-op. The viewixStatus
+    //    flip above DID apply — it's an independent concern.
+    if (!isPostLaunchDelivery(delivery)) {
+      return res.status(200).json({ ok: true, skipped: "pre_launch_delivery", viewixStatusUpdated });
     }
 
     const videoId = video.videoId || video.id;
@@ -215,6 +234,7 @@ export default async function handler(req, res) {
       assetKey,
       capturedCaption: !!snapshottedCaption,
       frameioFileId: frameioFileId || null,
+      viewixStatusUpdated,
     });
   } catch (e) {
     console.error("on-video-approved handler error:", e);
