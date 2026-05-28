@@ -37,7 +37,7 @@ import { SelectsPickerModal } from "./SelectsPickerModal";
 const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null });
 import { BTN } from "../config";
 import { fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
-import { fbSet, fbUpdate, getCurrentUserName, getCurrentUserEmail } from "../firebase";
+import { fbSet, fbUpdate, getCurrentUserName, getCurrentUserEmail, authFetch } from "../firebase";
 import {
   CalendarSyncContext,
   CALENDAR_SYNC_DEBOUNCE_MS,
@@ -1195,6 +1195,61 @@ function ShootCalendarSyncControls({ subtask, queueEntry, onToggleSync, onRetry 
   );
 }
 
+// Phase 4 — Approve / Needs changes buttons on the Internal Review
+// subtask. Calls the same /api/internal-review-outcome endpoint as
+// the Slack thread surface, so either path produces the identical
+// state changes (client-ready ping on approve, Internal Changes
+// subtask on needs-changes). Server is idempotent.
+function InternalReviewOutcomeButtons({ projectId, subtaskId }) {
+  const [submitting, setSubmitting] = useState(null); // "approve" | "needsChanges" | null
+  const [err, setErr] = useState("");
+  const callOutcome = async (outcome) => {
+    if (submitting) return;
+    setSubmitting(outcome);
+    setErr("");
+    try {
+      const r = await authFetch("/api/internal-review-outcome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, subtaskId, outcome }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || `HTTP ${r.status}`);
+      }
+      // The /projects listener will pick up the state change and the
+      // buttons will hide themselves on next render — no local optimistic
+      // hide needed (the server already wrote internalReview.state).
+    } catch (e) {
+      setErr(e?.message || String(e));
+      setSubmitting(null);
+    }
+  };
+  const btnBase = {
+    fontSize: 11, padding: "4px 10px", borderRadius: 6,
+    border: "1px solid", cursor: submitting ? "default" : "pointer",
+    fontFamily: "inherit", fontWeight: 600,
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, marginLeft: 18 }}>
+      <span style={{ fontSize: 9, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>Review outcome</span>
+      <button
+        onClick={() => callOutcome("approve")}
+        disabled={!!submitting}
+        title="Approve — flips videos to Ready for Client and pings the Account Manager"
+        style={{ ...btnBase, background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.45)", color: "#10B981", opacity: submitting && submitting !== "approve" ? 0.5 : 1 }}
+      >{submitting === "approve" ? "Approving…" : "Approve"}</button>
+      <button
+        onClick={() => { if (window.confirm("Needs changes — spawn an Internal Changes subtask for the project lead?")) callOutcome("needsChanges"); }}
+        disabled={!!submitting}
+        title="Needs changes — spawns an Internal Changes subtask on the lead's next working day at priority 1"
+        style={{ ...btnBase, background: "rgba(239,68,68,0.10)", borderColor: "rgba(239,68,68,0.40)", color: "#EF4444", opacity: submitting && submitting !== "needsChanges" ? 0.5 : 1 }}
+      >{submitting === "needsChanges" ? "Spawning…" : "Needs changes"}</button>
+      {err && <span style={{ fontSize: 10, color: "#EF4444" }}>{err}</span>}
+    </div>
+  );
+}
+
 function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete, striped, setProjects, setDeliveries, highlighted, onShootScheduled }) {
   const { viewOnly } = useContext(ProjectsAccessContext);
   const calendarSyncQueue = useContext(CalendarSyncContext);
@@ -1561,6 +1616,16 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
             style={{ fontSize: 11, padding: "3px 6px", maxWidth: 90 }}
           />
         </div>
+        {/* Internal Review outcome buttons — visible once the review
+            has been booked (attendance round-trip is done). Either
+            surface (UI here OR Slack thread buttons) calls the same
+            /api/internal-review-outcome endpoint. Hidden after the
+            outcome has been recorded so a stale double-click can't
+            re-fire (the server is idempotent but the buttons going
+            away is the clearer UX). */}
+        {subtask.isInternalReview && subtask.internalReview?.state === "booked" && !viewOnly && (
+          <InternalReviewOutcomeButtons projectId={projectId} subtaskId={subtask.id} />
+        )}
         {/* Calendar-sync UI — shoot subtasks only. Loud banner + status
             pill + per-shoot toggle. persist() / persistSyncToggle do
             the writes; this is pure render. */}

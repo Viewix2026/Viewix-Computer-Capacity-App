@@ -16,9 +16,8 @@
 // signature verification and only then URL-decode + JSON-parse.
 
 import { waitUntil } from "@vercel/functions";
-import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { adminGet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { earliestCommonAvailableDay } from "../shared/scheduling/reviewPipeline.js";
-import { nextWorkingDayFor } from "../shared/scheduling/availability.js";
 import { getCalendarClient } from "./_google-calendar.js";
 import { combineDateTimeSydney } from "./_calendar-utils.js";
 import { runBrainPassForScheduling } from "./_scheduling-brain-pass.js";
@@ -1416,92 +1415,27 @@ async function handleReviewOutcome({ payload, botToken }) {
     return;
   }
 
-  const now = new Date().toISOString();
-  if (kind === "review_outcome_approve") {
-    // Mark approved + done; fire client-ready alert (idempotent via the
-    // notifications.clientReady key inside notify-client-ready.js).
-    await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}`, { status: "done", updatedAt: now });
-    await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}/internalReview`, { state: "approved", outcomeBy: slackUserId || null, outcomeAt: now });
-    // Fire client-ready fire-and-forget (in-process call; cron-safe). The
-    // helper is internal so we can call it directly without an HTTP hop.
-    try {
-      const { fireClientReady } = await import("./notify-client-ready.js");
-      await fireClientReady({ projectId });
-    } catch (e) {
-      console.warn("approve: client-ready fan-out failed:", e.message);
-    }
-    if (ir.slackChannel && ir.slackTs) {
-      try {
-        await slackPostMessage({
-          channel: ir.slackChannel, thread_ts: ir.slackTs,
-          text: `:white_check_mark: *Approved* by <@${slackUserId}> — videos flipped to Ready for Client. Account Manager has been pinged.`,
-          botToken,
-        });
-      } catch (e) { console.warn("approve thread post failed:", e.message); }
-    }
+  // Delegate the actual writes to the shared outcome applier so the
+  // UI surface and the Slack surface stay in lockstep — one source of
+  // truth for "what does Approve / Needs changes do."
+  const outcome = kind === "review_outcome_approve" ? "approve" : "needsChanges";
+  let result;
+  try {
+    const mod = await import("./internal-review-outcome.js");
+    result = await mod.applyReviewOutcome({ projectId, subtaskId, outcome, actor: slackUserId || null });
+  } catch (e) {
+    console.warn("review outcome apply failed:", e.message);
+    await slackPostEphemeral({ channel: payload.channel?.id, user: slackUserId, text: `Couldn't record outcome: ${e.message}`, botToken });
     return;
   }
 
-  // Needs changes — spawn an Internal Changes subtask on the project lead's
-  // next available working day at dayPriority 1 (bumping anything below).
-  let editors = [];
-  try {
-    const raw = await adminGet("/editors");
-    editors = Array.isArray(raw) ? raw : Object.values(raw || {});
-  } catch (e) { console.warn("needs-changes editor lookup failed:", e.message); }
-  const leadEditor = editors.find(e => e && (e.name || "").trim().toLowerCase() === (project.projectLead || "").trim().toLowerCase()) || null;
-  const weekData = (await adminGet("/weekData")) || {};
-  const startDate = leadEditor ? nextWorkingDayFor(leadEditor, todaySydney(), weekData) : null;
-  const stId = `st-internal-changes-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  const subs = project.subtasks ? Object.values(project.subtasks) : [];
-  const orderBase = subs.reduce((m, s) => Math.max(m, s?.order ?? 0), 0) + 1;
-  const assigneeIds = leadEditor ? [leadEditor.id] : [];
-  // dayPriority = 1 (bump any existing 1+ on that editor|date by reading
-  // every project's subtasks for the same key — mirrors the reformat
-  // priority append shipped in #203).
-  let dayPriority = null;
-  if (leadEditor && startDate) {
-    const pkey = `${leadEditor.id}|${startDate}`;
-    let maxP = 0;
-    try {
-      const projectsRaw = (await adminGet("/projects")) || {};
-      const all = Array.isArray(projectsRaw) ? projectsRaw : Object.values(projectsRaw);
-      for (const p of all) {
-        const psubs = p?.subtasks ? Object.values(p.subtasks) : [];
-        for (const s of psubs) {
-          const v = s?.dayPriority?.[pkey];
-          if (Number.isFinite(v) && v > maxP) maxP = v;
-        }
-      }
-    } catch (e) { console.warn("dayPriority scan failed:", e.message); }
-    dayPriority = { [pkey]: maxP + 1 };
-  }
-
-  const changes = {
-    id: stId,
-    name: "Internal Changes",
-    stage: "revisions",
-    status: (assigneeIds.length && startDate) ? "scheduled" : "stuck",
-    startDate, endDate: startDate, startTime: null, endTime: null,
-    assigneeIds, assigneeId: assigneeIds[0] || null,
-    source: "internal-changes",
-    fromInternalReviewSubtaskId: subtaskId,
-    order: orderBase,
-    createdAt: now, updatedAt: now,
-  };
-  if (dayPriority) changes.dayPriority = dayPriority;
-  await adminSet(`/projects/${projectId}/subtasks/${stId}`, changes);
-
-  await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}`, { status: "done", updatedAt: now });
-  await adminPatch(`/projects/${projectId}/subtasks/${subtaskId}/internalReview`, { state: "needsChanges", outcomeBy: slackUserId || null, outcomeAt: now, spawnedSubtaskId: stId });
-
+  // Surface in the original thread so the channel sees what happened.
   if (ir.slackChannel && ir.slackTs) {
+    const text = outcome === "approve"
+      ? `:white_check_mark: *Approved* by <@${slackUserId}> — videos flipped to Ready for Client. Account Manager has been pinged.`
+      : `:memo: *Needs changes* by <@${slackUserId}> — spawned "Internal Changes" subtask for *${project.projectLead || "the project lead"}*${result?.spawnedSubtaskId ? "" : ""} (priority 1).`;
     try {
-      await slackPostMessage({
-        channel: ir.slackChannel, thread_ts: ir.slackTs,
-        text: `:memo: *Needs changes* by <@${slackUserId}> — spawned "Internal Changes" subtask for *${project.projectLead || "the project lead"}*${startDate ? ` on ${startDate}` : ""} (priority 1).`,
-        botToken,
-      });
-    } catch (e) { console.warn("needs-changes thread post failed:", e.message); }
+      await slackPostMessage({ channel: ir.slackChannel, thread_ts: ir.slackTs, text, botToken });
+    } catch (e) { console.warn("outcome thread post failed:", e.message); }
   }
 }
