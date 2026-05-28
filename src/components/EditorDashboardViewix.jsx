@@ -484,14 +484,25 @@ function isFrameioLink(s) {
 }
 
 // ─── Finish modal ──────────────────────────────────────────────────
-// Two modes driven by task.stage:
+// Three modes driven by task.stage:
 //  - shoot: confirmation with optional notes (notes append to the
 //    project's producerNotes field with editor name + date stamp).
+//  - selectsTimeline: same shape as shoot (confirm + optional notes).
+//    No Frame.io link — there's no shareable artifact yet, this is a
+//    producer-facing milestone signalling the edit can start. Slack
+//    fires to #project-leads via notify-finish with
+//    reviewType: "selectsTimeline".
 //  - everything else (treated as edit): Frame.io link input + Watch
 //    gate + radio between internal / client review. Submit propagates
 //    appropriately.
 function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmitted }) {
   const isShoot = task.stage === "shoot";
+  const isSelectsTimeline = task.stage === "selectsTimeline";
+  // Both branches skip the Frame.io link entirely — they're producer
+  // milestones, not client/internal review handoffs. Grouped so any
+  // downstream gates that need to know "this is the no-link path" can
+  // ask a single question.
+  const isNoLinkBranch = isShoot || isSelectsTimeline;
   const [link, setLink] = useState(task.frameioLink || "");
   const [watched, setWatched] = useState(false);
   const [reviewType, setReviewType] = useState("");
@@ -500,7 +511,7 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
   const [error, setError] = useState(null);
   const linkValid = isFrameioLink(link);
   const linkRequired = reviewType === "client";
-  const canSubmit = isShoot
+  const canSubmit = isNoLinkBranch
     ? !submitting
     : (reviewType && (!linkRequired || (linkValid && watched)) && !submitting);
 
@@ -525,7 +536,13 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
     setError(null);
     try {
       const now = new Date().toISOString();
-      if (isShoot) {
+      if (isNoLinkBranch) {
+        // Shoot + Selects Timeline share the same write path: flip the
+        // subtask to done, optionally stamp the producer notes, fire the
+        // small celebratory burst. The only thing that differs is the
+        // notes-stamp label ("shoot wrap" vs "selects wrap") and
+        // whether we POST notify-finish (we do, but only for
+        // selectsTimeline — shoot has no Slack ping today).
         await fbUpdate(`/projects/${task.projectId}/subtasks/${task.id}`, {
           status: "done",
           updatedAt: now,
@@ -534,15 +551,50 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
         if (trimmedNotes) {
           // Append to the project's producerNotes with a date + editor
           // stamp so the producer can scan the bottom of the project
-          // and see who said what after a shoot day.
+          // and see who said what after a shoot or selects wrap.
           const project = (projects || []).find(p => p?.id === task.projectId);
           const existing = (project?.producerNotes || "").trimEnd();
           const today = now.slice(0, 10);
-          const stamped = `[${today} · ${editorName || "Editor"} · shoot wrap]\n${trimmedNotes}`;
+          const label = isSelectsTimeline ? "selects wrap" : "shoot wrap";
+          const stamped = `[${today} · ${editorName || "Editor"} · ${label}]\n${trimmedNotes}`;
           const next = existing ? `${existing}\n\n${stamped}` : stamped;
           await fbSet(`/projects/${task.projectId}/producerNotes`, next);
         }
         fireSmallBurst();
+        if (isSelectsTimeline) {
+          // Internal handoff Slack ping to #project-leads. Best-effort —
+          // any Slack hiccup is logged + swallowed so the editor's flow
+          // isn't blocked. Mirrors the same try/catch shape used by the
+          // edit branch below.
+          try {
+            const project = (projects || []).find(p => p?.id === task.projectId);
+            const projectLead    = task.projectMeta?.projectLead    || "";
+            const clientName     = task.projectMeta?.clientName     || project?.clientName     || "";
+            const projectName    = task.projectMeta?.projectName    || project?.projectName    || "Untitled project";
+            const accountManager = task.projectMeta?.accountManager || "";
+            await authFetch("/api/notify-finish", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reviewType: "selectsTimeline",
+                projectName,
+                clientName,
+                videoName: task.name,
+                editorName,
+                projectLead,
+                accountManager,
+                // No frameioLink for selectsTimeline — notify-finish gates
+                // the requirement on reviewType, so omitting is fine.
+                projectId: task.projectId || "",
+                subtaskId: task.id || "",
+                videoId: task.videoId || "",
+                deliveryId: task.deliveryId || "",
+              }),
+            });
+          } catch (slackErr) {
+            console.warn("Slack notify-finish (selectsTimeline) failed (non-blocking):", slackErr);
+          }
+        }
       } else {
         const linkOut = link.trim();
         await fbUpdate(`/projects/${task.projectId}/subtasks/${task.id}`, {
@@ -663,16 +715,18 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
           boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
         }}>
         <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)", marginBottom: 6 }}>
-          {isShoot ? "Wrap shoot" : "Finish edit"}
+          {isShoot ? "Wrap shoot" : isSelectsTimeline ? "Wrap selects timeline" : "Finish edit"}
         </div>
         <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 18 }}>
           {task.parentName} · <span style={{ fontWeight: 600 }}>{task.name}</span>
         </div>
 
-        {isShoot ? (
+        {isNoLinkBranch ? (
           <>
             <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 10 }}>
-              Mark this shoot as complete?
+              {isSelectsTimeline
+                ? "Mark this selects timeline as complete? The project lead will be pinged in Slack so the edit can kick off."
+                : "Mark this shoot as complete?"}
             </div>
             <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 6 }}>
               Notes (optional — appended to project notes)
@@ -681,7 +735,9 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
               value={notes}
               onChange={e => setNotes(e.target.value)}
               rows={4}
-              placeholder="Anything the producer should know about today's shoot…"
+              placeholder={isSelectsTimeline
+                ? "Anything the project lead should know about the selects pass…"
+                : "Anything the producer should know about today's shoot…"}
               style={{
                 width: "100%", padding: "10px 12px", borderRadius: 8,
                 border: "1px solid var(--border)", background: "var(--input-bg)",

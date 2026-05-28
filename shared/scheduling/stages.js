@@ -16,6 +16,11 @@ export const STAGE_OPTIONS = [
   // status, the brighter delete-button red, and the orange Revisions
   // stage.
   { key: "shoot",         label: "Shoot",          color: "#DC2626" },
+  // Selects Timeline sits between shoot wrap and edit kick-off — the
+  // editor pulls usable takes out of the dailies and threads them onto
+  // a base timeline that the rest of the edit grows from. Teal so it
+  // reads as "prep but not edit yet" against the Viewix-blue edit bar.
+  { key: "selectsTimeline", label: "Selects Timeline", color: "#0EA5E9" },
   { key: "revisions",     label: "Revisions",      color: "#F97316" },
   // Edit uses the Viewix accent blue (matches --accent in config.js).
   { key: "edit",          label: "Edit",           color: "#0082FA" },
@@ -35,6 +40,7 @@ export const STAGE_KEYS = STAGE_OPTIONS.map(s => s.key);
 export const STAGE_DEFAULT_NAMES = {
   preProduction: "Pre Production",
   shoot: "Shoot",
+  selectsTimeline: "Selects Timeline",
   revisions: "Revisions",
   edit: "Edit",
   hold: "Hold",
@@ -47,23 +53,28 @@ export const STAGE_DEFAULT_NAMES = {
 // light up correctly on first render.
 //
 // Order of checks matters: "revision" before "shoot" so "reshoot"
-// doesn't false-match shoot first; "timeline" before generic "edit"
-// because "Selects timeline + kick off video" is the producer's
-// hand-off into edit phase.
+// doesn't false-match shoot first; "timeline" maps to selectsTimeline
+// (its own stage, not edit) — "Selects timeline + kick off video" is
+// the producer's hand-off OUT of shoot, INTO edit, but it's prep work
+// distinct from the edit itself.
 export function inferStage(subtask) {
   if (subtask?.stage && STAGE_MAP[subtask.stage]) return subtask.stage;
   const name = (subtask?.name || "").toLowerCase();
   if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
   if (name.includes("revision")) return "revisions";
   if (name.includes("shoot")) return "shoot";
-  if (name.includes("timeline")) return "edit";
+  if (name.includes("timeline")) return "selectsTimeline";
   if (name.includes("edit")) return "edit";
   return "preProduction";
 }
 
 // Helpers used by the brain's capacity calc.
 export const FIXED_TIME_STAGES = new Set(["shoot"]);   // shoots always fixed-time-ish
-export const FLEXIBLE_STAGES = new Set(["edit", "revisions", "preProduction"]);  // these stack into daily load
+// Flexible stages stack into daily load (admin-style work that the
+// editor distributes across the day). selectsTimeline is here because
+// laying down selects is prep work paced by the editor, not a
+// fixed-time appointment.
+export const FLEXIBLE_STAGES = new Set(["edit", "revisions", "preProduction", "selectsTimeline"]);
 // preProduction can be either: timed when startTime/endTime are set
 // (a planning call), flexible otherwise (admin work). Capacity calc
 // branches on whether the subtask has times.

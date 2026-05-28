@@ -39,36 +39,43 @@ import {
 // is this in) rather than STATUS (how is the work going). Stage gives
 // a much more useful at-a-glance read of where the team's effort is
 // concentrated — "lots of red bars next week" = lots of shoot days.
+// NOTE: duplicated from shared/scheduling/stages.js to avoid pulling the
+// shared module's full surface into the Team Board bundle. Keep in sync
+// with STAGE_OPTIONS over there. (A future refactor could just import.)
 const STAGE_COLOURS = {
-  preProduction: "#8B5CF6",
-  shoot:         "#DC2626",
-  revisions:     "#F97316",
-  edit:          "#0082FA",
-  hold:          "#EAB308",
+  preProduction:   "#8B5CF6",
+  shoot:           "#DC2626",
+  selectsTimeline: "#0EA5E9",
+  revisions:       "#F97316",
+  edit:            "#0082FA",
+  hold:            "#EAB308",
 };
-// Mirrors inferStage in Projects.jsx — falls back to a name-based guess
-// when the stage field is missing (legacy data) or invalid. Keeps the
-// Team Board readable for projects that haven't been touched since the
-// stage feature shipped.
+// Mirrors inferStage in shared/scheduling/stages.js — falls back to a
+// name-based guess when the stage field is missing (legacy data) or
+// invalid. Keeps the Team Board readable for projects that haven't been
+// touched since each stage shipped.
 const stageOf = (st) => {
   if (st?.stage && STAGE_COLOURS[st.stage]) return st.stage;
   const name = (st?.name || "").toLowerCase();
   if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
   if (name.includes("revision")) return "revisions";
   if (name.includes("shoot")) return "shoot";
+  if (name.includes("timeline")) return "selectsTimeline";
   if (name.includes("edit")) return "edit";
   return "preProduction";
 };
 const colourFor = (subtask) => STAGE_COLOURS[stageOf(subtask)];
 
-// Ordered list for the legend strip — same order as the dropdown in
-// Projects.jsx so producers see the same sequence in both places.
+// Ordered list for the legend strip — same order as STAGE_OPTIONS in
+// shared/scheduling/stages.js so producers see a consistent sequence
+// across the Projects dropdown, the Team Board legend, and the brain.
 const STAGE_LEGEND = [
-  { key: "preProduction", label: "Pre Production" },
-  { key: "shoot",         label: "Shoot" },
-  { key: "revisions",     label: "Revisions" },
-  { key: "edit",          label: "Edit" },
-  { key: "hold",          label: "Hold" },
+  { key: "preProduction",   label: "Pre Production" },
+  { key: "shoot",           label: "Shoot" },
+  { key: "selectsTimeline", label: "Selects Timeline" },
+  { key: "revisions",       label: "Revisions" },
+  { key: "edit",            label: "Edit" },
+  { key: "hold",            label: "Hold" },
 ];
 
 // ─── Date helpers (local — too narrow for src/utils.js) ────────────

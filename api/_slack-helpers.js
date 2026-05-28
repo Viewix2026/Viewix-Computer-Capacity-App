@@ -164,11 +164,12 @@ export function hashFingerprint(fp) {
 // Mirrors SUBTASK_STAGE_OPTIONS in src/components/Projects.jsx.
 // Keeping these here as the single Slack-side reference avoids importing
 // from the React tree into a serverless function.
-export const STAGES = ["preProduction", "shoot", "revisions", "edit", "hold"];
+export const STAGES = ["preProduction", "shoot", "selectsTimeline", "revisions", "edit", "hold"];
 
 export const STAGE_LABELS = {
   preProduction: "Pre Production",
   shoot: "Shoot",
+  selectsTimeline: "Selects Timeline",
   revisions: "Revisions",
   edit: "Edit",
   hold: "Hold",
@@ -176,9 +177,12 @@ export const STAGE_LABELS = {
 
 // Slack-rendered colour cues. Use the closest standard emoji to each
 // SUBTASK_STAGE_OPTIONS colour so the confirm card matches the gantt bar.
+// Note: there's no standard cyan/teal circle, so selectsTimeline shares
+// the blue circle with edit. The label disambiguates.
 export const STAGE_EMOJI = {
   preProduction: ":large_purple_circle:",
   shoot: ":red_circle:",
+  selectsTimeline: ":large_blue_circle:",
   revisions: ":large_orange_circle:",
   edit: ":large_blue_circle:",
   hold: ":large_yellow_circle:",
@@ -190,6 +194,7 @@ export const STAGE_EMOJI = {
 export const DEFAULT_NAME_FOR_STAGE = {
   preProduction: "Pre Production",
   shoot: "Shoot",
+  selectsTimeline: "Selects Timeline",
   revisions: "Revisions",
   edit: "Edit",
   hold: "Hold",
