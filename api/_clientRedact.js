@@ -15,6 +15,7 @@
 // Pinned by api/_clientRedact.test.mjs.
 
 import { extractCaptionsByVideoId, extractCaptionsByOrdinal } from "./_preprodCaptions.js";
+import { normalizeAvatarUrl } from "./_avatarUrl.js";
 
 // Client-facing video status vocab is the same as the staff side.
 //
@@ -113,9 +114,14 @@ function resolveAccountManagerEditor(account, editors) {
 export function accountManagerBlock(account, editors = null) {
   const editor = resolveAccountManagerEditor(account, editors);
   const name = clean(editor?.name) || clean(account?.accountManager);
+  // Pass the photo URL through the shared Drive-share-link normaliser so
+  // a Google Drive `/file/d/{ID}/view` URL pasted into Team Roster
+  // becomes a renderable `drive.google.com/thumbnail?id=…` URL the
+  // browser <img> can actually display. Non-Drive URLs pass through.
+  const rawPhoto = clean(editor?.avatarUrl) || clean(account?.accountManagerPhoto);
   return {
     name,
-    photo: clean(editor?.avatarUrl) || clean(account?.accountManagerPhoto),
+    photo: normalizeAvatarUrl(rawPhoto),
     phone: clean(editor?.phone) || clean(account?.accountManagerPhone),
     email: clean(editor?.email) || clean(account?.accountManagerEmail),
     bookingUrl: clean(editor?.bookingUrl) || clean(account?.accountManagerBookingUrl),

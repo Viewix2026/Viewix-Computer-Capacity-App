@@ -104,6 +104,22 @@ assert.equal(fallbackAm.phone, "0400 000 000");
 assert.equal(fallbackAm.email, "fallback@viewix.test");
 assert.equal(fallbackAm.bookingUrl, "https://fallback.test/book");
 
+// 3b. accountManager photo — Google Drive share URLs are rewritten so the
+//     browser <img> can actually render them (rendered HTML page → thumbnail
+//     image endpoint). Non-Drive URLs pass through unchanged.
+const driveAm = accountManagerBlock(
+  { accountManager: "Drive Person" },
+  { e1: { name: "Drive Person", avatarUrl: "https://drive.google.com/file/d/1abcDEF_xyz/view?usp=drive_link" } }
+);
+assert.equal(driveAm.photo, "https://drive.google.com/thumbnail?id=1abcDEF_xyz&sz=w200",
+  "Drive share URL must be normalized to thumbnail endpoint");
+const slackAm = accountManagerBlock(
+  { accountManager: "Slack Person" },
+  { e1: { name: "Slack Person", avatarUrl: "https://ca.slack-edge.com/T01/U01-abc.jpg" } }
+);
+assert.equal(slackAm.photo, "https://ca.slack-edge.com/T01/U01-abc.jpg",
+  "Non-Drive URL must pass through unchanged");
+
 // 4. derivePhase sanity
 assert.equal(derivePhase({ status: "archived" }, null, null), 3);
 assert.equal(derivePhase({ status: "active" }, { videos: [{ viewixStatus: "Ready for Review" }] }, null), 3);
