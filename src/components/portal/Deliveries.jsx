@@ -10,6 +10,17 @@ const VSTATUS_TONE = {
   "In Development": "amber",
 };
 
+// Single source of truth for the wide-grid column template — the header
+// row and every data row MUST use this identical string + gap, or the
+// header labels float out of alignment with the cells below. (Hit that
+// bug in #212: the header got updated, the data row didn't — header
+// labels shifted left of the data.) Floor of 240px on the title column
+// guarantees 2–3 words fit on one line; 2fr growth share absorbs all
+// remaining viewport width into the title rather than the fixed-width
+// status/revision columns.
+const WIDE_GRID_COLS = "32px minmax(240px,2fr) 60px 130px 140px 140px 60px";
+const WIDE_GRID_GAP = 10;
+
 function RevisionSelect({ value, editable, onChange }) {
   // Border = editability (ALWAYS blue when editable, regardless of value, so
   //   the "blue border = you can edit this" legend stays true after the
@@ -223,7 +234,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
         </div>
       ) : (
         <div style={{ border: "1px solid var(--line)", borderRadius: 14, overflow: "hidden", background: "var(--surface)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "32px minmax(180px,1.8fr) 64px 130px 145px 145px 64px", gap: 12, padding: "14px 22px", background: "var(--bg-2)", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: WIDE_GRID_COLS, gap: WIDE_GRID_GAP, padding: "14px 22px", background: "var(--bg-2)", borderBottom: "1px solid var(--line)" }}>
             {["#", "Video name", "Link", "Viewix status", "Revision round 1", "Revision round 2", "Posted"].map((c, i) => (
               <span key={i} className="mono" style={{ fontSize: 10, color: "var(--text-3)", letterSpacing: "0.08em", textTransform: "uppercase", justifySelf: i === 6 ? "center" : "flex-start" }}>{c}</span>
             ))}
@@ -231,7 +242,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
           {rows.map(r => {
             return (
               <div key={r.id} style={{ borderTop: "1px solid var(--line)", background: r.viewixStatus === "Ready for Review" ? "rgba(0,130,250,0.04)" : "transparent" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr) 80px 170px 170px 170px 80px", alignItems: "center", gap: 16, padding: "14px 22px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: WIDE_GRID_COLS, alignItems: "center", gap: WIDE_GRID_GAP, padding: "14px 22px" }}>
                   <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>{String(r.n).padStart(2, "0")}</span>
                   <div style={{ minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 500, color: "var(--text)", lineHeight: 1.4, wordBreak: "break-word" }}>{r.title}</div></div>
                   {r.link
@@ -246,7 +257,8 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
                     controls. Approving the video on the dropdowns
                     above implicitly approves THIS exact caption text. */}
                 {r.caption && (
-                  <div style={{ padding: "0 22px 14px 78px" }}>
+                  {/* Indent = grid left-padding (22) + # col (32) + first gap (10) = 64 */}
+                  <div style={{ padding: "0 22px 14px 64px" }}>
                     <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--bg-2)", border: "1px solid var(--line)" }}>
                       <Label style={{ fontSize: 9, display: "block", marginBottom: 4 }}>Caption</Label>
                       <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{r.caption}</div>

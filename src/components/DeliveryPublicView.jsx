@@ -193,7 +193,11 @@ export function DeliveryPublicView() {
           {am && <div style={{ padding: "0 16px 40px" }}><AccountManagerCard am={am} /></div>}
         </>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 380px", maxWidth: 1340, margin: "0 auto", alignItems: "start" }}>
+        {/* AM sidebar shrunk from 380px -> 340px so the table pane gets
+            ~40px more for the video-name column. The AM card is still
+            comfortable at 340 (photo + name + role + phone + email rows
+            + booking button all fit). */}
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 340px", maxWidth: 1340, margin: "0 auto", alignItems: "start" }}>
           <Deliveries deliveries={adapted} accountManager={am} narrow={false} writeEnabled={authReady} />
           <aside style={{ padding: "28px 32px 60px 0", position: "sticky", top: 0 }}>
             {am && <AccountManagerCard am={am} />}
