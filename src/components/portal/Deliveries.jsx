@@ -32,10 +32,10 @@ function RevisionSelect({ value, editable, onChange }) {
   );
 }
 
-const PostedBox = ({ checked, onChange }) => (
-  <input type="checkbox" checked={!!checked} onChange={e => onChange(e.target.checked)}
-    title={checked ? "Posted — click to unmark" : "Mark as posted"}
-    style={{ cursor: "pointer", accentColor: "var(--accent)", width: 18, height: 18 }} />
+const PostedBox = ({ checked, onChange, disabled }) => (
+  <input type="checkbox" checked={!!checked} disabled={disabled} onChange={e => onChange(e.target.checked)}
+    title={disabled ? "Finishing sign-in…" : checked ? "Posted — click to unmark" : "Mark as posted"}
+    style={{ cursor: disabled ? "not-allowed" : "pointer", accentColor: "var(--accent)", width: 18, height: 18, opacity: disabled ? 0.5 : 1 }} />
 );
 
 function HowTo({ narrow }) {
@@ -89,7 +89,12 @@ function NextStep({ am }) {
   );
 }
 
-export function Deliveries({ deliveries, accountManager, narrow }) {
+// `writeEnabled` (default true) lets a caller gate ALL revision/posted
+// writes — used by the public /d/ delivery shell, which must not allow a
+// write until anonymous Firebase auth has resolved. The portal omits it
+// (the client is already signed in). It reaches the controls (disabled
+// state) AND the write handler, so a click can't fire pre-auth.
+export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = true }) {
   const [rows, setRows] = useState(() => deliveries?.rows || []);
   const [saving, setSaving] = useState(false);
   const deliveryId = deliveries?.deliveryId;
@@ -115,7 +120,7 @@ export function Deliveries({ deliveries, accountManager, narrow }) {
   }
 
   const setField = (row, field, value) => {
-    if (!deliveryId || row.idx == null) return;
+    if (!writeEnabled || !deliveryId || row.idx == null) return;
     const prev = row[field];
     setRows(rs => rs.map(r => r.id === row.id ? { ...r, [field]: value } : r));
     setSaving(true);
@@ -172,12 +177,12 @@ export function Deliveries({ deliveries, accountManager, narrow }) {
                   </div>
                 )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <div><Label style={{ fontSize: 9 }}>Round 1</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision1} editable onChange={v => setField(r, "revision1", v)} /></div></div>
-                  <div><Label style={{ fontSize: 9 }}>Round 2</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision2} editable={r2editable} onChange={v => setField(r, "revision2", v)} /></div></div>
+                  <div><Label style={{ fontSize: 9 }}>Round 1</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision1} editable={writeEnabled} onChange={v => setField(r, "revision1", v)} /></div></div>
+                  <div><Label style={{ fontSize: 9 }}>Round 2</Label><div style={{ marginTop: 6 }}><RevisionSelect value={r.revision2} editable={writeEnabled && r2editable} onChange={v => setField(r, "revision2", v)} /></div></div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 10, marginTop: 2, borderTop: "1px solid var(--line)" }}>
                   <Label color={r.posted ? "var(--accent)" : "var(--text-3)"} style={{ fontSize: 10 }}>{r.posted ? "Posted" : "Not posted yet"}</Label>
-                  <PostedBox checked={r.posted} onChange={v => setField(r, "posted", v)} />
+                  <PostedBox checked={r.posted} disabled={!writeEnabled} onChange={v => setField(r, "posted", v)} />
                 </div>
               </div>
             );
@@ -201,9 +206,9 @@ export function Deliveries({ deliveries, accountManager, narrow }) {
                     ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>View <Icon.external /></a>
                     : <span style={{ color: "var(--text-3)" }}>—</span>}
                   <div><Pill tone={VSTATUS_TONE[r.viewixStatus] || "muted"}>{r.viewixStatus || "—"}</Pill></div>
-                  <div><RevisionSelect value={r.revision1} editable onChange={v => setField(r, "revision1", v)} /></div>
-                  <div><RevisionSelect value={r.revision2} editable={r2editable} onChange={v => setField(r, "revision2", v)} /></div>
-                  <div style={{ justifySelf: "center" }}><PostedBox checked={r.posted} onChange={v => setField(r, "posted", v)} /></div>
+                  <div><RevisionSelect value={r.revision1} editable={writeEnabled} onChange={v => setField(r, "revision1", v)} /></div>
+                  <div><RevisionSelect value={r.revision2} editable={writeEnabled && r2editable} onChange={v => setField(r, "revision2", v)} /></div>
+                  <div style={{ justifySelf: "center" }}><PostedBox checked={r.posted} disabled={!writeEnabled} onChange={v => setField(r, "posted", v)} /></div>
                 </div>
                 {/* Phase 2B caption — full-width row below the main
                     controls. Approving the video on the dropdowns

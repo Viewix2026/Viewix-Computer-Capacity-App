@@ -92,10 +92,17 @@ function clean(v) {
 function resolveAccountManagerEditor(account, editors) {
   const target = clean(account?.accountManager)?.toLowerCase();
   if (!target || !editors) return null;
+  // Deterministic order: object maps iterate in insertion order, arrays in
+  // index order — stable across calls either way.
   const list = Array.isArray(editors) ? editors : Object.values(editors);
   // Match account.accountManager to /editors by case-insensitive trimmed name.
-  // First match wins; current AM names are unique in the Viewix roster.
-  return list.find(ed => clean(ed?.name)?.toLowerCase() === target) || null;
+  const matches = list.filter(ed => clean(ed?.name)?.toLowerCase() === target);
+  if (matches.length > 1) {
+    // First match wins (deterministic), but a duplicate normalized name means
+    // the client could be shown the wrong AM contact — surface it server-side.
+    console.warn(`[accountManagerBlock] ${matches.length} editors normalize to "${target}"; using the first. Fix duplicate roster names.`);
+  }
+  return matches[0] || null;
 }
 
 // Curated PUBLIC account-manager block. Intentionally client-visible

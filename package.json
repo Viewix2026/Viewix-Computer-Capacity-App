@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:redact": "node api/_clientRedact.test.mjs",
+    "test:delivery-am": "node api/public/delivery-am.test.mjs",
     "test:captions": "node api/_preprodCaptions.test.mjs",
     "test:calendar": "node --test tests/*.test.js"
   },

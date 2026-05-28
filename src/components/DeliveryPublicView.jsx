@@ -1,245 +1,186 @@
-import { useState, useEffect, useRef } from "react";
-import { VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
+import { useState, useEffect } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
-import { writeDeliveryLeaf, createRevisionNotifier } from "./deliveryReview/deliveryWrites";
-import { StatusSelect } from "./UIComponents";
-import { Logo } from "./Logo";
-import { logoBg } from "../utils";
+import { PORTAL_CSS } from "./portal/portalTheme";
+import { ViewixLogo, useIsNarrow } from "./portal/ui";
+import { Deliveries } from "./portal/Deliveries";
+import { AccountManagerCard } from "./portal/AccountManagerCard";
 
-export function DeliveryPublicView(){
-  const[delivery,setDelivery]=useState(null);
-  const[loading,setLoading]=useState(true);
-  const[saving,setSaving]=useState(false);
-  const[showInstructions,setShowInstructions]=useState(true);
-  const[accountLogo,setAccountLogo]=useState(null);
-  const[accountLogoBg,setAccountLogoBg]=useState("white");
-  // Support both pretty paths (/d/HASH/slug) and legacy ?d=ID
-  const deliveryId=new URLSearchParams(window.location.search).get("d");
-  const prettyMatch=window.location.pathname.match(/^\/d\/([a-z0-9]{4,12})/i);
-  const shortId=prettyMatch?prettyMatch[1].toLowerCase():null;
-  // Shared notifier — same batching the portal Deliveries tab uses.
-  // Getters read a live ref so the once-created notifier never closes
-  // over a stale (first-render null) delivery.
-  const deliveryRef=useRef(null);
-  deliveryRef.current=delivery;
-  const notifier=useRef(null);
-  if(!notifier.current){
-    notifier.current=createRevisionNotifier({
-      getClientName:()=>deliveryRef.current?.clientName||"Unknown Client",
-      getDeliveryId:()=>deliveryRef.current?.id||deliveryId,
-    });
-  }
+// The public /d/{shortId} delivery link now renders the SAME light,
+// branded UI as the logged-in portal Deliveries tab. This component is a
+// thin shell: it keeps the anonymous-auth + raw /deliveries read (the link
+// stays tokenless), adapts the raw node into the portal Deliveries prop
+// shape, and renders the shared <Deliveries> + <AccountManagerCard>.
+//
+// Writes (revision1/revision2/posted) happen INSIDE <Deliveries> via the
+// shared deliveryReview/deliveryWrites module — the same leaf paths and the
+// same 2-minute notify batching the portal uses. We gate them on
+// `writeEnabled={authReady}` so a click can't fire before anonymous auth
+// has resolved.
 
-  const[notFoundReason,setNotFoundReason]=useState(null);
-  useEffect(()=>{
-    if(!deliveryId&&!shortId)return;
-    document.title="Viewix Dashboard";
+// Adapt a raw /deliveries/{id} node to the portal Deliveries prop shape.
+// Mirrors videoRow() in api/_clientRedact.js. <Deliveries> recomputes its
+// own counts from rows, so we only need available + ids + rows.
+function toDeliveriesProp(delivery) {
+  const videos = Array.isArray(delivery?.videos) ? delivery.videos : [];
+  return {
+    available: true,
+    deliveryId: delivery.id,
+    shortId: delivery.shortId || null,
+    orgName: delivery.clientName || "",
+    rows: videos.map((v, idx) => ({
+      n: idx + 1,
+      idx,                                  // RTDB array index — write path target
+      id: v?.id || v?.videoId || `v-${idx}`,
+      title: String(v?.name || ""),
+      link: v?.link ? String(v.link) : "",
+      viewixStatus: String(v?.viewixStatus || ""),
+      revision1: String(v?.revision1 || ""),
+      revision2: String(v?.revision2 || ""),
+      posted: !!v?.posted,
+      caption: v?.caption ? String(v.caption) : "",
+    })),
+  };
+}
+
+export function DeliveryPublicView() {
+  const narrow = useIsNarrow();
+  const [delivery, setDelivery] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(false);
+  const [notFoundReason, setNotFoundReason] = useState(null);
+  const [am, setAm] = useState(null);
+
+  // Support both pretty paths (/d/HASH/slug) and legacy ?d=ID.
+  const deliveryId = new URLSearchParams(window.location.search).get("d");
+  const prettyMatch = window.location.pathname.match(/^\/d\/([a-z0-9]{4,12})/i);
+  const shortId = prettyMatch ? prettyMatch[1].toLowerCase() : null;
+
+  useEffect(() => {
+    if (!deliveryId && !shortId) return;
+    document.title = "Viewix — Your Videos";
     initFB();
-    let unsub=()=>{};
-    // `cancelled` guard against the onFB async race — if the effect
-    // re-runs (deliveryId/shortId change) before onFB resolves, the
-    // fresh listener would write to a stale unsub and leak.
-    let cancelled=false;
-    // Safety net: if the listener never fires within 8s (rules denial
-    // that didn't invoke onError, or SDK init stuck), stop showing the
-    // "Loading…" spinner and surface the error. Without this, a silent
-    // auth failure leaves the page spinning forever.
-    const timeoutId=setTimeout(()=>{
+    let unsub = () => {};
+    let cancelled = false;
+    // Safety net: if the listener never fires within 8s (rules denial that
+    // didn't invoke onError, or SDK init stuck), stop the spinner and
+    // surface the reason — never hang on "Loading…".
+    const timeoutId = setTimeout(() => {
       setLoading(false);
-      setNotFoundReason(prev=>prev||"Timed out waiting for Firebase. The link may be invalid, or anonymous access is restricted on this deployment.");
-    },8000);
-    onFB(async()=>{
-      let authWorked=false;
-      try{
+      setNotFoundReason(prev => prev || "Timed out waiting for Firebase. The link may be invalid, or anonymous access is restricted on this deployment.");
+    }, 8000);
+    onFB(async () => {
+      try {
         await signInAnonymouslyForPublic();
-        authWorked=true;
-      }catch(e){
-        console.warn("Anonymous auth failed, continuing:",e.message);
-        if(!cancelled)setNotFoundReason(`Anonymous sign-in failed: ${e.message}. Enable anonymous auth in Firebase, or ask a producer to grant public read access to this delivery.`);
+        if (!cancelled) setAuthReady(true);          // unlocks writes
+      } catch (e) {
+        if (!cancelled) setNotFoundReason(`Anonymous sign-in failed: ${e.message}. Enable anonymous auth in Firebase, or ask a producer to grant public read access.`);
       }
-      if(cancelled)return;
-      const onReadError=(e)=>{
+      if (cancelled) return;
+      const onReadError = (e) => {
         clearTimeout(timeoutId);
         setLoading(false);
-        setNotFoundReason(`Firebase read error: ${e.code||e.message||"unknown"}. Rules may be blocking anonymous reads of this delivery.${authWorked?"":" (Anonymous auth also failed — likely rules denial.)"}`);
+        setNotFoundReason(`Firebase read error: ${e.code || e.message || "unknown"}. Rules may be blocking anonymous reads of this delivery.`);
       };
-      if(deliveryId){
-        unsub=fbListen(`/deliveries/${deliveryId}`,(data)=>{
+      if (deliveryId) {
+        unsub = fbListen(`/deliveries/${deliveryId}`, (data) => {
           clearTimeout(timeoutId);
-          if(data){setDelivery(data);setNotFoundReason(null);}
-          else{setNotFoundReason(`No delivery record at /deliveries/${deliveryId}. It may have been deleted or renamed.`);}
+          if (data) { setDelivery({ ...data, id: data.id || deliveryId }); setNotFoundReason(null); }
+          else setNotFoundReason(`No delivery record at /deliveries/${deliveryId}. It may have been deleted or renamed.`);
           setLoading(false);
-        },onReadError);
-      }else if(shortId){
-        unsub=fbListen("/deliveries",(allDeliveries)=>{
+        }, onReadError);
+      } else if (shortId) {
+        unsub = fbListen("/deliveries", (all) => {
           clearTimeout(timeoutId);
-          if(!allDeliveries){
-            setNotFoundReason(`The /deliveries collection came back empty — Firebase security rules may be blocking anonymous reads, or there are simply no deliveries yet.`);
+          if (!all) {
+            setNotFoundReason("The deliveries collection came back empty — anonymous reads may be blocked, or there are no deliveries yet.");
             setLoading(false);
             return;
           }
-          const match=Object.values(allDeliveries).find(d=>d&&d.shortId&&d.shortId.toLowerCase()===shortId);
-          if(match){setDelivery(match);setNotFoundReason(null);}
-          else{
-            const total=Object.values(allDeliveries).filter(d=>d&&d.id).length;
+          const match = Object.values(all).find(d => d && d.shortId && d.shortId.toLowerCase() === shortId);
+          if (match) { setDelivery(match); setNotFoundReason(null); }
+          else {
+            const total = Object.values(all).filter(d => d && d.id).length;
             setNotFoundReason(`Checked ${total} deliveries — none have shortId "${shortId}". The link may be stale or the record was deleted.`);
           }
           setLoading(false);
-        },onReadError);
+        }, onReadError);
       }
     });
-    // Cleanup disposes the shared notifier's batch timer so navigating
-    // away with pending revision edits doesn't leave a 2-minute timer.
-    return ()=>{cancelled=true;clearTimeout(timeoutId);unsub();notifier.current?.dispose();};
-  },[deliveryId,shortId]);
+    return () => { cancelled = true; clearTimeout(timeoutId); unsub(); };
+  }, [deliveryId, shortId]);
 
-  // Resolve account logo when delivery or accounts change. Same cleanup
-  // pattern — leaving this listener attached on clientName change would
-  // stack N listeners across the life of the page.
-  useEffect(()=>{
-    if(!delivery?.clientName)return;
-    let unsub=()=>{};
-    let cancelled=false;
-    onFB(()=>{
-      if(cancelled)return;
-      unsub=fbListen("/accounts",(acctData)=>{
-        if(!acctData)return;
-        const nameLC=delivery.clientName.toLowerCase();
-        const match=Object.values(acctData).find(a=>a&&(a.companyName||"").toLowerCase()===nameLC);
-        setAccountLogo(match?.logoUrl||null);
-        setAccountLogoBg(match?.logoBg||"white");
-      });
-    });
-    return ()=>{cancelled=true;unsub();};
-  },[delivery?.clientName]);
+  // Resolve the Account Manager block once we know the delivery id. The
+  // server endpoint (Admin SDK) does delivery → project → account →
+  // editors and returns ONLY the 5 redacted AM fields — the browser never
+  // reads /accounts, /editors or /projects.
+  useEffect(() => {
+    const id = delivery?.id;
+    if (!id) return;
+    let cancelled = false;
+    fetch(`/api/public/delivery-am?deliveryId=${encodeURIComponent(id)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelled && d) setAm(d.accountManager || null); })
+      .catch(() => { /* AM is best-effort; the review still works without it */ });
+    return () => { cancelled = true; };
+  }, [delivery?.id]);
 
-  const updateField=(videoId,field,value)=>{
-    if(!delivery)return;
-    // Guard against missing/non-array videos — legacy delivery records
-    // or partial webhook writes can land here without the field. Without
-    // this guard, findIndex throws and white-screens the public page for
-    // the client — worst possible place for a crash.
-    const videos=Array.isArray(delivery.videos)?delivery.videos:[];
-    const videoIndex=videos.findIndex(v=>v?.id===videoId);
-    if(videoIndex<0)return;
-    const video=videos[videoIndex];
-    const updated={...delivery,videos:videos.map(v=>v?.id===videoId?{...v,[field]:value}:v)};
-    setDelivery(updated);
-    setSaving(true);
-    // Leaf-scoped write via the shared module (same path the portal
-    // Deliveries tab writes). Firebase rules only permit writes to
-    // .../videos/{idx}/{revision1|revision2|posted} — never the whole
-    // /deliveries/{id} object.
-    writeDeliveryLeaf(delivery.id,videoIndex,field,value).catch(()=>{});
-    setTimeout(()=>setSaving(false),800);
-    if(field==="revision1"||field==="revision2"){
-      notifier.current.queue({videoName:video?.name||"Video",field,oldValue:video?.[field]||"",newValue:value});
-    }
-  };
+  const wrap = (children) => (
+    <div className="vx" style={{ minHeight: "100vh", background: "var(--bg)" }}>
+      <style>{PORTAL_CSS}</style>
+      {children}
+    </div>
+  );
 
-  if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif"}}><div style={{color:"#5A6B85",fontSize:14}}>Loading...</div></div>);
-  if(!delivery)return(
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif",padding:20}}>
-      <div style={{maxWidth:480,textAlign:"center"}}>
-        <div style={{fontSize:48,marginBottom:16}}>🔗</div>
-        <div style={{color:"#E8ECF4",fontSize:18,fontWeight:700,marginBottom:10}}>This delivery link is broken</div>
-        {notFoundReason&&<div style={{color:"#5A6B85",fontSize:13,lineHeight:1.6,marginBottom:20}}>{notFoundReason}</div>}
-        <div style={{color:"#5A6B85",fontSize:12,lineHeight:1.6}}>
-          Please ask Viewix for a fresh link, or have a producer copy the new share URL from the Projects → Deliveries tab.
-        </div>
+  if (loading) return wrap(
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ textAlign: "center" }}>
+        <ViewixLogo size={26} style={{ margin: "0 auto" }} />
+        <div style={{ marginTop: 16, color: "var(--text-3)", fontSize: 13 }}>Loading your videos…</div>
       </div>
     </div>
   );
 
-  // Coerce videos to an array once — multiple render paths downstream
-  // assume it's iterable (readyCount, totalCount, the video list map).
-  const videosArr=Array.isArray(delivery.videos)?delivery.videos:[];
-  const readyCount=videosArr.filter(v=>v&&(v.viewixStatus==="Ready for Review"||v.viewixStatus==="Completed")).length;
-  const totalCount=videosArr.length;
-  const editableBorder="1px solid #0082FA";
-  const editableBg="rgba(0,130,250,0.06)";
+  if (!delivery) return wrap(
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ maxWidth: 480, textAlign: "center" }}>
+        <ViewixLogo size={28} style={{ margin: "0 auto 18px" }} />
+        <h2 style={{ margin: "0 0 10px", fontSize: 20, fontWeight: 700, color: "var(--heading)" }}>This delivery link is broken</h2>
+        {notFoundReason && <p style={{ color: "var(--text-3)", fontSize: 13, lineHeight: 1.6, margin: "0 0 16px" }}>{notFoundReason}</p>}
+        <p style={{ color: "var(--text-3)", fontSize: 13, lineHeight: 1.6, margin: 0 }}>
+          Please ask Viewix for a fresh link, or have a producer copy the new share URL from the Projects → Deliveries tab.
+        </p>
+      </div>
+    </div>
+  );
 
-  return(<div style={{minHeight:"100vh",background:"#0B0F1A",fontFamily:"'DM Sans',-apple-system,sans-serif",color:"#E8ECF4"}}>
-    <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:6px;height:6px;}::-webkit-scrollbar-track{background:#0B0F1A;}::-webkit-scrollbar-thumb{background:#1E2A3A;border-radius:3px;}`}</style>
-    {/* Header */}
-    <div style={{padding:"24px 40px",borderBottom:"1px solid #1E2A3A",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-      <div style={{display:"flex",alignItems:"center",gap:16}}>
-        {(()=>{const s=accountLogo||delivery.logoUrl;const bg=logoBg(accountLogoBg);return s?<img key={s+bg} src={s} alt="" onError={e=>{e.target.style.display="none";}} style={{height:40,borderRadius:6,objectFit:"contain",background:bg,padding:4}}/>:null;})()}
-        <div>
-          <div style={{fontSize:18,fontWeight:800,color:"#E8ECF4"}}>{delivery.projectName}</div>
-          <div style={{fontSize:13,color:"#5A6B85"}}>{delivery.clientName}</div>
+  const adapted = toDeliveriesProp(delivery);
+
+  const header = (
+    <div style={{ padding: narrow ? "16px 18px" : "20px 32px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, background: "var(--surface)" }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: narrow ? 16 : 19, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{delivery.projectName || "Your videos"}</div>
+        <div style={{ fontSize: 13, color: "var(--text-3)" }}>{delivery.clientName || ""}</div>
+      </div>
+      <ViewixLogo size={22} />
+    </div>
+  );
+
+  return wrap(
+    <>
+      {header}
+      {narrow ? (
+        <>
+          <Deliveries deliveries={adapted} accountManager={am} narrow writeEnabled={authReady} />
+          {am && <div style={{ padding: "0 16px 40px" }}><AccountManagerCard am={am} /></div>}
+        </>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 380px", maxWidth: 1340, margin: "0 auto", alignItems: "start" }}>
+          <Deliveries deliveries={adapted} accountManager={am} narrow={false} writeEnabled={authReady} />
+          <aside style={{ padding: "28px 32px 60px 0", position: "sticky", top: 0 }}>
+            {am && <AccountManagerCard am={am} />}
+          </aside>
         </div>
-      </div>
-      <div style={{display:"flex",alignItems:"center",gap:12}}>
-        {saving&&<span style={{fontSize:11,color:"#10B981",fontWeight:600}}>Saved</span>}
-        <div style={{fontSize:12,color:"#5A6B85"}}>{readyCount}/{totalCount} ready</div>
-        <Logo h={20}/>
-      </div>
-    </div>
-
-    {/* Content */}
-    <div style={{maxWidth:1100,margin:"0 auto",padding:"32px 40px"}}>
-
-      {/* Instructions */}
-      <div style={{marginBottom:24,background:"#131825",border:"1px solid #1E2A3A",borderRadius:12,overflow:"hidden"}}>
-        <button onClick={()=>setShowInstructions(!showInstructions)} style={{width:"100%",padding:"14px 20px",background:"transparent",border:"none",color:"#E8ECF4",fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span>How to use this page</span>
-          <span style={{color:"#5A6B85"}}>{showInstructions?"▾":"▸"}</span>
-        </button>
-        {showInstructions&&(<div style={{padding:"0 20px 20px",fontSize:13,color:"#8899AB",lineHeight:1.7}}>
-          <div style={{display:"grid",gap:12}}>
-            <div style={{display:"flex",gap:10}}><span style={{color:"#0082FA",fontWeight:800,fontSize:14,minWidth:20}}>1.</span><span>Every time a new video is ready for review, it will be added into this table and the Viewix Status will change to <span style={{color:"#0082FA",fontWeight:600}}>"Ready for Review"</span>.</span></div>
-            <div style={{display:"flex",gap:10}}><span style={{color:"#0082FA",fontWeight:800,fontSize:14,minWidth:20}}>2.</span><span>Once you have reviewed the video, please update the relevant <span style={{color:"#0082FA",fontWeight:600}}>Revision Round Status</span> to either <span style={{color:"#10B981",fontWeight:600}}>"Approved"</span> or <span style={{color:"#EF4444",fontWeight:600}}>"Need Revisions"</span>.</span></div>
-            <div style={{display:"flex",gap:10}}><span style={{color:"#0082FA",fontWeight:800,fontSize:14,minWidth:20}}>3.</span><span>If a video needs revision, the Viewix Status will change to "Need Revisions". Once our changes are implemented, the status will update to "Ready for Review".</span></div>
-            <div style={{display:"flex",gap:10}}><span style={{color:"#0082FA",fontWeight:800,fontSize:14,minWidth:20}}>4.</span><span>Please add all notes and feedback directly into <span style={{color:"#0082FA",fontWeight:600}}>Frame.io</span>. This keeps a clear audit trail for all changes. To add comments, simply add a note into the comment box and the system will automatically time stamp it.</span></div>
-          </div>
-          <div style={{marginTop:16,padding:"10px 14px",background:"rgba(0,130,250,0.08)",borderRadius:8,border:"1px solid rgba(0,130,250,0.2)",fontSize:12,color:"#0082FA",fontWeight:600}}>There are 2 rounds of included revisions for every video.</div>
-        </div>)}
-      </div>
-
-      {/* Editable fields legend */}
-      <div style={{marginBottom:16,display:"flex",alignItems:"center",gap:8}}>
-        <div style={{width:12,height:12,borderRadius:3,border:editableBorder,background:editableBg}}/>
-        <span style={{fontSize:11,color:"#5A6B85"}}>Fields with a blue border can be edited by you</span>
-      </div>
-
-      {/* Video table */}
-      {videosArr.length===0?(<div style={{textAlign:"center",padding:60,color:"#5A6B85"}}><div style={{fontSize:16,fontWeight:600}}>No videos yet</div></div>)
-      :(<div style={{overflowX:"auto",background:"#131825",borderRadius:12,border:"1px solid #1E2A3A"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-        <thead><tr>
-          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Video Name</th>
-          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"left"}}>Link</th>
-          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#5A6B85",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",minWidth:130}}>Viewix Status</th>
-          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 1 ✎</th>
-          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#0082FA",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}>Revision Round 2 ✎</th>
-          {/* Posted — checkbox the client ticks once they've published
-              the video. Internal Deliveries view has the same column.
-              Anonymous-auth writes go through the same /videos/{idx}/
-              path as revision1 / revision2 (rule loosened to match). */}
-          <th style={{padding:"12px 14px",fontSize:10,fontWeight:700,color:"#10B981",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #1E2A3A",textAlign:"center",background:"rgba(16,185,129,0.04)"}}>Posted ✎</th>
-        </tr></thead>
-        <tbody>{videosArr.map(v=>{
-          const sc=VIEWIX_STATUS_COLORS[v.viewixStatus]||"#5A6B85";
-          return(<tr key={v.id}>
-            <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A",fontWeight:600,color:"#E8ECF4"}}>{v.name}</td>
-            <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A"}}>{v.link?<a href={v.link} target="_blank" rel="noopener noreferrer" style={{color:"#0082FA",textDecoration:"none",fontWeight:600}}>View ↗</a>:<span style={{color:"#5A6B85"}}>—</span>}</td>
-            <td style={{padding:"12px 14px",borderBottom:"1px solid #1E2A3A",textAlign:"center"}}><span style={{padding:"5px 12px",borderRadius:4,background:`${sc}20`,color:sc,fontSize:11,fontWeight:700,textTransform:"uppercase",whiteSpace:"nowrap"}}>{v.viewixStatus}</span></td>
-            <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}><div style={{border:editableBorder,borderRadius:6,padding:"4px",background:editableBg}}><StatusSelect value={v.revision1} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateField(v.id,"revision1",val)}/></div></td>
-            <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(0,130,250,0.04)"}}><div style={{border:editableBorder,borderRadius:6,padding:"4px",background:editableBg}}><StatusSelect value={v.revision2} options={CLIENT_REVISION_OPTIONS} colors={CLIENT_REVISION_COLORS} onChange={val=>updateField(v.id,"revision2",val)}/></div></td>
-            <td style={{padding:"8px 10px",borderBottom:"1px solid #1E2A3A",textAlign:"center",background:"rgba(16,185,129,0.04)"}}>
-              <input type="checkbox"
-                checked={!!v.posted}
-                onChange={e=>updateField(v.id,"posted",e.target.checked)}
-                title={v.posted?"Posted — click to unmark":"Mark as posted"}
-                style={{cursor:"pointer",accentColor:"#10B981",width:18,height:18}} />
-            </td>
-          </tr>);})}
-        </tbody>
-      </table></div>)}
-
-      <div style={{marginTop:40,textAlign:"center",color:"#3A4558",fontSize:11}}>
-        Powered by <span style={{color:"#0082FA",fontWeight:700}}>Viewix</span>
-      </div>
-    </div>
-  </div>);
+      )}
+    </>
+  );
 }
