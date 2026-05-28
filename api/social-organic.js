@@ -3291,6 +3291,211 @@ Return the JSON array now.`;
   return res.status(200).json({ success: true, formats: normalised });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// TAB 8 — FLAG CLAIMS FOR REVIEW
+// Two endpoints powering the producer-facing "scan for risky claims"
+// workflow on the Scripting page. Honest naming: this is claim
+// spotting, not fact verification — Claude is asked to surface
+// verifiable claims the producer should double-check before
+// publishing. No web/source retrieval here. Real fact-checking is a
+// future scope.
+//
+//   handleFlagClaimsForReview({ projectId })
+//     Walks every script row, asks Claude to identify verifiable
+//     claims per editable cell, persists results at
+//     /preproduction/socialOrganic/{id}/preproductionDoc/claimFlags
+//     keyed by rowIndex.
+//
+//   handleActionFlags({ projectId, flagIds: [{ rowIndex, flagId }, ...] })
+//     For each (rowIndex, flagId), rewrites ONLY the flagged cell to
+//     remove or generalise the claim. Other cells untouched
+//     (per item 14 spec: cell-targeted not row-targeted). Marks
+//     the flag actioned:true so re-firing skips it.
+// ═══════════════════════════════════════════════════════════════════
+async function handleFlagClaimsForReview(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+
+  const table = Array.isArray(project.preproductionDoc?.scriptTable) ? project.preproductionDoc.scriptTable : [];
+  if (table.length === 0) return res.status(400).json({ error: "Script table is empty — generate scripts first." });
+
+  // Claude system prompt for claim flagging. Honest about what this
+  // is: surface verifiable claims (stats, dates, named people /
+  // companies, quotes, product specs) so the producer can verify
+  // them. Confidence here means "confidence this is a verifiable
+  // claim that should be checked", not "confidence the claim is true".
+  const systemPrompt = `You scan one row of a Viewix social video script and identify every verifiable claim a producer should double-check before publishing. Return JSON only — no markdown, no preamble, no code fences.
+
+A verifiable claim is a specific statistic, named person, named company, date, quoted phrase, product specification, or factual assertion. Skip generic stylistic statements, opinions, hooks without specifics, and brand-voice copy.
+
+For each claim found, return: {
+  cell: one of "hook" | "textHook" | "visualHook" | "scriptNotes" | "props" | "caption",
+  claim: "the verbatim phrase from the script, trimmed",
+  confidence: 0.0–1.0 (how confident you are this is a verifiable claim, not a stylistic statement),
+  concern: "one short sentence explaining what the producer should check"
+}
+
+Return: { "flags": [...] } — empty array if nothing flagged. Never use em dashes; use commas or full stops.`;
+
+  // One Claude call per row. Runs in parallel; rows with no flags
+  // simply return [].
+  const runs = await Promise.all(table.map(async (row, rowIndex) => {
+    if (!row) return { rowIndex, flags: [] };
+    const cells = {
+      hook:        String(row.hook        || "").trim(),
+      textHook:    String(row.textHook    || "").trim(),
+      visualHook:  String(row.visualHook  || "").trim(),
+      scriptNotes: String(row.scriptNotes || "").trim(),
+      props:       String(row.props       || "").trim(),
+      caption:     String(row.caption     || "").trim(),
+    };
+    const hasAny = Object.values(cells).some(v => v.length > 0);
+    if (!hasAny) return { rowIndex, flags: [] };
+
+    const userMessage = `ROW ${rowIndex + 1}
+hook: ${cells.hook}
+textHook: ${cells.textHook}
+visualHook: ${cells.visualHook}
+scriptNotes: ${cells.scriptNotes}
+props: ${cells.props}
+caption: ${cells.caption}
+
+Scan every cell. Return JSON now.`;
+
+    let raw;
+    try {
+      raw = await callClaude({
+        model: "claude-sonnet-4-6",
+        systemPrompt,
+        userMessage,
+        maxTokens: 2000,
+        apiKey: ANTHROPIC_KEY,
+      });
+    } catch (e) {
+      return { rowIndex, error: `Claude failed: ${e.message}` };
+    }
+
+    let parsed;
+    try {
+      const cleaned = raw.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      return { rowIndex, error: `Invalid JSON: ${e.message}`, rawPreview: raw.slice(0, 200) };
+    }
+    const rawFlags = Array.isArray(parsed.flags) ? parsed.flags : [];
+    const flags = rawFlags.map((f, i) => ({
+      id: `flag_${Date.now()}_${rowIndex}_${i}`,
+      cell: typeof f?.cell === "string" ? f.cell : "scriptNotes",
+      claim: String(f?.claim || "").trim(),
+      confidence: typeof f?.confidence === "number" ? Math.max(0, Math.min(1, f.confidence)) : 0.5,
+      concern: String(f?.concern || "").trim(),
+      actioned: false,
+    })).filter(f => f.claim && f.concern);
+    return { rowIndex, flags };
+  }));
+
+  // Persist per-row. Skipped rows write `null` so the producer can
+  // see the absence in the rendered flag table.
+  const errors = [];
+  const summary = { rowsScanned: runs.length, totalFlags: 0, rowsWithErrors: 0 };
+  const flagsByRow = {};
+  for (const run of runs) {
+    if (run.error) {
+      summary.rowsWithErrors++;
+      errors.push({ rowIndex: run.rowIndex, error: run.error });
+      continue;
+    }
+    flagsByRow[run.rowIndex] = run.flags;
+    summary.totalFlags += run.flags.length;
+  }
+  await fbSet(`/preproduction/socialOrganic/${projectId}/preproductionDoc/claimFlags`, flagsByRow);
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
+
+  return res.status(200).json({ success: true, summary, errors });
+}
+
+async function handleActionFlags(req, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+
+  const { projectId, flagIds } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: "Missing projectId" });
+  if (!Array.isArray(flagIds) || flagIds.length === 0) {
+    return res.status(400).json({ error: "flagIds must be a non-empty array of { rowIndex, flagId }" });
+  }
+
+  const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+  if (!project) return res.status(404).json({ error: "Project not found" });
+  const table = Array.isArray(project.preproductionDoc?.scriptTable) ? project.preproductionDoc.scriptTable : [];
+  const allFlags = project.preproductionDoc?.claimFlags || {};
+
+  const sysPromptCellRewrite = `You rewrite a single cell of a Viewix social video script to remove or generalise a specific factual claim that the producer wants pulled. Return ONLY the rewritten cell value as plain text — no markdown, no preamble, no code fences. Keep the rest of the cell's content byte-for-byte where possible; only adjust what's necessary to remove the claim. Never use em dashes; use commas or full stops. Match the original cell's length and tone unless the claim is the entire cell, in which case rewrite the cell to a neutral equivalent.`;
+
+  let cellsRewritten = 0;
+  const cellErrors = [];
+  // Sequential rather than parallel — each rewrite mutates a single
+  // cell of the project doc, and parallel writes against the same
+  // row would race. Sequential keeps the writes deterministic and
+  // the cost is small (one Claude call per actioned flag).
+  for (const { rowIndex, flagId } of flagIds) {
+    if (typeof rowIndex !== "number" || !flagId) continue;
+    const row = table[rowIndex];
+    if (!row) { cellErrors.push({ rowIndex, flagId, error: "row not found" }); continue; }
+    const rowFlags = allFlags[rowIndex] || [];
+    const flag = rowFlags.find(f => f && f.id === flagId);
+    if (!flag) { cellErrors.push({ rowIndex, flagId, error: "flag not found" }); continue; }
+    if (flag.actioned) continue; // idempotent: skip already-actioned flags
+    const cellKey = flag.cell;
+    const currentValue = String(row[cellKey] || "").trim();
+    if (!currentValue) { cellErrors.push({ rowIndex, flagId, error: `cell ${cellKey} empty` }); continue; }
+
+    const userMessage = `CELL: ${cellKey}
+CLAIM TO REMOVE OR GENERALISE: """${flag.claim}"""
+WHY (producer concern): """${flag.concern}"""
+
+CURRENT CELL VALUE:
+"""
+${currentValue}
+"""
+
+Rewrite the cell value with the claim removed or generalised. Return only the rewritten cell value.`;
+
+    let rewritten;
+    try {
+      const raw = await callClaude({
+        model: "claude-sonnet-4-6",
+        systemPrompt: sysPromptCellRewrite,
+        userMessage,
+        maxTokens: 1200,
+        apiKey: ANTHROPIC_KEY,
+      });
+      rewritten = raw.trim();
+    } catch (e) {
+      cellErrors.push({ rowIndex, flagId, error: `Claude failed: ${e.message}` });
+      continue;
+    }
+
+    await fbSet(`/preproduction/socialOrganic/${projectId}/preproductionDoc/scriptTable/${rowIndex}/${cellKey}`, rewritten);
+    // Mark the flag actioned so re-firing skips it. We write the
+    // single index — replacing the whole array would race against
+    // any concurrent flagging pass.
+    const idx = rowFlags.findIndex(f => f && f.id === flagId);
+    if (idx >= 0) {
+      await fbSet(`/preproduction/socialOrganic/${projectId}/preproductionDoc/claimFlags/${rowIndex}/${idx}/actioned`, true);
+    }
+    cellsRewritten++;
+  }
+
+  await fbPatch(`/preproduction/socialOrganic/${projectId}`, { updatedAt: new Date().toISOString() });
+  return res.status(200).json({ success: true, cellsRewritten, cellErrors });
+}
+
 // ─── Dispatcher ───
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
@@ -3361,6 +3566,10 @@ export default async function handler(req, res) {
         return await handleRefreshScrapes(req, res);
       case "resetScrape":
         return await handleResetScrape(req, res);
+      case "flagClaimsForReview":
+        return await handleFlagClaimsForReview(req, res);
+      case "actionFlags":
+        return await handleActionFlags(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }

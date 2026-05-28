@@ -3028,6 +3028,14 @@ function ScriptStep({ project, onPatch }) {
         </SectionCard>
       )}
 
+      {/* Flag-claims-for-review panel. Below the script table + client
+          feedback summary. Producer clicks "Flag claims for review",
+          backend scans every cell of every row for verifiable claims
+          (stats, dates, named entities, quotes, specs). Returned flags
+          render in an inline table with a tickable "action" column;
+          clicking "Action flags" rewrites only the ticked cells. */}
+      <ClaimFlagsPanel project={project} />
+
       {rewriteTarget && !rewriteTarget.path.endsWith("._row") && (
         <CellRewriteModal
           target={rewriteTarget}
@@ -3046,6 +3054,174 @@ function ScriptStep({ project, onPatch }) {
         />
       )}
     </div>
+  );
+}
+
+// ─── Claim-flags panel ────────────────────────────────────────────
+// Below the script table on Tab 8. Two buttons + an inline flag table.
+//
+//   "Flag claims for review" → POST flagClaimsForReview, populates
+//     project.preproductionDoc.claimFlags { [rowIndex]: [{id, cell,
+//     claim, confidence, concern, actioned}, ...] }
+//
+//   "Action flags" → POST actionFlags with the ticked ids, rewrites
+//     ONLY the targeted cells (cell-targeted not row-targeted per
+//     item 14 spec). Every untouched cell stays byte-for-byte.
+//
+// Honest naming: this is claim spotting, not fact verification. The
+// AI doesn't retrieve sources — producer does the actual checking.
+function ClaimFlagsPanel({ project }) {
+  const flagsByRow = project?.preproductionDoc?.claimFlags || {};
+  const [scanning, setScanning] = useState(false);
+  const [actioning, setActioning] = useState(false);
+  const [scanError, setScanError] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  const [ticked, setTicked] = useState({}); // { "rowIndex:flagId": true }
+
+  const toggleTick = (rowIndex, flagId) => {
+    const k = `${rowIndex}:${flagId}`;
+    setTicked(p => {
+      const next = { ...p };
+      if (next[k]) delete next[k]; else next[k] = true;
+      return next;
+    });
+  };
+
+  const runScan = async () => {
+    setScanning(true);
+    setScanError(null);
+    try {
+      const r = await authFetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "flagClaimsForReview", projectId: project.id }),
+      });
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      // Firebase listener re-renders flag table when claimFlags lands.
+      // Clear any prior ticked state from a previous scan.
+      setTicked({});
+    } catch (e) {
+      setScanError(e.message);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const runAction = async () => {
+    const flagIds = Object.keys(ticked).map(k => {
+      const [rowIndex, flagId] = k.split(":");
+      return { rowIndex: parseInt(rowIndex, 10), flagId };
+    });
+    if (flagIds.length === 0) return;
+    setActioning(true);
+    setActionError(null);
+    try {
+      const r = await authFetch("/api/social-organic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "actionFlags", projectId: project.id, flagIds }),
+      });
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error((d.error || `HTTP ${r.status}`) + (d.detail ? ` — ${d.detail}` : ""));
+      setTicked({});
+    } catch (e) {
+      setActionError(e.message);
+    } finally {
+      setActioning(false);
+    }
+  };
+
+  // Flatten into a single list for rendering. Sorted by rowIndex then
+  // confidence DESC so the most-confidently-flagged claims come first
+  // within each row.
+  const flatFlags = Object.entries(flagsByRow)
+    .map(([rowIndex, flags]) => ({ rowIndex: parseInt(rowIndex, 10), flags: Array.isArray(flags) ? flags : [] }))
+    .sort((a, b) => a.rowIndex - b.rowIndex)
+    .flatMap(({ rowIndex, flags }) =>
+      flags
+        .filter(f => f && f.id)
+        .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+        .map(f => ({ ...f, rowIndex }))
+    );
+  const outstanding = flatFlags.filter(f => !f.actioned);
+  const tickedCount = Object.keys(ticked).length;
+
+  return (
+    <SectionCard title={`Flag claims for review${outstanding.length > 0 ? ` (${outstanding.length} open)` : ""}`}>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
+        Surface every verifiable claim (stats, dates, named people / companies, quotes, product specs) so you can double-check before publishing.
+        This is claim spotting, not fact verification — Claude doesn't retrieve sources, only flags what's worth checking.
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+        <button onClick={runScan} disabled={scanning} style={btnPrimary}>
+          {scanning ? "Scanning…" : flatFlags.length > 0 ? "Re-scan" : "Flag claims for review"}
+        </button>
+        {scanError && (
+          <span style={{ fontSize: 11, color: "#EF4444" }}>{scanError}</span>
+        )}
+      </div>
+      {flatFlags.length === 0 && !scanning && (
+        <div style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>
+          No flags yet. Run a scan once your script table is in a state you're confident about.
+        </div>
+      )}
+      {flatFlags.length > 0 && (
+        <>
+          <div style={{ overflowX: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "var(--bg)" }}>
+                  <th style={{ ...thStyle, width: 40 }}>#</th>
+                  <th style={{ ...thStyle, width: 90 }}>Cell</th>
+                  <th style={{ ...thStyle, minWidth: 220 }}>Claim</th>
+                  <th style={{ ...thStyle, width: 70 }}>Conf.</th>
+                  <th style={{ ...thStyle, minWidth: 200 }}>Why check</th>
+                  <th style={{ ...thStyle, width: 70, textAlign: "center" }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {flatFlags.map(f => {
+                  const isTicked = !!ticked[`${f.rowIndex}:${f.id}`];
+                  const dim = f.actioned;
+                  return (
+                    <tr key={f.id} style={{ borderTop: "1px solid var(--border)", opacity: dim ? 0.5 : 1 }}>
+                      <td style={tdStyle}>{f.rowIndex + 1}</td>
+                      <td style={{ ...tdStyle, fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>{f.cell}</td>
+                      <td style={tdStyle}>{f.claim}</td>
+                      <td style={{ ...tdStyle, fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>{(f.confidence ?? 0).toFixed(2)}</td>
+                      <td style={tdStyle}>{f.concern}</td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        {f.actioned ? (
+                          <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 600 }}>Done</span>
+                        ) : (
+                          <input type="checkbox" checked={isTicked} onChange={() => toggleTick(f.rowIndex, f.id)} style={{ cursor: "pointer", accentColor: "var(--accent)" }} />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button onClick={runAction} disabled={actioning || tickedCount === 0} style={{
+              ...btnPrimary,
+              opacity: (actioning || tickedCount === 0) ? 0.5 : 1,
+              cursor: (actioning || tickedCount === 0) ? "not-allowed" : "pointer",
+            }}>
+              {actioning ? "Rewriting…" : `Action flags${tickedCount > 0 ? ` (${tickedCount})` : ""}`}
+            </button>
+            {actionError && (
+              <span style={{ fontSize: 11, color: "#EF4444" }}>{actionError}</span>
+            )}
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>
+              Only the ticked cells are rewritten. Every other cell stays byte-for-byte.
+            </span>
+          </div>
+        </>
+      )}
+    </SectionCard>
   );
 }
 
