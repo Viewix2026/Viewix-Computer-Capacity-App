@@ -247,6 +247,16 @@ export function validateLinkUrl(url) {
   return trimmed;
 }
 
+// Regex helper for splitting paragraph text on http(s) URLs. Used by
+// the inline `renderTextWithLinks` helpers in components that render
+// producer-pasted paragraph copy (Scope of Work, Producer Comments).
+// Deliberately broader than validateLinkUrl() (which is HTTPS-only)
+// because http URLs are not uncommon for legacy or internal docs in
+// those surfaces. Structured-URL input fields keep the stricter
+// HTTPS-only policy.
+export const URL_SPLIT_RE = /(https?:\/\/[^\s<>"']+)/g;
+export const isHttpUrl = (s) => /^https?:\/\//.test(s);
+
 // Does the given URL belong to a scheduling provider known to allow iframe
 // embedding? We maintain a small allow-list rather than trying to iframe
 // any arbitrary URL, because many sites block framing via X-Frame-Options

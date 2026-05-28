@@ -37,7 +37,7 @@ import { ScheduleEditsModal } from "./ScheduleEditsModal";
 // that's the one field they own per spec.
 const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null });
 import { BTN } from "../config";
-import { fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
+import { fmtD, matchSherpaForName, resolveAccountForProject, URL_SPLIT_RE, isHttpUrl } from "../utils";
 import { fbSet, fbUpdate, getCurrentUserName, getCurrentUserEmail, authFetch } from "../firebase";
 import {
   CalendarSyncContext,
@@ -411,20 +411,68 @@ function InlineText({ value, onSave, placeholder, type = "text", displayValue, s
   );
 }
 
+// Split paragraph text on http(s) URLs and return a Fragment array
+// with clickable links. Used by InlineTextArea's read-mode preview and
+// by the Producer Comments rendering. Policy is wider than utils'
+// validateLinkUrl() (which is HTTPS-only) — producer-pasted paragraph
+// copy frequently includes http URLs for legacy/internal docs.
+function renderTextWithLinks(text) {
+  if (text == null || text === "") return null;
+  const parts = String(text).split(URL_SPLIT_RE);
+  return parts.map((part, i) =>
+    isHttpUrl(part)
+      ? <a key={i} href={part} target="_blank" rel="noopener noreferrer"
+           style={{ color: "#0082FA", textDecoration: "underline" }}
+           // Stop propagation so clicking a link inside an InlineTextArea
+           // preview doesn't also flip the parent into edit mode.
+           onClick={e => e.stopPropagation()}>{part}</a>
+      : <Fragment key={i}>{part}</Fragment>
+  );
+}
+
+// Click-to-edit textarea: when not focused, shows the saved value as
+// a styled div with clickable URLs. Click anywhere on the preview to
+// switch into edit mode (focused textarea). On blur, commits the
+// draft and returns to preview mode.
 function InlineTextArea({ value, onSave, placeholder, rows = 4 }) {
   const [draft, setDraft] = useState(value || "");
-  const [focused, setFocused] = useState(false);
-  useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
+  const [editing, setEditing] = useState(false);
+  const textareaRef = useRef(null);
+  useEffect(() => { if (!editing) setDraft(value || ""); }, [value, editing]);
+  // Auto-focus the textarea when entering edit mode so the producer
+  // doesn't have to click twice.
+  useEffect(() => {
+    if (editing && textareaRef.current) textareaRef.current.focus();
+  }, [editing]);
   const commit = () => {
     if ((draft || "") === (value || "")) return;
     onSave(draft);
   };
+  if (!editing) {
+    return (
+      <div
+        onClick={() => setEditing(true)}
+        title="Click to edit"
+        style={{
+          width: "100%", padding: "10px 12px", borderRadius: 6,
+          border: "1px solid var(--border)", background: "var(--input-bg)",
+          color: value ? "var(--fg)" : "var(--muted)",
+          fontSize: 13, lineHeight: 1.5, fontFamily: "inherit",
+          minHeight: rows * 22,
+          whiteSpace: "pre-wrap",
+          cursor: "text",
+          boxSizing: "border-box",
+        }}>
+        {value ? renderTextWithLinks(value) : (placeholder || "")}
+      </div>
+    );
+  }
   return (
     <textarea
+      ref={textareaRef}
       value={draft}
       onChange={e => setDraft(e.target.value)}
-      onFocus={() => setFocused(true)}
-      onBlur={() => { setFocused(false); commit(); }}
+      onBlur={() => { commit(); setEditing(false); }}
       placeholder={placeholder}
       rows={rows}
       style={{
@@ -432,6 +480,7 @@ function InlineTextArea({ value, onSave, placeholder, rows = 4 }) {
         border: "1px solid var(--border)", background: "var(--input-bg)",
         color: "var(--fg)", fontSize: 13, lineHeight: 1.5,
         fontFamily: "inherit", outline: "none", resize: "vertical",
+        boxSizing: "border-box",
       }}
     />
   );
@@ -2425,7 +2474,7 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
                 </span>
               </div>
               <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-                {e.text}
+                {renderTextWithLinks(e.text)}
               </div>
             </div>
           ))}
@@ -2613,12 +2662,29 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
         {/* Seven-status taxonomy — coloured dropdown to fit without overflow */}
         <div style={{ minWidth: 200, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
           <StatusCell value={status} onChange={(s) => { setStatus(s); persistField("status", s); }} />
-          {/* Commission / Move-to-Uncommissioned buttons removed —
-              producers flip a project between sections by dragging
-              its row across the section headers in the Projects
-              sub-tab table. See ProjectTable's onDragEnd. The
-              `commissioned` field still drives section grouping;
-              there's just no button for it any more. */}
+          {/* AM / PL chips — read-only mirror of ProjectRow's pattern
+              (Projects.jsx:1552). Producer edits the underlying values
+              in the Accounts tab; here they're shown so anyone opening
+              the project knows who's accountable without bouncing
+              tabs. Three-tier resolution via resolveAccountForProject
+              matches the rest of the dashboard. */}
+          {(() => {
+            const acct = resolveAccountForProject(project, accounts);
+            const am = acct?.accountManager || "";
+            const pl = acct?.projectLead || "";
+            return (
+              <div style={{ display: "flex", gap: 12, fontSize: 11, lineHeight: 1.25 }}>
+                <div title="Account manager">
+                  <span style={{ color: "var(--muted)", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 4 }}>AM</span>
+                  {am || <span style={{ color: "var(--muted)" }}>—</span>}
+                </div>
+                <div title="Project lead">
+                  <span style={{ color: "var(--muted)", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 4 }}>PL</span>
+                  {pl || <span style={{ color: "var(--muted)" }}>—</span>}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
