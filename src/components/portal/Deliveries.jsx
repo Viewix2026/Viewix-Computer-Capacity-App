@@ -257,7 +257,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
                     controls. Approving the video on the dropdowns
                     above implicitly approves THIS exact caption text. */}
                 {r.caption && (
-                  {/* Indent = grid left-padding (22) + # col (32) + first gap (10) = 64 */}
+                  // Indent = grid left-padding (22) + # col (32) + first gap (10) = 64
                   <div style={{ padding: "0 22px 14px 64px" }}>
                     <div style={{ padding: "10px 14px", borderRadius: 8, background: "var(--bg-2)", border: "1px solid var(--line)" }}>
                       <Label style={{ fontSize: 9, display: "block", marginBottom: 4 }}>Caption</Label>
