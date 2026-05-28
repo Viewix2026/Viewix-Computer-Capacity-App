@@ -52,7 +52,7 @@
 
 import { adminGet, adminPatch, adminSet } from "../_fb-admin.js";
 import { send, newCounters, postCronSummary, postCronPassError } from "../_email/send.js";
-import { getProjectContext, buildShootContext } from "../_email/getProjectContext.js";
+import { getProjectContext, buildShootContext, resolveProjectEmailRecipients } from "../_email/getProjectContext.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
 import { reconcileDeliveryStatus, maybePingAccountManager } from "../_deliveryReconcile.js";
 
@@ -143,7 +143,7 @@ async function postSchedulingAlert(line) {
 }
 
 // ─── Pass 1: shoot-tomorrow scan + same-day fallback ────────────
-async function passShootTomorrow({ projects, editors, today, tomorrow }) {
+async function passShootTomorrow({ projects, editors, accounts, today, tomorrow }) {
   const counters = newCounters();
   let evaluated = 0;
   let sameDaySkipped = 0;
@@ -163,7 +163,11 @@ async function passShootTomorrow({ projects, editors, today, tomorrow }) {
           counters.skipped_missing++;
           continue;
         }
-        const clientEmail = (project.clientContact?.email || "").trim();
+        // Resolve { to, cc } via the shared helper. Primary missing
+        // still skips (cc is additive, not a fallback). Falls back to
+        // legacy project.clientContact.email when the account record
+        // has no clientContact yet.
+        const { to: clientEmail, cc } = resolveProjectEmailRecipients(project, accounts);
         if (!clientEmail) {
           counters.skipped_missing++;
           continue;
@@ -190,6 +194,7 @@ async function passShootTomorrow({ projects, editors, today, tomorrow }) {
           template: "ShootTomorrow",
           idempotencyKey: `${projectId}/ShootTomorrow/${st.id}/${start}`,
           to: clientEmail,
+          cc,
           subject: SUBJECTS.ShootTomorrow(ctx.client.firstName),
           props: ctx,
           projectId,
@@ -287,7 +292,7 @@ async function passAutoProgress({ projects, today }) {
 // Reads (post-Pass-2) project state. Any project that now has at
 // least one edit-stage subtask in "inProgress" AND has no
 // /emailLog/{projectId}/InEditSuite log entry sends one email.
-async function passInEditSuite({ projects, editors }) {
+async function passInEditSuite({ projects, editors, accounts }) {
   const counters = newCounters();
 
   for (const [projectId, project] of Object.entries(projects)) {
@@ -304,7 +309,11 @@ async function passInEditSuite({ projects, editors }) {
     const prior = await adminGet(`/emailLog/${logKey}`).catch(() => null);
     if (prior) continue; // already sent OR previously suppressed (legacy or otherwise)
 
-    const clientEmail = (fresh.clientContact?.email || "").trim();
+    // Resolve { to, cc } via the shared helper. Falls back to legacy
+    // project.clientContact.email when the account record has no
+    // clientContact yet (backfill hasn't run, or this is a brand-new
+    // project the webhook just stamped).
+    const { to: clientEmail, cc } = resolveProjectEmailRecipients(fresh, accounts);
     if (!clientEmail) {
       counters.skipped_missing++;
       continue;
@@ -326,6 +335,7 @@ async function passInEditSuite({ projects, editors }) {
       template: "InEditSuite",
       idempotencyKey: logKey,
       to: clientEmail,
+      cc,
       subject: SUBJECTS.InEditSuite,
       props,
       projectId,
@@ -400,6 +410,17 @@ export default async function handler(req, res) {
     editors = [];
     console.warn("daily-09: /editors load failed:", e.message);
   }
+  // Pre-load /accounts so passShootTomorrow + passInEditSuite can
+  // resolve { to, cc } via resolveProjectEmailRecipients (canonical
+  // path: accounts[id].clientContact.email, fall back to legacy
+  // project.clientContact.email). One read, cached across the run.
+  let accounts;
+  try {
+    accounts = (await adminGet("/accounts")) || {};
+  } catch (e) {
+    accounts = {};
+    console.warn("daily-09: /accounts load failed:", e.message);
+  }
   let projects;
   try {
     projects = await readAllProjects();
@@ -413,7 +434,7 @@ export default async function handler(req, res) {
 
   // Pass 1 — Shoot Tomorrow + same-day fallback
   try {
-    const r = await passShootTomorrow({ projects, editors, today, tomorrow });
+    const r = await passShootTomorrow({ projects, editors, accounts, today, tomorrow });
     summary.pass1 = {
       evaluated: r.evaluated,
       sameDaySkipped: r.sameDaySkipped,
@@ -447,7 +468,7 @@ export default async function handler(req, res) {
 
   // Pass 3 — In Edit Suite (re-reads each project to pick up Pass 2 writes)
   try {
-    const r = await passInEditSuite({ projects, editors });
+    const r = await passInEditSuite({ projects, editors, accounts });
     summary.pass3 = { counters: r.counters };
     await postCronSummary("daily-09 · Pass 3 InEditSuite", r.counters);
   } catch (e) {

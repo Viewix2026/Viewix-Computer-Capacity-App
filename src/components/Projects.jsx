@@ -537,6 +537,81 @@ function DestinationsEditor({ value, onChange }) {
   );
 }
 
+// Additional Clients editor on the Project Details surface. Shows the
+// linked accounts (by companyName) as removable chips and a dropdown
+// of remaining accounts to add. Writes the array of accountIds via
+// onChange — the parent persists to /projects/{id}/links/additionalAccountIds.
+// Primary account (project.links.accountId) is excluded from both the
+// chip list and the dropdown so producers can't link the project to
+// its own primary as a "secondary".
+function AdditionalClientsEditor({ project, accounts, onChange }) {
+  const links = project?.links || {};
+  const primaryId = links.accountId || null;
+  const additionalIds = Array.isArray(links.additionalAccountIds) ? links.additionalAccountIds : [];
+  const accountsMap = accounts || {};
+  const allAccounts = Object.values(accountsMap).filter(a => a && a.id);
+
+  const nameFor = (id) => accountsMap[id]?.companyName || "(unknown account)";
+  const remove = (id) => onChange(additionalIds.filter(x => x !== id));
+  const add = (id) => {
+    if (!id) return;
+    if (id === primaryId) return;
+    if (additionalIds.includes(id)) return;
+    onChange([...additionalIds, id]);
+  };
+
+  // Build the add-dropdown candidate list: every account NOT already
+  // the primary and NOT already in additionalIds, sorted by companyName
+  // so producers can scan it without thinking about order.
+  const candidates = allAccounts
+    .filter(a => a.id !== primaryId && !additionalIds.includes(a.id))
+    .sort((a, b) => (a.companyName || "").toLowerCase().localeCompare((b.companyName || "").toLowerCase()));
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+        {additionalIds.map(id => {
+          const acct = accountsMap[id];
+          const missing = !acct;
+          return (
+            <button key={id} onClick={() => remove(id)} title="Click to remove"
+              style={{
+                padding: "3px 8px 3px 10px", borderRadius: 4,
+                background: "var(--bg)",
+                border: `1px solid ${missing ? "#EF4444" : "var(--border)"}`,
+                color: missing ? "#EF4444" : "var(--accent)",
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+                fontFamily: "inherit",
+                display: "inline-flex", alignItems: "center", gap: 6,
+              }}>
+              {missing ? `(missing) ${id}` : nameFor(id)}
+              <span style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1 }}>×</span>
+            </button>
+          );
+        })}
+        {additionalIds.length === 0 && (
+          <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None linked</span>
+        )}
+      </div>
+      <select
+        value=""
+        onChange={e => { add(e.target.value); e.target.value = ""; }}
+        disabled={candidates.length === 0}
+        style={{
+          padding: "7px 10px", borderRadius: 6,
+          border: "1px solid var(--border)", background: "var(--input-bg)",
+          color: candidates.length === 0 ? "var(--muted)" : "var(--fg)",
+          fontSize: 12, fontFamily: "inherit", outline: "none", width: "100%",
+        }}>
+        <option value="" disabled>{candidates.length === 0 ? "No accounts left to add" : "Add an account…"}</option>
+        {candidates.map(a => (
+          <option key={a.id} value={a.id}>{a.companyName || "(no name)"}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 // Variant of StatusPill that takes onClick + disabled. Disabled looks
 // dimmed and shows a "not yet" tooltip; click takes you to the matching
 // record via hash routing.
@@ -2722,6 +2797,23 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 
       <FieldCard label="Destinations" hint="Press Enter to add. Click a chip to remove.">
         <DestinationsEditor value={dests} onChange={(next) => persistField("destinations", next)} />
+      </FieldCard>
+
+      {/* Additional Clients — secondary accounts linked to this project.
+          The primary client (project.clientName / project.links.accountId)
+          stays the source of truth for every other surface (Deliveries
+          pill, Slack, the Projects table). The additionalAccountIds list
+          drives email cc recipients only — every project-touchpoint
+          email (Confirmation / ShootTomorrow / InEditSuite /
+          ReadyForReview) ccs each linked account's clientContact email.
+          Edit clientContact for each additional account in the Accounts
+          tab. */}
+      <FieldCard label="Additional Clients" hint="Linked accounts whose client contact also receives email touchpoints on this project. Edit each account's contact in the Accounts tab.">
+        <AdditionalClientsEditor
+          project={project}
+          accounts={accounts}
+          onChange={(next) => persistField("links", { ...(project.links || {}), additionalAccountIds: next })}
+        />
       </FieldCard>
 
       <FieldCard label="Kick Off" hint="YouTube URL of the kick-off recording, OR a Google Doc URL with a written brief. Editors see a glowing pill on each video subtask that opens the right one inline (🎬 for video, 📄 for doc). For Google Docs, set sharing to at least 'Anyone with the link can view' so the embed loads.">

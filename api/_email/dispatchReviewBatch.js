@@ -35,7 +35,7 @@
 //     IDs DID match.
 
 import { getAdmin, adminGet } from "../_fb-admin.js";
-import { getProjectContext, resolveAccountManagerChip } from "./getProjectContext.js";
+import { getProjectContext, resolveAccountManagerChip, resolveProjectEmailRecipients } from "./getProjectContext.js";
 import { send } from "./send.js";
 
 function makeBatchId() {
@@ -181,7 +181,17 @@ export async function dispatchReviewBatch({
   // problem (one CLI invocation = one send by definition).
   const batchId = callerBatchId || makeBatchId();
   const idempotencyKey = `${projectId}/ReadyForReview/${batchId}`;
-  const to = recipientOverride || ctx.client.email;
+  // Resolve additional client cc emails via the shared helper. Use
+  // the canonical account.clientContact path with fallback to legacy
+  // project.clientContact, and add any additionalAccountIds' contacts
+  // as cc. Skip cc resolution entirely when the caller passed a
+  // recipientOverride (manual sends from a CLI / replay shouldn't
+  // suddenly fan out to additional clients).
+  const recipients = recipientOverride
+    ? { to: recipientOverride, cc: null }
+    : resolveProjectEmailRecipients(ctx.project, accounts);
+  const to = recipients.to || ctx.client.email; // last-resort fallback
+  const cc = recipients.cc;
   const subject = subjectOverride || makeSubject({ count: videos.length });
 
   const props = {
@@ -203,6 +213,7 @@ export async function dispatchReviewBatch({
     template: "ReadyForReview",
     idempotencyKey,
     to,
+    cc,
     subject,
     props,
     projectId,
