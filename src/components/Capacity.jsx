@@ -409,7 +409,7 @@ export function Capacity({
                   <th style={{ ...TH, width: 40 }}></th>
                 </tr></thead>
                 <tbody>
-                  {editors.map(ed => {
+                  {[...editors].sort((a,b)=>(a?.name||"").toLowerCase().localeCompare((b?.name||"").toLowerCase())).map(ed => {
                     const dn = DK.filter(d => ed.defaultDays[d]).length;
                     const isE = rosterEditId === ed.id;
                     const edRole = ed.role || "editor";
