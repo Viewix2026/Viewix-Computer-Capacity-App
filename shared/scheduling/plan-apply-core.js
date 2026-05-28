@@ -146,6 +146,11 @@ export function reconcilePlan({
       updates[`${path}/_videoIndex`] = ps._videoIndex ?? ps.videoIndex ?? null;
       updates[`${path}/_planGroupId`] = planGroupId;
       updates[`${path}/updatedAt`] = nowIso;
+      // Phase 6 — persist videoId + creativeFormat when the planner
+      // surfaced them. Only write when present so we never blank an
+      // existing field (idempotent overwrite-with-same-value is fine).
+      if (ps.videoId) updates[`${path}/videoId`] = ps.videoId;
+      if (ps.creativeFormat) updates[`${path}/creativeFormat`] = ps.creativeFormat;
       written.push({ id: match.id, action: "update" });
       continue;
     }
@@ -153,7 +158,7 @@ export function reconcilePlan({
     // No match → create.
     const id = mkId(ps.stage, ps.videoIndex ?? "x");
     order += 1;
-    updates[`/projects/${projectId}/subtasks/${id}`] = {
+    const newRow = {
       id,
       name: ps.name,
       status: "scheduled",
@@ -171,6 +176,10 @@ export function reconcilePlan({
       createdAt: nowIso,
       updatedAt: nowIso,
     };
+    // Phase 6 — stamp canonical videoId + creativeFormat when surfaced.
+    if (ps.videoId) newRow.videoId = ps.videoId;
+    if (ps.creativeFormat) newRow.creativeFormat = ps.creativeFormat;
+    updates[`/projects/${projectId}/subtasks/${id}`] = newRow;
     written.push({ id, action: "create" });
   }
 

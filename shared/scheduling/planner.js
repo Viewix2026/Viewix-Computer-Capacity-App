@@ -108,6 +108,19 @@ export function buildVideoUnits(project) {
     if (stage === "edit" && !unit.edit) unit.edit = withId;
     else if (stage === "revisions" && !unit.revisions) unit.revisions = withId;
   }
+  // Phase 6 — surface each unit's creativeFormat so planEdits can bias
+  // toward keeping same-format videos on one editor (format grouping).
+  // Source: the existing edit subtask's creativeFormat (Meta Ads master
+  // seeding stamps it; SO push-to-runsheet stamps it). Falls back to
+  // null when there's no existing edit yet (the planner still works,
+  // just without the format-grouping bonus for that unit).
+  for (const unit of units) {
+    unit.creativeFormat = unit.edit?.creativeFormat || null;
+    // videoId is the canonical identity (delivery-owned). Carrying it
+    // here means proposed writes can stamp it on newly-created subtasks
+    // too — closes the _videoIndex<->videoId gap Codex flagged in Phase 6.
+    unit.videoId = unit.edit?.videoId || null;
+  }
   return units;
 }
 
@@ -289,6 +302,14 @@ export function planEdits({
 
   const windowEnd = deadline && deadline < planWindow.end ? deadline : planWindow.end;
 
+  // Phase 6 — format-grouping bias (soft preference, NOT a hard rule).
+  // Track which editor we've picked for each creativeFormat in this plan
+  // run; subsequent units sharing that format prefer the same editor so
+  // the editor stays in flow for one creative type. Falls back to the
+  // 3-tier tiebreak when no format match is available — earliest-finish
+  // still wins if a "format-matched" editor genuinely can't do it sooner.
+  const pickedByFormat = new Map(); // creativeFormat -> editorId
+
   for (const unit of videoUnits) {
     if (!unitNeedsEdit(unit)) continue;
 
@@ -312,7 +333,20 @@ export function planEdits({
       continue;
     }
 
+    const fmt = unit.creativeFormat || null;
+    const preferredId = fmt ? pickedByFormat.get(fmt) : null;
+
     cands.sort((a, b) => {
+      // Tier 0 (NEW, Phase 6) — same-format continuity: if we already
+      // picked an editor for this creativeFormat earlier in the run,
+      // prefer them as long as they're a candidate. Stays a soft bias:
+      // earliest-finish (tier 2) can still override if the matched
+      // editor has zero free hours in the window.
+      if (preferredId) {
+        const af = a.ed.id === preferredId ? 0 : 1;
+        const bf = b.ed.id === preferredId ? 0 : 1;
+        if (af !== bf) return af - bf;
+      }
       const ar = requested.has(a.ed.id) ? 0 : 1;
       const br = requested.has(b.ed.id) ? 0 : 1;
       if (ar !== br) return ar - br;                       // tier 1
@@ -323,9 +357,10 @@ export function planEdits({
 
     const pick = cands[0];
     grid[pick.ed.id][pick.earliest] = (grid[pick.ed.id][pick.earliest] || 0) - estHours;
+    if (fmt && !pickedByFormat.has(fmt)) pickedByFormat.set(fmt, pick.ed.id);
 
     const existing = unit.edit;
-    proposed.push({
+    const proposedRow = {
       mode: existing ? "update" : "create",
       stage: "edit",
       videoIndex: unit.index,
@@ -341,7 +376,13 @@ export function planEdits({
       assigneeId: pick.ed.id,
       id: existing ? existing._id : idFor("edit", unit.index),
       _estHours: estHours,
-    });
+    };
+    // Phase 6 — carry videoId + creativeFormat through proposed writes
+    // so the reconcile layer can persist them on newly-created subtasks
+    // (closes the _videoIndex<->videoId gap Codex called out).
+    if (unit.videoId) proposedRow.videoId = unit.videoId;
+    if (fmt) proposedRow.creativeFormat = fmt;
+    proposed.push(proposedRow);
   }
   return { proposed, violations };
 }

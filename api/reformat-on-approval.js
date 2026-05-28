@@ -81,7 +81,12 @@ export default async function handler(req, res) {
   const existingReformat = subs.find(s => s && s.videoId === videoId && s.reformatOfSubtaskId);
   if (existingReformat) return res.status(200).json({ ok: true, skipped: "reformat_exists" });
 
-  // Schedule: master's editor on their next working day (simple version).
+  // Schedule: master's editor on their next working day, BUT stack all
+  // of this project's reformats onto one editor's day (Phase 6 design
+  // — see docs/phase6-auto-scheduler-design.md). If another reformat on
+  // this project is already scheduled and assigned to the same editor,
+  // we land on that same day so the editor flows through every reformat
+  // in one sitting instead of context-switching across days.
   const editorId = (Array.isArray(master.assigneeIds) && master.assigneeIds[0]) || master.assigneeId || null;
   let startDate = null;
   let assigneeIds = [];
@@ -92,7 +97,18 @@ export default async function handler(req, res) {
       const editor = editors.find(e => e && e.id === editorId);
       const weekData = (await adminGet("/weekData")) || {};
       if (editor) {
-        startDate = nextWorkingDayFor(editor, todaySydney(), weekData);
+        // Look for an existing reformat in THIS project also assigned to
+        // the master's editor — stack onto the latest one's date.
+        const sameEditorReformats = subs.filter(s =>
+          s && s.reformatOfSubtaskId && s.startDate &&
+          ((Array.isArray(s.assigneeIds) && s.assigneeIds.includes(editorId)) || s.assigneeId === editorId)
+        );
+        if (sameEditorReformats.length > 0) {
+          sameEditorReformats.sort((a, b) => (a.startDate < b.startDate ? -1 : 1));
+          startDate = sameEditorReformats[sameEditorReformats.length - 1].startDate;
+        } else {
+          startDate = nextWorkingDayFor(editor, todaySydney(), weekData);
+        }
         assigneeIds = [editorId];
       }
     } catch (e) {
