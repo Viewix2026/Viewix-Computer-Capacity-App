@@ -201,7 +201,7 @@ export function Deliveries({ deliveries, accountManager, narrow, writeEnabled = 
               <div key={r.id} style={{ borderTop: "1px solid var(--line)", background: r.viewixStatus === "Ready for Review" ? "rgba(0,130,250,0.04)" : "transparent" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "40px minmax(0,1fr) 80px 170px 170px 170px 80px", alignItems: "center", gap: 16, padding: "14px 22px" }}>
                   <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>{String(r.n).padStart(2, "0")}</span>
-                  <div style={{ minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 500, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</div></div>
+                  <div style={{ minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 500, color: "var(--text)", lineHeight: 1.4, wordBreak: "break-word" }}>{r.title}</div></div>
                   {r.link
                     ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--accent)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>View <Icon.external /></a>
                     : <span style={{ color: "var(--text-3)" }}>—</span>}
