@@ -11,9 +11,15 @@ const VSTATUS_TONE = {
 };
 
 function RevisionSelect({ value, editable, onChange }) {
-  const tone = value === "Approved" ? { fg: "var(--ok)", bd: "rgba(27,155,110,0.34)", bg: "rgba(27,155,110,0.08)" }
-    : value === "Need Revisions" ? { fg: "var(--danger)", bd: "var(--orange-line)", bg: "var(--orange-soft)" }
-      : { fg: "var(--text-3)", bd: editable ? "var(--accent-line)" : "var(--line-2)", bg: editable ? "var(--accent-soft)" : "transparent" };
+  // Border = editability (ALWAYS blue when editable, regardless of value, so
+  //   the "blue border = you can edit this" legend stays true after the
+  //   client makes a selection).
+  // Background + text = current status (Approved=green tint, Need
+  //   Revisions=orange tint, Pending=blue tint).
+  const statusTone = value === "Approved" ? { fg: "var(--ok)", bg: "rgba(27,155,110,0.08)" }
+    : value === "Need Revisions" ? { fg: "var(--danger)", bg: "var(--orange-soft)" }
+      : { fg: "var(--text-3)", bg: editable ? "var(--accent-soft)" : "transparent" };
+  const borderColor = editable ? "var(--accent-line)" : "var(--line-2)";
   return (
     <select
       value={value || ""}
@@ -22,7 +28,7 @@ function RevisionSelect({ value, editable, onChange }) {
       className="mono"
       style={{
         minWidth: 150, padding: "8px 10px", borderRadius: 8,
-        border: `1.5px solid ${tone.bd}`, background: tone.bg, color: tone.fg,
+        border: `1.5px solid ${borderColor}`, background: statusTone.bg, color: statusTone.fg,
         fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600,
         cursor: editable ? "pointer" : "not-allowed", appearance: "auto",
       }}
@@ -32,11 +38,30 @@ function RevisionSelect({ value, editable, onChange }) {
   );
 }
 
-const PostedBox = ({ checked, onChange, disabled }) => (
-  <input type="checkbox" checked={!!checked} disabled={disabled} onChange={e => onChange(e.target.checked)}
-    title={disabled ? "Finishing sign-in…" : checked ? "Posted — click to unmark" : "Mark as posted"}
-    style={{ cursor: disabled ? "not-allowed" : "pointer", accentColor: "var(--accent)", width: 18, height: 18, opacity: disabled ? 0.5 : 1 }} />
-);
+// Posted now wraps the checkbox in a clickable cell with the same blue
+// border + blue-soft background as the empty revision dropdowns, so the
+// "blue border = editable" rule holds for all three editable columns
+// (R1, R2, Posted). When checked, the cell tints green to match the
+// "Approved" visual language; the checkmark itself stays brand blue.
+const PostedBox = ({ checked, onChange, disabled }) => {
+  const editable = !disabled;
+  return (
+    <label
+      title={disabled ? "Finishing sign-in…" : checked ? "Posted — click to unmark" : "Mark as posted"}
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: 44, height: 32, borderRadius: 8,
+        border: `1.5px solid ${editable ? "var(--accent-line)" : "var(--line-2)"}`,
+        background: checked ? "rgba(27,155,110,0.10)" : (editable ? "var(--accent-soft)" : "transparent"),
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <input type="checkbox" checked={!!checked} disabled={disabled} onChange={e => onChange(e.target.checked)}
+        style={{ cursor: disabled ? "not-allowed" : "pointer", accentColor: "var(--accent)", width: 18, height: 18, margin: 0 }} />
+    </label>
+  );
+};
 
 function HowTo({ narrow }) {
   return (
