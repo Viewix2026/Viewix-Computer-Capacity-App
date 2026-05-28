@@ -1,5 +1,8 @@
-// Dependency-free pin for the PUBLIC delivery-AM endpoint.
-// Run: node api/public/delivery-am.test.mjs   (or: npm run test:delivery-am)
+// Contract pin for the PUBLIC delivery-AM endpoint.
+// Run: npm run test:delivery-am   (node api/public/delivery-am.test.mjs)
+// Needs deps installed — importing the handler pulls in firebase-admin
+// transitively (via _fb-admin.js), even though every assertion below
+// exercises only the DB-free pure helpers + pre-DB handler guards.
 //
 // This endpoint is the only NEW public exposure in the delivery-surface
 // unification, so its contract is pinned hard: only the `accountManager`
