@@ -123,6 +123,16 @@ export function fbUpdate(p, v) {
   if (db) db.ref(p).update(v).catch(e => console.error("Firebase update failed", p, e));
 }
 
+// One-shot read of the *current* server value at a path (null if absent).
+// Use when a write must be computed from live server state rather than a
+// possibly-stale React snapshot — e.g. merging two account records, where
+// a concurrent webhook / Attio patch could otherwise be clobbered.
+export async function fbGet(p) {
+  if (!db) return null;
+  const snap = await db.ref(p).once("value");
+  return snap.val();
+}
+
 export function isPermissionDenied(err) {
   if (!err) return false;
   const code = String(err.code || "").toUpperCase();

@@ -351,18 +351,32 @@ async function handlePlanCancel({ payload, botToken }) {
   const shortId = payload.actions?.[0]?.value;
   const ch = payload.channel?.id;
   const ts = payload.message?.ts;
+
+  // Record the cancellation as the source of truth. If this write
+  // fails we must NOT tell the user it succeeded — the proposal would
+  // still be live and could be actioned later. Surface the failure so
+  // they can retry instead.
+  let cancelled = false;
   if (shortId) {
-    const { db } = getAdmin();
-    await db.ref(`/scheduling/proposedPlans/${shortId}`).update({
-      status: "cancelled", cancelledAt: Date.now(), cancelledBy: payload.user?.id || null,
-    }).catch(() => {});
+    try {
+      const { db } = getAdmin();
+      await db.ref(`/scheduling/proposedPlans/${shortId}`).update({
+        status: "cancelled", cancelledAt: Date.now(), cancelledBy: payload.user?.id || null,
+      });
+      cancelled = true;
+    } catch (e) {
+      console.error("handlePlanCancel: failed to record cancellation:", e.message);
+    }
   }
+
   if (ch && ts) {
+    const text = cancelled
+      ? ":x: Plan cancelled — no schedule changes were applied."
+      : ":warning: Couldn't record the cancellation — the plan is still live. Try again.";
     await slackUpdateMessage({
       channel: ch, ts,
-      blocks: [{ type: "section", text: { type: "mrkdwn",
-        text: ":x: Plan cancelled — nothing written." } }],
-      text: "Plan cancelled",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text } }],
+      text: cancelled ? "Plan cancelled" : "Cancel failed",
       botToken,
     });
   }
