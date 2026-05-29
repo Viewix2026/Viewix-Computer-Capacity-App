@@ -18,7 +18,7 @@
 // Consumers: BrandTruthStep (Tab 1), ScriptStep (Tab 7).
 
 import { useState } from "react";
-import { fbSet, fbSetAsync } from "../../firebase";
+import { fbSet, fbSetAsync, authFetch } from "../../firebase";
 
 const inputSt = {
   padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)",
@@ -122,7 +122,7 @@ export function CellRewriteModal({
     setWorking(true);
     setError(null);
     try {
-      const r = await fetch(apiEndpoint, {
+      const r = await authFetch(apiEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

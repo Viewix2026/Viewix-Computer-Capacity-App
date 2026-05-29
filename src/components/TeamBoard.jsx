@@ -39,36 +39,43 @@ import {
 // is this in) rather than STATUS (how is the work going). Stage gives
 // a much more useful at-a-glance read of where the team's effort is
 // concentrated — "lots of red bars next week" = lots of shoot days.
+// NOTE: duplicated from shared/scheduling/stages.js to avoid pulling the
+// shared module's full surface into the Team Board bundle. Keep in sync
+// with STAGE_OPTIONS over there. (A future refactor could just import.)
 const STAGE_COLOURS = {
-  preProduction: "#8B5CF6",
-  shoot:         "#DC2626",
-  revisions:     "#F97316",
-  edit:          "#0082FA",
-  hold:          "#EAB308",
+  preProduction:   "#8B5CF6",
+  shoot:           "#DC2626",
+  selectsTimeline: "#0EA5E9",
+  revisions:       "#F97316",
+  edit:            "#0082FA",
+  hold:            "#EAB308",
 };
-// Mirrors inferStage in Projects.jsx — falls back to a name-based guess
-// when the stage field is missing (legacy data) or invalid. Keeps the
-// Team Board readable for projects that haven't been touched since the
-// stage feature shipped.
+// Mirrors inferStage in shared/scheduling/stages.js — falls back to a
+// name-based guess when the stage field is missing (legacy data) or
+// invalid. Keeps the Team Board readable for projects that haven't been
+// touched since each stage shipped.
 const stageOf = (st) => {
   if (st?.stage && STAGE_COLOURS[st.stage]) return st.stage;
   const name = (st?.name || "").toLowerCase();
   if (name.includes("pre production") || name.includes("preproduction") || name.includes("pre-production")) return "preProduction";
   if (name.includes("revision")) return "revisions";
   if (name.includes("shoot")) return "shoot";
+  if (name.includes("timeline")) return "selectsTimeline";
   if (name.includes("edit")) return "edit";
   return "preProduction";
 };
 const colourFor = (subtask) => STAGE_COLOURS[stageOf(subtask)];
 
-// Ordered list for the legend strip — same order as the dropdown in
-// Projects.jsx so producers see the same sequence in both places.
+// Ordered list for the legend strip — same order as STAGE_OPTIONS in
+// shared/scheduling/stages.js so producers see a consistent sequence
+// across the Projects dropdown, the Team Board legend, and the brain.
 const STAGE_LEGEND = [
-  { key: "preProduction", label: "Pre Production" },
-  { key: "shoot",         label: "Shoot" },
-  { key: "revisions",     label: "Revisions" },
-  { key: "edit",          label: "Edit" },
-  { key: "hold",          label: "Hold" },
+  { key: "preProduction",   label: "Pre Production" },
+  { key: "shoot",           label: "Shoot" },
+  { key: "selectsTimeline", label: "Selects Timeline" },
+  { key: "revisions",       label: "Revisions" },
+  { key: "edit",            label: "Edit" },
+  { key: "hold",            label: "Hold" },
 ];
 
 // ─── Date helpers (local — too narrow for src/utils.js) ────────────
@@ -503,7 +510,13 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
   // → red priority badge. The two are independent and can co-occur.
   const overdue = !!subtask.isOverdue;
   const behind = isBehindScheduleFlagged(subtask);
-  const showBadge = reorderable || behind;
+  const done = subtask.status === "done";
+  // A finished bar always shows a static green tick in the badge slot
+  // (item 3) so the producer can see at a glance which work is done.
+  // Otherwise the badge only appears to rank the day (≥2 same-day tasks)
+  // or to flag a behind-schedule edit. A done bar is never a drag grip.
+  const showBadge = reorderable || behind || done;
+  const badgeDraggable = reorderable && !done;
   const span = (subtask.startDate && subtask.endDate)
     ? Math.max(1, daysBetween(subtask.startDate, subtask.endDate) + 1)
     : 1;
@@ -563,34 +576,40 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
       {showBadge && (
         <div
           // Draggable reorder grip only when there are siblings to
-          // reorder; a lone behind-schedule edit shows a static red
-          // badge (no drag).
-          ref={reorderable ? reorder.setNodeRef : undefined}
-          {...(reorderable ? reorder.listeners : {})}
-          {...(reorderable ? reorder.attributes : {})}
+          // reorder AND the task isn't done; a lone behind-schedule edit
+          // or a finished bar shows a static badge (no drag).
+          ref={badgeDraggable ? reorder.setNodeRef : undefined}
+          {...(badgeDraggable ? reorder.listeners : {})}
+          {...(badgeDraggable ? reorder.attributes : {})}
           onClick={e => e.stopPropagation()}
-          title={behind
+          title={done
+            ? "Done"
+            : behind
             ? "Behind schedule — this edit was due before and rolled to its editor's next working day"
             : "Drag to reorder this day's tasks for this editor"}
           style={{
             position: "absolute", top: 4, left: 6,
             width: 18, height: 18, borderRadius: "50%",
-            // Red = behind schedule; otherwise the stage colour.
-            background: behind ? "#EF4444" : colour,
+            // Green = done; red = behind schedule; otherwise stage colour.
+            background: done ? "#10B981" : behind ? "#EF4444" : colour,
             color: "#fff",
             fontSize: 10, fontWeight: 800, lineHeight: 1,
             display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: reorderable ? (reorder.isDragging ? "grabbing" : "grab") : "default",
-            boxShadow: behind ? "0 0 0 2px rgba(239,68,68,0.35), 0 1px 3px rgba(0,0,0,0.45)" : "0 1px 3px rgba(0,0,0,0.45)",
+            cursor: badgeDraggable ? (reorder.isDragging ? "grabbing" : "grab") : "default",
+            boxShadow: done
+              ? "0 0 0 2px rgba(16,185,129,0.35), 0 1px 3px rgba(0,0,0,0.45)"
+              : behind
+              ? "0 0 0 2px rgba(239,68,68,0.35), 0 1px 3px rgba(0,0,0,0.45)"
+              : "0 1px 3px rgba(0,0,0,0.45)",
             // Lift + follow the cursor while dragging so the gesture
             // reads as "moving this task"; the target bar also rings.
-            transform: reorderable && reorder.transform
+            transform: badgeDraggable && reorder.transform
               ? `translate3d(${reorder.transform.x}px, ${reorder.transform.y}px, 0)`
               : undefined,
-            zIndex: reorderable && reorder.isDragging ? 1000 : 3,
-            opacity: reorderable && reorder.isDragging ? 0.9 : 1,
+            zIndex: badgeDraggable && reorder.isDragging ? 1000 : 3,
+            opacity: badgeDraggable && reorder.isDragging ? 0.9 : 1,
           }}
-        >{dayRank}</div>
+        >{done ? "✓" : dayRank}</div>
       )}
       {/* Drag-handle resting cue — small 2-row × 2-col dot grid in
           the top-right corner so producers see the bar is grabbable
@@ -2264,6 +2283,7 @@ function PoolCard({ subtask, editors, onClick }) {
     ? names.join(", ")
     : `${names[0]}, ${names[1]} +${names.length - 2}`;
   const isUnassigned = names.length === 0;
+  const done = subtask.status === "done";
   return (
     <div
       ref={setNodeRef}
@@ -2274,7 +2294,9 @@ function PoolCard({ subtask, editors, onClick }) {
       style={{
         flexShrink: 0,
         width: 220,
-        padding: "8px 10px",
+        // Left padding widens when a done-tick is shown so the client
+        // name doesn't sit under the badge.
+        padding: done ? "8px 10px 8px 30px" : "8px 10px",
         borderRadius: 6,
         background: `${colour}38`,
         borderLeft: `3px solid ${colour}`,
@@ -2285,7 +2307,22 @@ function PoolCard({ subtask, editors, onClick }) {
         transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
         userSelect: "none",
         boxSizing: "border-box",
+        position: "relative",
       }}>
+      {/* A finished card sitting in the pool shows the same static green
+          tick as a done bar on the grid, so producers don't waste time
+          scheduling already-completed work back onto the board. */}
+      {done && (
+        <div style={{
+          position: "absolute", top: 6, left: 6,
+          width: 18, height: 18, borderRadius: "50%",
+          background: "#10B981", color: "#fff",
+          fontSize: 10, fontWeight: 800, lineHeight: 1,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: "0 0 0 2px rgba(16,185,129,0.35), 0 1px 3px rgba(0,0,0,0.45)",
+          pointerEvents: "none",
+        }}>✓</div>
+      )}
       <div style={{
         fontWeight: 700, lineHeight: 1.3,
         whiteSpace: "normal", wordBreak: "break-word", marginBottom: 2,

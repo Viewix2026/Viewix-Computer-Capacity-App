@@ -107,15 +107,17 @@ async function slackLog(line) {
 // can eyeball the actual email body without it leaving the
 // boundary. Truncated to 2900 chars (Slack's mrkdwn block limit) so
 // long emails don't 400 the post.
-async function slackDryRunPreview({ template, key, to, subject, html, projectId }) {
+async function slackDryRunPreview({ template, key, to, cc, subject, html, projectId }) {
   const url = process.env.SLACK_PROJECT_LEADS_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL;
   if (!url) return;
   const preview = String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1800);
+  const ccLine = Array.isArray(cc) && cc.length > 0 ? `> cc: ${cc.join(", ")}\n` : "";
   const text =
     `:test_tube: *DRY-RUN email* — ${template}\n` +
     `> key: \`${key}\`\n` +
     `> projectId: \`${projectId || "—"}\`\n` +
     `> to: ${to}\n` +
+    ccLine +
     `> subject: ${subject}\n\n` +
     `\`\`\`${preview}\`\`\``;
   try {
@@ -192,7 +194,7 @@ async function writeLog(key, payload) {
  *                                         Resend SDK in 6.x.
  * @returns {Promise<{state:'sent'|'dryRun'|'skipped'|'failed'|'noop', reason?:string, messageId?:string}>}
  */
-export async function send({ template, idempotencyKey, to, subject, props, projectId, counters, sendTimeoutMs }) {
+export async function send({ template, idempotencyKey, to, cc, subject, props, projectId, counters, sendTimeoutMs }) {
   const c = counters; // optional — when null, counters are not bumped
 
   // Kill switch first. Distinct from dry-run — kill switch halts
@@ -205,6 +207,9 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
   if (!template) return { state: "failed", reason: "missing_template" };
   if (!TEMPLATES[template]) return { state: "failed", reason: `unknown_template: ${template}` };
   if (!idempotencyKey) return { state: "failed", reason: "missing_key" };
+  // Primary `to` is required. cc is additive — having only cc with no
+  // primary means we don't have a clearly addressed recipient, so we
+  // skip rather than send a touchpoint to additional clients only.
   if (!to) {
     if (c) c.skipped_missing++;
     return { state: "skipped", reason: "missing_to" };
@@ -212,6 +217,22 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
   if (!subject) {
     if (c) c.skipped_missing++;
     return { state: "skipped", reason: "missing_subject" };
+  }
+
+  // Normalise cc: accept a string or an array, drop falsy / empty
+  // entries, dedupe, and remove any address equal to the primary `to`
+  // (Resend rejects sending the same address as both to and cc).
+  let ccList = null;
+  if (cc) {
+    const raw = Array.isArray(cc) ? cc : [cc];
+    const dedup = new Set();
+    for (const c of raw) {
+      const v = typeof c === "string" ? c.trim() : "";
+      if (!v) continue;
+      if (v.toLowerCase() === String(to).toLowerCase()) continue;
+      dedup.add(v);
+    }
+    if (dedup.size > 0) ccList = Array.from(dedup);
   }
 
   // Acquire the lock. If someone already sent, no-op silently.
@@ -261,12 +282,13 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
   // re-sends the Slack preview every time — that's the desired
   // testability behaviour.
   if (process.env.EMAIL_DRY_RUN === "true") {
-    await slackDryRunPreview({ template, key: idempotencyKey, to, subject, html, projectId });
+    await slackDryRunPreview({ template, key: idempotencyKey, to, cc: ccList, subject, html, projectId });
     await writeLog(idempotencyKey, {
       state: "dryRun",
       template,
       projectId: projectId || null,
       to,
+      cc: ccList,
       subject,
       previewedAt: Date.now(),
     });
@@ -308,6 +330,9 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
       const result = await resend.emails.send({
         from: FROM,
         to,
+        // Resend SDK accepts cc as string | string[]. Omit when null
+        // so older email-log entries stay compact.
+        ...(ccList ? { cc: ccList } : {}),
         replyTo: REPLY_TO,
         subject,
         html,
@@ -321,6 +346,7 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
         template,
         projectId: projectId || null,
         to,
+        cc: ccList,
         subject,
         sentAt: Date.now(),
       };
@@ -343,6 +369,7 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
         template,
         projectId: projectId || null,
         to,
+        cc: ccList,
         subject,
       };
       if (timedOut) {
@@ -385,6 +412,7 @@ export async function send({ template, idempotencyKey, to, subject, props, proje
       template,
       projectId: projectId || null,
       to,
+      cc: ccList,
       subject,
       timeout: true,
     });

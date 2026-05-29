@@ -156,6 +156,8 @@ async function buildSlackText({ reviewType, projectName, clientName, videoName, 
 
   const text = reviewType === "internal"
     ? `:eyes: *Ready for internal review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}`
+    : reviewType === "selectsTimeline"
+    ? `:clapper: *Selects timeline done · ready for edit*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}`
     : `:white_check_mark: *Ready for client review*\n${header}\n• Video: *${safeVideo}*\n• Editor: ${safeEditor}\n${projectLead ? `• Project lead: ${leadMention}\n` : ""}${accountManager ? `• Account manager: ${managerMention}\n` : ""}• Frame.io: ${safeLink}\n_Link added to the Deliveries tab and pushed to the client's delivery page._`;
 
   return text;
@@ -221,10 +223,14 @@ export default async function handler(req, res) {
     const videoId    = clamp(body.videoId    || "", 64);
     const payloadDeliveryId = clamp(body.deliveryId || "", 64);
 
-    if (reviewType !== "internal" && reviewType !== "client") {
-      return res.status(400).json({ error: "reviewType must be 'internal' or 'client'" });
+    if (reviewType !== "internal" && reviewType !== "client" && reviewType !== "selectsTimeline") {
+      return res.status(400).json({ error: "reviewType must be 'internal', 'client', or 'selectsTimeline'" });
     }
-    if (!frameioLink) {
+    // Frame.io link is required for internal + client review (the
+    // editor is handing off a watchable cut). Selects Timeline is a
+    // producer-facing milestone with no shareable artifact yet —
+    // no link needed.
+    if (reviewType !== "selectsTimeline" && !frameioLink) {
       return res.status(400).json({ error: "frameioLink required" });
     }
 
@@ -234,9 +240,12 @@ export default async function handler(req, res) {
       reviewType, projectName, clientName, videoName, editorName,
       projectLead, accountManager, frameioLink,
     });
-    const slackWebhook = reviewType === "internal"
-      ? process.env.SLACK_PROJECT_LEADS_WEBHOOK_URL
-      : process.env.SLACK_VIDEO_DELIVERIES_WEBHOOK_URL;
+    // Internal review + selectsTimeline both ping #project-leads (it's
+    // a producer-facing handoff in both cases). Only `client` review
+    // posts to the client-facing deliveries channel.
+    const slackWebhook = reviewType === "client"
+      ? process.env.SLACK_VIDEO_DELIVERIES_WEBHOOK_URL
+      : process.env.SLACK_PROJECT_LEADS_WEBHOOK_URL;
 
     // Slack-only path (Phase A redesign — see file header). The
     // ReadyForReview email used to fire here for reviewType=client;

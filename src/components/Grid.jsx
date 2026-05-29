@@ -63,8 +63,13 @@ function buildSubtaskOverlay(projects) {
 
 export function Grid({wk,weekData,onUpdate,masterEds,inputs,projects,onUpdateSuites}){
   const md=new Date(wk+"T00:00:00");const dd=dayDates(md);const data=weekData[wk]||{};
-  // Migrate legacy boolean days to new format
-  const eds=(data.editors||masterEds.map(e=>({...e,days:{...e.defaultDays},notes:{}}))).map(e=>({...e,notes:e.notes||{}}));
+  // Migrate legacy boolean days to new format. Sort alphabetically by
+  // name so the row order stays stable week-to-week — previously the
+  // per-week persisted `data.editors` array could land rows in any
+  // historical order, which Jeremy found jarring when paging weeks.
+  const eds=(data.editors||masterEds.map(e=>({...e,days:{...e.defaultDays},notes:{}})))
+    .map(e=>({...e,notes:e.notes||{}}))
+    .sort((a,b)=>(a?.name||"").toLowerCase().localeCompare((b?.name||"").toLowerCase()));
   const[newName,setNewName]=useState("");const[adding,setAdding]=useState(false);
   const[editingId,setEditingId]=useState(null);const[editName,setEditName]=useState("");
   const[noteEdit,setNoteEdit]=useState(null); // {editorId, day}

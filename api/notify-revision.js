@@ -7,6 +7,7 @@
 
 import { adminGet, adminSet } from "./_fb-admin.js";
 import { REVISION_NEED_REVISIONS } from "./_constants.js";
+import { reconcileDeliveryStatus, maybePingAccountManager } from "./_deliveryReconcile.js";
 
 // Escape Slack mrkdwn special characters in client-supplied strings
 // so a video name containing `*hello*` doesn't bold-format the
@@ -179,6 +180,19 @@ export default async function handler(req, res) {
       await maybeCreateRevisionSubtasks(deliveryId, changes);
     } catch (e) {
       console.error("Revision subtask auto-create failed:", e);
+    }
+
+    // Reconcile the viewixStatus pill from settled revision rounds,
+    // then ping the AM channel if every video on the delivery is now
+    // Completed. Best-effort: the Slack revision message is the
+    // primary user-facing signal and must not be blocked here.
+    try {
+      const { allCompleted, delivery } = await reconcileDeliveryStatus(deliveryId);
+      if (allCompleted) {
+        await maybePingAccountManager({ deliveryId, delivery });
+      }
+    } catch (e) {
+      console.error("Delivery reconcile failed:", e);
     }
 
     return res.status(200).json({ success: true, notified: changes.length });

@@ -37,7 +37,7 @@ import { ScheduleEditsModal } from "./ScheduleEditsModal";
 // that's the one field they own per spec.
 const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null });
 import { BTN } from "../config";
-import { fmtD, matchSherpaForName, resolveAccountForProject } from "../utils";
+import { fmtD, matchSherpaForName, resolveAccountForProject, URL_SPLIT_RE, isHttpUrl } from "../utils";
 import { fbSet, fbUpdate, getCurrentUserName, getCurrentUserEmail, authFetch } from "../firebase";
 import {
   CalendarSyncContext,
@@ -411,20 +411,68 @@ function InlineText({ value, onSave, placeholder, type = "text", displayValue, s
   );
 }
 
+// Split paragraph text on http(s) URLs and return a Fragment array
+// with clickable links. Used by InlineTextArea's read-mode preview and
+// by the Producer Comments rendering. Policy is wider than utils'
+// validateLinkUrl() (which is HTTPS-only) — producer-pasted paragraph
+// copy frequently includes http URLs for legacy/internal docs.
+function renderTextWithLinks(text) {
+  if (text == null || text === "") return null;
+  const parts = String(text).split(URL_SPLIT_RE);
+  return parts.map((part, i) =>
+    isHttpUrl(part)
+      ? <a key={i} href={part} target="_blank" rel="noopener noreferrer"
+           style={{ color: "#0082FA", textDecoration: "underline" }}
+           // Stop propagation so clicking a link inside an InlineTextArea
+           // preview doesn't also flip the parent into edit mode.
+           onClick={e => e.stopPropagation()}>{part}</a>
+      : <Fragment key={i}>{part}</Fragment>
+  );
+}
+
+// Click-to-edit textarea: when not focused, shows the saved value as
+// a styled div with clickable URLs. Click anywhere on the preview to
+// switch into edit mode (focused textarea). On blur, commits the
+// draft and returns to preview mode.
 function InlineTextArea({ value, onSave, placeholder, rows = 4 }) {
   const [draft, setDraft] = useState(value || "");
-  const [focused, setFocused] = useState(false);
-  useEffect(() => { if (!focused) setDraft(value || ""); }, [value, focused]);
+  const [editing, setEditing] = useState(false);
+  const textareaRef = useRef(null);
+  useEffect(() => { if (!editing) setDraft(value || ""); }, [value, editing]);
+  // Auto-focus the textarea when entering edit mode so the producer
+  // doesn't have to click twice.
+  useEffect(() => {
+    if (editing && textareaRef.current) textareaRef.current.focus();
+  }, [editing]);
   const commit = () => {
     if ((draft || "") === (value || "")) return;
     onSave(draft);
   };
+  if (!editing) {
+    return (
+      <div
+        onClick={() => setEditing(true)}
+        title="Click to edit"
+        style={{
+          width: "100%", padding: "10px 12px", borderRadius: 6,
+          border: "1px solid var(--border)", background: "var(--input-bg)",
+          color: value ? "var(--fg)" : "var(--muted)",
+          fontSize: 13, lineHeight: 1.5, fontFamily: "inherit",
+          minHeight: rows * 22,
+          whiteSpace: "pre-wrap",
+          cursor: "text",
+          boxSizing: "border-box",
+        }}>
+        {value ? renderTextWithLinks(value) : (placeholder || "")}
+      </div>
+    );
+  }
   return (
     <textarea
+      ref={textareaRef}
       value={draft}
       onChange={e => setDraft(e.target.value)}
-      onFocus={() => setFocused(true)}
-      onBlur={() => { setFocused(false); commit(); }}
+      onBlur={() => { commit(); setEditing(false); }}
       placeholder={placeholder}
       rows={rows}
       style={{
@@ -432,6 +480,7 @@ function InlineTextArea({ value, onSave, placeholder, rows = 4 }) {
         border: "1px solid var(--border)", background: "var(--input-bg)",
         color: "var(--fg)", fontSize: 13, lineHeight: 1.5,
         fontFamily: "inherit", outline: "none", resize: "vertical",
+        boxSizing: "border-box",
       }}
     />
   );
@@ -484,6 +533,81 @@ function DestinationsEditor({ value, onChange }) {
         placeholder="Add a destination, press Enter (e.g. Instagram, YouTube, LinkedIn)"
         style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, fontFamily: "inherit", outline: "none" }}
       />
+    </div>
+  );
+}
+
+// Additional Clients editor on the Project Details surface. Shows the
+// linked accounts (by companyName) as removable chips and a dropdown
+// of remaining accounts to add. Writes the array of accountIds via
+// onChange — the parent persists to /projects/{id}/links/additionalAccountIds.
+// Primary account (project.links.accountId) is excluded from both the
+// chip list and the dropdown so producers can't link the project to
+// its own primary as a "secondary".
+function AdditionalClientsEditor({ project, accounts, onChange }) {
+  const links = project?.links || {};
+  const primaryId = links.accountId || null;
+  const additionalIds = Array.isArray(links.additionalAccountIds) ? links.additionalAccountIds : [];
+  const accountsMap = accounts || {};
+  const allAccounts = Object.values(accountsMap).filter(a => a && a.id);
+
+  const nameFor = (id) => accountsMap[id]?.companyName || "(unknown account)";
+  const remove = (id) => onChange(additionalIds.filter(x => x !== id));
+  const add = (id) => {
+    if (!id) return;
+    if (id === primaryId) return;
+    if (additionalIds.includes(id)) return;
+    onChange([...additionalIds, id]);
+  };
+
+  // Build the add-dropdown candidate list: every account NOT already
+  // the primary and NOT already in additionalIds, sorted by companyName
+  // so producers can scan it without thinking about order.
+  const candidates = allAccounts
+    .filter(a => a.id !== primaryId && !additionalIds.includes(a.id))
+    .sort((a, b) => (a.companyName || "").toLowerCase().localeCompare((b.companyName || "").toLowerCase()));
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+        {additionalIds.map(id => {
+          const acct = accountsMap[id];
+          const missing = !acct;
+          return (
+            <button key={id} onClick={() => remove(id)} title="Click to remove"
+              style={{
+                padding: "3px 8px 3px 10px", borderRadius: 4,
+                background: "var(--bg)",
+                border: `1px solid ${missing ? "#EF4444" : "var(--border)"}`,
+                color: missing ? "#EF4444" : "var(--accent)",
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+                fontFamily: "inherit",
+                display: "inline-flex", alignItems: "center", gap: 6,
+              }}>
+              {missing ? `(missing) ${id}` : nameFor(id)}
+              <span style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1 }}>×</span>
+            </button>
+          );
+        })}
+        {additionalIds.length === 0 && (
+          <span style={{ fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>None linked</span>
+        )}
+      </div>
+      <select
+        value=""
+        onChange={e => { add(e.target.value); e.target.value = ""; }}
+        disabled={candidates.length === 0}
+        style={{
+          padding: "7px 10px", borderRadius: 6,
+          border: "1px solid var(--border)", background: "var(--input-bg)",
+          color: candidates.length === 0 ? "var(--muted)" : "var(--fg)",
+          fontSize: 12, fontFamily: "inherit", outline: "none", width: "100%",
+        }}>
+        <option value="" disabled>{candidates.length === 0 ? "No accounts left to add" : "Add an account…"}</option>
+        {candidates.map(a => (
+          <option key={a.id} value={a.id}>{a.companyName || "(no name)"}</option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -2425,7 +2549,7 @@ function ProducerCommentsCard({ project, viewerRole, setProjects }) {
                 </span>
               </div>
               <div style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-                {e.text}
+                {renderTextWithLinks(e.text)}
               </div>
             </div>
           ))}
@@ -2613,12 +2737,29 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
         {/* Seven-status taxonomy — coloured dropdown to fit without overflow */}
         <div style={{ minWidth: 200, display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
           <StatusCell value={status} onChange={(s) => { setStatus(s); persistField("status", s); }} />
-          {/* Commission / Move-to-Uncommissioned buttons removed —
-              producers flip a project between sections by dragging
-              its row across the section headers in the Projects
-              sub-tab table. See ProjectTable's onDragEnd. The
-              `commissioned` field still drives section grouping;
-              there's just no button for it any more. */}
+          {/* AM / PL chips — read-only mirror of ProjectRow's pattern
+              (Projects.jsx:1552). Producer edits the underlying values
+              in the Accounts tab; here they're shown so anyone opening
+              the project knows who's accountable without bouncing
+              tabs. Three-tier resolution via resolveAccountForProject
+              matches the rest of the dashboard. */}
+          {(() => {
+            const acct = resolveAccountForProject(project, accounts);
+            const am = acct?.accountManager || "";
+            const pl = acct?.projectLead || "";
+            return (
+              <div style={{ display: "flex", gap: 12, fontSize: 11, lineHeight: 1.25 }}>
+                <div title="Account manager">
+                  <span style={{ color: "var(--muted)", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 4 }}>AM</span>
+                  {am || <span style={{ color: "var(--muted)" }}>—</span>}
+                </div>
+                <div title="Project lead">
+                  <span style={{ color: "var(--muted)", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 4 }}>PL</span>
+                  {pl || <span style={{ color: "var(--muted)" }}>—</span>}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -2656,6 +2797,23 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
 
       <FieldCard label="Destinations" hint="Press Enter to add. Click a chip to remove.">
         <DestinationsEditor value={dests} onChange={(next) => persistField("destinations", next)} />
+      </FieldCard>
+
+      {/* Additional Clients — secondary accounts linked to this project.
+          The primary client (project.clientName / project.links.accountId)
+          stays the source of truth for every other surface (Deliveries
+          pill, Slack, the Projects table). The additionalAccountIds list
+          drives email cc recipients only — every project-touchpoint
+          email (Confirmation / ShootTomorrow / InEditSuite /
+          ReadyForReview) ccs each linked account's clientContact email.
+          Edit clientContact for each additional account in the Accounts
+          tab. */}
+      <FieldCard label="Additional Clients" hint="Linked accounts whose client contact also receives email touchpoints on this project. Edit each account's contact in the Accounts tab.">
+        <AdditionalClientsEditor
+          project={project}
+          accounts={accounts}
+          onChange={(next) => persistField("links", { ...(project.links || {}), additionalAccountIds: next })}
+        />
       </FieldCard>
 
       <FieldCard label="Kick Off" hint="YouTube URL of the kick-off recording, OR a Google Doc URL with a written brief. Editors see a glowing pill on each video subtask that opens the right one inline (🎬 for video, 📄 for doc). For Google Docs, set sharing to at least 'Anyone with the link can view' so the embed loads.">

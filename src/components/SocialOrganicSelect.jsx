@@ -159,6 +159,43 @@ export function SocialOrganicSelect({ project, onPatch }) {
   // Scope to organic-tagged formats — the Format Library is now split
   // between organic and metaAds. Legacy entries without a formatType
   // default to organic so pre-split formats still appear here.
+  //
+  // Diagnostic logging gated on a localStorage flag so producers can
+  // figure out why a format they expect to see isn't showing.
+  // Toggle on in the browser console:
+  //   localStorage.setItem("VIEWIX_FORMAT_LIBRARY_DEBUG", "true")
+  // then reload Page 6. Logs are off by default to avoid spamming
+  // the console for every keystroke in the search box.
+  const _debugLibrary = typeof window !== "undefined"
+    && window.localStorage?.getItem("VIEWIX_FORMAT_LIBRARY_DEBUG") === "true";
+  if (_debugLibrary) {
+    const all = Object.values(library || {});
+    const byReason = { ok: 0, missingId: 0, archived: 0, notOrganic: 0, categoryFilteredOut: 0 };
+    const sampleFiltered = [];
+    for (const f of all) {
+      if (!f || !f.id) { byReason.missingId++; continue; }
+      if (f.archived) {
+        byReason.archived++;
+        if (sampleFiltered.length < 10) sampleFiltered.push({ id: f.id, name: f.name, reason: "archived" });
+        continue;
+      }
+      if ((f.formatType || "organic") !== "organic") {
+        byReason.notOrganic++;
+        if (sampleFiltered.length < 10) sampleFiltered.push({ id: f.id, name: f.name, reason: `formatType=${f.formatType}` });
+        continue;
+      }
+      byReason.ok++;
+    }
+    console.log("[FormatLibrary debug]", {
+      total: all.length,
+      passedBaseFilters: byReason.ok,
+      filteredOutByReason: byReason,
+      sampleFilteredOut: sampleFiltered,
+      categoryMode,
+      tagFilter,
+      search,
+    });
+  }
   const libraryCards = Object.values(library || {})
     .filter(f => f && f.id && !f.archived)
     .filter(f => (f.formatType || "organic") === "organic")

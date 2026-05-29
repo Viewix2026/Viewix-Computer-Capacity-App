@@ -131,6 +131,49 @@ export function resolveAccountManagerChip({ project, accounts, editors }) {
   };
 }
 
+// Resolve the recipient list for any project-touchpoint email
+// (Confirmation, ShootTomorrow, InEditSuite, ReadyForReview). Returns
+// { to, cc } where:
+//   - to: the primary client's contact email.
+//     Resolution: project.links.accountId → accounts[id].clientContact.email
+//     (canonical), falling back to project.clientContact.email (legacy).
+//   - cc: every additionalAccountIds entry's clientContact.email, with
+//     valid format, deduped, and primary-removed.
+//
+// Returns to: null when no primary email resolves — callers MUST treat
+// that as a skip (don't fire an email to additional clients only).
+//
+// Email validation is lightweight (looks for an `@`); the boundary that
+// matters is whether Resend rejects it, not whether it's RFC5322.
+const EMAIL_LIGHT = (s) => typeof s === "string" && s.includes("@") && s.length < 255;
+
+export function resolveProjectEmailRecipients(project, accounts) {
+  const accountsMap = accounts || {};
+  const acctId = project?.links?.accountId;
+  const primaryAccountEmail = acctId && accountsMap[acctId]?.clientContact?.email
+    ? accountsMap[acctId].clientContact.email.trim()
+    : "";
+  const primaryProjectEmail = (project?.clientContact?.email || "").trim();
+  // Account record is the canonical source — falls back to the
+  // project record for legacy projects predating the schema move.
+  const to = EMAIL_LIGHT(primaryAccountEmail)
+    ? primaryAccountEmail
+    : (EMAIL_LIGHT(primaryProjectEmail) ? primaryProjectEmail : null);
+
+  const additionalIds = Array.isArray(project?.links?.additionalAccountIds)
+    ? project.links.additionalAccountIds
+    : [];
+  const ccSet = new Set();
+  for (const id of additionalIds) {
+    const acct = accountsMap[id];
+    const email = (acct?.clientContact?.email || "").trim();
+    if (!EMAIL_LIGHT(email)) continue;
+    if (to && email.toLowerCase() === to.toLowerCase()) continue;
+    ccSet.add(email);
+  }
+  return { to, cc: ccSet.size > 0 ? Array.from(ccSet) : null };
+}
+
 // Format a date for human reading. `dateStr` is YYYY-MM-DD as stored
 // in the subtask. We render in Australia/Sydney conventions because
 // every Viewix client is local. Falls back to the raw string if

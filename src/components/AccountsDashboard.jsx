@@ -640,6 +640,34 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
                               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Attio ID</div>
                               <input type="text" value={acct.attioId || ""} onChange={e => updateAccount(acct.id, { attioId: e.target.value })} placeholder="(not linked)" style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", width: "100%", fontFamily: "'JetBrains Mono',monospace", boxSizing: "border-box" }} />
                             </div>
+                            {/* Client Contact — canonical home for the client's
+                                first name + email. Project-touchpoint emails
+                                (Confirmation / ShootTomorrow / InEditSuite /
+                                ReadyForReview) prefer this over the legacy
+                                per-project clientContact field. Editing here
+                                propagates to every project linked to this
+                                account on the next email send — including
+                                as a cc recipient on any project that links
+                                this account via additionalAccountIds. */}
+                            <div>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>Client Contact</div>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 6 }}>
+                                <input
+                                  type="text"
+                                  value={acct.clientContact?.firstName || ""}
+                                  onChange={e => updateAccount(acct.id, { clientContact: { ...(acct.clientContact || {}), firstName: e.target.value } })}
+                                  placeholder="First name"
+                                  style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+                                />
+                                <input
+                                  type="email"
+                                  value={acct.clientContact?.email || ""}
+                                  onChange={e => updateAccount(acct.id, { clientContact: { ...(acct.clientContact || {}), email: e.target.value } })}
+                                  placeholder="email@company.com"
+                                  style={{ padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+                                />
+                              </div>
+                            </div>
                             {/* Sherpa Doc — the project-brief Google Doc that
                                 used to live in the now-removed Sherpas tab.
                                 Lookup is by case-insensitive name match
