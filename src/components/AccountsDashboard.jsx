@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { fbSet, fbUpdate } from "../firebase";
+import { fbSet, fbUpdate, fbGet } from "../firebase";
 import { BTN, TH, TD, MILESTONE_DEFS, DEFAULT_MILESTONE_GAPS, CLIENT_GOAL_OPTIONS, CLIENT_GOAL_LABELS, CLIENT_GOAL_COLORS } from "../config";
 import { logoBg, matchSherpaForName } from "../utils";
 import { ClientGoalPill } from "./ClientGoalPill";
 import { AccountPortalAccess } from "./portal/AccountPortalAccess";
+import { CompanyNotesModal, noteEntries, noteCount } from "./CompanyNotesModal";
 import { videoTypeToPartnership } from "../../api/_tiers.js";
 
 // Alias kept so local references to DEFAULT_GAPS inside this file read
@@ -102,7 +103,34 @@ function computeOffsets(gaps) {
   return offsets;
 }
 
-export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnaround, onSyncAttio, editors, clients, setClients, highlightId }) {
+// Repoint a single project's links from a dropped account to the keeper
+// during an account merge, then NORMALISE so the result is structurally
+// sound regardless of how the project referenced the two accounts:
+//   • A project that only had the drop as an *additional* (no primary)
+//     keeps the keeper as an additional — it must not lose the link.
+//   • The keeper never ends up as BOTH the primary and its own
+//     "additional" (dedupe against the resulting primary).
+// Returns the new links object, or null if this project referenced
+// neither account (nothing to write).
+function repointLinks(links, dropId, keepId) {
+  const additionals = Array.isArray(links?.additionalAccountIds) ? links.additionalAccountIds : [];
+  const touches = links?.accountId === dropId || additionals.includes(dropId) || additionals.includes(keepId);
+  if (!touches) return null;
+
+  const next = { ...links };
+  if (links?.accountId === dropId) next.accountId = keepId;
+
+  // Map drop→keep, dedupe, then remove whatever equals the (possibly
+  // newly-set) primary so the keeper is never its own additional. Only
+  // delete the primary when one actually exists — otherwise a project
+  // that referenced the drop solely as an additional would be stripped.
+  const set = new Set(additionals.map(x => (x === dropId ? keepId : x)));
+  if (next.accountId) set.delete(next.accountId);
+  next.additionalAccountIds = [...set];
+  return next;
+}
+
+export function AccountsDashboard({ accounts, setAccounts, deleteAccount, projects, setProjects, turnaround, onSyncAttio, editors, clients, setClients, highlightId }) {
   // Buyer Journey + Turnaround sub-tabs have moved to the Founders tab
   // (founders > buyerJourney). This component is now Clients-only; the
   // tab state is retained as a no-op to minimise downstream churn in
@@ -113,6 +141,13 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
   const [syncing, setSyncing] = useState(false);
   const [filterManager, setFilterManager] = useState("all");
   const [expandedClientId, setExpandedClientId] = useState(null);
+  // Account id whose Company Notes modal is open (null = closed).
+  const [notesAcctId, setNotesAcctId] = useState(null);
+  // Account id whose Merge modal is open (the row the producer clicked
+  // "Merge" on). The modal lets them pick a second (duplicate) account
+  // to fold into one, choose which record survives, and preview the
+  // result before committing. null = closed.
+  const [mergeAcctId, setMergeAcctId] = useState(null);
 
   // Auto-heal stale projectLead values that haven't kept up with editor
   // renames. /accounts/{id}.projectLead is stored as the editor's NAME
@@ -184,28 +219,46 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
   };
 
   const updateAccount = (id, patch) => {
+    // Side effects live OUTSIDE the state updater. React StrictMode
+    // double-invokes updaters in dev, so a Firebase write placed inside
+    // would fire twice. Keep the updater pure (compute next state from
+    // prev) and do the writes here, exactly once per call.
+    const companyName = { ...accounts[id], ...patch }.companyName;
+    // Sync to sherpas if manager or lead changed.
+    if (patch.accountManager !== undefined || patch.projectLead !== undefined) {
+      const sherpaSync = {};
+      if (patch.accountManager !== undefined) sherpaSync.accountManager = patch.accountManager;
+      if (patch.projectLead !== undefined) sherpaSync.projectLead = patch.projectLead;
+      syncToSherpas(companyName, sherpaSync);
+    }
+    // Leaf-merge write: only the keys in `patch` go to Firebase.
+    // Was a full-object fbSet which silently clobbered concurrent
+    // writes — auto-heal projectLead leaf writes, milestone edits
+    // happening at the same time, server-side webhook patches
+    // (api/webhook-deal-won fbPatch / fbSet on existing companies),
+    // sync-attio-cache backfills, etc. Symptom Jeremy hit: change
+    // a goal to "awareness" → setting persisted in local state
+    // briefly but the next write to /accounts/{id} (or a webhook
+    // fire on the same record) replayed the full object captured
+    // before the goal change and reverted the field.
+    fbUpdate(`/accounts/${id}`, patch);
+    setAccounts(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  };
+
+  // Write one company note as a keyed child (note=null deletes). Notes
+  // live at /accounts/{id}/notes/{key}; writing a single child never
+  // touches sibling notes, so two producers adding a note concurrently
+  // can't clobber each other (the old whole-array rewrite did). Legacy
+  // array-shaped notes are normalised to a keyed map on first touch.
+  const writeNote = (acctId, key, note) => {
     setAccounts(prev => {
-      const acct = { ...prev[id], ...patch };
-      // Sync to sherpas if manager or lead changed
-      if (patch.accountManager !== undefined || patch.projectLead !== undefined) {
-        const sherpaSync = {};
-        if (patch.accountManager !== undefined) sherpaSync.accountManager = patch.accountManager;
-        if (patch.projectLead !== undefined) sherpaSync.projectLead = patch.projectLead;
-        syncToSherpas(acct.companyName, sherpaSync);
-      }
-      // Leaf-merge write: only the keys in `patch` go to Firebase.
-      // Was a full-object fbSet which silently clobbered concurrent
-      // writes — auto-heal projectLead leaf writes, milestone edits
-      // happening at the same time, server-side webhook patches
-      // (api/webhook-deal-won fbPatch / fbSet on existing companies),
-      // sync-attio-cache backfills, etc. Symptom Jeremy hit: change
-      // a goal to "awareness" → setting persisted in local state
-      // briefly but the next write to /accounts/{id} (or a webhook
-      // fire on the same record) replayed the full object captured
-      // before the goal change and reverted the field.
-      fbUpdate(`/accounts/${id}`, patch);
-      return { ...prev, [id]: acct };
+      const acct = prev[acctId] || {};
+      const map = Object.fromEntries(noteEntries(acct.notes));
+      if (note == null) delete map[key]; else map[key] = note;
+      return { ...prev, [acctId]: { ...acct, notes: map } };
     });
+    // Child-path write — { [key]: note } updates/deletes only this note.
+    fbUpdate(`/accounts/${acctId}/notes`, { [key]: note });
   };
 
   // One-time data migration: the account manager formerly named "Vish"
@@ -224,20 +277,24 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
   }, [accounts]);
 
   const updateMilestone = (id, milestoneKey, patch) => {
+    // Leaf-merge at the milestone level — same race-avoidance
+    // reasoning as updateAccount above. Only the keys in `patch`
+    // (date / status) for this single milestone go to Firebase.
+    // Write lives outside the (StrictMode-double-invoked) updater.
+    fbUpdate(`/accounts/${id}/milestones/${milestoneKey}`, patch);
     setAccounts(prev => {
       const acct = prev[id] || {};
       const milestones = { ...(acct.milestones || {}) };
       milestones[milestoneKey] = { ...(milestones[milestoneKey] || {}), ...patch };
-      const updated = { ...acct, milestones };
-      // Leaf-merge at the milestone level — same race-avoidance
-      // reasoning as updateAccount above. Only the keys in `patch`
-      // (date / status) for this single milestone go to Firebase.
-      fbUpdate(`/accounts/${id}/milestones/${milestoneKey}`, patch);
-      return { ...prev, [id]: updated };
+      return { ...prev, [id]: { ...acct, milestones } };
     });
   };
 
   const setSigningDate = (id, dateStr) => {
+    // Leaf-merge: only signing.date, leaves status + every other
+    // milestone alone. Write lives outside the (StrictMode-double-
+    // invoked) updater.
+    fbUpdate(`/accounts/${id}/milestones/signing`, { date: dateStr });
     setAccounts(prev => {
       const acct = prev[id] || {};
       const milestones = { ...(acct.milestones || {}) };
@@ -247,11 +304,7 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
       // don't bulk-overwrite producer entries on every signing edit.
       const existing = milestones.signing || {};
       milestones.signing = { ...existing, date: dateStr };
-      const updated = { ...acct, milestones };
-      // Leaf-merge: only signing.date, leaves status + every other
-      // milestone alone.
-      fbUpdate(`/accounts/${id}/milestones/signing`, { date: dateStr });
-      return { ...prev, [id]: updated };
+      return { ...prev, [id]: { ...acct, milestones } };
     });
   };
 
@@ -290,6 +343,190 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
     updateAccount(id, { lastContact: new Date().toISOString().split("T")[0] });
   };
 
+  // How many projects reference an account — as their primary
+  // (links.accountId) or as a secondary (links.additionalAccountIds).
+  // Surfaced in the merge modal so the producer knows how many project
+  // links will get repointed when the duplicate is removed.
+  const linkedProjectCount = (acctId) =>
+    (projects || []).filter(p => {
+      const l = p?.links || {};
+      return l.accountId === acctId ||
+        (Array.isArray(l.additionalAccountIds) && l.additionalAccountIds.includes(acctId));
+    }).length;
+
+  // Fold `secondary` into `primary`: primary wins on every populated
+  // field, the secondary only fills gaps. Keeps primary's id (so all
+  // existing links to it stay valid) and its companyName (so the
+  // name-based Delivery / Sherpa matching doesn't break). Milestones
+  // merge per-key (primary's date/status preferred, secondary fills
+  // blanks); notes concatenate; lastContact takes the more recent date.
+  const mergeRecords = (primary, secondary) => {
+    const pick = (a, b) => {
+      const empty = a === undefined || a === null || (typeof a === "string" && a.trim() === "");
+      return empty ? b : a;
+    };
+    const maxDate = (a, b) => (!a ? (b || "") : !b ? a : (a >= b ? a : b)); // ISO yyyy-mm-dd sorts lexically
+
+    const mKeys = new Set([
+      ...Object.keys(primary.milestones || {}),
+      ...Object.keys(secondary.milestones || {}),
+    ]);
+    const milestones = {};
+    for (const k of mKeys) {
+      const pm = (primary.milestones || {})[k] || {};
+      const sm = (secondary.milestones || {})[k] || {};
+      const m = {};
+      const date = pick(pm.date, sm.date);
+      const status = pick(pm.status, sm.status);
+      if (date) m.date = date;
+      if (status) m.status = status;
+      if (Object.keys(m).length) milestones[k] = m;
+    }
+
+    const merged = {
+      ...secondary,
+      ...primary,
+      id: primary.id,
+      companyName: pick(primary.companyName, secondary.companyName) || "",
+      attioId: pick(primary.attioId, secondary.attioId) || "",
+      accountManager: pick(primary.accountManager, secondary.accountManager) || "",
+      projectLead: pick(primary.projectLead, secondary.projectLead) || "",
+      partnershipType: pick(primary.partnershipType, secondary.partnershipType) || "",
+      goal: pick(primary.goal, secondary.goal) || "",
+      logoUrl: pick(primary.logoUrl, secondary.logoUrl) || "",
+      logoBg: pick(primary.logoBg, secondary.logoBg) || "white",
+      lastContact: maxDate(primary.lastContact, secondary.lastContact),
+      clientContact: {
+        firstName: pick(primary.clientContact?.firstName, secondary.clientContact?.firstName) || "",
+        email: pick(primary.clientContact?.email, secondary.clientContact?.email) || "",
+      },
+      milestones,
+    };
+    // Notes are NOT folded into the merged object — they're keyed children
+    // now and get imported in doMerge via separate child writes (so legacy
+    // numeric keys can't collide between the two records). Drop any notes
+    // the spread carried over so callers don't mistake this for the merged
+    // note set.
+    delete merged.notes;
+    return merged;
+  };
+
+  // Commit a merge: keepId is the surviving record, dropId the
+  // duplicate being removed. Writes the merged record onto the keeper,
+  // repoints every project link from dropId → keepId, then deletes the
+  // duplicate. Writes go through fbSet/fbUpdate directly (same pattern
+  // as the rest of this file) so they persist without relying on the
+  // App.jsx bulk-write loop.
+  // Commit a merge: keepId survives, dropId is removed. To avoid
+  // clobbering concurrent webhook / Attio writes, fresh-READ both records
+  // first, then write ONLY what the merge changes — keeper blanks filled
+  // from the dropped record, derived fields, per-milestone children, and
+  // the dropped record's notes imported as fresh-keyed children. Keeper-
+  // owned fields the merge doesn't touch are never rewritten. Project
+  // links are repointed at child paths; the duplicate is deleted last.
+  const doMerge = async (keepId, dropId) => {
+    if (!keepId || !dropId || keepId === dropId) return;
+
+    const [keeper, dropped] = await Promise.all([
+      fbGet(`/accounts/${keepId}`),
+      fbGet(`/accounts/${dropId}`),
+    ]);
+    if (!keeper || !dropped) { setMergeAcctId(null); return; }
+
+    const merged = mergeRecords(keeper, dropped); // notes excluded by design
+
+    // 1. Scalar / derived fields — write only keys whose merged value
+    //    differs from the fresh keeper (blanks filled from the drop, or
+    //    derived like lastContact). Never re-send unchanged keeper fields.
+    const SCALARS = ["companyName", "attioId", "accountManager", "projectLead", "partnershipType", "goal", "logoUrl", "logoBg", "lastContact"];
+    const patch = {};
+    for (const k of SCALARS) {
+      if (merged[k] !== undefined && merged[k] !== keeper[k]) patch[k] = merged[k];
+    }
+    if (Object.keys(patch).length) fbUpdate(`/accounts/${keepId}`, patch);
+
+    // clientContact child fields — only if changed.
+    const ccPatch = {};
+    if ((merged.clientContact?.firstName || "") !== (keeper.clientContact?.firstName || "")) ccPatch.firstName = merged.clientContact?.firstName || "";
+    if ((merged.clientContact?.email || "") !== (keeper.clientContact?.email || "")) ccPatch.email = merged.clientContact?.email || "";
+    if (Object.keys(ccPatch).length) fbUpdate(`/accounts/${keepId}/clientContact`, ccPatch);
+
+    // 2. Milestones — fill keeper blanks only, at per-key child paths.
+    const msPatch = {};
+    for (const [mk, mv] of Object.entries(merged.milestones || {})) {
+      const cur = (keeper.milestones || {})[mk] || {};
+      if (mv.date && mv.date !== cur.date) msPatch[`${mk}/date`] = mv.date;
+      if (mv.status && mv.status !== cur.status) msPatch[`${mk}/status`] = mv.status;
+    }
+    if (Object.keys(msPatch).length) fbUpdate(`/accounts/${keepId}/milestones`, msPatch);
+
+    // 3. Notes — import the dropped record's notes as fresh-keyed children
+    //    so the keeper's note set is never rewritten (concurrent-add safe)
+    //    and legacy numeric keys can't collide across the two accounts.
+    const noteUpdates = {};
+    for (const [, n] of noteEntries(dropped.notes)) {
+      if (!n) continue;
+      const key = (typeof n.id === "string" && n.id.startsWith("note-"))
+        ? n.id
+        : ("note-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6));
+      noteUpdates[key] = n;
+    }
+    if (Object.keys(noteUpdates).length) fbUpdate(`/accounts/${keepId}/notes`, noteUpdates);
+
+    // 4. Local state — reflect the merged keeper (+ imported notes) and
+    //    drop the duplicate so the table updates without a round-trip.
+    setAccounts(prev => {
+      const next = { ...prev };
+      const local = { ...(next[keepId] || keeper), ...patch };
+      if (Object.keys(ccPatch).length) local.clientContact = { ...(local.clientContact || {}), ...ccPatch };
+      if (Object.keys(merged.milestones || {}).length) {
+        const ms = { ...(local.milestones || {}) };
+        for (const [mk, mv] of Object.entries(merged.milestones || {})) ms[mk] = { ...(ms[mk] || {}), ...mv };
+        local.milestones = ms;
+      }
+      const noteMap = Object.fromEntries(noteEntries(local.notes));
+      Object.assign(noteMap, noteUpdates);
+      if (Object.keys(noteMap).length) local.notes = noteMap;
+      next[keepId] = local;
+      return next;
+    });
+
+    // 5. Repoint project links drop→keep. Compute from the current
+    //    `projects` prop (pure), write child paths OUTSIDE any state
+    //    updater (so StrictMode's double-invoke can't double-fire the
+    //    writes), then update local state with a pure mapper.
+    if (typeof setProjects === "function") {
+      const ts = Date.now();
+      const changes = new Map();
+      (projects || []).forEach(p => {
+        if (!p) return;
+        const nextLinks = repointLinks(p.links || {}, dropId, keepId);
+        if (nextLinks) changes.set(p.id, nextLinks);
+      });
+      for (const [pid, links] of changes) {
+        fbUpdate(`/projects/${pid}`, {
+          "links/accountId": links.accountId ?? null,
+          "links/additionalAccountIds": (links.additionalAccountIds && links.additionalAccountIds.length) ? links.additionalAccountIds : null,
+          updatedAt: ts,
+        });
+      }
+      if (changes.size) {
+        setProjects(prev => (prev || []).map(p => (p && changes.has(p.id)) ? { ...p, links: changes.get(p.id), updatedAt: ts } : p));
+      }
+    }
+
+    // 6. Delete the duplicate.
+    if (typeof deleteAccount === "function") {
+      deleteAccount(dropId);
+    } else {
+      setAccounts(prev => { const n = { ...prev }; delete n[dropId]; return n; });
+      fbSet(`/accounts/${dropId}`, null);
+    }
+
+    setMergeAcctId(null);
+    setExpandedClientId(null);
+  };
+
   const doSync = async () => {
     if (!onSyncAttio) return;
     setSyncing(true);
@@ -325,7 +562,10 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
             } else if (partnershipLabel && !existing.partnershipType) {
               const updated = { ...existing, partnershipType: partnershipLabel };
               next[existing.id] = updated;
-              fbSet(`/accounts/${existing.id}`, updated);
+              // Leaf-merge: only the one field we changed. A full-object
+              // fbSet here clobbered sibling fields edited concurrently
+              // (same race the rest of this file already guards against).
+              fbUpdate(`/accounts/${existing.id}`, { partnershipType: partnershipLabel });
             }
           });
           return next;
@@ -431,6 +671,28 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
                                 achieve at a glance. */}
                             <ClientGoalPill goal={acct.goal} />
                           </span>
+                          {/* Company Notes — opens the per-account notes
+                              modal. Count badge surfaces how many notes
+                              exist so producers see at a glance which
+                              clients have history logged. */}
+                          {(() => {
+                            const n = noteCount(acct.notes);
+                            return (
+                              <button
+                                onClick={() => setNotesAcctId(acct.id)}
+                                title={n ? `${n} note${n === 1 ? "" : "s"}` : "Add company notes"}
+                                style={{
+                                  display: "inline-flex", alignItems: "center", gap: 4,
+                                  background: n ? "var(--accent-soft)" : "transparent",
+                                  border: "1px solid var(--border)", borderRadius: 4,
+                                  cursor: "pointer", color: n ? "var(--accent)" : "var(--muted)",
+                                  fontSize: 10, fontWeight: 700, padding: "2px 6px", lineHeight: 1.4,
+                                  fontFamily: "inherit", whiteSpace: "nowrap",
+                                }}>
+                                🗒 Notes{n ? ` ${n}` : ""}
+                              </button>
+                            );
+                          })()}
                         </div>
                       </td>
                       <td style={{ ...TD, position: "sticky", left: 160, zIndex: 5, background: "var(--card)", textAlign: "center" }}>
@@ -572,7 +834,12 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
                         );
                       })}
                       <td style={{ ...TD, textAlign: "center" }}>
-                        <button onClick={() => removeClient(acct.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14, padding: "2px 6px" }}>x</button>
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                          {accountList.length > 1 && (
+                            <button onClick={() => setMergeAcctId(acct.id)} title="Merge with another account (fold a duplicate into this one)" style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 13, padding: "2px 5px", lineHeight: 1 }}>⇄</button>
+                          )}
+                          <button onClick={() => removeClient(acct.id)} title="Remove this client" style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14, padding: "2px 6px" }}>x</button>
+                        </div>
                       </td>
                     </tr>
                     {isExpanded && (
@@ -691,7 +958,192 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, turnar
         )}
       </div>
     )}
+
+    {/* Company Notes modal — per-account note log. The modal hands back a
+        single (key, note) child write (note=null deletes); writeNote
+        persists it at /accounts/{id}/notes/{key} so concurrent adds from
+        two producers can't clobber each other. */}
+    {notesAcctId && accounts?.[notesAcctId] && (
+      <CompanyNotesModal
+        account={accounts[notesAcctId]}
+        onClose={() => setNotesAcctId(null)}
+        onWriteNote={(key, note) => writeNote(notesAcctId, key, note)}
+      />
+    )}
+
+    {/* Merge modal — fold a duplicate account into another. Driven by
+        the row's ⇄ button. Persistence (record write + project-link
+        repoint + duplicate delete) all happens in doMerge. */}
+    {mergeAcctId && accounts?.[mergeAcctId] && (
+      <MergeAccountModal
+        sourceId={mergeAcctId}
+        accounts={accounts}
+        mergeRecords={mergeRecords}
+        linkedProjectCount={linkedProjectCount}
+        onCancel={() => setMergeAcctId(null)}
+        onMerge={doMerge}
+      />
+    )}
   </>);
+}
+
+// ─── Merge accounts modal ────────────────────────────────────────
+// Folds a duplicate account into another. The producer picks the
+// second account, chooses which record survives ("keep"), and sees a
+// field-by-field preview of the merged result before committing.
+function MergeAccountModal({ sourceId, accounts, mergeRecords, linkedProjectCount, onCancel, onMerge }) {
+  const source = accounts[sourceId];
+  const others = Object.values(accounts || {})
+    .filter(a => a && a.id && a.id !== sourceId)
+    .sort((a, b) => (a.companyName || "").toLowerCase().localeCompare((b.companyName || "").toLowerCase()));
+
+  // Default the "other" account to the closest name match (shared
+  // prefix), since duplicates usually have near-identical names.
+  const bestMatch = () => {
+    const src = (source.companyName || "").toLowerCase().trim();
+    let best = others[0]?.id || "";
+    let bestScore = -1;
+    for (const o of others) {
+      const n = (o.companyName || "").toLowerCase().trim();
+      let i = 0;
+      while (i < src.length && i < n.length && src[i] === n[i]) i++;
+      if (i > bestScore) { bestScore = i; best = o.id; }
+    }
+    return best;
+  };
+
+  const [otherId, setOtherId] = useState(bestMatch);
+
+  // Completeness score — used to default which record survives. More
+  // populated fields → better default keeper.
+  const score = (a) => {
+    if (!a) return 0;
+    let s = 0;
+    ["companyName", "attioId", "accountManager", "projectLead", "partnershipType", "lastContact", "goal", "logoUrl"]
+      .forEach(k => { if ((a[k] || "").toString().trim()) s++; });
+    if (a.clientContact?.firstName) s++;
+    if (a.clientContact?.email) s++;
+    s += Object.keys(a.milestones || {}).length;
+    s += noteCount(a.notes);
+    s += linkedProjectCount(a.id);
+    return s;
+  };
+
+  const other = accounts[otherId];
+  const [keepId, setKeepId] = useState(sourceId);
+
+  // Re-evaluate the default keeper whenever the "other" selection
+  // changes — keep whichever of the pair is more complete.
+  useEffect(() => {
+    if (!other) return;
+    setKeepId(score(source) >= score(other) ? sourceId : otherId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otherId]);
+
+  if (!other) {
+    // Only one account exists — nothing to merge. Shouldn't happen
+    // because the button is gated on accountList.length > 1, but guard
+    // anyway.
+    return null;
+  }
+
+  const dropId = keepId === sourceId ? otherId : sourceId;
+  const keeper = accounts[keepId];
+  const dropped = accounts[dropId];
+  const merged = mergeRecords(keeper, dropped);
+  const repointCount = linkedProjectCount(dropId);
+
+  const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 };
+  const card = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 24, width: 640, maxWidth: "100%", maxHeight: "85vh", overflow: "auto" };
+  const lbl = { fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 };
+  const radioCard = (selected) => ({ flex: 1, padding: "10px 12px", borderRadius: 8, border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`, background: selected ? "var(--accent-soft)" : "var(--bg)", cursor: "pointer" });
+
+  const milestoneCount = Object.keys(merged.milestones || {}).length;
+  const fieldRow = (label, value, fromDropped) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "5px 0", borderBottom: "1px solid var(--border)", fontSize: 12 }}>
+      <span style={{ color: "var(--muted)" }}>{label}</span>
+      <span style={{ color: "var(--fg)", fontWeight: 600, textAlign: "right" }}>
+        {value || <span style={{ color: "var(--muted)", fontWeight: 400 }}>—</span>}
+        {fromDropped && value ? <span title="Filled from the removed duplicate" style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: "#F59E0B" }}>↩ from dup</span> : null}
+      </span>
+    </div>
+  );
+  // Did a given resulting value come from the dropped record (i.e. the
+  // keeper's own value was blank)? Drives the "from dup" tag.
+  const filledFromDrop = (key) => {
+    const k = (keeper[key] || "").toString().trim();
+    const v = (merged[key] || "").toString().trim();
+    return !k && !!v;
+  };
+
+  return (
+    <div style={overlay} onClick={onCancel}>
+      <div style={card} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)", marginBottom: 4 }}>Merge accounts</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 18 }}>
+          Fold a duplicate into one record. The kept record wins on every filled field; the duplicate only fills blanks, then gets deleted.
+        </div>
+
+        {/* Pick the duplicate to merge with */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={lbl}>Duplicate to merge</div>
+          <select value={otherId} onChange={e => setOtherId(e.target.value)}
+            style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none", width: "100%", fontFamily: "inherit" }}>
+            {others.map(o => <option key={o.id} value={o.id}>{o.companyName || "(no name)"}</option>)}
+          </select>
+        </div>
+
+        {/* Choose which record survives */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={lbl}>Which record to keep</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            {[source, other].map(a => {
+              const selected = keepId === a.id;
+              return (
+                <div key={a.id} onClick={() => setKeepId(a.id)} style={radioCard(selected)}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <span style={{ width: 12, height: 12, borderRadius: "50%", border: `2px solid ${selected ? "var(--accent)" : "var(--muted)"}`, background: selected ? "var(--accent)" : "transparent", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.companyName || "(no name)"}</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                    {linkedProjectCount(a.id)} project{linkedProjectCount(a.id) === 1 ? "" : "s"} · {Object.keys(a.milestones || {}).length} milestone{Object.keys(a.milestones || {}).length === 1 ? "" : "s"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Preview of the merged result */}
+        <div style={{ marginBottom: 16, padding: "12px 14px", background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)" }}>
+          <div style={lbl}>Result preview</div>
+          {fieldRow("Company name", merged.companyName, filledFromDrop("companyName"))}
+          {fieldRow("Manager", merged.accountManager, filledFromDrop("accountManager"))}
+          {fieldRow("Project lead", merged.projectLead, filledFromDrop("projectLead"))}
+          {fieldRow("Partnership", merged.partnershipType, filledFromDrop("partnershipType"))}
+          {fieldRow("Goal", merged.goal, filledFromDrop("goal"))}
+          {fieldRow("Last contact", merged.lastContact, filledFromDrop("lastContact"))}
+          {fieldRow("Contact name", merged.clientContact?.firstName, !((keeper.clientContact?.firstName || "").trim()) && !!(merged.clientContact?.firstName || "").trim())}
+          {fieldRow("Contact email", merged.clientContact?.email, !((keeper.clientContact?.email || "").trim()) && !!(merged.clientContact?.email || "").trim())}
+          {fieldRow("Milestones", `${milestoneCount} kept`, false)}
+          {fieldRow("Notes", `${noteCount(keeper.notes) + noteCount(dropped.notes)} combined`, false)}
+        </div>
+
+        {repointCount > 0 && (
+          <div style={{ marginBottom: 16, padding: "10px 12px", borderRadius: 8, background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B", fontSize: 12, fontWeight: 600 }}>
+            {repointCount} project{repointCount === 1 ? "" : "s"} linked to “{dropped.companyName || "the duplicate"}” will be repointed to “{keeper.companyName || "the kept record"}”.
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onCancel} style={{ ...BTN, background: "#374151", color: "#9CA3AF" }}>Cancel</button>
+          <button onClick={() => onMerge(keepId, dropId)} style={{ ...BTN, background: "var(--accent)", color: "white" }}>
+            Merge &amp; delete “{(dropped.companyName || "duplicate").length > 22 ? (dropped.companyName || "duplicate").slice(0, 22) + "…" : (dropped.companyName || "duplicate")}”
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Sherpa doc field ────────────────────────────────────────────

@@ -186,17 +186,22 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Webhook mode mismatch" });
   }
 
-  // Freshness window — Stripe's signature is valid forever, but
-  // we treat events older than 5 minutes as stale and refuse them.
-  // Belt-and-braces against (a) someone replaying a captured event
-  // weeks later to remark a slice paid, and (b) accidental replays
-  // from rotating webhook destinations between test/live modes.
-  // Stripe's own retry policy never produces events this old, so
-  // this rejects no legitimate traffic.
-  const FRESHNESS_WINDOW_SECS = 24 * 60 * 60;
+  // Freshness window — a SANITY bound, not a security control. Forgery is
+  // already stopped by signature verification above, and double-apply is
+  // stopped by per-slice idempotency in markSlicePaid (with order-
+  // independent invoice→slice attribution below), so a replayed event is
+  // harmless. We still reject *ancient* events as belt-and-braces.
+  //
+  // The window MUST exceed Stripe's retry horizon: Stripe retries a failed
+  // delivery for up to 3 days, re-sending the SAME event with the SAME
+  // `created` timestamp. The previous 24h window silently dropped day-2/3
+  // retries — so if our endpoint had a bad few hours, a real payment could
+  // arrive on retry and get rejected as "stale", leaving the invoice
+  // unmarked. 4 days clears the 3-day horizon with margin.
+  const FRESHNESS_WINDOW_SECS = 4 * 24 * 60 * 60;
   if (event.created && (Date.now() / 1000 - event.created) > FRESHNESS_WINDOW_SECS) {
-    console.warn("Stale webhook event rejected:", { id: event.id, type: event.type, ageSecs: Math.round(Date.now() / 1000 - event.created) });
-    return res.status(400).json({ error: "Stale event (older than 5 minutes)" });
+    console.warn("Ancient webhook event rejected:", { id: event.id, type: event.type, ageSecs: Math.round(Date.now() / 1000 - event.created) });
+    return res.status(400).json({ error: "Event older than 4-day freshness window" });
   }
 
   try {
@@ -326,15 +331,26 @@ export default async function handler(req, res) {
         return res.status(200).json({ received: true, ignored: true });
       }
 
-      // Count paid invoices for this subscription to derive sliceIdx.
-      // Stripe's invoice listing returns newest-first; paid invoices
-      // total = sliceIdx + 1 (1-based). Using `status: paid` filter
-      // is safer than relying on billing_reason.
+      // Derive sliceIdx from this invoice's FIXED position in the
+      // subscription's invoice timeline — not from a live paid-count.
+      // Counting paid invoices breaks under Stripe's retry/redelivery:
+      // a delayed or out-of-order invoice.paid would see a different
+      // paid total than when it was first issued and mis-attribute the
+      // slice. Position is stable: invoice #1 is always the deposit,
+      // #2 the next slice, regardless of when its event lands.
       const allInvoices = await stripe.invoices.list({
-        subscription: subId, limit: 10, status: "paid",
+        subscription: subId, limit: 100,
       });
-      const paidCount = allInvoices.data.length;
-      const sliceIdx  = paidCount - 1;
+      const ordered = allInvoices.data
+        .slice()
+        .sort((a, b) => (a.created - b.created) || String(a.id).localeCompare(String(b.id)));
+      let sliceIdx = ordered.findIndex(i => i.id === invoice.id);
+      if (sliceIdx === -1) {
+        // Invoice not in the listing yet (eventual consistency) — fall
+        // back to the paid count, clamped so we never go negative.
+        const paidCount = ordered.filter(i => i.status === "paid").length;
+        sliceIdx = Math.max(0, paidCount - 1);
+      }
       const scheduleLen = Number(sub.metadata?.scheduleLen || 3);
 
       // invoice_pdf is the direct download URL; hosted_invoice_url is
