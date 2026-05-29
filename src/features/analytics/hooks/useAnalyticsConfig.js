@@ -31,7 +31,7 @@ import { PLATFORMS } from "../config/constants";
 // pause scraping for an account, which is what the master `enabled`
 // toggle is for. So lean default-on for v1 platforms; v2/v3
 // platforms stay off until they're actually wired.
-function emptyConfig(accountId, companyName) {
+export function emptyConfig(accountId, companyName) {
   const platforms = {};
   PLATFORMS.forEach(p => { platforms[p.key] = !!p.v1; });
   return {
