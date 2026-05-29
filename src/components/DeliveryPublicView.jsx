@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { initFB, onFB, fbListen, signInAnonymouslyForPublic } from "../firebase";
+import { logoBg } from "../utils";
 import { PORTAL_CSS } from "./portal/portalTheme";
 import { ViewixLogo, useIsNarrow } from "./portal/ui";
 import { Deliveries } from "./portal/Deliveries";
@@ -49,6 +50,10 @@ export function DeliveryPublicView() {
   const [authReady, setAuthReady] = useState(false);
   const [notFoundReason, setNotFoundReason] = useState(null);
   const [am, setAm] = useState(null);
+  // Client logo lives on /accounts/{id} (the delivery node's own logoUrl is
+  // almost always ""), which the anonymous public page can't read directly —
+  // the delivery-am endpoint resolves it server-side and returns it here.
+  const [clientLogo, setClientLogo] = useState(null);
 
   // Support both pretty paths (/d/HASH/slug) and legacy ?d=ID.
   const deliveryId = new URLSearchParams(window.location.search).get("d");
@@ -119,8 +124,8 @@ export function DeliveryPublicView() {
     let cancelled = false;
     fetch(`/api/public/delivery-am?deliveryId=${encodeURIComponent(id)}`)
       .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (!cancelled && d) setAm(d.accountManager || null); })
-      .catch(() => { /* AM is best-effort; the review still works without it */ });
+      .then(d => { if (!cancelled && d) { setAm(d.accountManager || null); setClientLogo(d.clientLogo || null); } })
+      .catch(() => { /* AM + logo are best-effort; the review still works without them */ });
     return () => { cancelled = true; };
   }, [delivery?.id]);
 
@@ -158,9 +163,14 @@ export function DeliveryPublicView() {
   // Client logo: render at the same visual height as the Viewix logo
   // on the left, but let the natural aspect ratio determine width (with
   // a generous cap so very wide logos don't push the project text out
-  // of frame). No background / border / radius — present the asset
-  // cleanly the way the staff Account row does.
+  // of frame). Source is the server-resolved account logo (the delivery
+  // node's own logoUrl is almost always ""); fall back to it just in
+  // case an older delivery has one inline. Present cleanly with no
+  // backing UNLESS the producer set logoBg "dark" (a white-on-
+  // transparent mark that would be invisible on the light surface).
   const clientLogoHeight = narrow ? 24 : 32;
+  const clientLogoSrc = clientLogo?.url || delivery.logoUrl || "";
+  const clientLogoBoxed = clientLogo?.bg === "dark";
   const header = (
     // Full-width border / background, but inner content constrained to
     // the same maxWidth as the body grid below so left/right edges align.
@@ -172,11 +182,18 @@ export function DeliveryPublicView() {
             <div style={{ fontSize: narrow ? 16 : 19, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{delivery.projectName || "Your videos"}</div>
             <div style={{ fontSize: 13, color: "var(--text-3)" }}>{delivery.clientName || ""}</div>
           </div>
-          {delivery.logoUrl && (
+          {clientLogoSrc && (
             <img
-              src={delivery.logoUrl}
+              src={clientLogoSrc}
               alt={delivery.clientName || ""}
-              style={{ height: clientLogoHeight, width: "auto", maxWidth: narrow ? 120 : 180, objectFit: "contain", flexShrink: 0, display: "block" }}
+              onError={e => { e.target.style.display = "none"; }}
+              style={{
+                height: clientLogoHeight, width: "auto", maxWidth: narrow ? 120 : 180,
+                objectFit: "contain", flexShrink: 0, display: "block",
+                background: clientLogoBoxed ? logoBg(clientLogo.bg) : "transparent",
+                borderRadius: clientLogoBoxed ? 6 : 0,
+                padding: clientLogoBoxed ? "4px 6px" : 0,
+              }}
             />
           )}
         </div>

@@ -16,11 +16,17 @@
 // internal id.
 //
 // Contract:  GET /api/public/delivery-am?deliveryId=del-1234567890
-// Returns:   { accountManager: { name, photo, phone, email, bookingUrl } }
-//            or { accountManager: null } when it can't be resolved.
+// Returns:   { accountManager: { name, photo, phone, email, bookingUrl },
+//              clientLogo: { url, bg } | null }
+//            or { accountManager: null, clientLogo: null } when it can't be
+//            resolved. The client logo lives on /accounts/{id} (logoUrl +
+//            logoBg) — the public /d/ page can't read /accounts directly, so
+//            we resolve + return it here alongside the AM block. The org's
+//            own brand mark is not sensitive to that org.
 
 import { getAdmin } from "../_fb-admin.js";
 import { accountManagerBlock } from "../_clientRedact.js";
+import { normalizeAvatarUrl } from "../_avatarUrl.js";
 import { findOwningProject } from "../_findOwningProject.js";
 
 // Re-exported for back-compat — `delivery-am.test.mjs` imports it from
@@ -44,6 +50,20 @@ export function buildAmEnvelope(account, editors) {
   return { accountManager: am && am.name ? am : null };
 }
 
+// Resolve the client's own brand mark from the account record. `logoUrl`
+// may be a Google Drive *share* link (serves HTML, not image bytes) — run
+// it through the same normaliser the AM photo uses so <img> gets real
+// bytes. `bg` carries the producer's logoBg preference so a white-on-
+// transparent mark can be backed on the dark surface it needs. null when
+// there's no logo set. (A `del-` delivery node's own logoUrl is almost
+// always "" — the real asset lives on /accounts/{id}.)
+export function buildClientLogo(account) {
+  if (!account) return null;
+  const url = normalizeAvatarUrl(account.logoUrl);
+  if (!url) return null;
+  return { url, bg: account.logoBg || "white" };
+}
+
 // Light in-memory rate limit (same shape as api/notify-revision.js).
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT = 30;
@@ -64,7 +84,7 @@ function checkRate(ip) {
   return e.count <= RATE_LIMIT;
 }
 
-const NO_AM = { accountManager: null };
+const NO_AM = { accountManager: null, clientLogo: null };
 
 export default async function handler(req, res) {
   // Never cache: AM details can change and the response is per-delivery.
@@ -121,7 +141,11 @@ export default async function handler(req, res) {
       db.ref(`/accounts/${accountId}`).once("value"),
       db.ref("/editors").once("value"),
     ]);
-    return res.status(200).json(buildAmEnvelope(acctSnap.val(), editorsSnap.val()));
+    const account = acctSnap.val();
+    return res.status(200).json({
+      ...buildAmEnvelope(account, editorsSnap.val()),
+      clientLogo: buildClientLogo(account),
+    });
   } catch (e) {
     console.error("[delivery-am] error", e);
     return res.status(500).json({ error: "Could not resolve account manager" });
