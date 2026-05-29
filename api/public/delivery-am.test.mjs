@@ -12,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import handler, {
-  DELIVERY_ID_RE, findOwningProject, buildAmEnvelope,
+  DELIVERY_ID_RE, findOwningProject, buildAmEnvelope, buildClientLogo,
 } from "./delivery-am.js";
 
 // ── Fixtures ──
@@ -81,6 +81,30 @@ assert.deepEqual(
   "account with no AM name → null",
 );
 
+// ── 6b. buildClientLogo — resolves the account brand mark, fails soft ──
+assert.equal(buildClientLogo(null), null, "no account → no logo");
+assert.equal(buildClientLogo({ companyName: "X" }), null, "account without logoUrl → no logo");
+assert.deepEqual(
+  buildClientLogo({ logoUrl: "https://cdn.example/acme.png", logoBg: "dark" }),
+  { url: "https://cdn.example/acme.png", bg: "dark" },
+  "direct logo url + bg passed through",
+);
+assert.deepEqual(
+  buildClientLogo({ logoUrl: "https://cdn.example/acme.png" }),
+  { url: "https://cdn.example/acme.png", bg: "white" },
+  "missing logoBg defaults to white",
+);
+assert.deepEqual(
+  buildClientLogo({ logoUrl: "https://drive.google.com/file/d/ABC123/view?usp=drive_link" }),
+  { url: "https://drive.google.com/thumbnail?id=ABC123&sz=w200", bg: "white" },
+  "google drive share link normalized to thumbnail bytes",
+);
+// The logo carries only url + bg — never any account internals.
+const logoJson = JSON.stringify(buildClientLogo({ logoUrl: "https://cdn.example/a.png", logoBg: "white", dealValue: 9, attioId: "att", accountManager: "Jordan" }));
+for (const bad of ["dealValue", "attio", "accountManager", "companyName"]) {
+  assert.ok(!logoJson.includes(bad), `forbidden token "${bad}" leaked into clientLogo`);
+}
+
 // ── 6. Handler rejects before touching the DB (no Firebase needed) ──
 function fakeRes() {
   const r = { headers: {}, statusCode: null, body: null };
@@ -100,4 +124,4 @@ r = await call("GET", { deliveryId: "not-valid" });
 assert.equal(r.statusCode, 400, "bad deliveryId rejected before DB");
 assert.equal(r.headers["Cache-Control"], "no-store", "Cache-Control: no-store always set");
 
-console.log("OK — delivery-am endpoint contract pinned (6 groups passed)");
+console.log("OK — delivery-am endpoint contract pinned (7 groups passed)");
