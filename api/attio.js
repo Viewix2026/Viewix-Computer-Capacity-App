@@ -2,6 +2,40 @@
 // Fetches all deals with pagination for monthly revenue tracking
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 
+// ── Deal close-date resolution (feeds the Accounts "Signing" milestone) ──
+// Attio's Deals object may or may not carry a dedicated close / won-date
+// attribute depending on workspace config, and the slug isn't known from
+// code (the Zapier webhook receives a Zapier-mapped `closeDate`, not the raw
+// API field). So probe the common candidate slugs first, then fall back to
+// the deal record's system `created_at` as a signing proxy. Always resolve to
+// a Sydney calendar date (YYYY-MM-DD): milestone dates are date-only and the
+// team operates in Australia/Sydney, so a naive UTC slice would land a
+// morning signing on the previous day.
+const CLOSE_DATE_SLUGS = ["close_date", "closed_date", "won_date", "date_won", "signing_date", "signed_date", "won_on", "close"];
+
+function toSydneyDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  try {
+    // en-CA formats as YYYY-MM-DD; timeZone shifts to the Sydney calendar day.
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Sydney" }).format(d);
+  } catch {
+    return String(iso).slice(0, 10);
+  }
+}
+
+function dealRawDate(deal) {
+  const v = deal?.values || {};
+  for (const slug of CLOSE_DATE_SLUGS) {
+    const cell = Array.isArray(v[slug]) ? v[slug][0] : v[slug];
+    const raw = cell?.value || cell?.date || (typeof cell === "string" ? cell : null);
+    if (raw) return raw;
+  }
+  // System creation timestamp as the fallback signing anchor.
+  return deal?.created_at || (Array.isArray(v.created_at) ? v.created_at[0]?.value : null) || null;
+}
+
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
   setCors(req, res);
@@ -127,11 +161,31 @@ export default async function handler(req, res) {
         }
       }
 
+      // Build map: company_record_id -> earliest deal date (the signing
+      // anchor). Earliest, not latest, because signing marks when the
+      // relationship started; a later upsell deal shouldn't move it. Kept in
+      // its own pass rather than folded into the videoTypeMap loop above —
+      // that loop early-`continue`s once a company's video_type is known,
+      // which would skip the company's remaining deals and break the min.
+      const closeDateMap = {};
+      for (const deal of allDeals) {
+        const companyRef = deal.values?.associated_company;
+        const companyId = Array.isArray(companyRef) && companyRef[0]
+          ? companyRef[0].target_record_id
+          : (companyRef?.target_record_id || null);
+        if (!companyId) continue;
+        const resolved = toSydneyDate(dealRawDate(deal));
+        if (!resolved) continue;
+        if (!closeDateMap[companyId] || resolved < closeDateMap[companyId]) {
+          closeDateMap[companyId] = resolved;
+        }
+      }
+
       const companies = data.data.map(r => {
         const nameArr = r.values?.name || [];
         const name = nameArr[0]?.value || nameArr[0]?.first_name || "";
         const id = r.id?.record_id || "";
-        return { id, name, videoType: videoTypeMap[id] || "" };
+        return { id, name, videoType: videoTypeMap[id] || "", closeDate: closeDateMap[id] || "" };
       }).filter(c => c.name);
 
       return res.status(200).json({ companies, total: companies.length });
