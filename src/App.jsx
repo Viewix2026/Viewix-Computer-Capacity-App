@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, lazy, Suspense } from "react";
-import { initFB, onFB, fbSet, fbListen, recentlyWroteTo, onAuthReady, signOutUser, authFetch, getCurrentUserEmail, getCurrentUserName, getCurrentUserPhotoURL } from "./firebase";
+import { initFB, onFB, fbSet, fbListen, recentlyWroteTo, onAuthReady, onClientAuthChanged, signOutUser, authFetch, getCurrentUserEmail, getCurrentUserName, getCurrentUserPhotoURL } from "./firebase";
 import {
   CONTENT_CATEGORIES, CAT_COLORS,
   VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS,
@@ -61,6 +61,7 @@ const ClientPortal             = lazy(() => import("./components/portal/ClientPo
 
 export default function App(){
   const[role,setRole]=useState(null); // "founders" | "manager" | "closer" | ...
+  const[authUser,setAuthUser]=useState(null); // reactive Firebase user — keeps the header badge from falling back to "Account"
   const[loading,setLoading]=useState(true);
   const[tool,setTool]=useState("home");
   const[capTab,setCapTab]=useState("dashboard");
@@ -235,6 +236,11 @@ export default function App(){
     onAuthReady(restoredRole=>{
       if(restoredRole)setRole(restoredRole);
     });
+    // Reactive auth-user subscription so the header badge reflects the live
+    // Firebase user instead of a one-shot snapshot read during render. The
+    // non-reactive getters returned null on any render that landed before
+    // auth.currentUser was populated, making the badge stick on "Account".
+    return onClientAuthChanged(setAuthUser);
   },[]);
 
   const normalizedRole=normalizeRole(role);
@@ -602,7 +608,7 @@ export default function App(){
 
     {/* App header bar */}
     <div style={{flexShrink:0,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"8px 16px",borderBottom:"1px solid var(--border)",background:"var(--card)"}}>
-      <UserBadge editors={editors} email={getCurrentUserEmail()} name={getCurrentUserName()} photoURL={getCurrentUserPhotoURL()}/>
+      <UserBadge editors={editors} email={authUser?.email||getCurrentUserEmail()} name={authUser?.displayName||getCurrentUserName()} photoURL={authUser?.photoURL||getCurrentUserPhotoURL()}/>
     </div>
 
     {/* Scrollable tab area. Wrapped in Suspense so lazy-loaded tab modules
@@ -828,7 +834,7 @@ export default function App(){
     {tool==="editors"&&(isFounder||isLead||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} viewerRole={normalizedRole} currentUserEmail={getCurrentUserEmail()} currentUserName={getCurrentUserName()}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
-    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
+    {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} projects={projects} setProjects={setProjects} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
     {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null}/>)}

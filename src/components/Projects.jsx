@@ -3291,7 +3291,10 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
         setActiveProjectId(route.recordId);
       }
     } else {
+      // Navigating to a non-projects sub-tab (e.g. a delivery deep-link) must
+      // drop any open project, otherwise the stale `active` hides the sub-tab nav.
       appliedRouteRef.current = null;
+      setActiveProjectId(null);
     }
   }, [route?.subTab, route?.recordId, projects]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3376,7 +3379,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
               View only
             </span>
           )}
-          {!active && (
+          {!(subTab === "projects" && active) && (
             <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3, marginLeft: 12 }}>
               <button onClick={() => setSubTab("projects")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "projects" ? "var(--card)" : "transparent", color: subTab === "projects" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Projects</button>
               <button onClick={() => setSubTab("teamBoard")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "teamBoard" ? "var(--card)" : "transparent", color: subTab === "teamBoard" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Team Board</button>
