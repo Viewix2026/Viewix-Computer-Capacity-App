@@ -545,7 +545,10 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, projec
             const existing = Object.values(next).find(a => a.attioId === c.id);
             if (!existing) {
               const id = "acct-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
-              const created = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: partnershipLabel, lastContact: "", milestones: {}, logoUrl: "" };
+              // Seed the Signing milestone from the won deal's date so the
+              // Accounts table shows it immediately. Status "Completed" mirrors
+              // the deal-won webhook (a won deal == signing happened).
+              const created = { id, companyName: c.name || "", attioId: c.id || "", accountManager: "", projectLead: "", partnershipType: partnershipLabel, lastContact: "", milestones: c.closeDate ? { signing: { date: c.closeDate, status: "Completed" } } : {}, logoUrl: "" };
               next[id] = created;
               // /accounts is no longer written by the App.jsx bulk-write
               // loop (it raced server writes and clobbered just-set
@@ -559,13 +562,25 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, projec
                   return [...prev2, { id: `cl-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, name: c.name, projectLead: "", accountManager: "", docUrl: "" }];
                 });
               }
-            } else if (partnershipLabel && !existing.partnershipType) {
-              const updated = { ...existing, partnershipType: partnershipLabel };
-              next[existing.id] = updated;
-              // Leaf-merge: only the one field we changed. A full-object
-              // fbSet here clobbered sibling fields edited concurrently
-              // (same race the rest of this file already guards against).
-              fbUpdate(`/accounts/${existing.id}`, { partnershipType: partnershipLabel });
+            } else {
+              // Backfill from Attio without ever overwriting a producer edit.
+              // Two independent guards: partnership label and signing date each
+              // fire only when their target is genuinely empty, and each is a
+              // leaf-write so it can't clobber sibling fields touched
+              // concurrently (the race the rest of this file guards against).
+              let updated = existing;
+              if (partnershipLabel && !existing.partnershipType) {
+                updated = { ...updated, partnershipType: partnershipLabel };
+                fbUpdate(`/accounts/${existing.id}`, { partnershipType: partnershipLabel });
+              }
+              const hasSigningDate = existing.milestones?.signing?.date;
+              if (c.closeDate && !hasSigningDate) {
+                const status = existing.milestones?.signing?.status || "Completed";
+                updated = { ...updated, milestones: { ...(updated.milestones || {}), signing: { ...(existing.milestones?.signing || {}), date: c.closeDate, status } } };
+                // Leaf-merge the milestone path — same race-avoidance as setSigningDate.
+                fbUpdate(`/accounts/${existing.id}/milestones/signing`, { date: c.closeDate, status });
+              }
+              if (updated !== existing) next[existing.id] = updated;
             }
           });
           return next;
