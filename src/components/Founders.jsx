@@ -12,6 +12,7 @@ import { FoundersGoals } from "./FoundersGoals";
 import { FoundersAdvisor } from "./FoundersAdvisor";
 import { BuyerJourney } from "./BuyerJourney";
 import { TranscriptInsightsLab } from "./TranscriptInsightsLab";
+import { FoundersProfitability } from "./FoundersProfitability";
 import { computeFoundersMetrics } from "../../api/_attio-metrics";
 import {
   CATEGORIES, CATEGORY_COLORS, ALL_FIELDS, formatValue,
@@ -684,7 +685,7 @@ export function Founders({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Founders Dashboard</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "goals", label: "Goals" }, { key: "advisor", label: "Advisor" }, { key: "data", label: "Data" }, { key: "learnings", label: "AI Learnings" }, { key: "insightsLab", label: "Transcript Insights Lab" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "goals", label: "Goals" }, { key: "advisor", label: "Advisor" }, { key: "data", label: "Data" }, { key: "profitability", label: "Profitability" }, { key: "learnings", label: "AI Learnings" }, { key: "insightsLab", label: "Transcript Insights Lab" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }].map(t => (
             <button key={t.key} onClick={() => setFoundersTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: foundersTab === t.key ? "var(--card)" : "transparent", color: foundersTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
@@ -935,6 +936,7 @@ export function Founders({
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
         {foundersTab === "insightsLab" && <TranscriptInsightsLab />}
+        {foundersTab === "profitability" && <FoundersProfitability />}
         {foundersTab === "thankyou" && <ThankYouEditor saleThankYou={saleThankYou} setSaleThankYou={setSaleThankYou} />}
         {/* Buyer Journey is rendered above the maxWidth wrapper to allow
             full-width horizontal scroll — see top of this component. */}

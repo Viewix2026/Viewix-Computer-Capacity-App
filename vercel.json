@@ -72,6 +72,9 @@
     "api/cron/capacity-stats.js": {
       "maxDuration": 60
     },
+    "api/cron/profitability-rollup.js": {
+      "maxDuration": 120
+    },
     "api/cron/sales-daily.js": {
       "maxDuration": 120
     },
@@ -137,6 +140,10 @@
     {
       "path": "/api/cron/capacity-stats",
       "schedule": "30 18 * * *"
+    },
+    {
+      "path": "/api/cron/profitability-rollup",
+      "schedule": "30 19 * * *"
     },
     {
       "path": "/api/cron/sales-daily",
