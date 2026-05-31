@@ -627,10 +627,6 @@ export function Founders({
   accounts,
 }) {
   const [attioLoading, setAttioLoading] = useState(false);
-  // TEMP one-off: backfill historical Signing milestone dates from Attio.
-  // Remove this state + runBackfill + the button once Jeremy has clicked it once.
-  const [backfillLoading, setBackfillLoading] = useState(false);
-  const [backfillResult, setBackfillResult] = useState(null);
   const [revenueTableExpanded, setRevenueTableExpanded] = useState(false);
   // YTD revenue is hidden by default — clicked to reveal, click again
   // to re-hide. Default false so a casual glance over the founder's
@@ -681,19 +677,6 @@ export function Founders({
         setAttioLoading(false);
       })
       .catch(e => { console.error("Attio fetch error:", e); setAttioLoading(false); });
-  };
-
-  // ─── TEMP one-off: backfill historical Signing milestone dates ───
-  // Fills the Accounts "Signing" milestone for accounts that predate the
-  // deal-won webhook. Idempotent — only writes where signing is blank. Click
-  // once, read the report, then this handler + state + button get removed.
-  const runBackfill = () => {
-    setBackfillLoading(true);
-    setBackfillResult(null);
-    authFetch("/api/backfill-signing-dates", { method: "POST", headers: { "Content-Type": "application/json" } })
-      .then(r => r.json())
-      .then(data => { setBackfillResult(data); setBackfillLoading(false); })
-      .catch(e => { console.error("Backfill error:", e); setBackfillResult({ error: e.message }); setBackfillLoading(false); });
   };
 
   return (
@@ -839,36 +822,8 @@ export function Founders({
                   })()}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {/* TEMP one-off button — remove after Jeremy runs it once. */}
-                <button onClick={runBackfill} disabled={backfillLoading} style={{ ...BTN, background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", padding: "8px 16px", opacity: backfillLoading ? 0.6 : 1 }}>{backfillLoading ? "Backfilling..." : "Backfill signing dates"}</button>
-                <button onClick={syncAttio} style={{ ...BTN, background: "var(--accent)", color: "white", padding: "8px 16px" }}>{attioLoading ? "Syncing..." : "Sync from Attio"}</button>
-              </div>
+              <button onClick={syncAttio} style={{ ...BTN, background: "var(--accent)", color: "white", padding: "8px 16px" }}>{attioLoading ? "Syncing..." : "Sync from Attio"}</button>
             </div>
-            {/* TEMP one-off backfill report — remove with the button above. */}
-            {backfillResult && (
-              <div style={{ marginBottom: 16, padding: "12px 16px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--fg)" }}>
-                {backfillResult.error ? (
-                  <span style={{ color: "var(--danger, #e5484d)" }}>Backfill failed: {backfillResult.error}</span>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div style={{ fontWeight: 700 }}>
-                      Backfilled {backfillResult.backfilledCount} of {backfillResult.totalAccounts} accounts
-                      <span style={{ color: "var(--muted)", fontWeight: 400 }}> · {backfillResult.dealsScanned} deals scanned · {backfillResult.skippedHasDate} already had a date</span>
-                    </div>
-                    {backfillResult.backfilled?.length > 0 && (
-                      <div style={{ color: "var(--muted)" }}>Set: {backfillResult.backfilled.map(b => `${b.name} (${b.date})`).join(", ")}</div>
-                    )}
-                    {backfillResult.skippedNoDeal?.length > 0 && (
-                      <div style={{ color: "var(--muted)" }}>No matching deal: {backfillResult.skippedNoDeal.join(", ")}</div>
-                    )}
-                    {backfillResult.skippedNoAttio?.length > 0 && (
-                      <div style={{ color: "var(--muted)" }}>No Attio link (fill by hand): {backfillResult.skippedNoAttio.join(", ")}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
             {attioDeals?.data ? (() => {
               // Extract value and date from deals, trying multiple field name patterns
               const extractVal = d => { const v = d.values; const candidates = [v?.deal_value, v?.amount, v?.value, v?.revenue, v?.contract_value]; for (const c of candidates) { if (c?.[0] != null) { const n = c[0].currency_value ?? c[0].value; if (n != null) return typeof n === "number" ? n : parseFloat(n) || 0; } } return 0; };
