@@ -339,10 +339,6 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, projec
     }
   };
 
-  const logContact = (id) => {
-    updateAccount(id, { lastContact: new Date().toISOString().split("T")[0] });
-  };
-
   // How many projects reference an account — as their primary
   // (links.accountId) or as a secondary (links.additionalAccountIds).
   // Surfaced in the merge modal so the producer knows how many project
@@ -735,10 +731,10 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, projec
                         </select>
                       </td>
                       <td style={{ ...TD, textAlign: "center" }}>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: cc.bg, color: cc.color, textTransform: "uppercase" }}>{cc.label}</span>
-                          <button onClick={() => logContact(acct.id)} style={{ fontSize: 10, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>Log Contact</button>
-                        </div>
+                        {/* Auto-fed from each account's Attio company `last_interaction`
+                            (email or meeting), synced nightly by sync-attio-cache.js.
+                            Replaced the old manual "Log Contact" button. */}
+                        <span title="Last interaction from Attio (email or meeting) · synced nightly" style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: cc.bg, color: cc.color, textTransform: "uppercase" }}>{cc.label}</span>
                       </td>
                       {MILESTONE_DEFS.map(m => {
                         const ms = acct.milestones?.[m.key] || {};
