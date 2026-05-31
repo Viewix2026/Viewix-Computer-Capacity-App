@@ -923,6 +923,13 @@ function BrandFooter() {
 //   hasInHeroCta: signals to the layout that the hero rendered its own
 //               CTA, so the footer dashboard link should be suppressed
 //               to avoid two CTAs in the same email.
+//   showStepper / showProjectCard / showUpNext: opt-out flags (all
+//               default true). The 4 lifecycle templates omit them and
+//               render the full Kickoff→Review chrome. Transactional
+//               emails that aren't a lifecycle stage (e.g. the client
+//               portal invite) set the relevant ones to false to drop
+//               the stepper / project card / "up next" rail while still
+//               reusing the shared header, footer, fonts and BRAND tokens.
 // ────────────────────────────────────────────────────────────────
 export function Layout({
   stage,
@@ -935,6 +942,9 @@ export function Layout({
   dashboardUrl,
   hasInHeroCta = false,
   showImagery = false,
+  showStepper = true,
+  showProjectCard = true,
+  showUpNext = true,
   children,
 }) {
   const stageInfo = STAGES.find(s => s.num === stage) || STAGES[0];
@@ -978,7 +988,7 @@ export function Layout({
           Container,
           { style: styles.card },
           h(EmailHeader, null),
-          h(Stepper, { stage, accent }),
+          showStepper ? h(Stepper, { stage, accent }) : null,
           // Hero block — template-specific
           h(Section, { style: styles.hero }, children),
           // Per-stage hero imagery (Kickoff = blue gradient/play, Shoot
@@ -990,9 +1000,9 @@ export function Layout({
             ? h(HeroImagery, { stage })
             : null,
           // Project card
-          h(ProjectCard, { project, producer, editor, accent }),
+          showProjectCard ? h(ProjectCard, { project, producer, editor, accent }) : null,
           // Up next
-          h(UpNext, { text: resolvedUpNext }),
+          showUpNext ? h(UpNext, { text: resolvedUpNext }) : null,
           // Footer dashboard link (only when no in-hero CTA)
           !hasInHeroCta && dashboardUrl
             ? h(FooterDashboardLink, { url: dashboardUrl, accent })
