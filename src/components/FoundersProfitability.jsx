@@ -196,6 +196,18 @@ export function FoundersProfitability() {
     [commissionPlansM]
   );
 
+  // first-run setup: before the cron has written any snapshot, open the
+  // rate + commission panels so the empty-state "set rates below" guidance
+  // is actionable. One-shot (ref-guarded) so a manual collapse sticks.
+  const setupOpened = useRef(false);
+  useEffect(() => {
+    if (loaded.current && baseRows.length === 0 && !setupOpened.current) {
+      setupOpened.current = true;
+      setShowRates(true);
+      setShowPlans(true);
+    }
+  }, [baseRows.length]);
+
   // ── writers (optimistic draft + persist) ──────────────────────────
   const saveRate = (id, patch) => {
     const next = { ...(laborCostsM[id] || {}), ...patch, updatedAt: Date.now() };
@@ -226,14 +238,8 @@ export function FoundersProfitability() {
   if (!loaded.current) {
     return <div style={{ color: C.muted, fontSize: 13, padding: "20px 4px" }}>Loading profitability…</div>;
   }
-  if (baseRows.length === 0) {
-    return (
-      <div style={{ color: C.muted, fontSize: 13, padding: "20px 4px", lineHeight: 1.6 }}>
-        No profitability snapshot yet. The nightly rollup (<code>profitability-rollup</code>) writes <code>/profitability</code> after the first run.
-        Set per-person labour rates and commission plans below in the meantime so the first run lands with real costs.
-      </div>
-    );
-  }
+
+  const noSnapshot = baseRows.length === 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -250,6 +256,15 @@ export function FoundersProfitability() {
         </p>
       </div>
 
+      {noSnapshot && (
+        <div style={{ color: C.muted, fontSize: 13, padding: "4px 0", lineHeight: 1.6 }}>
+          No profitability snapshot yet. The nightly rollup (<code>profitability-rollup</code>) writes <code>/profitability</code> after its first run (tonight 05:30 Sydney, or trigger it now).
+          Set per-person labour rates and commission plans below so that first run lands with real costs.
+        </div>
+      )}
+
+      {!noSnapshot && (
+        <>
       {/* estimates / missing-rate banner */}
       <div style={{ fontSize: 12, color: ratesIncomplete ? "#F59E0B" : C.muted, background: ratesIncomplete ? "rgba(245,158,11,0.10)" : "transparent", border: `1px solid ${ratesIncomplete ? "rgba(245,158,11,0.35)" : C.border}`, borderRadius: 8, padding: "9px 12px", lineHeight: 1.5 }}>
         {ratesIncomplete
@@ -326,6 +341,9 @@ export function FoundersProfitability() {
           </table>
         </div>
       </section>
+
+        </>
+      )}
 
       {/* per-person labour rates */}
       <section>
