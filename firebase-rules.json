@@ -142,6 +142,27 @@
       ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
+    "laborCosts": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
+    },
+    "commissionPlans": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
+    },
+    "projectCostInputs": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
+    },
+    "projectCommissionInputs": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
+    },
+    "profitability": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": false
+    },
+
     "teamHome": {
       ".read": "auth != null && auth.token.role != null",
       ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
