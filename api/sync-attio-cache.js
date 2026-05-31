@@ -46,6 +46,39 @@ function dealRecordId(deal) {
   return deal?.id?.record_id || deal?.id || "";
 }
 
+// Resolve an ISO timestamp to a Sydney calendar date (YYYY-MM-DD). lastContact
+// is date-only and the team operates in Australia/Sydney, so a naive UTC slice
+// would land an early-morning interaction on the previous day.
+function toSydneyDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Sydney" }).format(d);
+  } catch {
+    return String(iso).slice(0, 10);
+  }
+}
+
+// Most recent client touchpoint for a company, as a Sydney date. Attio
+// "interaction" attributes serialise as an array whose cell carries
+// `interacted_at` (ISO). `last_interaction` is already the rolled-up latest
+// across channels; the email/calendar slugs are probed as a fallback and the
+// max is taken so a missing rollup can't blank an account that clearly has
+// activity. Returns "" when the company has no logged interaction at all.
+const LAST_INTERACTION_SLUGS = ["last_interaction", "last_email_interaction", "last_calendar_interaction"];
+function lastInteractionDate(company) {
+  const v = company?.values || {};
+  let best = "";
+  for (const slug of LAST_INTERACTION_SLUGS) {
+    const cell = Array.isArray(v[slug]) ? v[slug][0] : v[slug];
+    const raw = cell?.interacted_at || cell?.value || cell?.date || (typeof cell === "string" ? cell : null);
+    const date = toSydneyDate(raw);
+    if (date && date > best) best = date;
+  }
+  return best;
+}
+
 export default async function handler(req, res) {
   if (req.method === "GET" && !isAuthorizedCron(req).ok) {
     return res.status(401).json({ error: "Cron header required" });
@@ -235,6 +268,40 @@ export default async function handler(req, res) {
       }
     }
 
+    // 6. Mirror each account's last-contact date from its Attio company's
+    //    `last_interaction` (rolled-up across email + meetings). This replaces
+    //    the old manual "Log Contact" button — the Accounts staleness badge is
+    //    now Attio-driven and refreshes every night. Match company -> account
+    //    by attioId (the same id the webhook stamps), leaf-write only
+    //    `lastContact`, and skip writes that wouldn't change anything so a
+    //    quiet night is a near no-op.
+    let companiesScanned = 0;
+    let lastContactUpdated = 0;
+    try {
+      const cr = await fetch("https://api.attio.com/v2/objects/companies/records/query", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ filter: { contact_type: "Current Customer" }, limit: 500 }),
+      });
+      const cd = await cr.json();
+      const companies = Array.isArray(cd?.data) ? cd.data : [];
+      companiesScanned = companies.length;
+      const contactBatch = {};
+      for (const company of companies) {
+        const companyId = company?.id?.record_id || "";
+        if (!companyId) continue;
+        const acct = accountByAttioId.get(companyId);
+        if (!acct) continue;
+        const date = lastInteractionDate(company);
+        if (!date || acct.lastContact === date) continue;
+        contactBatch[`${acct.id}/lastContact`] = date;
+        lastContactUpdated++;
+      }
+      if (Object.keys(contactBatch).length) await fbPatch("/accounts", contactBatch);
+    } catch (e) {
+      console.error("last-contact sync error:", e);
+    }
+
     return res.status(200).json({
       ok: true,
       trigger,
@@ -247,6 +314,7 @@ export default async function handler(req, res) {
         accounts: accountsBackfilled,
         preproduction: preprodBackfilled,
       },
+      lastContactSync: { companiesScanned, updated: lastContactUpdated },
       lastSyncedAt,
     });
   } catch (e) {
