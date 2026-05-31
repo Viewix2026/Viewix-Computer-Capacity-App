@@ -24,6 +24,7 @@ import InEditSuite from "./templates/InEditSuite.js";
 import ReadyForReview from "./templates/ReadyForReview.js";
 import SocialReconnect from "./templates/SocialReconnect.js";
 import SocialReconnectInternal from "./templates/SocialReconnectInternal.js";
+import ClientPortalInvite from "./templates/ClientPortalInvite.js";
 
 const TEMPLATES = {
   Confirmation,
@@ -36,6 +37,9 @@ const TEMPLATES = {
   // Leadsie-granted BM access).
   SocialReconnect,
   SocialReconnectInternal,
+  // Transactional — fired from admin-client-access.js on a new per-org
+  // portal grant (and the manual "Resend invite"). Not a lifecycle stage.
+  ClientPortalInvite,
 };
 
 /**
