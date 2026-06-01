@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const [projects, timeLogs, laborCosts, commissionPlans, costInputs, commissionInputs] =
+    const [projects, timeLogs, laborCosts, commissionPlans, costInputs, commissionInputs, attioCache] =
       await Promise.all([
         adminGet("/projects"),
         adminGet("/timeLogs"),
@@ -53,6 +53,10 @@ export default async function handler(req, res) {
         adminGet("/commissionPlans"),
         adminGet("/projectCostInputs"),
         adminGet("/projectCommissionInputs"),
+        // Revenue source of truth: projects rarely carry their own dealValue,
+        // so the compute fills blanks from the matched Won deal in this cache
+        // (refreshed by sync-attio-cache at 19:00 UTC, just before this run).
+        adminGet("/attioCache"),
       ]);
 
     const { perProject, rollups } = computeProfitability({
@@ -62,6 +66,7 @@ export default async function handler(req, res) {
       commissionPlans: commissionPlans || {},
       costInputs: costInputs || {},
       commissionInputs: commissionInputs || {},
+      attioCache: attioCache || null,
     });
 
     // The pure module stays timeless; the cron stamps computedAt at

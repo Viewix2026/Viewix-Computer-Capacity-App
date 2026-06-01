@@ -19,8 +19,11 @@
 // headline metric is "Contribution (before overhead)" — overhead is
 // intentionally excluded, so it must NEVER be labelled "profit".
 //
-// Deliberately dependency-free so it runs unchanged under Node (cron) and
-// in the browser bundle (UI), and is trivially unit-testable.
+// Deliberately free of EXTERNAL/Node deps so it runs unchanged under Node
+// (cron) and in the browser bundle (UI), and is trivially unit-testable.
+// The one intra-shared import below (attio-extract) is itself isomorphic
+// and dependency-free.
+import { buildDealIndex, resolveDealValue } from "./attio-extract.js";
 
 // Single documented gate. Deal values are ex GST today, so the math uses
 // them directly. If deal values ever become GST-inclusive, flip this and
@@ -36,6 +39,10 @@ export const WARNINGS = {
   COMMISSION_RATE_MISSING: "commissionRateMissing",
   MISSING_OR_ZERO_DEAL_VALUE: "missingOrZeroDealValue",
   DUPLICATE_TASK_ID: "duplicateTaskId",
+  // Attio had >1 Won deal matching this project's name and we couldn't
+  // pick one confidently, so no value was sourced. The row is Incomplete
+  // until the deal is renamed in Attio or its value set on the project.
+  DEAL_MATCH_AMBIGUOUS: "dealMatchAmbiguous",
 };
 
 const num = (v) => {
@@ -135,8 +142,14 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
   }
 
   // --- deal value (ex GST) ---
+  // base.dealValue has already been resolved upstream (computeProfitability):
+  // the project's own value if it had one, else a CONFIDENT Attio match,
+  // else 0. We only read it here so the client round-trips the same number.
   const dealValue = num(base.dealValue);
   if (dealValue <= 0) warnings.push(WARNINGS.MISSING_OR_ZERO_DEAL_VALUE);
+  // An ambiguous Attio match (>1 same-named Won deal) is flagged so the
+  // "missing value" reads as "go disambiguate" rather than "no deal exists".
+  if (base.dealMatchAmbiguous) warnings.push(WARNINGS.DEAL_MATCH_AMBIGUOUS);
 
   const productionCost = labourCost + externalCosts;
   const productionMargin = dealValue - productionCost;
@@ -153,6 +166,12 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
     clientName: base.clientName || "",
     projectName: base.projectName || "",
     dealValue,
+    // provenance of dealValue: "project" (its own field), "attio" (matched
+    // Won deal), or "none". Round-tripped so the client can tag the row and
+    // re-derive without re-matching.
+    dealValueSource: base.dealValueSource || (dealValue > 0 ? "project" : "none"),
+    attioDealId: base.attioDealId || null,
+    dealMatchAmbiguous: !!base.dealMatchAmbiguous,
     numberOfVideos: base.numberOfVideos ?? null,
     videoType: base.videoType || "",
     productLine: base.productLine || "",
@@ -213,8 +232,28 @@ export function computeProfitability({
   commissionPlans = {},
   costInputs = {},
   commissionInputs = {},
+  attioCache = null,
 } = {}) {
   const { taskToProject, dupProjectIds } = indexTasks(projects);
+  // Index Won deals by name once, so revenue can be sourced from Attio for
+  // projects whose own dealValue is blank (the common case).
+  const dealIndex = buildDealIndex(attioCache);
+
+  // Pre-count CONFIDENT Attio claims per deal id. If two different projects
+  // (same name + company) both resolve to the SAME Won deal, attaching its
+  // value to both would sum one sale into the totals twice. So a deal
+  // claimed by >1 project is treated as ambiguous for ALL claimants below —
+  // no number attached, row flagged. Projects with their OWN dealValue don't
+  // consume a deal and are unaffected.
+  const attioClaimCounts = new Map();
+  for (const p of Object.values(projects || {})) {
+    if (!p || typeof p !== "object" || !p.id) continue;
+    if (num(p.dealValue) > 0) continue;
+    const m = resolveDealValue(p, dealIndex);
+    if (m && m.value > 0 && m.dealId) {
+      attioClaimCounts.set(m.dealId, (attioClaimCounts.get(m.dealId) || 0) + 1);
+    }
+  }
 
   // projectId -> { [personId]: hours }
   const hoursByProject = new Map();
@@ -243,11 +282,39 @@ export function computeProfitability({
   const perProject = {};
   for (const p of Object.values(projects || {})) {
     if (!p || typeof p !== "object" || !p.id) continue;
+
+    // Sold-for amount. The project's OWN value wins when present (captured
+    // for THIS project, zero matching risk). Attio only fills a blank, and
+    // only on a CONFIDENT match; an ambiguous match sets the flag (not a
+    // number) so the row reads Incomplete rather than guessed.
+    let dealValue = num(p.dealValue);
+    let dealValueSource = dealValue > 0 ? "project" : "none";
+    let attioDealId = p.attioDealId || null;
+    let dealMatchAmbiguous = false;
+    if (dealValue <= 0) {
+      const m = resolveDealValue(p, dealIndex);
+      if (m) {
+        if (m.value > 0 && m.dealId && attioClaimCounts.get(m.dealId) > 1) {
+          // Contested: >1 project resolves to this one deal. Attach NO
+          // number and flag, rather than count the same sale twice.
+          dealMatchAmbiguous = true;
+        } else if (m.value > 0) {
+          dealValue = m.value;
+          dealValueSource = "attio";
+          attioDealId = m.dealId || null;
+        }
+        if (m.ambiguous) dealMatchAmbiguous = true;
+      }
+    }
+
     const base = {
       projectId: p.id,
       clientName: p.clientName || "",
       projectName: p.projectName || "",
-      dealValue: p.dealValue,
+      dealValue,
+      dealValueSource,
+      attioDealId,
+      dealMatchAmbiguous,
       numberOfVideos: p.numberOfVideos ?? null,
       videoType: p.videoType || "",
       productLine: p.productLine || "",

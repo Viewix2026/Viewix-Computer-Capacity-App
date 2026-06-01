@@ -36,6 +36,7 @@ const WARN_LABEL = {
   [WARNINGS.COMMISSION_RATE_MISSING]: "Assigned payee has no rate set",
   [WARNINGS.MISSING_OR_ZERO_DEAL_VALUE]: "Deal value missing or zero",
   [WARNINGS.DUPLICATE_TASK_ID]: "Duplicate task id — labour may misattribute",
+  [WARNINGS.DEAL_MATCH_AMBIGUOUS]: "Attio match not unique — set this deal's value manually",
 };
 
 const money = (v) => fmtCur(Number(v) || 0);
@@ -419,7 +420,12 @@ export function FoundersProfitability() {
             {r.projectName && <div style={{ fontSize: 11, color: C.muted }}>{r.projectName}</div>}
           </td>
           <td style={tdL}>{plLabel(r.productLine)}</td>
-          <td style={td}>{money(r.dealValue)}</td>
+          <td style={td}>
+            {money(r.dealValue)}
+            {r.dealValueSource === "attio" && (
+              <span title="Sourced from the matched Attio Won deal (the project had no value of its own)" style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: 0.3, color: "#60A5FA", border: "1px solid rgba(96,165,250,0.4)", borderRadius: 4, padding: "1px 4px", verticalAlign: "middle" }}>ATTIO</span>
+            )}
+          </td>
           <td style={td}>{money(r.labourCost)}</td>
           <td style={td}>{money(r.externalCosts)}</td>
           <td style={td}>{money(r.commission)}</td>
