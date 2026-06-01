@@ -34,6 +34,7 @@ const WARN_LABEL = {
   [WARNINGS.MISSING_EXTERNAL_COST]: "External costs not entered",
   [WARNINGS.COMMISSION_UNASSIGNED]: "Commission not assigned",
   [WARNINGS.COMMISSION_RATE_MISSING]: "Assigned payee has no rate set",
+  [WARNINGS.LEAD_SOURCE_UNSET]: "Lead source not set — pick provided or self-sourced",
   [WARNINGS.MISSING_OR_ZERO_DEAL_VALUE]: "Deal value missing or zero",
   [WARNINGS.DUPLICATE_TASK_ID]: "Duplicate task id — labour may misattribute",
   [WARNINGS.DEAL_MATCH_AMBIGUOUS]: "Attio match not unique — set this deal's value manually",
@@ -473,7 +474,7 @@ export function FoundersProfitability() {
                           <div style={{ marginTop: 3 }}><Sel value={ci.closerId} onChange={(v) => saveComm(r.projectId, { closerId: v })} options={closerOpts} placeholder={closerOpts.length ? "— choose —" : "add a closer below"} /></div>
                         </label>
                         <label style={{ fontSize: 12, color: C.fg }}>Lead source
-                          <div style={{ marginTop: 3 }}><Sel value={ci.leadSource || "provided"} onChange={(v) => saveComm(r.projectId, { leadSource: v })} options={[{ value: "provided", label: "Company provided (10%)" }, { value: "selfSourced", label: "Self-sourced (15%)" }]} /></div>
+                          <div style={{ marginTop: 3 }}><Sel value={ci.leadSource} onChange={(v) => saveComm(r.projectId, { leadSource: v })} options={[{ value: "provided", label: "Company provided (10%)" }, { value: "selfSourced", label: "Self-sourced (15%)" }]} placeholder="— choose —" /></div>
                         </label>
                       </>
                     )}
