@@ -54,21 +54,24 @@ test("extractVal: parses stringified/formatted currency safely (no parseFloat tr
   assert.equal(extractVal(deal({ id: "d", name: "x", value: "not a number" })), 0);
 });
 
-test("extractStage: lowercases; isWonStage true for Won/Closed Won, false for Lost/Lead", () => {
+test("extractStage + isWonStage: only 'won' is won across the real Viewix pipeline", () => {
   assert.equal(extractStage(deal({ id: "d", name: "x", value: 1, stage: "Won" })), "won");
+  // the six real Attio stages (verified 2026-06-01): only Won is won
   assert.equal(isWonStage("won"), true);
-  assert.equal(isWonStage("closed won"), true);
-  assert.equal(isWonStage("completed"), true);
   assert.equal(isWonStage("lead"), false);
+  assert.equal(isWonStage("meeting booked"), false);
+  assert.equal(isWonStage("quoted"), false);
+  assert.equal(isWonStage("on hold"), false);
   assert.equal(isWonStage("lost"), false);
+  // rename-robust: a future "Closed Won" still resolves as won
+  assert.equal(isWonStage("closed won"), true);
+  // negation guard: a "won" compound that is explicitly not-won stays false
+  assert.equal(isWonStage("not won"), false);
   // the bare substring "closed" must NOT make "closed lost" count as won
   assert.equal(isWonStage("closed lost"), false);
-  // WORD-BOUNDARY guard: a "won/signed/completed" substring inside a negated
-  // word must NOT read as won, or a non-won deal's revenue would be indexed.
-  assert.equal(isWonStage("unsigned"), false);
-  assert.equal(isWonStage("un-signed"), false);
-  assert.equal(isWonStage("not signed"), false);
-  assert.equal(isWonStage("uncompleted"), false);
+  // 'completed' / 'signed' are NOT Viewix won states; they must not match
+  assert.equal(isWonStage("completed"), false);
+  assert.equal(isWonStage("signed"), false);
 });
 
 test("extractDealName / company id / record id", () => {

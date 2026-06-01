@@ -107,18 +107,17 @@ export function dealRecordId(d) {
   return "";
 }
 
-// Stage is already lowercased by extractStage. Match the won / closed-won
-// family, but with WORD BOUNDARIES so a substring can't sneak in: "unsigned"
-// and "uncompleted" must NOT read as won. The negation guard drops anything
-// explicitly not-won ("closed lost", "not signed"). Erring toward FALSE is
-// the safe bias here: a missed match leaves a row "missing value" (honest),
-// whereas a false positive attaches a non-won deal's revenue and silently
-// inflates margin — the exact failure this instrument exists to avoid.
-const WON_RE = /\b(?:won|completed|signed)\b/;
-// Reject explicit negations: "closed lost", "not signed", and the un-prefixed
-// forms ("unsigned" / "un-signed" / "uncompleted") a word boundary alone
-// wouldn't catch once a hyphen reintroduces one.
-const NOT_WON_RE = /\b(?:lost|not)\b|un-?(?:signed|completed)/;
+// Stage is already lowercased by extractStage. Viewix's Attio deal pipeline
+// has exactly ONE won state: "Won". Verified 2026-06-01 against the live
+// `stage` attribute; the six stages are Lead, Meeting Booked, Quoted, On
+// Hold, Won, Lost. So match the word "won" (a future rename to "Closed Won"
+// still resolves) and reject an explicit negation so a compound like "Not
+// Won" can't slip through. Erring toward FALSE is the safe bias: a missed
+// match leaves a row "missing value" (honest), whereas a false positive
+// attaches a non-won deal's revenue and silently inflates margin, the exact
+// failure this instrument exists to avoid.
+const WON_RE = /\bwon\b/;
+const NOT_WON_RE = /\b(?:lost|not)\b/;
 export function isWonStage(stage) {
   const s = String(stage || "");
   return WON_RE.test(s) && !NOT_WON_RE.test(s);
