@@ -97,6 +97,55 @@ function feedbackSummary(project, flavour) {
   return { approvals, changes, reactions, comments, legacyCount, flavour };
 }
 
+// Resolve the account manager + project lead Slack mentions for a
+// preproduction record so feedback pings tag the people who own the
+// account. Both socialOrganic and metaAds preprod records are linked
+// from a /projects record via links.preprodId; the AM/PL names live on
+// the linked account (PL falls back to the project's own projectLead).
+// Names are matched case-insensitively against /editors to pick up each
+// person's slackUserId for a real @mention, falling back to a bold name
+// when no Slack id is on file. Best-effort: returns an empty cc string
+// if nothing resolves so callers can append unconditionally.
+async function resolveAccountMentions(preprodId) {
+  try {
+    if (!preprodId) return { cc: "" };
+    const projectsObj = (await fbGet("/projects")) || {};
+    const linkedProject = Object.values(projectsObj).find(p =>
+      p && p.links && p.links.preprodId === preprodId
+    );
+    if (!linkedProject) return { cc: "" };
+
+    const accountId = linkedProject.links?.accountId;
+    const accountsObj = (await fbGet("/accounts")) || {};
+    const acct = accountId ? accountsObj[accountId] : null;
+
+    const amName = (acct?.accountManager || "").trim();
+    const plName = (acct?.projectLead || linkedProject.projectLead || "").trim();
+    if (!amName && !plName) return { cc: "" };
+
+    const editorsArr = (await fbGet("/editors")) || [];
+    const editorsList = Array.isArray(editorsArr)
+      ? editorsArr.filter(Boolean)
+      : Object.values(editorsArr || {}).filter(Boolean);
+    const mentionFor = (name) => {
+      if (!name) return null;
+      const ed = editorsList.find(e => (e?.name || "").trim().toLowerCase() === name.toLowerCase());
+      return ed?.slackUserId ? `<@${ed.slackUserId}>` : `*${name}*`;
+    };
+
+    const seen = new Set();
+    const mentions = [mentionFor(amName), mentionFor(plName)].filter(m => {
+      if (!m || seen.has(m)) return false;
+      seen.add(m);
+      return true;
+    });
+    return { cc: mentions.length ? ` cc ${mentions.join(" ")}` : "" };
+  } catch (e) {
+    console.error("resolveAccountMentions failed:", e.message);
+    return { cc: "" };
+  }
+}
+
 // Schedule a Meta Ads pre-production revision subtask on the project
 // linked to the given preproduction record. Reverse-lookup is by
 // `links.preprodId === metaAdsProjectId` because the preproduction
@@ -607,18 +656,18 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
       // on the linked project. Best-effort — Slack still fires even if
       // any step here trips.
       let scheduledFor = null;
-      let plMention = null;
       if (flavour === "metaAds") {
         try {
           const scheduled = await scheduleMetaAdsRevisionSubtask({ metaAdsProjectId: projectId, project });
-          if (scheduled) {
-            scheduledFor = scheduled.nextAvailable;
-            plMention = scheduled.plMention;
-          }
+          if (scheduled) scheduledFor = scheduled.nextAvailable;
         } catch (e) {
           console.error("notifyFeedback: schedule Meta Ads revision failed:", e.message);
         }
       }
+
+      // Tag the account manager + project lead so the right people see
+      // the feedback. Best-effort — falls back to no mention if unresolved.
+      const { cc } = await resolveAccountMentions(projectId);
 
       const slackUrl = process.env.SLACK_PREPRODUCTION_WEBHOOK_URL;
       if (slackUrl) {
@@ -631,15 +680,15 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
           if (s.comments > 0)              parts.push(`${s.comments} comment${s.comments !== 1 ? "s" : ""}`);
           if (s.legacyCount > 0 && parts.length === 0) parts.push(`${s.legacyCount} cell note${s.legacyCount !== 1 ? "s" : ""}`);
           const summary = parts.length > 0 ? parts.join(" · ") : "feedback saved";
-          text = `${project.companyName} has left feedback on their ${label}: ${summary}. Review in dashboard: planner.viewix.com.au`;
+          text = `${project.companyName} has left feedback on their ${label}: ${summary}.${cc} Review in dashboard: planner.viewix.com.au`;
         } else {
           // metaAds keeps the legacy per-cell count (its review page
           // hasn't been redesigned, so sectionFeedback / scriptFeedback
           // don't exist there) and appends the new auto-schedule line.
           const scheduleSuffix = scheduledFor
-            ? ` Pre-production revision scheduled for *${scheduledFor}*${plMention ? ` · cc ${plMention}` : ""}.`
+            ? ` Pre-production revision scheduled for *${scheduledFor}*.`
             : "";
-          text = `:speech_balloon: *${project.companyName}* has left feedback on their ${label} (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}).${scheduleSuffix} Review in dashboard: planner.viewix.com.au`;
+          text = `:speech_balloon: *${project.companyName}* has left feedback on their ${label} (${feedbackCount} comment${feedbackCount !== 1 ? "s" : ""}).${scheduleSuffix}${cc} Review in dashboard: planner.viewix.com.au`;
         }
         await fetch(slackUrl, {
           method: "POST",
@@ -679,11 +728,12 @@ Return a single JSON object with this exact structure (no markdown, no preamble,
         if (s.reactions > 0) parts.push(`${s.reactions} reaction${s.reactions !== 1 ? "s" : ""}`);
         if (s.comments > 0)  parts.push(`${s.comments} comment${s.comments !== 1 ? "s" : ""}`);
         const summary = parts.length > 0 ? parts.join(" · ") : "no feedback left";
+        const { cc } = await resolveAccountMentions(projectId);
         await fetch(slackUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            text: `✅ ${fresh.companyName} submitted their pre-production review. ${summary}. Review in dashboard: planner.viewix.com.au`,
+            text: `✅ ${fresh.companyName} submitted their pre-production review. ${summary}.${cc} Review in dashboard: planner.viewix.com.au`,
           }),
         });
       }
