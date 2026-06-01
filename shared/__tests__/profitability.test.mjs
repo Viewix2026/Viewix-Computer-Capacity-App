@@ -79,6 +79,13 @@ test("commission: flat-per-deal only (no pct) is honoured, no warning", () => {
   assert.deepEqual(r.warnings, []);
 });
 
+test("commission: new + closer + no leadSource => 0 + leadSourceUnset (no flattering default)", () => {
+  const r = commissionFor({ dealType: "new", closerId: "p-closer" }, PLANS, 10000);
+  assert.equal(r.commission, 0);
+  assert.equal(r.leadSource, null);
+  assert.deepEqual(r.warnings, [WARNINGS.LEAD_SOURCE_UNSET]);
+});
+
 // ── recomputeRow math ────────────────────────────────────────────────
 const RATES = { "ed-1": { costPerHour: 50 }, "ed-jeremy": { costPerHour: 120 } };
 
@@ -155,6 +162,51 @@ test("recomputeRow: round-trips as a valid base (client live recompute)", () => 
   assert.equal(second.labourCost, first.labourCost);
   assert.equal(second.contribution, first.contribution);
   assert.ok(second.warnings.includes(WARNINGS.DUPLICATE_TASK_ID));
+});
+
+// ── leadSource is an explicit human choice, never defaulted ───────────
+// A new-business deal with a closer but no lead source must read Incomplete
+// (not silently 10% "provided"), since defaulting the lower rate would
+// overstate contribution. Picking provided/self-sourced completes the row.
+test("recomputeRow: new + closer + no leadSource => leadSourceUnset + Incomplete", () => {
+  const base = { projectId: "p", dealValue: 10000, hoursByPerson: {} };
+  const row = recomputeRow(base, {
+    laborCosts: {},
+    costInputs: { p: { crew: 0 } },
+    commissionInputs: { p: { dealType: "new", closerId: "p-closer" } },
+    commissionPlans: PLANS,
+  });
+  assert.equal(row.commission, 0);
+  assert.ok(row.warnings.includes(WARNINGS.LEAD_SOURCE_UNSET));
+  assert.equal(row.complete, false);
+});
+
+test("recomputeRow: new + closer + provided => 10%, complete", () => {
+  const base = { projectId: "p", dealValue: 10000, hoursByPerson: {} };
+  const row = recomputeRow(base, {
+    laborCosts: {},
+    costInputs: { p: { crew: 0 } },
+    commissionInputs: { p: { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
+    commissionPlans: PLANS,
+  });
+  assert.equal(row.commission, 1000);
+  assert.equal(row.leadSource, "provided");
+  assert.ok(!row.warnings.includes(WARNINGS.LEAD_SOURCE_UNSET));
+  assert.equal(row.complete, true);
+});
+
+test("recomputeRow: new + closer + selfSourced => 15%, complete", () => {
+  const base = { projectId: "p", dealValue: 10000, hoursByPerson: {} };
+  const row = recomputeRow(base, {
+    laborCosts: {},
+    costInputs: { p: { crew: 0 } },
+    commissionInputs: { p: { dealType: "new", closerId: "p-closer", leadSource: "selfSourced" } },
+    commissionPlans: PLANS,
+  });
+  assert.equal(row.commission, 1500);
+  assert.equal(row.leadSource, "selfSourced");
+  assert.ok(!row.warnings.includes(WARNINGS.LEAD_SOURCE_UNSET));
+  assert.equal(row.complete, true);
 });
 
 // ── computeProfitability join ────────────────────────────────────────

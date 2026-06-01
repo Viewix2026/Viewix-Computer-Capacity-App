@@ -37,6 +37,11 @@ export const WARNINGS = {
   MISSING_EXTERNAL_COST: "missingExternalCost",
   COMMISSION_UNASSIGNED: "commissionUnassigned",
   COMMISSION_RATE_MISSING: "commissionRateMissing",
+  // New-business deal with a closer but no lead source chosen. The rate
+  // (provided 10% vs self-sourced 15%) is a human-only fact, so we refuse to
+  // default it — a silent default would pick the LOWER rate and inflate
+  // contribution. Row stays Incomplete until a human picks.
+  LEAD_SOURCE_UNSET: "leadSourceUnset",
   MISSING_OR_ZERO_DEAL_VALUE: "missingOrZeroDealValue",
   DUPLICATE_TASK_ID: "duplicateTaskId",
   // Attio had >1 Won deal matching this project's name and we couldn't
@@ -87,7 +92,13 @@ export function commissionFor(input, commissionPlans, dealValue) {
   if (!closerId || !plan) {
     return { commission: 0, payeeId: closerId || null, payeeType: "closer", leadSource: input.leadSource || null, warnings: [WARNINGS.COMMISSION_UNASSIGNED] };
   }
-  const leadSource = input.leadSource === "selfSourced" ? "selfSourced" : "provided";
+  // Lead source must be an explicit human choice. Defaulting a blank to
+  // "provided" would silently apply the lower 10% rate and overstate
+  // contribution, so a blank is flagged Incomplete instead of guessed.
+  if (input.leadSource !== "provided" && input.leadSource !== "selfSourced") {
+    return { commission: 0, payeeId: closerId, payeeType: "closer", leadSource: null, warnings: [WARNINGS.LEAD_SOURCE_UNSET] };
+  }
+  const leadSource = input.leadSource;
   const pctField = leadSource === "selfSourced" ? plan.selfSourcedPct : plan.providedLeadPct;
   const flat = num(plan.flatPerDeal);
   if (isBlank(pctField) && !flat) {
