@@ -138,6 +138,7 @@ export function normName(s) {
 export function buildDealIndex(attioCache) {
   const deals = Array.isArray(attioCache?.data) ? attioCache.data : [];
   const byName = new Map();
+  const seen = new Set();
   for (const d of deals) {
     if (!isWonStage(extractStage(d))) continue;
     const value = extractVal(d);
@@ -147,6 +148,13 @@ export function buildDealIndex(attioCache) {
     // project's claim (the double-count guard keys on dealId). Skip it
     // rather than index an unattributable deal.
     if (!recordId) continue;
+    // The cache can hold the SAME deal record twice (a pagination overlap in
+    // api/sync-attio-cache.js, which pages by offset over created_at-desc
+    // results). Index each record id once so one real deal can't masquerade
+    // as a multi-candidate tie that resolveDealValue would flag ambiguous —
+    // a genuine collision across DIFFERENT record ids still keeps both.
+    if (seen.has(recordId)) continue;
+    seen.add(recordId);
     const name = normName(extractDealName(d));
     if (!name) continue;
     const entry = {

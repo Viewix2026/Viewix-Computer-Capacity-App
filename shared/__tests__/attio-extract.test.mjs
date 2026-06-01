@@ -113,6 +113,37 @@ test("buildDealIndex: skips a Won deal with no record id (unattributable, can't 
   assert.equal(buildDealIndex(cache).byName.size, 0);
 });
 
+test("buildDealIndex: SAME record id twice (cache dup) => ONE candidate, resolves (not a fake tie)", () => {
+  // A pagination overlap in api/sync-attio-cache.js can drop the SAME deal
+  // record into /attioCache.data twice. It must not look like a name
+  // collision — that would wrongly flag an otherwise-clean project Incomplete.
+  const cache = { data: [
+    deal({ id: "dup-1", name: "Highway Upgrade Film", value: 9000, companyId: "co-rms" }),
+    deal({ id: "dup-1", name: "Highway Upgrade Film", value: 9000, companyId: "co-rms" }),
+  ] };
+  const idx = buildDealIndex(cache);
+  assert.equal(idx.byName.get("highway upgrade film").length, 1);
+  const r = resolveDealValue({ projectName: "Highway Upgrade Film" }, idx);
+  assert.equal(r.value, 9000);
+  assert.equal(r.dealId, "dup-1");
+  assert.equal(r.ambiguous, false);
+});
+
+test("buildDealIndex: same name across DIFFERENT record ids stays a real collision (ambiguous)", () => {
+  // The dedupe keys on record id, not name: two genuinely different deals
+  // that share a name must still produce >1 candidate so resolveDealValue
+  // refuses to guess.
+  const cache = { data: [
+    deal({ id: "diff-a", name: "Highway Upgrade Film", value: 9000, companyId: "co-a" }),
+    deal({ id: "diff-b", name: "Highway Upgrade Film", value: 15000, companyId: "co-b" }),
+  ] };
+  const idx = buildDealIndex(cache);
+  assert.equal(idx.byName.get("highway upgrade film").length, 2);
+  const r = resolveDealValue({ projectName: "Highway Upgrade Film" }, idx);
+  assert.equal(r.value, null);
+  assert.equal(r.ambiguous, true);
+});
+
 // ── resolveDealValue ─────────────────────────────────────────────────
 const IDX = buildDealIndex({ data: [
   deal({ id: "d-uniq", name: "Corporate video for Spanish translation", value: 672, companyId: "co-ausimm" }),
