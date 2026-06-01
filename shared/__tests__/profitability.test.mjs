@@ -212,6 +212,87 @@ test("computeProfitability: duplicate taskId across projects flags both", () => 
   assert.ok(perProject["b"].warnings.includes(WARNINGS.DUPLICATE_TASK_ID));
 });
 
+// ── Attio revenue enrichment (computeProfitability + attioCache) ─────
+function rawDeal(id, name, value, companyId) {
+  return {
+    id: { record_id: id },
+    values: {
+      name: [{ value: name }],
+      value: [{ currency_value: value, currency_code: "AUD" }],
+      stage: [{ status: { title: "Won" } }],
+      close_date: [{ value: "2026-05-01" }],
+      ...(companyId ? { associated_company: [{ target_record_id: companyId }] } : {}),
+    },
+  };
+}
+
+test("enrichment: blank project dealValue is filled from matched Attio Won deal", () => {
+  const projects = { "proj-x": { id: "proj-x", clientName: "AusIMM", projectName: "Spanish Translation", dealValue: null } };
+  const attioCache = { data: [rawDeal("deal-x", "Spanish Translation", 672, "co-ausimm")] };
+  const { perProject } = computeProfitability({
+    projects, attioCache,
+    costInputs: { "proj-x": { crew: 0 } },
+    commissionInputs: { "proj-x": { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
+    commissionPlans: PLANS,
+  });
+  const r = perProject["proj-x"];
+  assert.equal(r.dealValue, 672);
+  assert.equal(r.dealValueSource, "attio");
+  assert.equal(r.attioDealId, "deal-x");
+  assert.ok(!r.warnings.includes(WARNINGS.MISSING_OR_ZERO_DEAL_VALUE));
+});
+
+test("enrichment: project's OWN dealValue wins, Attio never overrides", () => {
+  const projects = { "proj-y": { id: "proj-y", projectName: "Spanish Translation", dealValue: 999 } };
+  const attioCache = { data: [rawDeal("deal-y", "Spanish Translation", 672, "co-ausimm")] };
+  const { perProject } = computeProfitability({ projects, attioCache, costInputs: { "proj-y": { crew: 0 } } });
+  const r = perProject["proj-y"];
+  assert.equal(r.dealValue, 999);
+  assert.equal(r.dealValueSource, "project");
+});
+
+test("enrichment: ambiguous match => no number, DEAL_MATCH_AMBIGUOUS + missing value, Incomplete", () => {
+  const projects = { "proj-z": { id: "proj-z", projectName: "Brand Video", dealValue: null } }; // no company => can't disambiguate
+  const attioCache = { data: [rawDeal("d-a", "Brand Video", 8000, "co-a"), rawDeal("d-b", "Brand Video", 12000, "co-b")] };
+  const { perProject } = computeProfitability({ projects, attioCache, costInputs: { "proj-z": { crew: 0 } } });
+  const r = perProject["proj-z"];
+  assert.equal(r.dealValue, 0);
+  assert.equal(r.dealValueSource, "none");
+  assert.ok(r.warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.ok(r.warnings.includes(WARNINGS.MISSING_OR_ZERO_DEAL_VALUE));
+  assert.equal(r.complete, false);
+});
+
+test("enrichment: one Won deal claimed by TWO projects => both flagged, sale never double-counted", () => {
+  const projects = {
+    "proj-1": { id: "proj-1", projectName: "Recurring Social", dealValue: null },
+    "proj-2": { id: "proj-2", projectName: "Recurring Social", dealValue: null },
+  };
+  // a single deal both same-named projects would otherwise each claim in full
+  const attioCache = { data: [rawDeal("deal-dup", "Recurring Social", 5000, "co-x")] };
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache,
+    costInputs: { "proj-1": { crew: 0 }, "proj-2": { crew: 0 } },
+    commissionInputs: {
+      "proj-1": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "proj-2": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  const a = perProject["proj-1"];
+  const b = perProject["proj-2"];
+  // neither gets the number; both flagged ambiguous + Incomplete
+  assert.equal(a.dealValue, 0);
+  assert.equal(b.dealValue, 0);
+  assert.ok(a.warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.ok(b.warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.equal(a.complete, false);
+  assert.equal(b.complete, false);
+  // the 5000 sale lands in NEITHER total (both excluded) — never doubled
+  assert.equal(rollups.totals.dealValue, 0);
+  assert.equal(rollups.incompleteCount, 2);
+});
+
 // ── rollups: totals exclude incomplete rows ──────────────────────────
 test("buildRollups: only complete rows enter totals; incomplete counted separately", () => {
   const rows = [
