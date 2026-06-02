@@ -27,40 +27,11 @@
 //   So "primary metric" differs per platform; see PLATFORM_METRICS.
 
 import { zernio } from "./_zernio.js";
+// Per-platform metric semantics live in one pure module shared with the
+// scoring engine (avoids coupling the engine to this Zernio client).
+import { PLATFORM_METRICS, platformMetrics, primaryMetric } from "./_platformMetrics.js";
 
-// ─── Platform metric config (single source of truth) ──────────────────
-//
-// `primary`        — the metric scoring should treat as the headline
-//                    number (medians, overperformance) for this platform.
-//                    IG stays on `views` for back-compat with the existing
-//                    IG pilot; LinkedIn/FB use impressions (text posts have
-//                    no views); YouTube/TikTok use views.
-// `hasFollowers`   — whether follower-normalised reach is meaningful.
-//                    TikTok public data has no reliable follower count.
-// `hasImpressions` — whether impressions/reach are populated at all
-//                    (false for YT/TikTok → don't render empty fields).
-// `videoOnly`      — whether to keep ONLY video posts. IG/YT/TikTok are
-//                    effectively video surfaces for our purposes; LinkedIn
-//                    and Facebook MUST keep text/image posts or a
-//                    LinkedIn-primary report is half-empty.
-export const PLATFORM_METRICS = {
-  instagram: { primary: "views",       hasFollowers: true,  hasImpressions: true,  videoOnly: true  },
-  facebook:  { primary: "impressions", hasFollowers: true,  hasImpressions: true,  videoOnly: false },
-  linkedin:  { primary: "impressions", hasFollowers: true,  hasImpressions: true,  videoOnly: false },
-  youtube:   { primary: "views",       hasFollowers: true,  hasImpressions: false, videoOnly: true  },
-  tiktok:    { primary: "views",       hasFollowers: false, hasImpressions: false, videoOnly: true  },
-};
-
-const DEFAULT_METRICS = { primary: "views", hasFollowers: false, hasImpressions: false, videoOnly: false };
-
-export function platformMetrics(platform) {
-  return PLATFORM_METRICS[String(platform || "").toLowerCase()] || DEFAULT_METRICS;
-}
-
-// The metric scoring should use as the headline number for a platform.
-export function primaryMetric(platform) {
-  return platformMetrics(platform).primary;
-}
+export { PLATFORM_METRICS, platformMetrics, primaryMetric };
 
 // ─── Errors ───────────────────────────────────────────────────────────
 

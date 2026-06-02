@@ -28,6 +28,7 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { classifyFormat } from "./_analyticsFormatHeuristic.js";
 import { buildNextVideoRecs } from "./_analyticsRecsBuilder.js";
 import { buildClientProjection, makePortalShortId } from "./_analyticsClientProjection.js";
+import { primaryMetricValue, metricNoun, platformMetrics } from "./_platformMetrics.js";
 import {
   isClaudeEnabled,
   classifyFormatWithClaude,
@@ -150,11 +151,16 @@ function latestFollowerCount(followers) {
 
 // ─── Scoring computations (pure, given precomputed inputs) ────────
 
-function computeOverperformance({ views, medianViews }) {
+// `metric` is the headline value for this platform (views for IG/YT/
+// TikTok, impressions for LinkedIn/FB) and `median` its baseline. The
+// arg is still loosely called via {views, medianViews} at IG call sites
+// for back-compat, but the noun is platform-driven so the label reads
+// "4.8x usual impressions" on LinkedIn, "4.8x usual views" on IG.
+function computeOverperformance({ views, medianViews, noun = "views" }) {
   if (!views || !medianViews) return { score: null, label: null };
   const score = +(views / medianViews).toFixed(2);
   let label = null;
-  if (score >= OVERPERF.noiseFloorScore) label = `${score.toFixed(1)}x usual views`;
+  if (score >= OVERPERF.noiseFloorScore) label = `${score.toFixed(1)}x usual ${noun}`;
   return { score, label };
 }
 
@@ -387,32 +393,49 @@ export async function recomputeClientAnalytics(clientId) {
     const videos = videosRoot[platform] || {};
     const videosList = Object.entries(videos).map(([videoId, v]) => ({ videoId, ...v }));
 
+    // Platform metric semantics: IG/YT/TikTok score on `views`, LinkedIn/
+    // FB on `impressions`. `primaryMetricValue` falls back to views so
+    // legacy IG snapshots are unaffected. `pMetric`/`pNoun` drive the
+    // baseline key meaning + the overperformance label noun.
+    const pMeta = platformMetrics(platform);
+    const pNoun = metricNoun(platform);
+
     const allViews = [];
     const allEngagement = [];
     for (const v of videosList) {
       const snap = latestSnapshot(v);
       if (!snap) continue;
-      if (snap.views != null) allViews.push(snap.views);
+      const primary = primaryMetricValue(snap, platform);
+      if (primary != null) allViews.push(primary);
       if (snap.engagementRate != null) allEngagement.push(snap.engagementRate);
     }
     const medViews = median(allViews);
     const medEng = median(allEngagement);
+    // `medianViews` key kept for back-compat; for non-IG platforms it now
+    // holds the median of the platform's primary metric. `primaryMetric`
+    // records which metric that is so consumers never misread it.
     baselines.medianViews[platform] = Math.round(medViews);
     baselines.medianEngagementRate[platform] = +medEng.toFixed(3);
     baselines.followerCount[platform] = latestFollowerCount(followersRoot[platform]);
+    if (!baselines.primaryMetric) baselines.primaryMetric = {};
+    baselines.primaryMetric[platform] = pMeta.primary;
 
     // ─── 3. Per-video scoring (rule-based) ───────────────────────
-    const followerCount = baselines.followerCount[platform];
+    // Follower-normalised reach only where the platform has a meaningful
+    // follower count (gated by platformMetrics.hasFollowers — e.g. not
+    // TikTok). Otherwise that signal stays null and scoring leans on
+    // overperformance + engagement.
+    const followerCount = pMeta.hasFollowers ? baselines.followerCount[platform] : null;
     for (const v of videosList) {
       const snap = latestSnapshot(v);
       if (!snap) continue;
 
-      const views = snap.views;
+      const views = primaryMetricValue(snap, platform);
       const engagementRate = snap.engagementRate;
       const timestamp = v.post?.timestamp ? new Date(v.post.timestamp).getTime() : null;
       const ageDays = timestamp ? (now - timestamp) / (24 * 3600 * 1000) : null;
 
-      const overperf = computeOverperformance({ views, medianViews: medViews });
+      const overperf = computeOverperformance({ views, medianViews: medViews, noun: pNoun });
       const engagementVsBaseline = computeEngagementVsBaseline({
         engagementRate, medianEngagementRate: medEng,
       });
@@ -518,7 +541,10 @@ export async function recomputeClientAnalytics(clientId) {
       if (!ts) continue;
       if (ts < oldestTs) oldestTs = ts;
       const snap = latestSnapshot(v);
-      const views = snap?.views || 0;
+      // Primary metric per platform (views for IG/YT/TikTok, impressions
+      // for LinkedIn/FB). The var stays named `views` to keep the window
+      // math below unchanged.
+      const views = primaryMetricValue(snap, platform) || 0;
       const er = snap?.engagementRate;
       if (ts >= win30) {
         posts30dViews += views;
@@ -585,57 +611,82 @@ export async function recomputeClientAnalytics(clientId) {
     competitorsRoot, enabledPlatforms, now,
   });
 
-  // ─── 7. Aggregate stats across platforms (v1: IG only, so this is
-  //         effectively a passthrough — but keeps the door open for
-  //         v2 multi-platform without rewiring). ────────────────────
-  const aggregate = aggregatePlatformStats(platformStats);
-  const status = computeStatus({
-    posts30dViews: aggregate.posts30dViews,
-    postsPrior30dViews: aggregate.postsPrior30dViews,
-    postCount: aggregate.totalPosts,
-    weeksOfData: aggregate.weeksOfData,
-  });
+  // ─── 7b. Per-platform status + momentum (NOT cross-platform summed) ──
+  //
+  // Summing a `views` field across platforms is meaningless once metrics
+  // differ — LinkedIn impressions vs TikTok views (Codex review). So
+  // status + momentum are computed PER platform from that platform's own
+  // stats + cohort, and written under clients/{id}/platforms/{platform}/.
+  //
+  // Back-compat: the root clients/{id}/status + /momentum are MIRRORED
+  // from the "primary" platform — Instagram when present (so the existing
+  // IG pilot's root keys stay byte-identical), else the configured
+  // primaryPlatform, else the first enabled platform. No consumer reading
+  // the root path breaks; multi-platform clients get the primary
+  // platform's headline at the root PLUS the full per-platform breakdown.
+  const perPlatformDerived = {}; // platform -> { status, momentum }
+  for (const platform of enabledPlatforms) {
+    const s = platformStats[platform];
+    if (!s) continue;
+    const pStatus = computeStatus({
+      posts30dViews: s.posts30dViews,
+      postsPrior30dViews: s.postsPrior30dViews,
+      postCount: s.totalPosts,
+      weeksOfData: s.weeksOfData,
+    });
+    const vDelta = (s.postsPrior30dViews && s.postsPrior30dViews > 0)
+      ? (s.posts30dViews - s.postsPrior30dViews) / s.postsPrior30dViews : null;
+    const eDelta = (s.engagementPrior30d && s.engagementPrior30d > 0)
+      ? (s.engagement30d - s.engagementPrior30d) / s.engagementPrior30d : null;
+    const fDelta = (s.postsPerWeekPrior && s.postsPerWeekPrior > 0)
+      ? (s.postsPerWeekRecent - s.postsPerWeekPrior) / s.postsPerWeekPrior : null;
+    const cohortEng = competitorCohort?.[platform]?.pooled?.engagement30d ?? null;
+    const cDelta = (cohortEng && cohortEng > 0 && s.engagement30d != null)
+      ? (s.engagement30d - cohortEng) / cohortEng : null;
+    const pMomentum = computeMomentum({
+      viewsDelta: vDelta, engagementDelta: eDelta,
+      postFrequencyDelta: fDelta, competitorDelta: cDelta,
+    });
+    perPlatformDerived[platform] = {
+      status: { state: pStatus.state, reason: pStatus.reason, computedAt },
+      momentum: {
+        score: pMomentum.score,
+        reasonLine: pMomentum.reasonLine,
+        signals: pMomentum.signals,
+        delta30d: vDelta,
+        computedAt,
+      },
+    };
+  }
 
-  const viewsDelta = (aggregate.postsPrior30dViews && aggregate.postsPrior30dViews > 0)
-    ? (aggregate.posts30dViews - aggregate.postsPrior30dViews) / aggregate.postsPrior30dViews
-    : null;
-  const engagementDelta = (aggregate.engagementPrior30d && aggregate.engagementPrior30d > 0)
-    ? (aggregate.engagement30d - aggregate.engagementPrior30d) / aggregate.engagementPrior30d
-    : null;
-  const postFrequencyDelta = (aggregate.postsPerWeekPrior && aggregate.postsPerWeekPrior > 0)
-    ? (aggregate.postsPerWeekRecent - aggregate.postsPerWeekPrior) / aggregate.postsPerWeekPrior
-    : null;
-
-  const cohortEngagement30d = aggregateCohortEngagement30d(competitorCohort, enabledPlatforms);
-  const competitorDelta = (cohortEngagement30d && cohortEngagement30d > 0 && aggregate.engagement30d != null)
-    ? (aggregate.engagement30d - cohortEngagement30d) / cohortEngagement30d
-    : null;
-
-  const momentum = computeMomentum({
-    viewsDelta, engagementDelta, postFrequencyDelta, competitorDelta,
-  });
+  // Primary platform for the back-compat root mirror.
+  const primaryPlatform =
+    enabledPlatforms.includes("instagram") ? "instagram"
+    : (config.primaryPlatform && enabledPlatforms.includes(config.primaryPlatform)) ? config.primaryPlatform
+    : (enabledPlatforms[0] || null);
+  const rootDerived = primaryPlatform ? perPlatformDerived[primaryPlatform] : null;
+  const status = rootDerived?.status
+    || { state: "insufficient", reason: "No enabled platforms with data yet.", computedAt };
+  const momentum = rootDerived?.momentum
+    || { score: 50, reasonLine: "Not enough signal yet — momentum starts neutral.", signals: {}, delta30d: null, computedAt };
+  const viewsDelta = momentum.delta30d ?? null;
 
   // ─── 8. Bulk-PATCH all per-client derived state in one call ─────
-  // baselines + competitorCohort + status + momentum are all derived
-  // state living under /analytics/clients/{id}. Writing them as ONE
-  // patch is cheaper than 4 individual fbSet calls + means listeners
-  // see them all change atomically (no stale-status moment while
-  // momentum is being written).
-  // currentInsightsWeek is patched after the insights writes below,
-  // and lastRecomputeAt stays last (separate write) so it only updates
-  // after every other write has succeeded.
-  await fbPatch(`/analytics/clients/${clientId}`, {
+  // baselines + cohort + (root-mirrored) status + momentum + the full
+  // per-platform breakdown, in one atomic patch. Root status/momentum
+  // keep the exact shape existing consumers expect.
+  const clientPatch = {
     baselines,
     competitorCohort: { ...competitorCohort, updatedAt: computedAt },
-    status: { state: status.state, reason: status.reason, computedAt },
-    momentum: {
-      score: momentum.score,
-      reasonLine: momentum.reasonLine,
-      signals: momentum.signals,
-      delta30d: viewsDelta,
-      computedAt,
-    },
-  });
+    status,
+    momentum,
+    primaryPlatform,
+  };
+  for (const [platform, d] of Object.entries(perPlatformDerived)) {
+    clientPatch[`platforms/${platform}/status`] = d.status;
+    clientPatch[`platforms/${platform}/momentum`] = d.momentum;
+  }
+  await fbPatch(`/analytics/clients/${clientId}`, clientPatch);
 
   // ─── 9. Format Playbook aggregation + Next Video Recommendations
   //         (Phase 6, rules-first). ─────────────────────────────────
@@ -797,25 +848,39 @@ export async function recomputeClientAnalytics(clientId) {
   // so it can never break the internal pipeline. "Auto-building" is
   // preserved — this regenerates on every recompute (webhook/cron/
   // manual) the engine already runs.
-  try {
-    let portalShortId = config.portalShortId;
-    if (!portalShortId) {
-      portalShortId = makePortalShortId();
-      await fbPatch(`/analytics/clients/${clientId}/config`, { portalShortId });
+  //
+  // MULTI-PLATFORM GATE (Codex review): buildClientProjection is
+  // Instagram-only — it hardcodes "public Instagram video posts" and
+  // drops platform identity. Running it for a client with any non-IG
+  // platform enabled would publish a broken, IG-labelled portal the
+  // instant Zernio data lands. So we ONLY auto-write the portal
+  // projection for IG-only clients until the multi-platform projection
+  // (Phase 4) exists. Multi-platform clients get no portal yet (the deck
+  // is their deliverable); their analytics still compute + store fully.
+  const isIgOnly = enabledPlatforms.length > 0 && enabledPlatforms.every(p => p === "instagram");
+  if (!isIgOnly) {
+    console.log(`[analytics-scoring] ${clientId}: multi-platform (${enabledPlatforms.join(",") || "none"}) — skipping IG-only portal projection (Phase 4 adds the multi-platform portal).`);
+  } else {
+    try {
+      let portalShortId = config.portalShortId;
+      if (!portalShortId) {
+        portalShortId = makePortalShortId();
+        await fbPatch(`/analytics/clients/${clientId}/config`, { portalShortId });
+      }
+      const projection = buildClientProjection({
+        config, status, momentum, baselines, competitorCohort,
+        formatCounts, recs, videoUpdates, videosRoot, competitorsRoot,
+        renewalAmmo, thisWeekInNiche: thisWeekInNicheForProjection,
+        enabledPlatforms, computedAt,
+      });
+      await fbSet(`/analytics/public/${portalShortId}`, {
+        ...projection,
+        clientId,                 // back-reference (server-only consumers)
+        portalShortId,
+      });
+    } catch (err) {
+      console.warn(`[analytics-scoring] client projection failed for ${clientId}: ${err.message}`);
     }
-    const projection = buildClientProjection({
-      config, status, momentum, baselines, competitorCohort,
-      formatCounts, recs, videoUpdates, videosRoot, competitorsRoot,
-      renewalAmmo, thisWeekInNiche: thisWeekInNicheForProjection,
-      enabledPlatforms, computedAt,
-    });
-    await fbSet(`/analytics/public/${portalShortId}`, {
-      ...projection,
-      clientId,                 // back-reference (server-only consumers)
-      portalShortId,
-    });
-  } catch (err) {
-    console.warn(`[analytics-scoring] client projection failed for ${clientId}: ${err.message}`);
   }
 
   // ─── 10. lastRecomputeAt last so it reflects a fully successful run.
