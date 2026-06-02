@@ -860,6 +860,25 @@ export async function recomputeClientAnalytics(clientId) {
   const isIgOnly = enabledPlatforms.length > 0 && enabledPlatforms.every(p => p === "instagram");
   if (!isIgOnly) {
     console.log(`[analytics-scoring] ${clientId}: multi-platform (${enabledPlatforms.join(",") || "none"}) — skipping IG-only portal projection (Phase 4 adds the multi-platform portal).`);
+    // TOMBSTONE (Codex r3): if this client previously had an IG-only
+    // portal, skipping the write would leave /analytics/public/{id} live
+    // serving STALE Instagram data after they went multi-platform. Retire
+    // it so the portal stops serving rather than silently going stale.
+    // (Portals aren't client-facing yet — pilot only — so urgency is low,
+    // but the gate must be correct.)
+    if (config.portalShortId) {
+      try {
+        await fbSet(`/analytics/public/${config.portalShortId}`, {
+          retired: true,
+          reason: "client_went_multi_platform",
+          retiredAt: computedAt,
+          clientId,
+          portalShortId: config.portalShortId,
+        });
+      } catch (err) {
+        console.warn(`[analytics-scoring] portal tombstone failed for ${clientId}: ${err.message}`);
+      }
+    }
   } else {
     try {
       let portalShortId = config.portalShortId;
@@ -1315,7 +1334,11 @@ function computeRenewalAmmoSinceTrackingBegan({
         url: src?.post?.url || null,
         thumbnail: src?.post?.thumbnail || null,
         caption: (src?.post?.caption || "").slice(0, 200),
-        views: snap?.views ?? null,
+        views: snap?.views ?? null,                 // raw views (back-compat; IG)
+        // Platform-correct headline value + its name, so a LinkedIn post
+        // shows impressions not a misleading views:0.
+        primaryMetric: platformMetrics(u.platform).primary,
+        primaryValue: primaryMetricValue(snap, u.platform),
         overperformanceLabel: u.scoring.overperformanceLabel,
         overperformanceScore: u.scoring.overperformanceScore,
         timestamp: src?.post?.timestamp || null,
@@ -1355,57 +1378,81 @@ function computeRenewalAmmoSinceTrackingBegan({
     });
   }
 
-  // Best week by summed views across all videos posted in that week.
-  // Rolling 7-day window over all timestamps. Returns the {start, end,
-  // totalViews, postCount} of the best window.
-  const allWithTs = videoUpdates
-    .map(u => {
-      const src = videosRoot?.[u.platform]?.[u.videoId];
-      const snap = latestSnapshot(src);
-      return {
-        ts: src?.post?.timestamp ? new Date(src.post.timestamp).getTime() : null,
-        views: snap?.views || 0,
-      };
-    })
-    .filter(p => p.ts != null);
-  let bestWeek = null;
-  if (allWithTs.length > 0) {
-    allWithTs.sort((a, b) => a.ts - b.ts);
-    let windowStart = 0;
-    let windowSum = 0;
-    let windowCount = 0;
+  // Best week — PER PLATFORM (Codex r3: never blend a metric across
+  // platforms). Each platform's best 7-day window is summed using THAT
+  // platform's primary metric (views for IG/YT/TikTok, impressions for
+  // LinkedIn/FB). Returns bestWeekByPlatform; the top-level `bestWeek`
+  // mirrors the primary platform's window for back-compat with the
+  // existing IG portal consumer (for an IG-only client that's IG over
+  // views — byte-identical to before).
+  const rollingBestWeek = (rows) => {
+    const arr = rows.filter(p => p.ts != null).sort((a, b) => a.ts - b.ts);
+    if (arr.length === 0) return null;
+    let windowStart = 0, windowSum = 0, windowCount = 0;
     let best = { sum: -1, start: null, end: null, count: 0 };
-    for (let i = 0; i < allWithTs.length; i++) {
-      windowSum += allWithTs[i].views;
-      windowCount++;
-      while (allWithTs[i].ts - allWithTs[windowStart].ts > 7 * 24 * 3600 * 1000) {
-        windowSum -= allWithTs[windowStart].views;
-        windowCount--;
-        windowStart++;
+    for (let i = 0; i < arr.length; i++) {
+      windowSum += arr[i].value; windowCount++;
+      while (arr[i].ts - arr[windowStart].ts > 7 * 24 * 3600 * 1000) {
+        windowSum -= arr[windowStart].value; windowCount--; windowStart++;
       }
       if (windowSum > best.sum) {
-        best = {
-          sum: windowSum,
-          start: allWithTs[windowStart].ts,
-          end: allWithTs[i].ts,
-          count: windowCount,
-        };
+        best = { sum: windowSum, start: arr[windowStart].ts, end: arr[i].ts, count: windowCount };
       }
     }
-    if (best.sum > 0) {
-      bestWeek = {
-        startDate: new Date(best.start).toISOString().slice(0, 10),
-        endDate: new Date(best.end).toISOString().slice(0, 10),
-        totalViews: best.sum,
-        postCount: best.count,
+    if (best.sum <= 0) return null;
+    return {
+      startDate: new Date(best.start).toISOString().slice(0, 10),
+      endDate: new Date(best.end).toISOString().slice(0, 10),
+      total: best.sum,
+      postCount: best.count,
+    };
+  };
+
+  const bestWeekByPlatform = {};
+  for (const platform of enabledPlatforms) {
+    const rows = videoUpdates
+      .filter(u => u.platform === platform)
+      .map(u => {
+        const src = videosRoot?.[u.platform]?.[u.videoId];
+        const snap = latestSnapshot(src);
+        return {
+          ts: src?.post?.timestamp ? new Date(src.post.timestamp).getTime() : null,
+          value: primaryMetricValue(snap, platform) || 0,
+        };
+      });
+    const bw = rollingBestWeek(rows);
+    if (bw) {
+      bestWeekByPlatform[platform] = {
+        ...bw,
+        metric: platformMetrics(platform).primary,
+        metricNoun: metricNoun(platform),
       };
     }
   }
+
+  // Back-compat top-level bestWeek = the primary platform's window, with
+  // the legacy `totalViews` key preserved (IG-only → views, unchanged).
+  const primaryPlatform = enabledPlatforms.includes("instagram")
+    ? "instagram"
+    : (enabledPlatforms[0] || null);
+  const primaryBest = primaryPlatform ? bestWeekByPlatform[primaryPlatform] : null;
+  const bestWeek = primaryBest
+    ? {
+        startDate: primaryBest.startDate,
+        endDate: primaryBest.endDate,
+        totalViews: primaryBest.total,   // legacy key; = primary metric total
+        total: primaryBest.total,
+        metric: primaryBest.metric,
+        metricNoun: primaryBest.metricNoun,
+        postCount: primaryBest.postCount,
+      }
+    : null;
 
   return {
     topPosts,
     trajectoryHighlights,
     bestWeek,
+    bestWeekByPlatform,
   };
 }
 

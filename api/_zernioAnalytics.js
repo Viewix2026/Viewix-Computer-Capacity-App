@@ -127,6 +127,27 @@ export async function getAnalytics({
   };
 }
 
+// ─── checkAnalyticsAccess — cheap plan-wide add-on preflight ──────────
+// One minimal GET /v1/analytics?limit=1. Lets the cron confirm the
+// Analytics add-on is active BEFORE writing any data, so a 402 can't
+// leave half a client's snapshots written with stale derived state
+// (Codex r3). Returns { ok, hasAnalyticsAccess }. Throws
+// AnalyticsAddonError on 402; other errors propagate.
+export async function checkAnalyticsAccess() {
+  try {
+    const resp = await zernio(`/analytics?limit=1&page=1`);
+    return {
+      ok: true,
+      hasAnalyticsAccess: resp?.hasAnalyticsAccess ?? null,
+    };
+  } catch (err) {
+    if (err.status === 402 || err.zernioCode === "analytics_addon_required") {
+      throw new AnalyticsAddonError(err.message);
+    }
+    throw err;
+  }
+}
+
 // ─── follower-stats — current follower/audience counts ────────────────
 // Used for follower-normalised reach on platforms where it's meaningful
 // (gated by PLATFORM_METRICS.hasFollowers). Best-effort: returns null on
@@ -162,19 +183,36 @@ export function normaliseZernioPost(zPost, platform) {
   // Per-platform analytics: prefer the platform-scoped entry if present
   // (multi-platform posts carry a platforms[]/platformAnalytics[] array),
   // else the top-level analytics object.
+  //
+  // Codex r3: we've only seen the OpenAPI EXAMPLE, not a live payload.
+  // The example nests metrics under `<entry>.analytics`, but tolerate the
+  // metrics living directly on the entry/post too, so a shape we haven't
+  // seen doesn't silently ingest all-null. pickAnalytics walks: nested
+  // .analytics → the entry itself (if it looks like a metrics bag) →
+  // top-level .analytics → the post itself.
   const platformEntry = pickPlatformEntry(zPost, platform);
-  const a = platformEntry?.analytics || zPost.analytics || {};
+  const a = pickAnalytics(platformEntry, zPost);
 
   const url = platformEntry?.platformPostUrl || zPost.platformPostUrl || null;
-  const timestamp = zPost.publishedAt || zPost.scheduledFor || null;
+  // Timestamp: published/scheduled first, then analytics freshness as a
+  // last resort so a post that's missing both date fields still lands in
+  // the time series rather than being silently dropped.
+  const timestamp =
+    zPost.publishedAt || zPost.scheduledFor || zPost.createdAt ||
+    a.lastUpdated || zPost.lastUpdated || null;
   if (!url || !timestamp) return null;
 
   const mediaType = zPost.mediaType || null;
   const isVideo = mediaType === "video" || mediaType === "reel" || mediaType === "reels";
   if (cfg.videoOnly && mediaType && !isVideo) return null; // drop non-video on video surfaces
 
+  // Idempotency anchor: the platform-NATIVE post id is most stable
+  // (survives Zernio re-syncs), then Zernio's external postId, then a
+  // stable hash of the post URL, and only as a last resort Zernio's
+  // internal _id (which can change when an external post rematerialises).
   const platformPostId =
-    platformEntry?.platformPostId || zPost.platformPostId || zPost._id || zPost.postId || null;
+    platformEntry?.platformPostId || zPost.platformPostId || zPost.postId ||
+    (url ? `u${hashString(url)}` : null) || zPost._id || null;
   if (!platformPostId) return null;
   const videoId = `${String(platform).toLowerCase()}_${platformPostId}`;
 
@@ -228,4 +266,32 @@ function pickPlatformEntry(zPost, platform) {
     ? zPost.platformAnalytics
     : [];
   return arr.find((p) => String(p?.platform || "").toLowerCase() === want) || null;
+}
+
+// Metric field names we expect on an analytics bag — used to decide
+// whether an object "looks like" a metrics container.
+const METRIC_KEYS = ["impressions", "reach", "views", "likes", "comments", "shares", "saves", "clicks", "engagementRate"];
+function looksLikeAnalytics(obj) {
+  return !!obj && typeof obj === "object" && METRIC_KEYS.some((k) => k in obj);
+}
+// Resolve the analytics bag tolerantly: nested `.analytics`, else the
+// entry itself if it carries metric keys, else the post's top-level
+// `.analytics`, else the post itself. Guards against a live Zernio shape
+// differing from the OpenAPI example (Codex r3).
+function pickAnalytics(platformEntry, zPost) {
+  if (platformEntry?.analytics) return platformEntry.analytics;
+  if (looksLikeAnalytics(platformEntry)) return platformEntry;
+  if (zPost?.analytics) return zPost.analytics;
+  if (looksLikeAnalytics(zPost)) return zPost;
+  return {};
+}
+
+// Tiny stable string hash (djb2) for a URL-based idempotency fallback.
+// Deterministic across runs so the same post URL always maps to the same
+// videoId when no platform-native id is available.
+function hashString(s) {
+  let h = 5381;
+  const str = String(s);
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h.toString(36);
 }

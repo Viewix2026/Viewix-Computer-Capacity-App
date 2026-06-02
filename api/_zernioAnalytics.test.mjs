@@ -129,5 +129,48 @@ const limitedAnalytics = { // YT/TikTok shape — no impressions/reach
   check("unknown platform → default config", platformMetrics("mastodon").primary === "views");
 }
 
+// ── 9. Shape tolerance (Codex r3) — metrics directly on entry ────────
+{
+  console.log("Metrics directly on platform entry (no nested .analytics)");
+  const raw = {
+    _id: "zer_x", content: "flat shape", publishedAt: "2026-05-01T10:00:00Z",
+    mediaType: "video", platformPostUrl: "https://example.com/li/x",
+    platforms: [{
+      platform: "linkedin", platformPostId: "ext_x",
+      platformPostUrl: "https://example.com/li/x",
+      // metrics live directly here, NOT under .analytics
+      impressions: 7777, likes: 50, comments: 5, shares: 2, engagementRate: 0.9,
+    }],
+  };
+  const n = normaliseZernioPost(raw, "linkedin");
+  check("extracted from entry-level metrics", n?.snapshot.impressions === 7777);
+  check("not all-null", n?.snapshot.likes === 50);
+}
+
+// ── 10. videoId idempotency fallback to URL hash ─────────────────────
+{
+  console.log("videoId fallback — no platform-native id");
+  const mk = () => normaliseZernioPost({
+    content: "no id", publishedAt: "2026-05-01T10:00:00Z", mediaType: "video",
+    platformPostUrl: "https://example.com/li/stable", analytics: { impressions: 10 },
+    platforms: [{ platform: "linkedin", platformPostUrl: "https://example.com/li/stable", analytics: { impressions: 10 } }],
+  }, "linkedin");
+  const a = mk(), b = mk();
+  check("videoId present from url hash", !!a?.videoId && a.videoId.startsWith("linkedin_u"));
+  check("deterministic across runs (idempotent)", a.videoId === b.videoId);
+}
+
+// ── 11. timestamp falls back to lastUpdated ──────────────────────────
+{
+  console.log("timestamp fallback to analytics.lastUpdated");
+  const n = normaliseZernioPost({
+    content: "no date", mediaType: "video", platformPostUrl: "https://example.com/li/z",
+    platforms: [{ platform: "linkedin", platformPostId: "ext_z", platformPostUrl: "https://example.com/li/z",
+                  analytics: { impressions: 1, lastUpdated: "2026-05-02T08:00:00Z" } }],
+  }, "linkedin");
+  check("kept via lastUpdated", n !== null);
+  check("timestamp = lastUpdated", n?.post.timestamp === "2026-05-02T08:00:00Z");
+}
+
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

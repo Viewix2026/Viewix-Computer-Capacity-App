@@ -39,6 +39,7 @@ import {
   getAnalytics,
   getFollowerStats,
   normaliseZernioPost,
+  checkAnalyticsAccess,
   AnalyticsAddonError,
 } from "../_zernioAnalytics.js";
 import { platformMetrics } from "../_platformMetrics.js";
@@ -102,10 +103,30 @@ export default async function handler(req, res) {
   const todayUtc = new Date(now).toISOString().slice(0, 10);
   const fromDate = fullWindowFromDate(now);
 
+  // ── Add-on preflight (Codex r3) ─────────────────────────────────────
+  // The Analytics add-on is plan-wide, so check it ONCE before touching
+  // any client data. A 402 here aborts cleanly with zero writes — no
+  // half-written client left with stale derived state.
+  try {
+    await checkAnalyticsAccess();
+  } catch (err) {
+    if (err instanceof AnalyticsAddonError) {
+      res.status(200).json({
+        ok: false,
+        reason: "analytics_addon_required",
+        detail: "Zernio Analytics add-on is not active on the plan; aborted before any writes. Enable it, then re-run.",
+      });
+      return;
+    }
+    // A non-402 preflight failure (network/auth) — surface, don't half-run.
+    res.status(502).json({ ok: false, reason: "preflight_failed", detail: err.message });
+    return;
+  }
+
   const clients = (await fbGet("/analytics/clients")) || {};
   const summary = {
     walkedClients: 0, enabledClients: 0, clientsPulled: 0,
-    platformsPulled: 0, postsWritten: 0, recomputed: 0,
+    platformsPulled: 0, postsWritten: 0, postsDropped: 0, recomputed: 0,
     skipped: {}, errors: [], addonMissing: false,
   };
   const skip = (reason) => { summary.skipped[reason] = (summary.skipped[reason] || 0) + 1; };
@@ -146,12 +167,24 @@ export default async function handler(req, res) {
 
         const batch = {};
         let writtenForPlatform = 0;
+        let droppedForPlatform = 0;
         for (const zp of posts) {
           const n = normaliseZernioPost(zp, platform);
-          if (!n) continue;
+          if (!n) { droppedForPlatform++; continue; }
           batch[`${n.videoId}/post`] = n.post;
           batch[`${n.videoId}/snapshots/${todayUtc}`] = n.snapshot;
           writtenForPlatform++;
+        }
+        // Surface drops so silent loss is visible. Some drops are
+        // legitimate (non-video on a video-only platform); a HIGH drop
+        // ratio is the signal that the live payload shape differs from
+        // what normaliseZernioPost expects.
+        summary.postsDropped += droppedForPlatform;
+        if (posts.length > 0 && droppedForPlatform / posts.length > 0.5) {
+          summary.errors.push({
+            clientId, platform, scope: "high_drop_ratio",
+            detail: `${droppedForPlatform}/${posts.length} posts dropped by normaliser — check Zernio payload shape.`,
+          });
         }
         if (writtenForPlatform > 0) {
           await fbPatch(`/analytics/videos/${clientId}/${platform}`, batch);
