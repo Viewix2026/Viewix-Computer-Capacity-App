@@ -99,7 +99,14 @@ function apiKey() {
 // non-2xx (the thrown error carries `.status` and `.body` so callers
 // can special-case e.g. a 409 dedup); the caller decides whether to
 // swallow, retry, or surface.
-async function zernio(path, { method = "GET", body, headers: extraHeaders, timeoutMs = 30000 } = {}) {
+//
+// Exported so the analytics layer (api/_zernioAnalytics.js) reuses the
+// exact same auth/timeout/error surface instead of duplicating it.
+// Note 2xx semantics: a 202 (analytics sync pending) has `resp.ok`
+// true, so it returns the parsed body normally rather than throwing —
+// the analytics layer inspects the body for the pending state. 402/424
+// throw with `err.status` set, which the analytics layer catches.
+export async function zernio(path, { method = "GET", body, headers: extraHeaders, timeoutMs = 30000 } = {}) {
   const url = `${baseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
   const headers = {
     Authorization: `Bearer ${apiKey()}`,
