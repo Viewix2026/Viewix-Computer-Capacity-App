@@ -52,7 +52,18 @@ export function initFB() {
               // back-filled but whose browser session still held the
               // pre-backfill token.
               const tok = await user.getIdTokenResult(true);
-              currentRole = tok.claims?.role || null;
+              // Staff auth is Google-only. The pre-SSO shared-password
+              // accounts (viewix-founder, viewix-closer, …) still restore
+              // from IndexedDB on page load and carry a stale `role`
+              // claim — which auto-logged staff straight in without ever
+              // hitting the Google sign-in. Honour the role ONLY on a
+              // Google session; any other restored session (legacy
+              // shared-password, anonymous public-share viewer,
+              // client-portal email-link user) gets no role and falls
+              // through to the Login screen, where one Google sign-in
+              // permanently replaces the stale session.
+              const provider = tok.claims?.firebase?.sign_in_provider;
+              currentRole = provider === "google.com" ? (tok.claims?.role || null) : null;
             } catch {
               currentRole = null;
             }
