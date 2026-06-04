@@ -4,6 +4,7 @@
 // Writes to Firebase via admin SDK (falls back to REST if service account not configured)
 
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
+import { parseVideoCount } from "../shared/attio-extract.js";
 import { identifyDeal, productLineLabel, videoTypeToPartnership } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 import { send as sendEmail } from "./_email/send.js";
@@ -31,7 +32,13 @@ function validatePayload(p) {
   const email = s(p["Client Email"] || p.clientEmail || p.email);
   if (email && !EMAIL_RX.test(email)) return "clientEmail is not a valid email";
   if (p.dealValue != null && p.dealValue !== "" && !Number.isFinite(Number(p.dealValue))) return "dealValue must be a number";
-  if (p.numberOfVideos != null && p.numberOfVideos !== "" && !Number.isFinite(Number(p.numberOfVideos))) return "numberOfVideos must be a number";
+  // numberOfVideos may arrive under any of the observed Zapier key shapes (see
+  // readNumberOfVideos). Validate the SAME resolved value so a count under a
+  // capitalised/spaced key can't bypass validation and reach the placeholder
+  // loop. parseVideoCount returns null for absent/non-numeric; a present-but-
+  // unparseable value is the only reject case.
+  const rawVideos = p.numberOfVideos ?? p["Number of Videos"] ?? p.number_of_videos;
+  if (rawVideos != null && rawVideos !== "" && parseVideoCount(rawVideos) === null) return "numberOfVideos must be a number";
   const destRaw = p["Destination"] || p.destinations || p.destination;
   if (typeof destRaw === "string" && destRaw.length > 2000) return "destinations too long (max 2000 chars)";
   if (Array.isArray(destRaw) && destRaw.length > 50) return "too many destinations (max 50)";
@@ -96,13 +103,25 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
 
+    // PII-safe diagnostic: log only the KEY NAMES Zapier sent (never values —
+    // the body carries client email + deal description). Lets us confirm which
+    // key the "Number of Videos" field actually arrives under and drop the
+    // unused fallbacks once verified. Remove after confirmation.
+    try { console.log("webhook-deal-won: body keys =", Object.keys(body)); } catch {}
+
     // Validate the payload shape BEFORE we touch Firebase. Bad data
     // here would otherwise create malformed /accounts and /projects
     // records that producers would have to clean up by hand.
     const validationErr = validatePayload(body);
     if (validationErr) return res.status(400).json({ error: validationErr });
 
-    const { companyName, companyId, dealName, dealValue, closeDate, videoType, numberOfVideos, secret } = body;
+    const { companyName, companyId, dealName, dealValue, closeDate, videoType, secret } = body;
+
+    // numberOfVideos: read under every observed Zapier key shape. The original
+    // camelCase key is destructured-by-name on most fields, but the newer Attio
+    // fields arrive capitalised/spaced — so accept all three. parseVideoCount
+    // preserves an explicit 0 (footage-only deals) and yields null when absent.
+    const numVideos = parseVideoCount(body.numberOfVideos ?? body["Number of Videos"] ?? body.number_of_videos);
 
     // New Attio fields (Zapier sends these with capital letters / spaces —
     // bracket notation required). Each is optional; Destination is
@@ -232,8 +251,9 @@ export default async function handler(req, res) {
         // appears. See api/_constants.js (isPostLaunchDelivery).
         createdAt: new Date().toISOString(),
       };
-      // Add placeholder videos based on numberOfVideos
-      const numVids = parseInt(numberOfVideos) || 0;
+      // Add placeholder videos based on numberOfVideos (already parsed +
+      // clamped to 0..500 by parseVideoCount, so the loop can't run away).
+      const numVids = numVideos || 0;
       if (numVids > 0) {
         for (let i = 0; i < numVids; i++) {
           newDelivery.videos.push({
@@ -317,7 +337,7 @@ export default async function handler(req, res) {
         attioCompanyId: companyId || null,
         attioDealId: null,
         dealValue: dealValue || null,
-        numberOfVideos: parseInt(numberOfVideos) || null,
+        numberOfVideos: numVideos,
         // New-flow fields — see MetaAdsResearch.META_TABS for the order
         tab: "brandTruth",
         approvals: {},
@@ -355,7 +375,7 @@ export default async function handler(req, res) {
         attioCompanyId: companyId || null,
         dealValue: dealValue || null,
         videoType: videoType || null,
-        numberOfVideos: parseInt(numberOfVideos) || null,
+        numberOfVideos: numVideos,
         // 7-tab workflow state. Tab router keys off `tab`; approvals[key]
         // timestamps advance each gate.
         tab: "brandTruth",
@@ -393,7 +413,7 @@ export default async function handler(req, res) {
       videoType: videoType || "",
       productLine: deal.productLine,
       packageTier: deal.tier,
-      numberOfVideos: parseInt(numberOfVideos) || null,
+      numberOfVideos: numVideos,
       description,                    // scope of work from Attio "Description"
       destinations,                   // array, split from Attio comma-separated "Destination"
       targetAudience,                 // Attio "Target Audience" — future field, empty for now
@@ -466,7 +486,7 @@ export default async function handler(req, res) {
               id: projectId,
               projectName: (dealName || "").trim() || "Untitled project",
               clientName: companyName,
-              numberOfVideos: parseInt(numberOfVideos) || null,
+              numberOfVideos: numVideos,
             },
             // Producer slot drives the chip render in the project card.
             // Other 3 templates resolve the same way via the cron path

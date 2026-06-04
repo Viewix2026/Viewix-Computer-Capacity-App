@@ -78,6 +78,72 @@ export function extractStage(d) {
   return "";
 }
 
+// Parse a raw "number of videos" value into a clean integer count. Used both
+// for the Zapier webhook payload (where it may arrive as "5", "5 videos", 5, or
+// absent) AND the cron backfill. Rules:
+//   - absent / "" / non-numeric  -> null (the field stays "missing", honest)
+//   - else                       -> integer, floored, clamped to 0..500
+// Preserves an explicit 0 (footage-only deals are legitimately 0 videos) —
+// unlike the old `parseInt(x) || null`, which collapsed 0 to null. The 500
+// ceiling is a safety cap so no single payload can drive a runaway placeholder
+// loop (real-world max observed is 96).
+export function parseVideoCount(raw) {
+  if (raw == null) return null;
+  if (typeof raw === "string" && raw.trim() === "") return null;
+  const n = typeof raw === "number" ? raw : parseInt(String(raw).replace(/[^0-9.\-]/g, ""), 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(500, Math.max(0, Math.trunc(n)));
+}
+
+// Read `number_of_videos` from a RAW Attio deal record (number attribute:
+// values.number_of_videos[0].value). Returns an integer incl. 0, or null when
+// the attribute is absent — so the backfill can distinguish a real 0 from a
+// deal that simply never had the field set.
+export function extractNumberOfVideos(d) {
+  const v = d?.values || {};
+  const cell = Array.isArray(v.number_of_videos) ? v.number_of_videos[0] : v.number_of_videos;
+  const raw = cell?.value;
+  if (raw == null) return null;
+  return parseVideoCount(raw);
+}
+
+// The deal's single associated person record_id (record-reference cell). Returns
+// the id ONLY when there is exactly ONE associated person — zero or >1 returns
+// null so the clientContact backfill never guesses which contact to email.
+export function extractDealPersonId(d) {
+  const v = d?.values || {};
+  const ref = v.associated_people;
+  const arr = Array.isArray(ref) ? ref : (ref ? [ref] : []);
+  if (arr.length !== 1) return null;
+  const cell = arr[0];
+  return cell?.target_record_id || cell?.record_id || null;
+}
+
+// --- person-record extractors (raw Attio person, fetched per-id) ---
+
+// First email on a person record. Attio email cells carry `email_address`
+// (fall through `value`). Returns null when the person has no email.
+export function extractPersonEmail(person) {
+  const v = person?.values || {};
+  const cell = Array.isArray(v.email_addresses) ? v.email_addresses[0] : v.email_addresses;
+  const email = cell?.email_address || cell?.value;
+  return email ? String(email).trim() : null;
+}
+
+// First name from a person record. Attio personal-name cells carry `first_name`
+// + `full_name`. Falls back to the first whitespace-delimited token of full_name
+// (mononym => whole name). Returns null when absent.
+export function extractPersonFirstName(person) {
+  const v = person?.values || {};
+  const cell = Array.isArray(v.name) ? v.name[0] : v.name;
+  if (!cell) return null;
+  const first = cell.first_name && String(cell.first_name).trim();
+  if (first) return first;
+  const full = (cell.full_name || cell.value || "").toString().trim();
+  if (!full) return null;
+  return full.split(/\s+/)[0];
+}
+
 // --- deal-specific extractors ---
 
 // The deal's own name (NOT the company). Raw text cell: values.name[0].value.
@@ -132,17 +198,23 @@ export function normName(s) {
 
 // --- matcher ---
 
-// Index the Won deals in /attioCache by normalised name. Only Won deals
-// with a positive value are indexed (a Lead/Lost deal isn't revenue, and a
-// project only exists because its deal was Won). Returns { byName: Map }.
-export function buildDealIndex(attioCache) {
+// Index the Won deals in /attioCache by normalised name. By default only Won
+// deals with a POSITIVE value are indexed (a Lead/Lost deal isn't revenue, and
+// the profitability instrument only cares about deals that carry a sale).
+//
+// `includeZeroValue: true` (used by the carry-across backfill) indexes EVERY Won
+// deal with a record id regardless of value, because numberOfVideos / client
+// contact must be recoverable even from a $0 (footage-only) Won deal. Each entry
+// carries `numberOfVideos` + `personId` so the backfill can read them without a
+// second pass over the raw cache. Returns { byName: Map }.
+export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
   const deals = Array.isArray(attioCache?.data) ? attioCache.data : [];
   const byName = new Map();
   const seen = new Set();
   for (const d of deals) {
     if (!isWonStage(extractStage(d))) continue;
     const value = extractVal(d);
-    if (!(value > 0)) continue;
+    if (!includeZeroValue && !(value > 0)) continue;
     const recordId = dealRecordId(d);
     // No record id => we can't reference it OR dedupe it against another
     // project's claim (the double-count guard keys on dealId). Skip it
@@ -160,6 +232,8 @@ export function buildDealIndex(attioCache) {
     const entry = {
       recordId,
       value,
+      numberOfVideos: extractNumberOfVideos(d),
+      personId: extractDealPersonId(d),
       companyId: extractDealCompanyId(d),
       closeDate: extractDate(d),
     };
@@ -170,42 +244,62 @@ export function buildDealIndex(attioCache) {
   return { byName };
 }
 
-// Resolve a project to its Won deal's value. CONFIDENT only when the match
-// is unique by name (and not contradicted by company), or unique by name +
-// company. A same-named deal that belongs to a DIFFERENT known company is
-// rejected (value null, not ambiguous) — it's some other client's deal that
-// merely shares a name. A genuine >1-way tie returns ambiguous so the caller
-// flags the row instead of trusting a guessed number. Returns null when
-// there is no candidate at all (caller then leaves the project's own value /
-// missing-value handling).
-export function resolveDealValue(project, dealIndex) {
-  if (!dealIndex || !dealIndex.byName) return null;
+// Core matcher shared by resolveDealValue + resolveDeal. CONFIDENT only when the
+// match is unique by name (and not contradicted by company), or unique by name +
+// company. Returns a tagged result:
+//   { kind: "none" }            no index / blank name / no candidates
+//   { kind: "mismatch" }        single candidate whose KNOWN company disagrees
+//   { kind: "ambiguous" }       >1 candidate that company can't disambiguate
+//   { kind: "match", entry }    confident single match
+function matchDealEntry(project, dealIndex) {
+  if (!dealIndex || !dealIndex.byName) return { kind: "none" };
   const key = normName(project?.projectName);
-  if (!key) return null;
+  if (!key) return { kind: "none" };
   const cands = dealIndex.byName.get(key);
-  if (!cands || !cands.length) return null;
+  if (!cands || !cands.length) return { kind: "none" };
   const cid = project?.attioCompanyId || null;
 
   if (cands.length === 1) {
     const only = cands[0];
-    // Single same-named deal is normally THE match — unless the project
-    // knows its company and the deal's (known) company differs. Then this
-    // is a name collision across clients: attach no number (a confident
-    // wrong revenue is worse than none).
-    if (cid && only.companyId && only.companyId !== cid) {
-      return { value: null, dealId: null, ambiguous: false };
-    }
-    return { value: only.value, dealId: only.recordId, ambiguous: false };
+    // Single same-named deal is normally THE match — unless the project knows
+    // its company and the deal's (known) company differs. Then it's a
+    // cross-client name collision: refuse (a confident wrong match is worse).
+    if (cid && only.companyId && only.companyId !== cid) return { kind: "mismatch" };
+    return { kind: "match", entry: only };
   }
 
   // Multiple deals share this name — disambiguate by the project's company.
   if (cid) {
     const byCo = cands.filter((c) => c.companyId && c.companyId === cid);
-    if (byCo.length === 1) {
-      return { value: byCo[0].value, dealId: byCo[0].recordId, ambiguous: false };
-    }
+    if (byCo.length === 1) return { kind: "match", entry: byCo[0] };
   }
 
   // Can't uniquely resolve — do NOT guess.
-  return { value: null, dealId: null, ambiguous: true };
+  return { kind: "ambiguous" };
+}
+
+// Resolve a project to its Won deal's value. Returns null when there is no
+// candidate at all (caller then leaves the project's own value / missing-value
+// handling); an object with value:null + ambiguous flag on a mismatch/tie; or
+// the value + dealId on a confident match. Contract unchanged from the original
+// (profitability.js depends on it byte-for-byte).
+export function resolveDealValue(project, dealIndex) {
+  const m = matchDealEntry(project, dealIndex);
+  switch (m.kind) {
+    case "none":      return null;
+    case "mismatch":  return { value: null, dealId: null, ambiguous: false };
+    case "ambiguous": return { value: null, dealId: null, ambiguous: true };
+    default:          return { value: m.entry.value, dealId: m.entry.recordId, ambiguous: false };
+  }
+}
+
+// Resolve a project to its full Won-deal entry for the carry-across backfill.
+// Returns the matched index entry (carrying numberOfVideos + personId) on a
+// confident match, an ambiguous flag on a tie, or null when there's no confident
+// deal (no candidate OR a cross-client name collision). Never guesses.
+export function resolveDeal(project, dealIndex) {
+  const m = matchDealEntry(project, dealIndex);
+  if (m.kind === "match")     return { entry: m.entry, dealId: m.entry.recordId, ambiguous: false };
+  if (m.kind === "ambiguous") return { entry: null, dealId: null, ambiguous: true };
+  return null; // none or mismatch -> no confident deal to backfill from
 }
