@@ -73,7 +73,13 @@ export function ClientPortal() {
         (data) => {
           clearTimeout(timeoutId);
           if (cancelled) return;
-          if (data) { setProjection(data); setError(null); }
+          // A retired tombstone (written when a client moves to the
+          // multi-platform pipeline before the Phase 4 portal exists) is
+          // truthy but is NOT a renderable projection — treat it as
+          // not-found rather than feeding the "still gathering" UI with a
+          // doc that has no zones (Codex r4).
+          if (data && data.retired) { setProjection(null); setError("notfound"); }
+          else if (data) { setProjection(data); setError(null); }
           else { setError("notfound"); }
           setLoading(false);
         },

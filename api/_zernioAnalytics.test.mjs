@@ -160,16 +160,56 @@ const limitedAnalytics = { // YT/TikTok shape — no impressions/reach
   check("deterministic across runs (idempotent)", a.videoId === b.videoId);
 }
 
-// ── 11. timestamp falls back to lastUpdated ──────────────────────────
+// ── 11. lastUpdated is NOT used as post timestamp (Codex r4) ──────────
 {
-  console.log("timestamp fallback to analytics.lastUpdated");
+  console.log("dateless post is dropped, NOT dated by lastUpdated");
   const n = normaliseZernioPost({
     content: "no date", mediaType: "video", platformPostUrl: "https://example.com/li/z",
     platforms: [{ platform: "linkedin", platformPostId: "ext_z", platformPostUrl: "https://example.com/li/z",
                   analytics: { impressions: 1, lastUpdated: "2026-05-02T08:00:00Z" } }],
   }, "linkedin");
-  check("kept via lastUpdated", n !== null);
-  check("timestamp = lastUpdated", n?.post.timestamp === "2026-05-02T08:00:00Z");
+  check("dropped (no real post date)", n === null);
+  // ...but a real date still works, and lastUpdated is stored separately
+  const m = normaliseZernioPost({
+    content: "dated", publishedAt: "2026-05-01T10:00:00Z", mediaType: "video",
+    platformPostUrl: "https://example.com/li/z2",
+    platforms: [{ platform: "linkedin", platformPostId: "ext_z2", platformPostUrl: "https://example.com/li/z2",
+                  analytics: { impressions: 1, lastUpdated: "2026-05-02T08:00:00Z" } }],
+  }, "linkedin");
+  check("dated post kept", m !== null);
+  check("timestamp = real post date (not lastUpdated)", m?.post.timestamp === "2026-05-01T10:00:00Z");
+  check("analyticsLastUpdated stored separately", m?.snapshot.analyticsLastUpdated === "2026-05-02T08:00:00Z");
+}
+
+// ── 12. account-level lone `likes` must NOT masquerade as post analytics
+{
+  console.log("account metadata does not masquerade as post analytics (Codex r4)");
+  const n = normaliseZernioPost({
+    content: "post", publishedAt: "2026-05-01T10:00:00Z", mediaType: "video",
+    platformPostUrl: "https://example.com/li/m",
+    // post-level metrics live flat on the post...
+    impressions: 5000, likes: 40, comments: 6, engagementRate: 1.1,
+    // ...but the platform entry carries only an account-total `likes`.
+    platforms: [{ platform: "linkedin", platformPostId: "ext_m",
+                  platformPostUrl: "https://example.com/li/m", likes: 999999 }],
+  }, "linkedin");
+  check("picked POST metrics, not account likes", n?.snapshot.impressions === 5000);
+  check("post-level likes used (40, not 999999)", n?.snapshot.likes === 40);
+}
+
+// ── 13. canonical URL → utm variants map to the same videoId ─────────
+{
+  console.log("canonical URL idempotency (Codex r4)");
+  const mk = (u) => normaliseZernioPost({
+    content: "x", publishedAt: "2026-05-01T10:00:00Z", mediaType: "video",
+    platformPostUrl: u,
+    platforms: [{ platform: "linkedin", platformPostUrl: u, analytics: { impressions: 9, likes: 1 } }],
+  }, "linkedin");
+  const a = mk("https://example.com/li/canon");
+  const b = mk("https://example.com/li/canon?utm_source=newsletter&fbclid=123");
+  const c = mk("https://example.com/li/canon#section");
+  check("bare and ?utm variant → same videoId", a?.videoId === b?.videoId);
+  check("bare and #fragment variant → same videoId", a?.videoId === c?.videoId);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);

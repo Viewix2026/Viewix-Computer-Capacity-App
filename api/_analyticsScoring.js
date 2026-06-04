@@ -868,13 +868,19 @@ export async function recomputeClientAnalytics(clientId) {
     // but the gate must be correct.)
     if (config.portalShortId) {
       try {
-        await fbSet(`/analytics/public/${config.portalShortId}`, {
-          retired: true,
-          reason: "client_went_multi_platform",
-          retiredAt: computedAt,
-          clientId,
-          portalShortId: config.portalShortId,
-        });
+        // Only write the tombstone ONCE — not on every recompute (Codex
+        // r4). Read the current public record; if it's already retired,
+        // leave it alone.
+        const existingPublic = await fbGet(`/analytics/public/${config.portalShortId}`);
+        if (!existingPublic?.retired) {
+          await fbSet(`/analytics/public/${config.portalShortId}`, {
+            retired: true,
+            reason: "client_went_multi_platform",
+            retiredAt: computedAt,
+            clientId,
+            portalShortId: config.portalShortId,
+          });
+        }
       } catch (err) {
         console.warn(`[analytics-scoring] portal tombstone failed for ${clientId}: ${err.message}`);
       }

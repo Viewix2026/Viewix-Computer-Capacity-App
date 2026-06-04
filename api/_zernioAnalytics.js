@@ -194,12 +194,15 @@ export function normaliseZernioPost(zPost, platform) {
   const a = pickAnalytics(platformEntry, zPost);
 
   const url = platformEntry?.platformPostUrl || zPost.platformPostUrl || null;
-  // Timestamp: published/scheduled first, then analytics freshness as a
-  // last resort so a post that's missing both date fields still lands in
-  // the time series rather than being silently dropped.
+  // Timestamp: a REAL post date only (published → scheduled → created).
+  // We deliberately do NOT fall back to analytics `lastUpdated` (Codex
+  // r4): that's data-freshness, not post time, and using it would date an
+  // old post "today" and miscount it into the current 30-day window,
+  // skewing status/momentum. A post with no real date is dropped (the
+  // cron counts drops); its analytics freshness is kept separately on the
+  // snapshot for reference, never as the post timestamp.
   const timestamp =
-    zPost.publishedAt || zPost.scheduledFor || zPost.createdAt ||
-    a.lastUpdated || zPost.lastUpdated || null;
+    zPost.publishedAt || zPost.scheduledFor || zPost.createdAt || null;
   if (!url || !timestamp) return null;
 
   const mediaType = zPost.mediaType || null;
@@ -208,11 +211,13 @@ export function normaliseZernioPost(zPost, platform) {
 
   // Idempotency anchor: the platform-NATIVE post id is most stable
   // (survives Zernio re-syncs), then Zernio's external postId, then a
-  // stable hash of the post URL, and only as a last resort Zernio's
-  // internal _id (which can change when an external post rematerialises).
+  // stable hash of the CANONICAL post URL (query/fragment stripped, so a
+  // `?utm=` change doesn't fork the id — Codex r4), and only as a last
+  // resort Zernio's internal _id (which can change when an external post
+  // rematerialises).
   const platformPostId =
     platformEntry?.platformPostId || zPost.platformPostId || zPost.postId ||
-    (url ? `u${hashString(url)}` : null) || zPost._id || null;
+    (url ? `u${hashString(canonicalUrl(url))}` : null) || zPost._id || null;
   if (!platformPostId) return null;
   const videoId = `${String(platform).toLowerCase()}_${platformPostId}`;
 
@@ -235,6 +240,9 @@ export function normaliseZernioPost(zPost, platform) {
     // Convenience: the platform's headline metric value, so scoring can
     // read snapshot[primaryMetric(platform)] without re-deriving.
     primaryMetric: cfg.primary,
+    // Analytics freshness kept for reference ONLY — never used as the
+    // post timestamp (see the timestamp note above).
+    analyticsLastUpdated: a.lastUpdated || null,
   };
 
   const post = {
@@ -271,19 +279,44 @@ function pickPlatformEntry(zPost, platform) {
 // Metric field names we expect on an analytics bag — used to decide
 // whether an object "looks like" a metrics container.
 const METRIC_KEYS = ["impressions", "reach", "views", "likes", "comments", "shares", "saves", "clicks", "engagementRate"];
+// "Strong" post-level signals an account/profile object almost never
+// carries — their presence is good evidence we're looking at POST
+// analytics rather than account metadata.
+const STRONG_METRIC_KEYS = ["impressions", "reach", "views", "engagementRate", "saves", "clicks"];
+// Codex r4: a lone `likes` (which an account/page entry can carry as a
+// total) must NOT classify that entry as post analytics. Require either a
+// strong post-level signal OR at least TWO metric keys — account metadata
+// won't satisfy that, a real flat analytics bag (many keys) will.
 function looksLikeAnalytics(obj) {
-  return !!obj && typeof obj === "object" && METRIC_KEYS.some((k) => k in obj);
+  if (!obj || typeof obj !== "object") return false;
+  if (STRONG_METRIC_KEYS.some((k) => k in obj)) return true;
+  const present = METRIC_KEYS.filter((k) => k in obj).length;
+  return present >= 2;
 }
-// Resolve the analytics bag tolerantly: nested `.analytics`, else the
-// entry itself if it carries metric keys, else the post's top-level
+// Resolve the analytics bag tolerantly: nested `.analytics` (the
+// documented shape — always wins), else the entry itself ONLY if it
+// convincingly looks like post analytics, else the post's top-level
 // `.analytics`, else the post itself. Guards against a live Zernio shape
-// differing from the OpenAPI example (Codex r3).
+// differing from the OpenAPI example without letting account-level
+// metadata masquerade as post metrics.
 function pickAnalytics(platformEntry, zPost) {
   if (platformEntry?.analytics) return platformEntry.analytics;
-  if (looksLikeAnalytics(platformEntry)) return platformEntry;
   if (zPost?.analytics) return zPost.analytics;
+  if (looksLikeAnalytics(platformEntry)) return platformEntry;
   if (looksLikeAnalytics(zPost)) return zPost;
   return {};
+}
+
+// Canonicalise a URL for a stable hash: drop query string + fragment so a
+// `?utm=...` variant maps to the same id as the bare URL. Falls back to
+// the raw string if URL parsing fails.
+function canonicalUrl(u) {
+  try {
+    const parsed = new URL(String(u));
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+  } catch {
+    return String(u).split(/[?#]/)[0];
+  }
 }
 
 // Tiny stable string hash (djb2) for a URL-based idempotency fallback.

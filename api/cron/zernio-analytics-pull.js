@@ -209,21 +209,24 @@ export default async function handler(req, res) {
         }
       } catch (err) {
         if (err instanceof AnalyticsAddonError) {
-          // Plan-wide gate — stop the whole run, report clearly.
+          // The plan-wide add-on gate is already caught by the preflight
+          // BEFORE any writes. Hitting a 402 here, mid-loop, is therefore
+          // an anomaly (e.g. follower-stats on one account) — NOT a reason
+          // to abort the whole run and orphan the platforms we already
+          // wrote. Record it, stop pulling further platforms for THIS
+          // client, and fall through to the recompute so whatever we did
+          // write gets consistent derived state (Codex r4).
           summary.addonMissing = true;
-          summary.errors.push({ clientId, platform, scope: "addon", error: err.message });
-          res.status(200).json({
-            ok: false,
-            reason: "analytics_addon_required",
-            detail: "Zernio Analytics add-on is not active on the plan; every analytics call 402s. Enable it, then re-run.",
-            summary,
-          });
-          return;
+          summary.errors.push({ clientId, platform, scope: "addon_midloop", error: err.message });
+          break;
         }
         summary.errors.push({ clientId, platform, scope: "getAnalytics", error: err.message });
       }
     }
 
+    // INVARIANT: if anything was written for this client this run, a
+    // recompute ALWAYS follows — no partial post data is ever left with
+    // stale derived state.
     if (pulledAnyForClient) {
       summary.clientsPulled++;
       try {
