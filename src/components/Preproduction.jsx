@@ -741,10 +741,15 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                 fbPatchProject(p.id, { status: newStatus });
                 // Auto-create delivery when approved
                 if (newStatus === "approved" && p.scriptTable?.length > 0) {
-                  // Idempotency: if this project already has a delivery,
-                  // re-selecting "approved" must NOT mint a second one — that
-                  // orphaned duplicate is exactly the bug we're fixing. Look
-                  // the project up first and bail before creating anything.
+                  // Idempotency: re-selecting "approved" must NOT mint a second
+                  // delivery (the orphaned-duplicate bug). Guard on TWO signals:
+                  //   1. p.deliveryId — stamped on the preprod record itself at
+                  //      creation. This is the freshest source (it drives this
+                  //      row's render), so it closes the race where the
+                  //      dealProjects prop hasn't yet caught the link write.
+                  //   2. the linked project's links.deliveryId — belt to the
+                  //      above's braces for records created before this stamp.
+                  if (p.deliveryId) return;
                   const linkedProject = (dealProjects || []).find(pr => (pr.links || {}).preprodId === p.id);
                   if (linkedProject && (linkedProject.links || {}).deliveryId) {
                     return;
@@ -790,6 +795,10 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                     videos,
                     createdAt: new Date().toISOString(),
                   });
+                  // Stamp the delivery id back onto the preprod record so a
+                  // re-selection of "approved" is a no-op even if the projects
+                  // prop is stale (see the guard at the top of this handler).
+                  fbSet(`/preproduction/metaAds/${p.id}/deliveryId`, delId);
 
                   // Auto-seed a subtask per approved video on the linked
                   // /projects/{id} record. Mirrors the Deliveries push so
