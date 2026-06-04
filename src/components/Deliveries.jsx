@@ -75,6 +75,15 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
   // ─── Actions ───
   const createBlank = () => {
     const d = newDelivery("New Client", "New Project");
+    // Persist the FULL record immediately. Without this the delivery
+    // lives only in local state; Firebase gets only the leaf fields the
+    // producer later edits, so the node never gets an `id`. The
+    // /deliveries sync filters out id-less nodes (useDeliveriesSync.js),
+    // so the next server-triggered resync (e.g. on-video-approved
+    // flipping viewixStatus) would drop the delivery — it vanishes from
+    // the list and the detail view falls back. Writing the whole object
+    // here also persists shortId + createdAt (the posting-bar gate).
+    fbSet(`/deliveries/${d.id}`, d);
     setDeliveries(p => [...p, d]);
     setActiveDeliveryId(d.id);
   };
