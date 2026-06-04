@@ -234,6 +234,91 @@ function seedDefaultSubtasksFor(project, accounts, editors, setProjects) {
   }
 }
 
+// Product lines whose per-video edit subtasks are seeded (and named) at
+// preproduction-approval time (api/social-organic.js + api/meta-ads.js
+// handlePushToRunsheet). We must NOT also seed those here or we'd double-create
+// — so seedVideoSubtasksFor skips them. Everything else (one-off / Live Action /
+// 90 Day Gameplan / Animation / unrecognised) has NO preprod-approval path and
+// therefore never gets per-video edit rows; this is the gap it fills.
+const PREPROD_PRODUCT_LINES = ["metaAds", "socialPremium", "socialOrganic"];
+
+// Lazy-seed one "edit" subtask per video for no-preprod project types, driven by
+// project.numberOfVideos (Thread 2 — videos → edits). Idempotent: guarded on the
+// absence of any source:"video" subtask, so re-running on every expand/open is a
+// no-op. Binds each row to its delivery video BY INDEX via a canonical videoId
+// (minted + persisted onto /deliveries when missing) so Deliveries + Analytics
+// link up, mirroring the approval-time seeding. Names come from the delivery
+// video (placeholder "Video N" fallback); producers rename inline.
+function seedVideoSubtasksFor(project, deliveries, setProjects, setDeliveries, { orderBase } = {}) {
+  if (!project?.id) return;
+  if (PREPROD_PRODUCT_LINES.includes(project.productLine)) return; // seeded at approval instead
+  const n = parseInt(project.numberOfVideos, 10);
+  if (!Number.isFinite(n) || n <= 0) return;
+  const existing = subtasksAsArray(project.subtasks);
+  if (existing.some(s => s.source === "video")) return; // already seeded — idempotent
+
+  const now = new Date().toISOString();
+  const base = Number.isFinite(orderBase)
+    ? orderBase
+    : (existing.length ? Math.max(...existing.map(s => s.order ?? 0)) + 1 : 0);
+
+  const delId = (project.links || {}).deliveryId || null;
+  const delivery = delId && Array.isArray(deliveries) ? deliveries.find(d => d?.id === delId) : null;
+  const delVideos = Array.isArray(delivery?.videos) ? delivery.videos : [];
+  const mintVideoId = () => `v-${Math.random().toString(36).slice(2, 12)}`;
+
+  const seeded = {};
+  const videoIdWrites = []; // { idx, videoId } — minted ids to persist on the delivery
+  for (let i = 0; i < n; i++) {
+    const stId = `st-vid-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`;
+    const delVid = delVideos[i] || null;
+    let videoId = delVid?.videoId || null;
+    if (delVid && !videoId) { videoId = mintVideoId(); videoIdWrites.push({ idx: i, videoId }); }
+    const name = (delVid?.name || "").trim() || `Video ${i + 1}`;
+    const rec = {
+      id: stId, name,
+      videoId: videoId || null,
+      creativeFormat: delVid?.creativeFormat || null,
+      // Producer-gate default (same as default phases): stuck until a producer
+      // schedules it. edit stage — the next touchpoint for a won-deal video.
+      status: "stuck", stage: "edit",
+      startDate: null, endDate: null, startTime: null, endTime: null,
+      location: "",
+      assigneeIds: [], assigneeId: null,
+      source: "video", order: base + i,
+      createdAt: now, updatedAt: now,
+    };
+    seeded[stId] = rec;
+    fbSet(`/projects/${project.id}/subtasks/${stId}`, rec);
+  }
+
+  // Persist minted videoIds back onto the delivery videos (index bind) so the
+  // subtask <-> delivery-video link is stable for Deliveries + Analytics.
+  if (delId && videoIdWrites.length) {
+    for (const { idx, videoId } of videoIdWrites) {
+      fbSet(`/deliveries/${delId}/videos/${idx}/videoId`, videoId);
+    }
+    if (typeof setDeliveries === "function") {
+      setDeliveries(prev => (Array.isArray(prev) ? prev.map(d => {
+        if (!d || d.id !== delId) return d;
+        const videos = Array.isArray(d.videos) ? d.videos.slice() : [];
+        for (const { idx, videoId } of videoIdWrites) {
+          if (videos[idx]) videos[idx] = { ...videos[idx], videoId };
+        }
+        return { ...d, videos };
+      }) : prev));
+    }
+  }
+
+  if (typeof setProjects === "function") {
+    setProjects(prev => prev.map(p =>
+      p && p.id === project.id
+        ? { ...p, subtasks: { ...(p.subtasks || {}), ...seeded }, updatedAt: now }
+        : p
+    ));
+  }
+}
+
 // Ordered list of subtask records out of the keyed Firebase object.
 // Falls back to insertion order when `order` is missing so legacy
 // records (or the auto-seeded defaults) still render in a stable order.
@@ -2608,6 +2693,20 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
   // Phase 6 — scheduler modal toggle.
   const [scheduleEditsOpen, setScheduleEditsOpen] = useState(false);
 
+  // Thread 2 — lazy-seed subtasks on open. The list-row expand seeds these too,
+  // but a project can be opened straight into the detail view (Team Board modal,
+  // deep link) without ever expanding its row. Seed default phases if the
+  // project has none, then per-video edit rows for no-preprod types (after the
+  // defaults). Both helpers are idempotent/self-guarded, so re-opening is a
+  // no-op. View-only viewers never write.
+  useEffect(() => {
+    if (viewOnly) return;
+    const empty = !project.subtasks || Object.keys(project.subtasks).length === 0;
+    if (empty) seedDefaultSubtasksFor(project, accounts, editors, setProjects);
+    seedVideoSubtasksFor(project, deliveries, setProjects, setDeliveries, empty ? { orderBase: DEFAULT_SUBTASKS.length } : {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, viewOnly]);
+
   // Run the shared Selects-timeline sync against a freshly-updated project
   // (passed up from SubtaskRow after a shoot date change). overrideAssignee
   // is supplied when the producer picks someone in the modal.
@@ -3240,8 +3339,13 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
       // producer actually engages with the project, keeping the data
       // tree clean for projects that nobody ever drills into.
       const project = projects.find(p => p.id === id);
-      if (project && (!project.subtasks || Object.keys(project.subtasks).length === 0)) {
-        seedDefaultSubtasksFor(project, accounts, editors, setProjects);
+      if (project) {
+        const empty = !project.subtasks || Object.keys(project.subtasks).length === 0;
+        if (empty) seedDefaultSubtasksFor(project, accounts, editors, setProjects);
+        // Thread 2 — also seed per-video edit rows for no-preprod types. When we
+        // just seeded the 5 defaults, start video rows after them; the helper is
+        // idempotent + self-guards on productLine / numberOfVideos.
+        seedVideoSubtasksFor(project, deliveries, setProjects, setDeliveries, empty ? { orderBase: DEFAULT_SUBTASKS.length } : {});
       }
       return next;
     });
