@@ -796,6 +796,15 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                   // so it won't double-seed.
                   const linkedProject = (dealProjects || []).find(pr => (pr.links || {}).preprodId === p.id);
                   if (linkedProject) {
+                    // Back-link the freshly-created delivery onto the project so
+                    // the Projects "Delivery" pill lights up and "Open delivery"
+                    // works. The server Meta Ads path (api/meta-ads.js) already
+                    // does this; this legacy UI approval path didn't, leaving
+                    // orphaned deliveries that looked uncreated. Only write when
+                    // the project isn't already bound to a delivery.
+                    if (!(linkedProject.links || {}).deliveryId) {
+                      fbSet(`/projects/${linkedProject.id}/links/deliveryId`, delId);
+                    }
                     const existingCount = Object.keys(linkedProject.subtasks || {}).length;
                     const now = new Date().toISOString();
                     rowsWithIds.forEach((row, i) => {

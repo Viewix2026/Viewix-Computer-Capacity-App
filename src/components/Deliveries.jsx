@@ -485,7 +485,7 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
           </div>
         ) : (
           <div style={{ display: "grid", gap: 12 }}>
-            {deliveries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(d => {
+            {deliveries.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)).map(d => {
               const ready = d.videos.filter(v => v.viewixStatus === "Completed" || v.viewixStatus === "Ready for Review").length;
               const approved = d.videos.filter(v => v.revision1 === "Approved").length;
               const logoSrc = getAcctLogo(d.clientName) || d.logoUrl;

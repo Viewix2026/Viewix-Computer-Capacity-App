@@ -225,6 +225,12 @@ export default async function handler(req, res) {
         logoUrl: "",
         notes: "",
         videos: [],
+        // Full ISO timestamp (not the date-only `now` above) so this matches
+        // the other delivery-creation paths and so isPostLaunchDelivery() can
+        // gate the social-posting scheduler. Without it every Won-deal delivery
+        // is treated as pre-launch and the "Schedule social posting" bar never
+        // appears. See api/_constants.js (isPostLaunchDelivery).
+        createdAt: new Date().toISOString(),
       };
       // Add placeholder videos based on numberOfVideos
       const numVids = parseInt(numberOfVideos) || 0;
