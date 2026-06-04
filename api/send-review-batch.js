@@ -64,10 +64,11 @@ const STATUS_BY_CODE = {
 };
 
 // Reverse-lookup: find the project that owns this delivery. Matching
-// rules (authoritative link → strict unique name fallback, fail-closed
-// on ambiguity) live in the shared findProjectForDelivery() so this and
-// the daily-09 reconciler can't drift. We keep the link self-heal write
-// here so a name-matched send repairs the link for next time.
+// rules (authoritative link → canonical videoId bridge → strict unique
+// name fallback, fail-closed on ambiguity) live in the shared
+// findProjectForDelivery() so this and the daily-09 reconciler can't
+// drift. We keep the link self-heal write here so a heuristic-matched
+// send repairs the link for next time.
 //
 // At ~50–100 projects this scan is cheap; add a reverse-index in
 // Firebase later if latency becomes an issue.
@@ -76,13 +77,13 @@ async function findProjectIdForDelivery(deliveryId, delivery) {
   const { projectId, matchedBy, ambiguous } = findProjectForDelivery(projectsRaw, deliveryId, delivery);
   if (ambiguous || !projectId) return null;
 
-  if (matchedBy === "name") {
-    // Best-effort link repair so the next send takes the fast path and
-    // the Projects "Delivery" pill lights up. A write failure must not
-    // block the email — the projectId we resolved is still correct.
+  // Repair the link for any heuristic match (videoId / name) — "link"
+  // means it was already correct. A write failure must not block the
+  // email; the projectId we resolved is still correct.
+  if (matchedBy && matchedBy !== "link") {
     try {
       await adminPatch(`/projects/${projectId}/links`, { deliveryId });
-      console.log(`[send-review-batch] self-healed link: project ${projectId} -> delivery ${deliveryId}`);
+      console.log(`[send-review-batch] self-healed link (${matchedBy}): project ${projectId} -> delivery ${deliveryId}`);
     } catch (e) {
       console.warn(`[send-review-batch] link self-heal write failed for project ${projectId}: ${e.message}`);
     }

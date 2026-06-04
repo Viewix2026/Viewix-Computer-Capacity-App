@@ -33,40 +33,71 @@ export function normName(s) {
   return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-// Resolve the project that owns a delivery, with a self-heal fallback.
+// Collect the canonical videoIds carried by a project's subtasks
+// (subtasks may be array- or object-shaped in RTDB).
+function subtaskVideoIds(project) {
+  const raw = project?.subtasks;
+  const subs = Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? Object.values(raw) : []);
+  return subs.filter(Boolean).map(s => s.videoId).filter(Boolean);
+}
+
+// Resolve the project that owns a delivery, with self-heal fallbacks.
 // PURE — performs no writes; callers decide whether to repair the link.
+// Always returns the RTDB KEY as projectId (authoritative for write
+// paths) even if a record's embedded `.id` field has drifted.
 //
-//   matchedBy: "link" — a project's links.deliveryId already points here
-//              "name" — no link, but EXACTLY ONE project shares the same
-//                       normalised clientName + projectName (and isn't
-//                       bound to a different delivery). Safe to adopt.
-//              null   — no resolution (zero matches, or ambiguous)
-//   ambiguous: true when >1 candidate at the link OR name stage — fail
-//              closed so callers refuse rather than guess.
+//   matchedBy: "link"    — a project's links.deliveryId already points here
+//              "videoId" — no link, but EXACTLY ONE project's subtasks share
+//                          a canonical videoId with this delivery's videos.
+//                          The reliable bridge for Meta Ads orphans, whose
+//                          delivery name ("<client> Meta Ads") never equals
+//                          the project's deal name.
+//              "name"    — no link/videoId, but EXACTLY ONE project shares the
+//                          normalised clientName + projectName.
+//              null      — no resolution (zero matches, or ambiguous)
+//   ambiguous: true when >1 candidate at any stage — fail closed so callers
+//              refuse rather than guess.
 //
 // Shared by send-review-batch (live self-heal) and the daily-09 reconciler
 // so the matching rules can't drift between them.
 export function findProjectForDelivery(projects, deliveryId, delivery) {
   const list = Object.entries(projects || {})
-    .map(([id, p]) => (p && typeof p === "object" ? { ...p, id: p.id || id } : null))
+    .map(([key, p]) => (p && typeof p === "object" ? { key, p } : null))
     .filter(Boolean);
 
   // 1. Authoritative: a project already links to this delivery.
-  const linked = list.filter(p => (p.links || {}).deliveryId === deliveryId);
-  if (linked.length === 1) return { projectId: linked[0].id, matchedBy: "link", ambiguous: false };
+  const linked = list.filter(({ p }) => (p.links || {}).deliveryId === deliveryId);
+  if (linked.length === 1) return { projectId: linked[0].key, matchedBy: "link", ambiguous: false };
   if (linked.length > 1) return { projectId: null, matchedBy: null, ambiguous: true };
 
-  // 2. Self-heal fallback: strict unique normalised name match, skipping
-  //    projects already bound to a DIFFERENT delivery.
+  // Candidates for a heuristic adopt: never steal a delivery a project is
+  // already (intentionally) bound to.
+  const notBoundElsewhere = ({ p }) => {
+    const linkedTo = (p.links || {}).deliveryId;
+    return !linkedTo || linkedTo === deliveryId;
+  };
+
+  // 2. Canonical videoId bridge — exact, survives name drift.
+  const deliveryVideoIds = new Set(
+    (Array.isArray(delivery?.videos) ? delivery.videos : [])
+      .map(v => v && v.videoId).filter(Boolean)
+  );
+  if (deliveryVideoIds.size) {
+    const vid = list.filter(notBoundElsewhere).filter(({ p }) =>
+      subtaskVideoIds(p).some(id => deliveryVideoIds.has(id))
+    );
+    if (vid.length === 1) return { projectId: vid[0].key, matchedBy: "videoId", ambiguous: false };
+    if (vid.length > 1) return { projectId: null, matchedBy: null, ambiguous: true };
+  }
+
+  // 3. Strict unique normalised name match.
   const cN = normName(delivery?.clientName);
   const pN = normName(delivery?.projectName);
   if (!cN || !pN) return { projectId: null, matchedBy: null, ambiguous: false };
 
-  const matches = list.filter(p => {
-    const linkedTo = (p.links || {}).deliveryId;
-    if (linkedTo && linkedTo !== deliveryId) return false;
-    return normName(p.clientName) === cN && normName(p.projectName) === pN;
-  });
-  if (matches.length === 1) return { projectId: matches[0].id, matchedBy: "name", ambiguous: false };
+  const matches = list.filter(notBoundElsewhere).filter(({ p }) =>
+    normName(p.clientName) === cN && normName(p.projectName) === pN
+  );
+  if (matches.length === 1) return { projectId: matches[0].key, matchedBy: "name", ambiguous: false };
   return { projectId: null, matchedBy: null, ambiguous: matches.length > 1 };
 }

@@ -36,7 +36,7 @@ function localStatusFor(remoteStatus) {
 
 export default async function handler(req, res) {
   const auth = isAuthorizedCron(req);
-  if (!auth.authorized) return res.status(401).json({ error: "Unauthorized" });
+  if (!auth.ok) return res.status(401).json({ error: "Unauthorized" });
 
   const { db, err } = getAdmin();
   if (err) return res.status(500).json({ error: err });
