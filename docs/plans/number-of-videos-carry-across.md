@@ -152,7 +152,35 @@ placeholder-video loop, and the cron backfill.
 
 ---
 
-## Deferred — Thread 2 (edits auto-creation), NOT in this change
+## Thread 2 — # videos → # edits (SHIPPING, lean shape chosen 2026-06-04)
+Decision: **Lean — fill the one-off gap only.** SO / Meta Ads already seed +
+name edit subtasks at preprod-approval (`social-organic.js` / `meta-ads.js`
+`handlePushToRunsheet`, index-bound by canonical `videoId`); leave that flow
+untouched (it creates rows with no dedup, so pre-seeding there would duplicate).
+
+The real gap: **one-off / Live Action / unrecognised** projects (productLine not
+in metaAds/socialPremium/socialOrganic) get delivery placeholder videos but
+**no per-video edit subtasks** — so their project-detail timeline has no
+"Video N" rows to schedule.
+
+Implementation — **client-side lazy reconcile** (NOT webhook/cron), mirroring the
+existing default-phase lazy-seed (`Projects.jsx` `seedDefaultSubtasksFor`,
+seeded on first list-expand / detail-open). Chosen because pre-seeding rows
+server-side would suppress the default-phase seed (gated on `subtasks` being
+empty) and because client-side already has `deliveries` + the index-bind pattern:
+- New `seedVideoSubtasksFor(project, deliveries, setProjects, setDeliveries)`:
+  guards on numberOfVideos>0, no-preprod productLine, and **no existing
+  `source:"video"` subtask** (idempotent). Seeds N edit-stage / stuck subtasks
+  named from the delivery video (`Video N` fallback), index-bound to each
+  delivery video via a minted canonical `videoId` (persisted back to
+  `/deliveries`), ordered after the default phases.
+- Fired alongside the existing default-phase seed on list-expand and on
+  ProjectDetail open (`!viewOnly`). Covers new AND existing one-off projects the
+  moment a producer opens them; no automation/webhook surface touched.
+- Names: one-off has no preprod script, so rows read `Video N`, editable inline.
+  SO/Meta name carry-through at approval already works and is unchanged.
+
+## (historical) Deferred — Thread 2 framing before the lean decision
 The "# videos → # edits + name carry-through" already exists on two paths:
 **Social Organic** (`social-organic.js` `handlePushToRunsheet`) and **Meta Ads**
 (`meta-ads.js` `handlePushToRunsheet`) create one edit-stage subtask per
