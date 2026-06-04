@@ -3,9 +3,10 @@
 // generates shareable client review links. Records are spawned by the
 // Attio deal-won webhook or created blank from this list.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
+import { findProjectForDelivery } from "../../api/_findOwningProject.js";
 import { StatusSelect } from "./UIComponents";
 import { fbSet, fbSetAsync, authFetch } from "../firebase";
 import { SchedulePostingModal } from "./SchedulePostingModal";
@@ -28,8 +29,64 @@ import { notifyVideoApproved } from "./deliveryReview/deliveryWrites";
 // manual `posted` checkbox workflow until they finish.
 import { SOCIAL_SCHEDULE_LAUNCH_TS as SCHEDULE_FEATURE_LAUNCH_TS } from "../../api/_constants.js";
 
-export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDeliveryId }) {
+export function Deliveries({ deliveries, setDeliveries, accounts, projects, deepLinkDeliveryId }) {
   const [activeDeliveryId, setActiveDeliveryId] = useState(null);
+  // ─── List-view toolbar: search + sort + unlinked filter ───────────
+  // Sort/filter persisted per-browser (a viewing preference, not routable
+  // state). Keys are namespaced to deliveries so they can't collide with
+  // the Projects toolbar's viewix.projects.* keys.
+  const SORT_KEY = "viewix.deliveries.sort";
+  const FILTER_KEY = "viewix.deliveries.filter";
+  const VALID_SORTS = ["alpha", "newest", "oldest"];
+  const VALID_FILTERS = ["all", "unlinked"];
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState(() => {
+    try { const s = typeof window !== "undefined" ? window.localStorage.getItem(SORT_KEY) : null; return VALID_SORTS.includes(s) ? s : "newest"; } catch { return "newest"; }
+  });
+  const [filter, setFilter] = useState(() => {
+    try { const s = typeof window !== "undefined" ? window.localStorage.getItem(FILTER_KEY) : null; return VALID_FILTERS.includes(s) ? s : "all"; } catch { return "all"; }
+  });
+  useEffect(() => { try { if (typeof window !== "undefined") window.localStorage.setItem(SORT_KEY, sortBy); } catch { /* ignore */ } }, [sortBy]);
+  useEffect(() => { try { if (typeof window !== "undefined") window.localStorage.setItem(FILTER_KEY, filter); } catch { /* ignore */ } }, [filter]);
+
+  // Ownership map: delivery id → whether a project owns it. Computed once
+  // per deliveries/projects change (not per render) so the "Unlinked"
+  // filter's per-delivery project scan doesn't run N×M every keystroke.
+  const unlinkedIds = useMemo(() => {
+    const projObj = Array.isArray(projects)
+      ? Object.fromEntries((projects || []).filter(p => p && p.id).map(p => [p.id, p]))
+      : (projects || {});
+    const set = new Set();
+    for (const d of (deliveries || [])) {
+      if (!d || !d.id) continue;
+      const { projectId } = findProjectForDelivery(projObj, d.id, d);
+      if (!projectId) set.add(d.id);
+    }
+    return set;
+  }, [deliveries, projects]);
+
+  const labelOf = (d) => `${(d.clientName || "").trim()}: ${(d.projectName || "").trim()}`.toLowerCase();
+  const visibleDeliveries = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = (deliveries || []).filter(d => {
+      if (!d || !d.id) return false;
+      if (filter === "unlinked" && !unlinkedIds.has(d.id)) return false;
+      if (q && !((d.clientName || "").toLowerCase().includes(q) || (d.projectName || "").toLowerCase().includes(q) || (d.shortId || "").toLowerCase().includes(q))) return false;
+      return true;
+    });
+    // Sort a COPY — never mutate the synced deliveries array in place.
+    // Secondary alpha sort keeps createdAt-less records deterministic
+    // (they'd otherwise cluster at epoch order under Newest/Oldest).
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "newest" || sortBy === "oldest") {
+        const da = Date.parse(a.createdAt) || 0;
+        const db = Date.parse(b.createdAt) || 0;
+        if (db !== da) return sortBy === "newest" ? db - da : da - db;
+      }
+      return labelOf(a).localeCompare(labelOf(b));
+    });
+  }, [deliveries, search, sortBy, filter, unlinkedIds]);
+  const unlinkedCount = unlinkedIds.size;
   // Phase A.5 "Share with client" modal state. Lifted to the parent
   // (rather than the detail-view block) so the modal lifecycle stays
   // simple — only one share flow can be active at a time, and the
@@ -493,8 +550,38 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
             <div style={{ fontSize: 13 }}>Deliveries are created when a project is won. Use "+ Blank Delivery" if you need to add one manually.</div>
           </div>
         ) : (
-          <div style={{ display: "grid", gap: 12 }}>
-            {deliveries.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)).map(d => {
+          <>
+            {/* Toolbar — search + Unlinked filter + sort. Mirrors the
+                Projects sub-tab toolbar. "Unlinked" surfaces deliveries
+                with no owning project (the orphan state) so producers can
+                see and fix them instead of them hiding in the full list. */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search deliveries…"
+                style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 12, width: 220, outline: "none" }} />
+              <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
+                {[{ key: "all", label: "All" }, { key: "unlinked", label: unlinkedCount > 0 ? `Unlinked · ${unlinkedCount}` : "Unlinked" }].map(f => (
+                  <button key={f.key} onClick={() => setFilter(f.key)}
+                    style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: filter === f.key ? "var(--card)" : "transparent", color: filter === f.key ? (f.key === "unlinked" && unlinkedCount > 0 ? "#F59E0B" : "var(--fg)") : "var(--muted)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
+                {[{ key: "alpha", label: "A–Z" }, { key: "newest", label: "Newest" }, { key: "oldest", label: "Oldest" }].map(s => (
+                  <button key={s.key} onClick={() => setSortBy(s.key)}
+                    style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: sortBy === s.key ? "var(--card)" : "transparent", color: sortBy === s.key ? "var(--fg)" : "var(--muted)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {visibleDeliveries.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", background: "var(--card)", borderRadius: 12, border: "1px solid var(--border)", fontSize: 13 }}>
+                No deliveries match {filter === "unlinked" ? "the Unlinked filter" : "your search"}.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                {visibleDeliveries.map(d => {
               const ready = d.videos.filter(v => v.viewixStatus === "Completed" || v.viewixStatus === "Ready for Review").length;
               const approved = d.videos.filter(v => v.revision1 === "Approved").length;
               const logoSrc = getAcctLogo(d.clientName) || d.logoUrl;
@@ -538,7 +625,9 @@ export function Deliveries({ deliveries, setDeliveries, accounts, deepLinkDelive
                 </div>
               );
             })}
-          </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </>
