@@ -307,15 +307,30 @@ function pickAnalytics(platformEntry, zPost) {
   return {};
 }
 
-// Canonicalise a URL for a stable hash: drop query string + fragment so a
-// `?utm=...` variant maps to the same id as the bare URL. Falls back to
-// the raw string if URL parsing fails.
+// Tracking/share params that carry NO post identity — safe to strip so a
+// `?utm=...`/`?fbclid=...` variant maps to the same id as the bare URL.
+const TRACKING_PARAMS = new Set([
+  "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+  "fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_cid", "mc_eid",
+  "igshid", "igsh", "si", "feature", "ref", "ref_src", "ref_url", "share_id",
+]);
+
+// Canonicalise a URL for a stable hash. CRITICAL (Codex r3): strip ONLY
+// known tracking params + the fragment — do NOT nuke the whole query,
+// because identity lives in query params on some platforms (YouTube
+// `?v=ID`, Facebook `?story_fbid=`/`?fbid=`). Nuking the query collapsed
+// every such post to one id. Falls back to a path-only string if URL
+// parsing fails.
 function canonicalUrl(u) {
   try {
     const parsed = new URL(String(u));
-    return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+    for (const k of [...parsed.searchParams.keys()]) {
+      if (TRACKING_PARAMS.has(k.toLowerCase())) parsed.searchParams.delete(k);
+    }
+    parsed.hash = "";
+    return parsed.toString().replace(/\?$/, "").replace(/\/+$/, "");
   } catch {
-    return String(u).split(/[?#]/)[0];
+    return String(u).split("#")[0];
   }
 }
 

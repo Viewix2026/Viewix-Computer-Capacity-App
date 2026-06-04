@@ -21,6 +21,14 @@ export function NicheIntel({ data, competitorsRoot }) {
   const nichePulse = data?.insights?.nichePulse || null;
   const thisWeekInNiche = data?.insights?.thisWeekInNiche || null;
 
+  // The Views-over-time chart is scoped to a SINGLE platform (no
+  // cross-platform blend — Codex r3). Use the client's primary platform
+  // (Instagram for the existing pilot; LinkedIn etc. for multi-platform)
+  // with ITS matching median + metric noun.
+  const primaryPlatform = data?.primaryPlatform || "instagram";
+  const viewsChartMedian = data?.baselines?.medianViews?.[primaryPlatform] ?? null;
+  const viewsChartNoun = data?.baselines?.primaryMetric?.[primaryPlatform] || "views";
+
   const followerHistory = (data?.followers?.instagram) || {};
   const followerDates = Object.keys(followerHistory).sort();
   const followerNow = followerDates.length
@@ -81,7 +89,9 @@ export function NicheIntel({ data, competitorsRoot }) {
             </div>
             <ViewsOverTimeChart
               videos={data?.videos}
-              medianViews={data?.baselines?.medianViews?.instagram}
+              platform={primaryPlatform}
+              medianViews={viewsChartMedian}
+              metricNoun={viewsChartNoun}
             />
           </div>
           <div style={{

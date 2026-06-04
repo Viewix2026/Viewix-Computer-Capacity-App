@@ -212,5 +212,27 @@ const limitedAnalytics = { // YT/TikTok shape — no impressions/reach
   check("bare and #fragment variant → same videoId", a?.videoId === c?.videoId);
 }
 
+// ── 14. identity query params are PRESERVED (Codex r3) ───────────────
+{
+  console.log("identity query params not stripped (YouTube ?v=, FB story_fbid)");
+  const ytA = normaliseZernioPost({
+    content: "yt a", publishedAt: "2026-05-01T10:00:00Z", mediaType: "video",
+    platformPostUrl: "https://www.youtube.com/watch?v=AAA&utm_source=x",
+    platforms: [{ platform: "youtube", platformPostUrl: "https://www.youtube.com/watch?v=AAA&utm_source=x", analytics: { views: 1, likes: 1 } }],
+  }, "youtube");
+  const ytB = normaliseZernioPost({
+    content: "yt b", publishedAt: "2026-05-01T10:00:00Z", mediaType: "video",
+    platformPostUrl: "https://www.youtube.com/watch?v=BBB",
+    platforms: [{ platform: "youtube", platformPostUrl: "https://www.youtube.com/watch?v=BBB", analytics: { views: 1, likes: 1 } }],
+  }, "youtube");
+  check("different ?v= → different videoId (NOT collapsed)", ytA?.videoId !== ytB?.videoId);
+  check("tracking param still stripped (?v=AAA&utm == ?v=AAA)",
+    ytA?.videoId === normaliseZernioPost({
+      content: "yt a2", publishedAt: "2026-05-01T10:00:00Z", mediaType: "video",
+      platformPostUrl: "https://www.youtube.com/watch?v=AAA",
+      platforms: [{ platform: "youtube", platformPostUrl: "https://www.youtube.com/watch?v=AAA", analytics: { views: 1, likes: 1 } }],
+    }, "youtube")?.videoId);
+}
+
 console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);
