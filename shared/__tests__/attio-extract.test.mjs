@@ -13,6 +13,12 @@ import {
   normName,
   buildDealIndex,
   resolveDealValue,
+  parseVideoCount,
+  extractNumberOfVideos,
+  extractDealPersonId,
+  extractPersonEmail,
+  extractPersonFirstName,
+  resolveDeal,
 } from "../attio-extract.js";
 
 let passed = 0;
@@ -197,6 +203,104 @@ test("resolveDealValue: no candidate => null; blank name => null", () => {
   assert.equal(resolveDealValue({ projectName: "Does Not Exist" }, IDX), null);
   assert.equal(resolveDealValue({ projectName: "" }, IDX), null);
   assert.equal(resolveDealValue({ projectName: "x" }, null), null);
+});
+
+// ── carry-across: parseVideoCount ────────────────────────────────────
+test("parseVideoCount: parses, preserves 0, clamps, rejects junk", () => {
+  assert.equal(parseVideoCount("5"), 5);
+  assert.equal(parseVideoCount(5), 5);
+  assert.equal(parseVideoCount(0), 0);          // explicit 0 preserved (was lost by `|| null`)
+  assert.equal(parseVideoCount("0"), 0);
+  assert.equal(parseVideoCount(5.9), 5);         // floored
+  assert.equal(parseVideoCount("12 videos"), 12); // strips trailing text
+  assert.equal(parseVideoCount(999), 500);       // clamped to ceiling
+  assert.equal(parseVideoCount(-3), 0);          // clamped to floor
+  assert.equal(parseVideoCount(""), null);
+  assert.equal(parseVideoCount("  "), null);
+  assert.equal(parseVideoCount(undefined), null);
+  assert.equal(parseVideoCount(null), null);
+  assert.equal(parseVideoCount("abc"), null);
+});
+
+// ── carry-across: extractNumberOfVideos (distinguishes 0 from absent) ──
+test("extractNumberOfVideos: number incl 0, null when attribute absent", () => {
+  assert.equal(extractNumberOfVideos({ values: { number_of_videos: [{ value: 9 }] } }), 9);
+  assert.equal(extractNumberOfVideos({ values: { number_of_videos: [{ value: 0 }] } }), 0);
+  assert.equal(extractNumberOfVideos({ values: {} }), null);
+  assert.equal(extractNumberOfVideos({ values: { number_of_videos: [] } }), null);
+});
+
+// ── carry-across: extractDealPersonId (single-person guard) ───────────
+test("extractDealPersonId: returns id only for exactly ONE associated person", () => {
+  const one = { values: { associated_people: [{ target_record_id: "person-1" }] } };
+  assert.equal(extractDealPersonId(one), "person-1");
+  const none = { values: { associated_people: [] } };
+  assert.equal(extractDealPersonId(none), null);
+  const many = { values: { associated_people: [{ target_record_id: "a" }, { target_record_id: "b" }] } };
+  assert.equal(extractDealPersonId(many), null); // never guess which contact
+  assert.equal(extractDealPersonId({ values: {} }), null);
+});
+
+// ── carry-across: person extractors ──────────────────────────────────
+test("extractPersonEmail / extractPersonFirstName: present, absent, mononym", () => {
+  const p = { values: { email_addresses: [{ email_address: " raj@x.com " }], name: [{ first_name: "Raj", full_name: "Raj Pandita" }] } };
+  assert.equal(extractPersonEmail(p), "raj@x.com");
+  assert.equal(extractPersonFirstName(p), "Raj");
+  // no first_name -> first token of full_name
+  const f = { values: { name: [{ full_name: "Alan Hollensen" }] } };
+  assert.equal(extractPersonFirstName(f), "Alan");
+  // mononym -> whole name
+  const m = { values: { name: [{ full_name: "Cher" }] } };
+  assert.equal(extractPersonFirstName(m), "Cher");
+  // absent
+  assert.equal(extractPersonEmail({ values: {} }), null);
+  assert.equal(extractPersonFirstName({ values: {} }), null);
+});
+
+// ── carry-across: buildDealIndex includeZeroValue + new entry fields ──
+test("buildDealIndex includeZeroValue: indexes a $0 Won deal; default excludes it", () => {
+  const zeroDeal = {
+    id: { record_id: "z1" },
+    values: {
+      name: [{ value: "Footage Only Shoot" }],
+      stage: [{ status: { title: "Won" } }],
+      value: [{ currency_value: 0 }],
+      number_of_videos: [{ value: 0 }],
+      associated_people: [{ target_record_id: "person-9" }],
+    },
+  };
+  // default: value-gated -> excluded (profitability semantics unchanged)
+  assert.equal(buildDealIndex({ data: [zeroDeal] }).byName.size, 0);
+  // includeZeroValue: indexed, carrying numberOfVideos + personId
+  const idx = buildDealIndex({ data: [zeroDeal] }, { includeZeroValue: true });
+  const entry = idx.byName.get("footage only shoot")[0];
+  assert.equal(entry.numberOfVideos, 0);
+  assert.equal(entry.personId, "person-9");
+  assert.equal(entry.recordId, "z1");
+});
+
+// ── carry-across: resolveDeal ────────────────────────────────────────
+const CARRY_IDX = buildDealIndex({ data: [
+  deal({ id: "c-uniq", name: "Spanish Translation Video", value: 672, companyId: "co-1" }),
+  deal({ id: "c-a", name: "Shared Name", value: 8000, companyId: "co-a" }),
+  deal({ id: "c-b", name: "Shared Name", value: 12000, companyId: "co-b" }),
+] }, { includeZeroValue: true });
+
+test("resolveDeal: confident match returns the entry + dealId", () => {
+  const r = resolveDeal({ projectName: "Spanish Translation Video" }, CARRY_IDX);
+  assert.equal(r.dealId, "c-uniq");
+  assert.equal(r.ambiguous, false);
+  assert.equal(r.entry.recordId, "c-uniq");
+});
+
+test("resolveDeal: tie => ambiguous, no entry; mismatch/none => null", () => {
+  const tie = resolveDeal({ projectName: "Shared Name" }, CARRY_IDX);
+  assert.equal(tie.ambiguous, true);
+  assert.equal(tie.entry, null);
+  // cross-client name collision (single candidate, company disagrees) => null
+  assert.equal(resolveDeal({ projectName: "Spanish Translation Video", attioCompanyId: "co-other" }, CARRY_IDX), null);
+  // no candidate => null
+  assert.equal(resolveDeal({ projectName: "Nope" }, CARRY_IDX), null);
 });
 
 console.log(`\n${passed} passed`);

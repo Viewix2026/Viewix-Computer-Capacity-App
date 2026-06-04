@@ -13,6 +13,13 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 import { requireRole, sendAuthError } from "./_requireAuth.js";
 import { isAuthorizedCron } from "./_cronAuth.js";
+import { buildDealIndex, resolveDeal, extractPersonEmail, extractPersonFirstName } from "../shared/attio-extract.js";
+
+// Cap on per-id Attio people GETs in a single run. The clientContact backfill
+// fetches one person record per project that still lacks a client email; on the
+// first historical run hundreds could qualify, which would blow the cron's time
+// budget. Bound it and let the backlog converge over a few nights (idempotent).
+const MAX_PEOPLE_FETCH_PER_RUN = 50;
 
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -268,6 +275,102 @@ export default async function handler(req, res) {
       }
     }
 
+    // 5b. Self-heal numberOfVideos + clientContact from the matched Attio Won
+    //     deal. Both should arrive via webhook-deal-won at win-time but are
+    //     frequently missing (Zapier didn't map them, or the deal had no value /
+    //     associated person then). ADDITIVE-ONLY: fills a blank, never overrides
+    //     — a producer edit or any present value always survives. Runs in its
+    //     OWN loop over all projects (NOT inside the step-5 clientName guard,
+    //     which early-exits on projects that already have a clientName — i.e.
+    //     most of them, exactly the ones that may still need these fields).
+    let numberOfVideosBackfilled = 0;
+    let clientContactBackfilled = 0;
+    let peopleFetched = 0;
+    let clientContactRemaining = 0;
+    try {
+      // includeZeroValue: a footage-only ($0) Won deal still carries a real
+      // video count + client, which the default value>0 gate would hide.
+      const dealIndex = buildDealIndex({ data: allDeals }, { includeZeroValue: true });
+
+      // Carry-across claim guard (separate from profitability's value-gated
+      // attioClaimCounts): a deal confidently claimed by >1 project is
+      // ambiguous for ALL of them, so we never copy one deal's data onto two
+      // same-named projects.
+      const dealClaimCounts = new Map();
+      for (const p of projects) {
+        const m = resolveDeal(p, dealIndex);
+        if (m && m.dealId && !m.ambiguous) {
+          dealClaimCounts.set(m.dealId, (dealClaimCounts.get(m.dealId) || 0) + 1);
+        }
+      }
+      const claimedOnce = (dealId) => dealId && dealClaimCounts.get(dealId) === 1;
+
+      // Pass A: numberOfVideos (write immediately) + collect clientContact work.
+      const needsContact = []; // { projectId, personId }
+      for (const p of projects) {
+        const m = resolveDeal(p, dealIndex);
+        if (!m || m.ambiguous || !claimedOnce(m.dealId)) continue;
+        const entry = m.entry;
+
+        // numberOfVideos — only when the project's value is genuinely blank
+        // (== null catches null + undefined; an explicit 0 is "set", skipped).
+        if (p.numberOfVideos == null && entry.numberOfVideos != null) {
+          // Re-read the leaf right before writing so a producer edit landing
+          // between the snapshot and now is never clobbered.
+          const live = await fbGet(`/projects/${p.id}/numberOfVideos`).catch(() => null);
+          if (live == null) {
+            await fbPatch(`/projects/${p.id}`, { numberOfVideos: entry.numberOfVideos, updatedAt: lastSyncedAt });
+            numberOfVideosBackfilled++;
+          }
+        }
+
+        // clientContact email — queue the deal's single associated person
+        // (entry.personId is null for zero/>1-person deals, so we never guess).
+        const emailBlank = !((p.clientContact?.email || "").trim());
+        if (emailBlank && entry.personId) {
+          needsContact.push({ projectId: p.id, personId: entry.personId });
+        }
+      }
+
+      // Fetch distinct people, bounded + per-id isolated so one failure skips
+      // only that person and never writes a partial/wrong address.
+      const personCache = new Map(); // personId -> { email, firstName } | null
+      const distinctPersonIds = [...new Set(needsContact.map(n => n.personId))];
+      const toFetch = distinctPersonIds.slice(0, MAX_PEOPLE_FETCH_PER_RUN);
+      clientContactRemaining = Math.max(0, distinctPersonIds.length - toFetch.length);
+      for (const pid of toFetch) {
+        try {
+          const pr = await fetch(`https://api.attio.com/v2/objects/people/records/${pid}`, { headers });
+          if (!pr.ok) { personCache.set(pid, null); continue; }
+          const pj = await pr.json();
+          const person = pj?.data || null;
+          const email = person ? extractPersonEmail(person) : null;
+          if (!email) { personCache.set(pid, null); peopleFetched++; continue; }
+          personCache.set(pid, { email, firstName: person ? extractPersonFirstName(person) : null });
+          peopleFetched++;
+        } catch {
+          personCache.set(pid, null);
+        }
+      }
+
+      // Pass B: leaf-patch ONLY the still-blank child fields (re-read right
+      // before so a producer edit is never clobbered). A person with no email
+      // leaves the project blank rather than writing a fake address.
+      for (const { projectId, personId } of needsContact) {
+        const resolved = personCache.get(personId);
+        if (!resolved || !resolved.email) continue;
+        const live = (await fbGet(`/projects/${projectId}/clientContact`).catch(() => null)) || {};
+        const patch = {};
+        if (!((live.email || "").trim())) patch.email = resolved.email;
+        if (!((live.firstName || "").trim()) && resolved.firstName) patch.firstName = resolved.firstName;
+        if (Object.keys(patch).length === 0) continue;
+        await fbPatch(`/projects/${projectId}/clientContact`, patch);
+        clientContactBackfilled++;
+      }
+    } catch (carryErr) {
+      console.error("carry-across backfill error:", carryErr);
+    }
+
     // 6. Mirror each account's last-contact date from its Attio company's
     //    `last_interaction` (rolled-up across email + meetings). This replaces
     //    the old manual "Log Contact" button — the Accounts staleness badge is
@@ -315,6 +418,12 @@ export default async function handler(req, res) {
         preproduction: preprodBackfilled,
       },
       lastContactSync: { companiesScanned, updated: lastContactUpdated },
+      carryAcrossBackfill: {
+        numberOfVideos: numberOfVideosBackfilled,
+        clientContact: clientContactBackfilled,
+        peopleFetched,
+        clientContactRemaining,
+      },
       lastSyncedAt,
     });
   } catch (e) {
