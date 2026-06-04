@@ -100,7 +100,10 @@ export function RenewalAmmo({ ammo }) {
                     fontSize: 10, color: "var(--muted)", marginTop: 2,
                     fontFamily: "'JetBrains Mono', monospace",
                   }}>
-                    {fmtCount(p.views)} views
+                    {/* Platform-correct headline: a LinkedIn post shows
+                        impressions, not a misleading "0 views". Falls back
+                        to raw views for legacy IG records. */}
+                    {fmtCount(p.primaryValue != null ? p.primaryValue : p.views)} {p.primaryValue != null ? (p.primaryMetric || "views") : "views"}
                   </div>
                 </div>
               </a>
@@ -130,10 +133,10 @@ function BestWeekCard({ week }) {
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 18, fontWeight: 800, color: "#F59E0B", marginTop: 4,
       }}>
-        {fmtCount(week.totalViews)}
+        {fmtCount(week.total != null ? week.total : week.totalViews)}
       </div>
       <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4, lineHeight: 1.4 }}>
-        {week.startDate} → {week.endDate} · {week.postCount} posts
+        {week.metricNoun || "views"} · {week.startDate} → {week.endDate} · {week.postCount} posts
       </div>
     </div>
   );

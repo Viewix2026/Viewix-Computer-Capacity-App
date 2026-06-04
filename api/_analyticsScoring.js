@@ -28,6 +28,7 @@ import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { classifyFormat } from "./_analyticsFormatHeuristic.js";
 import { buildNextVideoRecs } from "./_analyticsRecsBuilder.js";
 import { buildClientProjection, makePortalShortId } from "./_analyticsClientProjection.js";
+import { primaryMetricValue, metricNoun, platformMetrics } from "./_platformMetrics.js";
 import {
   isClaudeEnabled,
   classifyFormatWithClaude,
@@ -150,11 +151,16 @@ function latestFollowerCount(followers) {
 
 // ─── Scoring computations (pure, given precomputed inputs) ────────
 
-function computeOverperformance({ views, medianViews }) {
+// `metric` is the headline value for this platform (views for IG/YT/
+// TikTok, impressions for LinkedIn/FB) and `median` its baseline. The
+// arg is still loosely called via {views, medianViews} at IG call sites
+// for back-compat, but the noun is platform-driven so the label reads
+// "4.8x usual impressions" on LinkedIn, "4.8x usual views" on IG.
+function computeOverperformance({ views, medianViews, noun = "views" }) {
   if (!views || !medianViews) return { score: null, label: null };
   const score = +(views / medianViews).toFixed(2);
   let label = null;
-  if (score >= OVERPERF.noiseFloorScore) label = `${score.toFixed(1)}x usual views`;
+  if (score >= OVERPERF.noiseFloorScore) label = `${score.toFixed(1)}x usual ${noun}`;
   return { score, label };
 }
 
@@ -387,32 +393,49 @@ export async function recomputeClientAnalytics(clientId) {
     const videos = videosRoot[platform] || {};
     const videosList = Object.entries(videos).map(([videoId, v]) => ({ videoId, ...v }));
 
+    // Platform metric semantics: IG/YT/TikTok score on `views`, LinkedIn/
+    // FB on `impressions`. `primaryMetricValue` falls back to views so
+    // legacy IG snapshots are unaffected. `pMetric`/`pNoun` drive the
+    // baseline key meaning + the overperformance label noun.
+    const pMeta = platformMetrics(platform);
+    const pNoun = metricNoun(platform);
+
     const allViews = [];
     const allEngagement = [];
     for (const v of videosList) {
       const snap = latestSnapshot(v);
       if (!snap) continue;
-      if (snap.views != null) allViews.push(snap.views);
+      const primary = primaryMetricValue(snap, platform);
+      if (primary != null) allViews.push(primary);
       if (snap.engagementRate != null) allEngagement.push(snap.engagementRate);
     }
     const medViews = median(allViews);
     const medEng = median(allEngagement);
+    // `medianViews` key kept for back-compat; for non-IG platforms it now
+    // holds the median of the platform's primary metric. `primaryMetric`
+    // records which metric that is so consumers never misread it.
     baselines.medianViews[platform] = Math.round(medViews);
     baselines.medianEngagementRate[platform] = +medEng.toFixed(3);
     baselines.followerCount[platform] = latestFollowerCount(followersRoot[platform]);
+    if (!baselines.primaryMetric) baselines.primaryMetric = {};
+    baselines.primaryMetric[platform] = pMeta.primary;
 
     // ─── 3. Per-video scoring (rule-based) ───────────────────────
-    const followerCount = baselines.followerCount[platform];
+    // Follower-normalised reach only where the platform has a meaningful
+    // follower count (gated by platformMetrics.hasFollowers — e.g. not
+    // TikTok). Otherwise that signal stays null and scoring leans on
+    // overperformance + engagement.
+    const followerCount = pMeta.hasFollowers ? baselines.followerCount[platform] : null;
     for (const v of videosList) {
       const snap = latestSnapshot(v);
       if (!snap) continue;
 
-      const views = snap.views;
+      const views = primaryMetricValue(snap, platform);
       const engagementRate = snap.engagementRate;
       const timestamp = v.post?.timestamp ? new Date(v.post.timestamp).getTime() : null;
       const ageDays = timestamp ? (now - timestamp) / (24 * 3600 * 1000) : null;
 
-      const overperf = computeOverperformance({ views, medianViews: medViews });
+      const overperf = computeOverperformance({ views, medianViews: medViews, noun: pNoun });
       const engagementVsBaseline = computeEngagementVsBaseline({
         engagementRate, medianEngagementRate: medEng,
       });
@@ -518,7 +541,10 @@ export async function recomputeClientAnalytics(clientId) {
       if (!ts) continue;
       if (ts < oldestTs) oldestTs = ts;
       const snap = latestSnapshot(v);
-      const views = snap?.views || 0;
+      // Primary metric per platform (views for IG/YT/TikTok, impressions
+      // for LinkedIn/FB). The var stays named `views` to keep the window
+      // math below unchanged.
+      const views = primaryMetricValue(snap, platform) || 0;
       const er = snap?.engagementRate;
       if (ts >= win30) {
         posts30dViews += views;
@@ -585,57 +611,82 @@ export async function recomputeClientAnalytics(clientId) {
     competitorsRoot, enabledPlatforms, now,
   });
 
-  // ─── 7. Aggregate stats across platforms (v1: IG only, so this is
-  //         effectively a passthrough — but keeps the door open for
-  //         v2 multi-platform without rewiring). ────────────────────
-  const aggregate = aggregatePlatformStats(platformStats);
-  const status = computeStatus({
-    posts30dViews: aggregate.posts30dViews,
-    postsPrior30dViews: aggregate.postsPrior30dViews,
-    postCount: aggregate.totalPosts,
-    weeksOfData: aggregate.weeksOfData,
-  });
+  // ─── 7b. Per-platform status + momentum (NOT cross-platform summed) ──
+  //
+  // Summing a `views` field across platforms is meaningless once metrics
+  // differ — LinkedIn impressions vs TikTok views (Codex review). So
+  // status + momentum are computed PER platform from that platform's own
+  // stats + cohort, and written under clients/{id}/platforms/{platform}/.
+  //
+  // Back-compat: the root clients/{id}/status + /momentum are MIRRORED
+  // from the "primary" platform — Instagram when present (so the existing
+  // IG pilot's root keys stay byte-identical), else the configured
+  // primaryPlatform, else the first enabled platform. No consumer reading
+  // the root path breaks; multi-platform clients get the primary
+  // platform's headline at the root PLUS the full per-platform breakdown.
+  const perPlatformDerived = {}; // platform -> { status, momentum }
+  for (const platform of enabledPlatforms) {
+    const s = platformStats[platform];
+    if (!s) continue;
+    const pStatus = computeStatus({
+      posts30dViews: s.posts30dViews,
+      postsPrior30dViews: s.postsPrior30dViews,
+      postCount: s.totalPosts,
+      weeksOfData: s.weeksOfData,
+    });
+    const vDelta = (s.postsPrior30dViews && s.postsPrior30dViews > 0)
+      ? (s.posts30dViews - s.postsPrior30dViews) / s.postsPrior30dViews : null;
+    const eDelta = (s.engagementPrior30d && s.engagementPrior30d > 0)
+      ? (s.engagement30d - s.engagementPrior30d) / s.engagementPrior30d : null;
+    const fDelta = (s.postsPerWeekPrior && s.postsPerWeekPrior > 0)
+      ? (s.postsPerWeekRecent - s.postsPerWeekPrior) / s.postsPerWeekPrior : null;
+    const cohortEng = competitorCohort?.[platform]?.pooled?.engagement30d ?? null;
+    const cDelta = (cohortEng && cohortEng > 0 && s.engagement30d != null)
+      ? (s.engagement30d - cohortEng) / cohortEng : null;
+    const pMomentum = computeMomentum({
+      viewsDelta: vDelta, engagementDelta: eDelta,
+      postFrequencyDelta: fDelta, competitorDelta: cDelta,
+    });
+    perPlatformDerived[platform] = {
+      status: { state: pStatus.state, reason: pStatus.reason, computedAt },
+      momentum: {
+        score: pMomentum.score,
+        reasonLine: pMomentum.reasonLine,
+        signals: pMomentum.signals,
+        delta30d: vDelta,
+        computedAt,
+      },
+    };
+  }
 
-  const viewsDelta = (aggregate.postsPrior30dViews && aggregate.postsPrior30dViews > 0)
-    ? (aggregate.posts30dViews - aggregate.postsPrior30dViews) / aggregate.postsPrior30dViews
-    : null;
-  const engagementDelta = (aggregate.engagementPrior30d && aggregate.engagementPrior30d > 0)
-    ? (aggregate.engagement30d - aggregate.engagementPrior30d) / aggregate.engagementPrior30d
-    : null;
-  const postFrequencyDelta = (aggregate.postsPerWeekPrior && aggregate.postsPerWeekPrior > 0)
-    ? (aggregate.postsPerWeekRecent - aggregate.postsPerWeekPrior) / aggregate.postsPerWeekPrior
-    : null;
-
-  const cohortEngagement30d = aggregateCohortEngagement30d(competitorCohort, enabledPlatforms);
-  const competitorDelta = (cohortEngagement30d && cohortEngagement30d > 0 && aggregate.engagement30d != null)
-    ? (aggregate.engagement30d - cohortEngagement30d) / cohortEngagement30d
-    : null;
-
-  const momentum = computeMomentum({
-    viewsDelta, engagementDelta, postFrequencyDelta, competitorDelta,
-  });
+  // Primary platform for the back-compat root mirror.
+  const primaryPlatform =
+    enabledPlatforms.includes("instagram") ? "instagram"
+    : (config.primaryPlatform && enabledPlatforms.includes(config.primaryPlatform)) ? config.primaryPlatform
+    : (enabledPlatforms[0] || null);
+  const rootDerived = primaryPlatform ? perPlatformDerived[primaryPlatform] : null;
+  const status = rootDerived?.status
+    || { state: "insufficient", reason: "No enabled platforms with data yet.", computedAt };
+  const momentum = rootDerived?.momentum
+    || { score: 50, reasonLine: "Not enough signal yet — momentum starts neutral.", signals: {}, delta30d: null, computedAt };
+  const viewsDelta = momentum.delta30d ?? null;
 
   // ─── 8. Bulk-PATCH all per-client derived state in one call ─────
-  // baselines + competitorCohort + status + momentum are all derived
-  // state living under /analytics/clients/{id}. Writing them as ONE
-  // patch is cheaper than 4 individual fbSet calls + means listeners
-  // see them all change atomically (no stale-status moment while
-  // momentum is being written).
-  // currentInsightsWeek is patched after the insights writes below,
-  // and lastRecomputeAt stays last (separate write) so it only updates
-  // after every other write has succeeded.
-  await fbPatch(`/analytics/clients/${clientId}`, {
+  // baselines + cohort + (root-mirrored) status + momentum + the full
+  // per-platform breakdown, in one atomic patch. Root status/momentum
+  // keep the exact shape existing consumers expect.
+  const clientPatch = {
     baselines,
     competitorCohort: { ...competitorCohort, updatedAt: computedAt },
-    status: { state: status.state, reason: status.reason, computedAt },
-    momentum: {
-      score: momentum.score,
-      reasonLine: momentum.reasonLine,
-      signals: momentum.signals,
-      delta30d: viewsDelta,
-      computedAt,
-    },
-  });
+    status,
+    momentum,
+    primaryPlatform,
+  };
+  for (const [platform, d] of Object.entries(perPlatformDerived)) {
+    clientPatch[`platforms/${platform}/status`] = d.status;
+    clientPatch[`platforms/${platform}/momentum`] = d.momentum;
+  }
+  await fbPatch(`/analytics/clients/${clientId}`, clientPatch);
 
   // ─── 9. Format Playbook aggregation + Next Video Recommendations
   //         (Phase 6, rules-first). ─────────────────────────────────
@@ -797,25 +848,64 @@ export async function recomputeClientAnalytics(clientId) {
   // so it can never break the internal pipeline. "Auto-building" is
   // preserved — this regenerates on every recompute (webhook/cron/
   // manual) the engine already runs.
-  try {
-    let portalShortId = config.portalShortId;
-    if (!portalShortId) {
-      portalShortId = makePortalShortId();
-      await fbPatch(`/analytics/clients/${clientId}/config`, { portalShortId });
+  //
+  // MULTI-PLATFORM GATE (Codex review): buildClientProjection is
+  // Instagram-only — it hardcodes "public Instagram video posts" and
+  // drops platform identity. Running it for a client with any non-IG
+  // platform enabled would publish a broken, IG-labelled portal the
+  // instant Zernio data lands. So we ONLY auto-write the portal
+  // projection for IG-only clients until the multi-platform projection
+  // (Phase 4) exists. Multi-platform clients get no portal yet (the deck
+  // is their deliverable); their analytics still compute + store fully.
+  const isIgOnly = enabledPlatforms.length > 0 && enabledPlatforms.every(p => p === "instagram");
+  if (!isIgOnly) {
+    console.log(`[analytics-scoring] ${clientId}: multi-platform (${enabledPlatforms.join(",") || "none"}) — skipping IG-only portal projection (Phase 4 adds the multi-platform portal).`);
+    // TOMBSTONE (Codex r3): if this client previously had an IG-only
+    // portal, skipping the write would leave /analytics/public/{id} live
+    // serving STALE Instagram data after they went multi-platform. Retire
+    // it so the portal stops serving rather than silently going stale.
+    // (Portals aren't client-facing yet — pilot only — so urgency is low,
+    // but the gate must be correct.)
+    if (config.portalShortId) {
+      try {
+        // Only write the tombstone ONCE — not on every recompute (Codex
+        // r4). Read the current public record; if it's already retired,
+        // leave it alone.
+        const existingPublic = await fbGet(`/analytics/public/${config.portalShortId}`);
+        if (!existingPublic?.retired) {
+          await fbSet(`/analytics/public/${config.portalShortId}`, {
+            retired: true,
+            reason: "client_went_multi_platform",
+            retiredAt: computedAt,
+            clientId,
+            portalShortId: config.portalShortId,
+          });
+        }
+      } catch (err) {
+        console.warn(`[analytics-scoring] portal tombstone failed for ${clientId}: ${err.message}`);
+      }
     }
-    const projection = buildClientProjection({
-      config, status, momentum, baselines, competitorCohort,
-      formatCounts, recs, videoUpdates, videosRoot, competitorsRoot,
-      renewalAmmo, thisWeekInNiche: thisWeekInNicheForProjection,
-      enabledPlatforms, computedAt,
-    });
-    await fbSet(`/analytics/public/${portalShortId}`, {
-      ...projection,
-      clientId,                 // back-reference (server-only consumers)
-      portalShortId,
-    });
-  } catch (err) {
-    console.warn(`[analytics-scoring] client projection failed for ${clientId}: ${err.message}`);
+  } else {
+    try {
+      let portalShortId = config.portalShortId;
+      if (!portalShortId) {
+        portalShortId = makePortalShortId();
+        await fbPatch(`/analytics/clients/${clientId}/config`, { portalShortId });
+      }
+      const projection = buildClientProjection({
+        config, status, momentum, baselines, competitorCohort,
+        formatCounts, recs, videoUpdates, videosRoot, competitorsRoot,
+        renewalAmmo, thisWeekInNiche: thisWeekInNicheForProjection,
+        enabledPlatforms, computedAt,
+      });
+      await fbSet(`/analytics/public/${portalShortId}`, {
+        ...projection,
+        clientId,                 // back-reference (server-only consumers)
+        portalShortId,
+      });
+    } catch (err) {
+      console.warn(`[analytics-scoring] client projection failed for ${clientId}: ${err.message}`);
+    }
   }
 
   // ─── 10. lastRecomputeAt last so it reflects a fully successful run.
@@ -1250,7 +1340,11 @@ function computeRenewalAmmoSinceTrackingBegan({
         url: src?.post?.url || null,
         thumbnail: src?.post?.thumbnail || null,
         caption: (src?.post?.caption || "").slice(0, 200),
-        views: snap?.views ?? null,
+        views: snap?.views ?? null,                 // raw views (back-compat; IG)
+        // Platform-correct headline value + its name, so a LinkedIn post
+        // shows impressions not a misleading views:0.
+        primaryMetric: platformMetrics(u.platform).primary,
+        primaryValue: primaryMetricValue(snap, u.platform),
         overperformanceLabel: u.scoring.overperformanceLabel,
         overperformanceScore: u.scoring.overperformanceScore,
         timestamp: src?.post?.timestamp || null,
@@ -1290,57 +1384,81 @@ function computeRenewalAmmoSinceTrackingBegan({
     });
   }
 
-  // Best week by summed views across all videos posted in that week.
-  // Rolling 7-day window over all timestamps. Returns the {start, end,
-  // totalViews, postCount} of the best window.
-  const allWithTs = videoUpdates
-    .map(u => {
-      const src = videosRoot?.[u.platform]?.[u.videoId];
-      const snap = latestSnapshot(src);
-      return {
-        ts: src?.post?.timestamp ? new Date(src.post.timestamp).getTime() : null,
-        views: snap?.views || 0,
-      };
-    })
-    .filter(p => p.ts != null);
-  let bestWeek = null;
-  if (allWithTs.length > 0) {
-    allWithTs.sort((a, b) => a.ts - b.ts);
-    let windowStart = 0;
-    let windowSum = 0;
-    let windowCount = 0;
+  // Best week — PER PLATFORM (Codex r3: never blend a metric across
+  // platforms). Each platform's best 7-day window is summed using THAT
+  // platform's primary metric (views for IG/YT/TikTok, impressions for
+  // LinkedIn/FB). Returns bestWeekByPlatform; the top-level `bestWeek`
+  // mirrors the primary platform's window for back-compat with the
+  // existing IG portal consumer (for an IG-only client that's IG over
+  // views — byte-identical to before).
+  const rollingBestWeek = (rows) => {
+    const arr = rows.filter(p => p.ts != null).sort((a, b) => a.ts - b.ts);
+    if (arr.length === 0) return null;
+    let windowStart = 0, windowSum = 0, windowCount = 0;
     let best = { sum: -1, start: null, end: null, count: 0 };
-    for (let i = 0; i < allWithTs.length; i++) {
-      windowSum += allWithTs[i].views;
-      windowCount++;
-      while (allWithTs[i].ts - allWithTs[windowStart].ts > 7 * 24 * 3600 * 1000) {
-        windowSum -= allWithTs[windowStart].views;
-        windowCount--;
-        windowStart++;
+    for (let i = 0; i < arr.length; i++) {
+      windowSum += arr[i].value; windowCount++;
+      while (arr[i].ts - arr[windowStart].ts > 7 * 24 * 3600 * 1000) {
+        windowSum -= arr[windowStart].value; windowCount--; windowStart++;
       }
       if (windowSum > best.sum) {
-        best = {
-          sum: windowSum,
-          start: allWithTs[windowStart].ts,
-          end: allWithTs[i].ts,
-          count: windowCount,
-        };
+        best = { sum: windowSum, start: arr[windowStart].ts, end: arr[i].ts, count: windowCount };
       }
     }
-    if (best.sum > 0) {
-      bestWeek = {
-        startDate: new Date(best.start).toISOString().slice(0, 10),
-        endDate: new Date(best.end).toISOString().slice(0, 10),
-        totalViews: best.sum,
-        postCount: best.count,
+    if (best.sum <= 0) return null;
+    return {
+      startDate: new Date(best.start).toISOString().slice(0, 10),
+      endDate: new Date(best.end).toISOString().slice(0, 10),
+      total: best.sum,
+      postCount: best.count,
+    };
+  };
+
+  const bestWeekByPlatform = {};
+  for (const platform of enabledPlatforms) {
+    const rows = videoUpdates
+      .filter(u => u.platform === platform)
+      .map(u => {
+        const src = videosRoot?.[u.platform]?.[u.videoId];
+        const snap = latestSnapshot(src);
+        return {
+          ts: src?.post?.timestamp ? new Date(src.post.timestamp).getTime() : null,
+          value: primaryMetricValue(snap, platform) || 0,
+        };
+      });
+    const bw = rollingBestWeek(rows);
+    if (bw) {
+      bestWeekByPlatform[platform] = {
+        ...bw,
+        metric: platformMetrics(platform).primary,
+        metricNoun: metricNoun(platform),
       };
     }
   }
+
+  // Back-compat top-level bestWeek = the primary platform's window, with
+  // the legacy `totalViews` key preserved (IG-only → views, unchanged).
+  const primaryPlatform = enabledPlatforms.includes("instagram")
+    ? "instagram"
+    : (enabledPlatforms[0] || null);
+  const primaryBest = primaryPlatform ? bestWeekByPlatform[primaryPlatform] : null;
+  const bestWeek = primaryBest
+    ? {
+        startDate: primaryBest.startDate,
+        endDate: primaryBest.endDate,
+        totalViews: primaryBest.total,   // legacy key; = primary metric total
+        total: primaryBest.total,
+        metric: primaryBest.metric,
+        metricNoun: primaryBest.metricNoun,
+        postCount: primaryBest.postCount,
+      }
+    : null;
 
   return {
     topPosts,
     trajectoryHighlights,
     bestWeek,
+    bestWeekByPlatform,
   };
 }
 

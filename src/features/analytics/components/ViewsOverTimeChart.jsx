@@ -17,30 +17,35 @@
 import { useMemo } from "react";
 import { fmtCount } from "../utils/displayFormatters";
 
-export function ViewsOverTimeChart({ videos, medianViews, height = 200 }) {
-  // Flatten + sort posts by timestamp.
+export function ViewsOverTimeChart({ videos, medianViews, platform = "instagram", metricNoun = "views", height = 200 }) {
+  // Scope to a SINGLE platform (Codex r3: never blend platforms in one
+  // series — a TikTok 210k post next to IG 9k-median posts is a
+  // misleading comparison). Read each snapshot's OWN primary metric
+  // (views for IG/YT/TikTok, impressions for LinkedIn/FB) via the
+  // `primaryMetric` field the ingest normaliser stamped — display of
+  // precomputed truth, no math here.
   const points = useMemo(() => {
     const all = [];
-    for (const [platform, group] of Object.entries(videos || {})) {
-      for (const [videoId, v] of Object.entries(group || {})) {
-        if (!v?.post?.timestamp) continue;
-        const snaps = v.snapshots || {};
-        const dates = Object.keys(snaps).sort();
-        if (!dates.length) continue;
-        const latest = snaps[dates[dates.length - 1]];
-        if (latest?.views == null) continue;
-        all.push({
-          ts: new Date(v.post.timestamp).getTime(),
-          views: latest.views,
-          platform,
-          videoId,
-          url: v.post?.url || null,
-          caption: (v.post?.caption || "").slice(0, 80),
-        });
-      }
+    const group = (videos && videos[platform]) || {};
+    for (const [videoId, v] of Object.entries(group)) {
+      if (!v?.post?.timestamp) continue;
+      const snaps = v.snapshots || {};
+      const dates = Object.keys(snaps).sort();
+      if (!dates.length) continue;
+      const latest = snaps[dates[dates.length - 1]];
+      const value = latest?.[latest?.primaryMetric] ?? latest?.views;
+      if (value == null) continue;
+      all.push({
+        ts: new Date(v.post.timestamp).getTime(),
+        views: value,
+        platform,
+        videoId,
+        url: v.post?.url || null,
+        caption: (v.post?.caption || "").slice(0, 80),
+      });
     }
     return all.sort((a, b) => a.ts - b.ts);
-  }, [videos]);
+  }, [videos, platform]);
 
   if (points.length < 2) {
     return (
@@ -94,7 +99,7 @@ export function ViewsOverTimeChart({ videos, medianViews, height = 200 }) {
 
   return (
     <div>
-      <Legend medianViews={medianViews} />
+      <Legend medianViews={medianViews} metricNoun={metricNoun} />
       <svg
         viewBox={`0 0 ${W} ${H}`}
         width="100%"
@@ -143,7 +148,7 @@ export function ViewsOverTimeChart({ videos, medianViews, height = 200 }) {
               style={{ cursor: p.url ? "pointer" : "default" }}
               onClick={() => open(p.url)}
             >
-              <title>{`${fmtCount(p.views)} views · ${new Date(p.ts).toLocaleDateString("en-AU")}\n${p.caption}`}</title>
+              <title>{`${fmtCount(p.views)} ${metricNoun} · ${new Date(p.ts).toLocaleDateString("en-AU")}\n${p.caption}`}</title>
             </circle>
           );
         })}
@@ -186,7 +191,7 @@ export function ViewsOverTimeChart({ videos, medianViews, height = 200 }) {
   );
 }
 
-function Legend({ medianViews }) {
+function Legend({ medianViews, metricNoun = "views" }) {
   return (
     <div style={{
       display: "flex", gap: 14, marginBottom: 8, flexWrap: "wrap",
@@ -213,7 +218,7 @@ function Legend({ medianViews }) {
             borderTop: "1.5px dashed #F59E0B",
             display: "inline-block",
           }}/>
-          Median ({fmtCount(medianViews)} views)
+          Median ({fmtCount(medianViews)} {metricNoun})
         </span>
       )}
     </div>

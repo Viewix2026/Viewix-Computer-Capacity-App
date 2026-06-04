@@ -7,13 +7,17 @@
 // Boundary reminder: this file is config. It does NOT compute. All
 // math lives in api/_analyticsScoring.js per the success criterion.
 
+// All five platforms Zernio analytics can source. Only Instagram
+// defaults ON (v1) — it's the existing Apify pilot. LinkedIn / Facebook
+// / YouTube / TikTok default OFF and are toggled per client by the
+// founder once that client's accounts are connected in Zernio. Nothing
+// pulls or costs anything for a platform until its toggle is true.
 export const PLATFORMS = [
   { key: "instagram", label: "Instagram", v1: true },
-  // TikTok + YouTube are v2 / v3 — kept here so the per-client
-  // platforms toggle has a stable shape and adding them later is
-  // wiring, not redesign.
-  { key: "tiktok",    label: "TikTok",    v1: false },
+  { key: "linkedin",  label: "LinkedIn",  v1: false },
+  { key: "facebook",  label: "Facebook",  v1: false },
   { key: "youtube",   label: "YouTube",   v1: false },
+  { key: "tiktok",    label: "TikTok",    v1: false },
 ];
 
 // Format buckets — closed list. "other" is the catch-all so the
