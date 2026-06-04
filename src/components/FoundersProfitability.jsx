@@ -19,7 +19,7 @@ import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { fbListenSafe, fbSet } from "../firebase";
 import { pct, fmtCur } from "../utils";
 import { DEF_EDS } from "../config";
-import { recomputeRow, buildRollups, WARNINGS } from "../../shared/profitability.js";
+import { recomputeRow, buildRollups, keepProjectRow, WARNINGS } from "../../shared/profitability.js";
 
 const PL_LABEL = {
   metaAds: "Meta Ads",
@@ -154,7 +154,12 @@ export function FoundersProfitability() {
     [profitability]
   );
   const rows = useMemo(
-    () => baseRows.map((b) => recomputeRow(b, { laborCosts: laborCostsM, costInputs: costInputsM, commissionInputs: commissionInputsM, commissionPlans: commissionPlansM })),
+    () => baseRows
+      .map((b) => recomputeRow(b, { laborCosts: laborCostsM, costInputs: costInputsM, commissionInputs: commissionInputsM, commissionPlans: commissionPlansM }))
+      // strict: show only projects with logged time (duplicate-flagged rows
+      // survive so their warning stays visible). Mirrors the cron filter so
+      // the live view matches what gets persisted. See keepProjectRow.
+      .filter(keepProjectRow),
     [baseRows, laborCostsM, costInputsM, commissionInputsM, commissionPlansM]
   );
   const rollups = useMemo(() => buildRollups(rows, { commissionPlans: commissionPlansM }), [rows, commissionPlansM]);
@@ -241,7 +246,11 @@ export function FoundersProfitability() {
     return <div style={{ color: C.muted, fontSize: 13, padding: "20px 4px" }}>Loading profitability…</div>;
   }
 
-  const noSnapshot = baseRows.length === 0;
+  // distinguish "cron never ran" from "ran but every project filtered out":
+  // a real run stamps _rollups.computedAt even when no rows survive the
+  // no-logged-time filter, so don't show the first-run "set rates" guidance
+  // in that case.
+  const noSnapshot = baseRows.length === 0 && !persistedAt;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>

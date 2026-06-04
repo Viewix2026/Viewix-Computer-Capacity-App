@@ -254,12 +254,65 @@ test("computeProfitability: joins timeLogs->projects, excludes _running", () => 
   assert.equal(p2.complete, true);
 });
 
-test("computeProfitability: duplicate taskId across projects flags both", () => {
+test("computeProfitability: strict drops zero-logged-time projects (even with externals); keeps timed", () => {
+  const projects = {
+    "timed":      { id: "timed", dealValue: 5000, subtasks: { "t-x": { id: "t-x" } } },
+    "outsourced": { id: "outsourced", dealValue: 5000 }, // externals but NO logged time
+    "ghost":      { id: "ghost", dealValue: 5000 },       // nothing logged, no externals
+  };
+  const timeLogs = { "ed-1": { "2026-05-20": { "t-x": { secs: 3600 } } } }; // 1h on "timed"
+  const { perProject } = computeProfitability({
+    projects, timeLogs, laborCosts: RATES,
+    costInputs: { "outsourced": { crew: 1200 } }, // real externals, still dropped (strict)
+    commissionInputs: {}, commissionPlans: PLANS,
+  });
+  assert.ok(perProject["timed"], "logged-time project kept");
+  assert.equal(perProject["outsourced"], undefined, "externals-only project dropped (no logged time)");
+  assert.equal(perProject["ghost"], undefined, "no-time/no-externals project dropped");
+  assert.equal(Object.keys(perProject).length, 1);
+});
+
+test("computeProfitability: legacy numeric time log (plain seconds) counts as hours, survives the filter", () => {
+  // old timer entries stored seconds as a plain number, not { secs }. Every
+  // other reader (Capacity, EditorDashboard) handles both; the filter must
+  // too, or numeric-format projects undercount to 0 hours and vanish.
+  const projects = { "num": { id: "num", dealValue: 5000, subtasks: { "t-n": { id: "t-n" } } } };
+  const timeLogs = { "ed-1": { "2026-05-20": { "t-n": 3600 } } }; // plain number, not { secs }
+  const { perProject } = computeProfitability({
+    projects, timeLogs, laborCosts: RATES,
+    costInputs: { "num": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  assert.ok(perProject["num"], "numeric-log project survives");
+  assert.equal(perProject["num"].loggedHours, 1);
+  assert.equal(perProject["num"].labourCost, 50); // 1h * ed-1 rate 50
+});
+
+test("computeProfitability: strict drops a no-logged-time project even with a saved confirmed-zero cost entry", () => {
+  // a producer can save all-zero externals + a note as an explicit "no
+  // externals" confirmation. Under strict, no logged time still means
+  // dropped — the confirmation covers externals, not labour.
+  const projects = { "confz": { id: "confz", dealValue: 5000 } };
+  const { perProject } = computeProfitability({
+    projects, timeLogs: {}, laborCosts: {}, commissionPlans: PLANS,
+    costInputs: { "confz": { crew: 0, travel: 0, location: 0, gear: 0, other: 0, note: "confirmed none" } },
+    commissionInputs: {},
+  });
+  assert.equal(perProject["confz"], undefined, "no logged time => dropped, confirmed-zero externals notwithstanding");
+});
+
+test("computeProfitability: duplicate taskId flags BOTH projects and keeps the 0-hour one visible", () => {
   const dupProjects = {
     "a": { id: "a", dealValue: 1000, subtasks: { "shared": { id: "shared" } } },
     "b": { id: "b", dealValue: 1000, subtasks: { "shared": { id: "shared" } } },
   };
-  const { perProject } = computeProfitability({ projects: dupProjects, timeLogs: {}, laborCosts: {}, commissionPlans: {}, costInputs: {}, commissionInputs: {} });
+  // time logged on the shared task maps to ONE project (a); b gets 0 hours.
+  // No externals on either. b must STILL survive (the duplicate exception)
+  // so its misattribution warning stays visible instead of vanishing.
+  const timeLogs = { "ed-1": { "2026-05-20": { "shared": { secs: 3600 } } } };
+  const { perProject } = computeProfitability({ projects: dupProjects, timeLogs, laborCosts: RATES, commissionPlans: {}, costInputs: {}, commissionInputs: {} });
+  assert.ok(perProject["a"], "project that received the hours is kept");
+  assert.ok(perProject["b"], "0-hour duplicate-flagged project is kept (warning stays visible)");
+  assert.equal(perProject["b"].loggedHours, 0);
   assert.ok(perProject["a"].warnings.includes(WARNINGS.DUPLICATE_TASK_ID));
   assert.ok(perProject["b"].warnings.includes(WARNINGS.DUPLICATE_TASK_ID));
 });
@@ -278,11 +331,26 @@ function rawDeal(id, name, value, companyId) {
   };
 }
 
+// Give every project a subtask + one logged hour so it survives the strict
+// no-logged-time filter. These tests exercise deal MATCHING, not the filter
+// (which has its own tests), and keep zero externals so the zero-externals
+// enrichment path stays covered.
+function withHour(projects) {
+  const timeLogs = { "ed-1": { "2026-05-20": {} } };
+  for (const p of Object.values(projects)) {
+    const tid = `${p.id}__t`;
+    p.subtasks = { ...(p.subtasks || {}), [tid]: { id: tid } };
+    timeLogs["ed-1"]["2026-05-20"][tid] = { secs: 3600 };
+  }
+  return timeLogs;
+}
+
 test("enrichment: blank project dealValue is filled from matched Attio Won deal", () => {
   const projects = { "proj-x": { id: "proj-x", clientName: "AusIMM", projectName: "Spanish Translation", dealValue: null } };
   const attioCache = { data: [rawDeal("deal-x", "Spanish Translation", 672, "co-ausimm")] };
+  const timeLogs = withHour(projects);
   const { perProject } = computeProfitability({
-    projects, attioCache,
+    projects, attioCache, timeLogs, laborCosts: RATES,
     costInputs: { "proj-x": { crew: 0 } },
     commissionInputs: { "proj-x": { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
     commissionPlans: PLANS,
@@ -297,7 +365,8 @@ test("enrichment: blank project dealValue is filled from matched Attio Won deal"
 test("enrichment: project's OWN dealValue wins, Attio never overrides", () => {
   const projects = { "proj-y": { id: "proj-y", projectName: "Spanish Translation", dealValue: 999 } };
   const attioCache = { data: [rawDeal("deal-y", "Spanish Translation", 672, "co-ausimm")] };
-  const { perProject } = computeProfitability({ projects, attioCache, costInputs: { "proj-y": { crew: 0 } } });
+  const timeLogs = withHour(projects);
+  const { perProject } = computeProfitability({ projects, attioCache, timeLogs, laborCosts: RATES, costInputs: { "proj-y": { crew: 0 } } });
   const r = perProject["proj-y"];
   assert.equal(r.dealValue, 999);
   assert.equal(r.dealValueSource, "project");
@@ -306,7 +375,8 @@ test("enrichment: project's OWN dealValue wins, Attio never overrides", () => {
 test("enrichment: ambiguous match => no number, DEAL_MATCH_AMBIGUOUS + missing value, Incomplete", () => {
   const projects = { "proj-z": { id: "proj-z", projectName: "Brand Video", dealValue: null } }; // no company => can't disambiguate
   const attioCache = { data: [rawDeal("d-a", "Brand Video", 8000, "co-a"), rawDeal("d-b", "Brand Video", 12000, "co-b")] };
-  const { perProject } = computeProfitability({ projects, attioCache, costInputs: { "proj-z": { crew: 0 } } });
+  const timeLogs = withHour(projects);
+  const { perProject } = computeProfitability({ projects, attioCache, timeLogs, laborCosts: RATES, costInputs: { "proj-z": { crew: 0 } } });
   const r = perProject["proj-z"];
   assert.equal(r.dealValue, 0);
   assert.equal(r.dealValueSource, "none");
@@ -322,8 +392,9 @@ test("enrichment: one Won deal claimed by TWO projects => both flagged, sale nev
   };
   // a single deal both same-named projects would otherwise each claim in full
   const attioCache = { data: [rawDeal("deal-dup", "Recurring Social", 5000, "co-x")] };
+  const timeLogs = withHour(projects);
   const { perProject, rollups } = computeProfitability({
-    projects, attioCache,
+    projects, attioCache, timeLogs, laborCosts: RATES,
     costInputs: { "proj-1": { crew: 0 }, "proj-2": { crew: 0 } },
     commissionInputs: {
       "proj-1": { dealType: "new", closerId: "p-closer", leadSource: "provided" },

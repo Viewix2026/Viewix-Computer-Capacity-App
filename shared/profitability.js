@@ -56,6 +56,22 @@ const num = (v) => {
 };
 const isBlank = (v) => v == null || v === "";
 
+// A project earns a profitability row only when someone logged timer time
+// against it. That logged labour is the realized cost the margin view
+// exists to profile; a project nobody timed would read as full-margin
+// revenue against ~zero cost, so it is dropped as noise. STRICT rule by
+// design: no logged time => out, EVEN IF the project carries entered
+// externals (a deliberate founder call to keep the view to jobs the team
+// actually worked). The ONE exception is a duplicateTaskId collision: the
+// hours ARE logged but got misattributed to another project sharing a
+// subtask id, so dropping it would bury the very warning the producer must
+// act on. Applied at the join (computeProfitability) and mirrored in the
+// UI live recompute, so cron-persisted truth and on-screen rows agree.
+export function keepProjectRow(row) {
+  if (!row || typeof row !== "object") return false;
+  return num(row.loggedHours) > 0 || !!row.duplicateTaskId;
+}
+
 // Route a deal's commission to exactly ONE payee.
 //   new business  -> the CLOSER: providedLeadPct (company-supplied lead)
 //                    or selfSourcedPct (closer found the lead themselves)
@@ -274,10 +290,15 @@ export function computeProfitability({
       if (!byTask || typeof byTask !== "object") continue;
       for (const [taskId, log] of Object.entries(byTask)) {
         if (taskId === "_running") continue; // live timer sentinel, not a real log
-        if (!log || typeof log !== "object") continue;
+        if (log == null) continue;
         const projectId = taskToProject.get(taskId);
         if (!projectId) continue; // orphan log — no parent project anywhere
-        const hours = num(log.secs) / 3600;
+        // logs are normally { secs, stage }, but legacy entries are a plain
+        // number of seconds. Every other reader (Capacity, EditorDashboard)
+        // handles both; match them, or numeric-format projects undercount to
+        // zero hours and get wrongly dropped by the no-logged-time filter.
+        const secs = typeof log === "number" ? log : num(log.secs);
+        const hours = secs / 3600;
         if (hours <= 0) continue;
         let bucket = hoursByProject.get(projectId);
         if (!bucket) { bucket = {}; hoursByProject.set(projectId, bucket); }
@@ -332,7 +353,13 @@ export function computeProfitability({
       hoursByPerson: hoursByProject.get(p.id) || {},
       duplicateTaskId: dupProjectIds.has(p.id),
     };
-    perProject[p.id] = recomputeRow(base, { laborCosts, costInputs, commissionInputs, commissionPlans });
+    const row = recomputeRow(base, { laborCosts, costInputs, commissionInputs, commissionPlans });
+    // Strict: drop projects nobody logged time on so the calculator shows
+    // only jobs the team actually worked. A duplicateTaskId row survives
+    // (its hours are misattributed, not absent) so its warning stays
+    // visible. See keepProjectRow.
+    if (!keepProjectRow(row)) continue;
+    perProject[p.id] = row;
   }
 
   const rollups = buildRollups(Object.values(perProject), { commissionPlans });
