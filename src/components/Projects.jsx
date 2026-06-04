@@ -35,9 +35,9 @@ import { ScheduleEditsModal } from "./ScheduleEditsModal";
 // canEditKickoff carves out the one exception: the kick-off video
 // URL on the Project Detail panel stays editable for leads, since
 // that's the one field they own per spec.
-const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null });
+const ProjectsAccessContext = createContext({ viewOnly: false, canEditKickoff: true, canEditProducerNotes: true, role: null, onOpenDelivery: () => {}, onCreateDelivery: () => {} });
 import { BTN } from "../config";
-import { fmtD, matchSherpaForName, resolveAccountForProject, URL_SPLIT_RE, isHttpUrl } from "../utils";
+import { fmtD, matchSherpaForName, resolveAccountForProject, URL_SPLIT_RE, isHttpUrl, newDelivery } from "../utils";
 import { fbSet, fbUpdate, getCurrentUserName, getCurrentUserEmail, authFetch } from "../firebase";
 import {
   CalendarSyncContext,
@@ -1952,7 +1952,8 @@ function AddSubtaskRow({ projectId, nextOrder, setProjects }) {
 }
 
 function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onToggleSelect, expanded, onToggleExpand, subtaskCount, subtaskDoneCount, clientGoal, accountManager, projectLead }) {
-  const { viewOnly } = useContext(ProjectsAccessContext);
+  const { viewOnly, onOpenDelivery, onCreateDelivery } = useContext(ProjectsAccessContext);
+  const deliveryId = (project.links || {}).deliveryId || null;
   // Drag-to-commission: each project row is sortable via the table's
   // shared DndContext. The drag handle (six-dot grip in the leading
   // cell) carries the listeners so clicking the row body still opens
@@ -2109,7 +2110,13 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
               <path d="M5 3l6 5-6 5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
-          <span style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.3 }}>
+          {/* Truncate the name (not the whole cell) so long
+              "Client: Project" labels ellipsis instead of blowing out the
+              row height / shoving the chips off-screen. minWidth:0 is the
+              flexbox incantation that actually lets a flex child shrink
+              below its content size; chips + delivery pill are flexShrink:0
+              so the name is what gives. */}
+          <span style={{ fontSize: 13, color: "var(--fg)", lineHeight: 1.3, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 1 }} title={`${clientPart ? clientPart + ": " : ""}${namePart}`}>
             {/* Drop the leading "Client:" prefix entirely when there's
                 no client on file — used to render a stray "—:" sentinel
                 that looked like a glitch. Producers can still set the
@@ -2117,6 +2124,35 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
             {clientPart && (<><span style={{ fontWeight: 700 }}>{clientPart}:</span>{" "}</>)}
             <span style={{ fontWeight: 500 }}>{namePart}</span>
           </span>
+          {/* Delivery affordance — jump to the linked delivery, or create
+              one (two-sided write) when none exists. stopPropagation so it
+              doesn't trigger the row's open-project click. Hidden create
+              for view-only roles. */}
+          {deliveryId ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpenDelivery(deliveryId); }}
+              title="Open this project's delivery"
+              style={{
+                flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4,
+                fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999,
+                border: "1px solid rgba(16,185,129,0.4)", background: "rgba(16,185,129,0.12)",
+                color: "#10B981", cursor: "pointer", fontFamily: "inherit",
+              }}>
+              📦 Delivery
+            </button>
+          ) : !viewOnly ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); onCreateDelivery(project); }}
+              title="No delivery yet — create one linked to this project"
+              style={{
+                flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4,
+                fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999,
+                border: "1px dashed var(--border)", background: "transparent",
+                color: "var(--muted)", cursor: "pointer", fontFamily: "inherit",
+              }}>
+              + Delivery
+            </button>
+          ) : null}
           {/* Client-goal pill — resolved from the linked account by
               the parent ProjectTable so this row doesn't need to know
               about /accounts. Renders nothing when unset. */}
@@ -2131,7 +2167,7 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
               happened to match — looked like a duplicate. */}
           {videoCount != null && (
             <span style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
+              display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0,
               fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
               background: "var(--bg)", color: "var(--muted)",
               fontFamily: "'JetBrains Mono',monospace",
@@ -2147,7 +2183,7 @@ function ProjectRow({ project, onOpen, onStatusChange, striped, selected, onTogg
             const allDone = subtaskDoneCount === subtaskCount;
             return (
               <span style={{
-                display: "inline-flex", alignItems: "center", gap: 4,
+                display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0,
                 fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
                 background: allDone ? "rgba(16,185,129,0.15)" : "rgba(99,102,241,0.15)",
                 color: allDone ? "#10B981" : "var(--accent)",
@@ -3468,9 +3504,32 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
     clearSelection();
   };
 
+  // Per-row delivery affordance (consumed by ProjectRow via context).
+  // goToDelivery jumps to an existing linked delivery; createDelivery-
+  // ForProject makes one AND stamps project.links.deliveryId in the same
+  // breath — never a one-sided write, so we don't manufacture the orphan
+  // the daily reconciler exists to clean up. Seeds from the canonical
+  // newDelivery() factory (id/shortId/createdAt/videos). Optimistic local
+  // writes beat the useDeliveriesSync echo-suppression window so the
+  // detail view isn't blank on arrival.
+  const goToDelivery = (deliveryId) => { if (deliveryId) window.location.hash = `projects/deliveries/${deliveryId}`; };
+  const createDeliveryForProject = (project) => {
+    if (!project || viewOnly) return;
+    const existing = (project.links || {}).deliveryId;
+    if (existing) { goToDelivery(existing); return; }
+    const d = newDelivery(project.clientName, project.projectName);
+    fbSet(`/deliveries/${d.id}`, d);
+    fbSet(`/projects/${project.id}/links/deliveryId`, d.id);
+    setDeliveries(prev => [...prev, d]);
+    setProjects(prev => (prev || []).map(p => p && p.id === project.id
+      ? { ...p, links: { ...(p.links || {}), deliveryId: d.id } }
+      : p));
+    goToDelivery(d.id);
+  };
+
   return (
     <CalendarSyncContext.Provider value={calendarSyncQueue || new Map()}>
-    <ProjectsAccessContext.Provider value={{ viewOnly, canEditKickoff, canEditProducerNotes, role }}>
+    <ProjectsAccessContext.Provider value={{ viewOnly, canEditKickoff, canEditProducerNotes, role, onOpenDelivery: goToDelivery, onCreateDelivery: createDeliveryForProject }}>
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Projects</span>
@@ -3762,6 +3821,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
           deliveries={deliveries}
           setDeliveries={setDeliveries}
           accounts={accounts}
+          projects={projects}
           deepLinkDeliveryId={route?.subTab === "deliveries" ? route?.recordId : null}
         />
       )}
