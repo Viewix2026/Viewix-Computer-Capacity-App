@@ -529,16 +529,16 @@ export default async function handler(req, res) {
           if (r?.posted) amPinged++;
         }
 
-        // Resolve the owning project (authoritative link, else strict
-        // unique name match). Shared matcher — same rules as
-        // send-review-batch's live self-heal.
+        // Resolve the owning project (authoritative link, else canonical
+        // videoId bridge, else strict unique name match). Shared matcher —
+        // same rules as send-review-batch's live self-heal.
         const { projectId, matchedBy, ambiguous } = findProjectForDelivery(projects, did, d);
         let ownerProject = projectId ? projects[projectId] : null;
 
-        if (matchedBy === "name" && projectId) {
-          // Repair the orphaned link. Update the in-memory copy too so the
-          // no-delivery report below reflects the post-apply state (even in
-          // dry-run, where we don't touch Firebase).
+        if (matchedBy && matchedBy !== "link" && projectId) {
+          // Repair the orphaned link (videoId or name match). Update the
+          // in-memory copy too so the no-delivery report below reflects the
+          // post-apply state (even in dry-run, where we don't touch Firebase).
           if (ownerProject) {
             ownerProject.links = { ...(ownerProject.links || {}), deliveryId: did };
           }
