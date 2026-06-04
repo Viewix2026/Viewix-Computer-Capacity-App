@@ -53,6 +53,7 @@ export default async function handler(req, res) {
   let skippedClientPosts = 0;
   let skippedPreLaunch = 0;
   let purgedPreLaunch = 0;
+  let skippedAlreadyInZernio = 0;
 
   for (const [deliveryId, delivery] of Object.entries(deliveries)) {
     if (!delivery || !Array.isArray(delivery.videos)) continue;
@@ -96,6 +97,14 @@ export default async function handler(req, res) {
       if (!approved) continue;
       scanned++;
 
+      // Already transferred to Zernio — never re-queue. Matters now that
+      // the createdAt backfill can flip previously-excluded deliveries
+      // post-launch: a video handled before the gate moved already has
+      // its asset in Zernio and must not be queued again. (The
+      // /socialAssets row check below also covers the normal case; this
+      // guards the path where zernioMediaUrl exists without a row.)
+      if (v.zernioMediaUrl) { skippedAlreadyInZernio++; continue; }
+
       const videoId = v.videoId || v.id;
       if (!videoId) { skippedNoVideoId++; continue; }
       const assetKey = `${deliveryId}_${videoId}`;
@@ -131,5 +140,6 @@ export default async function handler(req, res) {
     skippedClientPosts,
     skippedPreLaunch,
     purgedPreLaunch,
+    skippedAlreadyInZernio,
   });
 }

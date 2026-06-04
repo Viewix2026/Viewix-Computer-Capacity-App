@@ -173,6 +173,15 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, skipped: "client_posts_themselves" });
     }
 
+    // 2b. Already transferred to Zernio — never re-queue. Guards the case
+    //     where the createdAt backfill flips a previously-excluded
+    //     delivery post-launch and a video already handled before the
+    //     gate moved gets re-approved (the /socialAssets check below
+    //     covers the normal case; this covers a url-without-row).
+    if (video.zernioMediaUrl) {
+      return res.status(200).json({ ok: true, skipped: "already_in_zernio", viewixStatusUpdated });
+    }
+
     // 3. Idempotency — if the row already exists for any prior
     //    approval transition of this video, skip silently.
     const assetKey = `${deliveryId}_${videoId}`;

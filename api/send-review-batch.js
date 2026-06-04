@@ -41,6 +41,7 @@
 //                                       inside send()
 
 import { adminGet, adminPatch } from "./_fb-admin.js";
+import { findProjectForDelivery } from "./_findOwningProject.js";
 import { handleOptions, setCors, requireRole, sendAuthError } from "./_requireAuth.js";
 import { dispatchReviewBatch } from "./_email/dispatchReviewBatch.js";
 
@@ -62,73 +63,29 @@ const STATUS_BY_CODE = {
   no_videos_selected: 422,
 };
 
-function listProjects(projectsRaw) {
-  // Projects are stored as an object keyed by id in /projects.
-  // Normalise to an array so we can scan with .find().
-  if (!projectsRaw) return [];
-  if (Array.isArray(projectsRaw)) return projectsRaw.filter(Boolean);
-  return Object.entries(projectsRaw)
-    .map(([id, p]) => (p && typeof p === "object" ? { id, ...p } : null))
-    .filter(Boolean);
-}
-
-// Normalise a client/project name for cross-record matching: trim,
-// lowercase, collapse internal whitespace. Project + delivery both
-// copy these from the same Attio fields at deal-won, so an exact
-// normalised match is a reliable bridge when the explicit link is
-// missing.
-function normName(s) {
-  return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-// Reverse-lookup: find the project that owns this delivery.
-//
-//   1. Authoritative path — a project whose `links.deliveryId`
-//      already equals deliveryId.
-//   2. Self-heal fallback — when no project points back (delivery
-//      predates the link, was created blank, or the link was lost)
-//      AND there is EXACTLY ONE project with the same normalised
-//      clientName + projectName that isn't already bound to a
-//      different delivery, adopt it: repair the link in Firebase
-//      (idempotent, best-effort) and use it. Strict uniqueness +
-//      both-field equality keeps a client email from ever resolving
-//      to the wrong project. Ambiguous/zero → null (caller 422s).
+// Reverse-lookup: find the project that owns this delivery. Matching
+// rules (authoritative link → strict unique name fallback, fail-closed
+// on ambiguity) live in the shared findProjectForDelivery() so this and
+// the daily-09 reconciler can't drift. We keep the link self-heal write
+// here so a name-matched send repairs the link for next time.
 //
 // At ~50–100 projects this scan is cheap; add a reverse-index in
 // Firebase later if latency becomes an issue.
 async function findProjectIdForDelivery(deliveryId, delivery) {
   const projectsRaw = await adminGet("/projects").catch(() => null);
-  const projects = listProjects(projectsRaw);
+  const { projectId, matchedBy, ambiguous } = findProjectForDelivery(projectsRaw, deliveryId, delivery);
+  if (ambiguous || !projectId) return null;
 
-  for (const p of projects) {
-    if (p?.links?.deliveryId === deliveryId) {
-      return p.id;
+  if (matchedBy === "name") {
+    // Best-effort link repair so the next send takes the fast path and
+    // the Projects "Delivery" pill lights up. A write failure must not
+    // block the email — the projectId we resolved is still correct.
+    try {
+      await adminPatch(`/projects/${projectId}/links`, { deliveryId });
+      console.log(`[send-review-batch] self-healed link: project ${projectId} -> delivery ${deliveryId}`);
+    } catch (e) {
+      console.warn(`[send-review-batch] link self-heal write failed for project ${projectId}: ${e.message}`);
     }
-  }
-
-  // Fallback: no project links back. Try a strict, unique name match.
-  const cN = normName(delivery?.clientName);
-  const pN = normName(delivery?.projectName);
-  if (!cN || !pN) return null;
-
-  const matches = projects.filter(p => {
-    const linkedTo = p?.links?.deliveryId;
-    // Skip projects already bound to some OTHER delivery — those are
-    // intentionally linked elsewhere; adopting them would be wrong.
-    if (linkedTo && linkedTo !== deliveryId) return false;
-    return normName(p.clientName) === cN && normName(p.projectName) === pN;
-  });
-  if (matches.length !== 1) return null;
-
-  const projectId = matches[0].id;
-  // Best-effort link repair so the next send takes the fast path and
-  // the Projects "Delivery" pill lights up. A write failure must not
-  // block the email — the projectId we resolved is still correct.
-  try {
-    await adminPatch(`/projects/${projectId}/links`, { deliveryId });
-    console.log(`[send-review-batch] self-healed link: project ${projectId} -> delivery ${deliveryId}`);
-  } catch (e) {
-    console.warn(`[send-review-batch] link self-heal write failed for project ${projectId}: ${e.message}`);
   }
   return projectId;
 }

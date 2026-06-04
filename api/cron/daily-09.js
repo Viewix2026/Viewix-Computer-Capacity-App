@@ -55,6 +55,7 @@ import { send, newCounters, postCronSummary, postCronPassError } from "../_email
 import { getProjectContext, buildShootContext, resolveProjectEmailRecipients } from "../_email/getProjectContext.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
 import { reconcileDeliveryStatus, maybePingAccountManager } from "../_deliveryReconcile.js";
+import { findProjectForDelivery } from "../_findOwningProject.js";
 
 // Subject lines (locked 2026-05-13 per Codex audit — these match the
 // template body headlines and Jeremy's approved copy):
@@ -110,6 +111,23 @@ async function readAllProjects() {
   const all = await adminGet("/projects");
   if (!all) return {};
   return all;
+}
+
+// Derive a delivery.createdAt from a linked project's date for the
+// backfill. Prefers closeDate (the real deal-won date) over createdAt
+// (which can be an import timestamp — see Projects.jsx sort comment).
+// Date-only "YYYY-MM-DD" is pinned to Sydney midnight so it compares
+// deterministically against the +10:00 launch cutoff. Returns null for
+// missing / unparseable / future-dated sources so we never trust a bad
+// timestamp into post-launch scope.
+function deriveCreatedAtFromProject(project) {
+  const src = project?.closeDate || project?.createdAt;
+  if (!src || typeof src !== "string") return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(src) ? `${src}T00:00:00+10:00` : src;
+  const ts = Date.parse(normalized);
+  if (!Number.isFinite(ts)) return null;
+  if (ts > Date.now()) return null;
+  return normalized;
 }
 
 // Normalise subtasks (array vs object form, mirrors the same logic
@@ -487,6 +505,20 @@ export default async function handler(req, res) {
     const deliveriesObj = (await adminGet("/deliveries")) || {};
     let reconciled = 0;
     let amPinged = 0;
+    // Delivery-plumbing reconcile (link-only + report, never auto-create):
+    //   - linksRepaired:      orphaned delivery uniquely name-matched to a
+    //                         project → /projects/{id}/links.deliveryId set,
+    //                         so the "Delivery" pill lights up.
+    //   - linkUnmatched:      no project, or ambiguous → left alone.
+    //   - createdAtBackfilled/Skipped: deliveries missing createdAt get it
+    //     from the owning project's date so isPostLaunchDelivery() can gate
+    //     the social-posting scheduler. Never overwrites an existing value.
+    // All writes here are gated on !dryRunReport — dryRunReport otherwise
+    // only shapes the response (line ~525), it does NOT gate writes.
+    let linksRepaired = 0;
+    let linkUnmatched = 0;
+    let createdAtBackfilled = 0;
+    let createdAtSkipped = 0;
     for (const [did, d] of Object.entries(deliveriesObj)) {
       if (!d || !d.id) continue;
       try {
@@ -496,11 +528,72 @@ export default async function handler(req, res) {
           const r = await maybePingAccountManager({ deliveryId: did, delivery });
           if (r?.posted) amPinged++;
         }
+
+        // Resolve the owning project (authoritative link, else strict
+        // unique name match). Shared matcher — same rules as
+        // send-review-batch's live self-heal.
+        const { projectId, matchedBy, ambiguous } = findProjectForDelivery(projects, did, d);
+        let ownerProject = projectId ? projects[projectId] : null;
+
+        if (matchedBy === "name" && projectId) {
+          // Repair the orphaned link. Update the in-memory copy too so the
+          // no-delivery report below reflects the post-apply state (even in
+          // dry-run, where we don't touch Firebase).
+          if (ownerProject) {
+            ownerProject.links = { ...(ownerProject.links || {}), deliveryId: did };
+          }
+          if (!dryRunReport) {
+            await adminPatch(`/projects/${projectId}/links`, { deliveryId: did });
+          }
+          linksRepaired++;
+        } else if (ambiguous || !projectId) {
+          linkUnmatched++;
+        }
+
+        if (!d.createdAt) {
+          const normalized = ownerProject ? deriveCreatedAtFromProject(ownerProject) : null;
+          if (normalized) {
+            if (!dryRunReport) {
+              await adminPatch(`/deliveries/${did}`, { createdAt: normalized });
+            }
+            createdAtBackfilled++;
+          } else {
+            createdAtSkipped++;
+          }
+        }
       } catch (e) {
         console.error(`daily-09 Pass 4: reconcile failed for delivery ${did}:`, e.message);
       }
     }
-    summary.pass4 = { reconciledVideos: reconciled, amPinged };
+
+    // Report (no auto-create): projects with no linked delivery. Meta Ads
+    // legitimately defers delivery creation to script approval, so split
+    // those out from genuine anomalies (a non-Meta active project that
+    // should have a delivery but doesn't).
+    let metaAdsPending = 0;
+    const anomalies = [];
+    for (const [pid, p] of Object.entries(projects)) {
+      if (!p || typeof p !== "object") continue;
+      if ((p.links || {}).deliveryId) continue;
+      if (p.status === "archived") continue;
+      if (p.productLine === "metaAds") { metaAdsPending++; continue; }
+      anomalies.push(`${p.id || pid} ${p.clientName || "?"}/${p.projectName || "?"}`);
+    }
+    if (anomalies.length) {
+      console.warn(`daily-09 Pass 4: ${anomalies.length} non-Meta project(s) with no delivery: ${anomalies.join("; ")}`);
+    }
+
+    summary.pass4 = {
+      reconciledVideos: reconciled,
+      amPinged,
+      linksRepaired,
+      linkUnmatched,
+      createdAtBackfilled,
+      createdAtSkipped,
+      metaAdsPending,
+      anomalyNoDelivery: anomalies.length,
+      anomalies: anomalies.slice(0, 20),
+    };
   } catch (e) {
     console.error("daily-09 Pass 4 failed:", e);
     summary.pass4 = { error: e.message };
