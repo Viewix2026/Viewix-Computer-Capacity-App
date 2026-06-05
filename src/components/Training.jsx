@@ -200,7 +200,7 @@ export function Training({
   const visibleTraining = role === "closer"
     ? trainingData.filter(c => (c.name || "").toLowerCase().includes("sales"))
     : role === "trial"
-    ? trainingData.filter(c => (c.name || "").toLowerCase() === "editor onboarding")
+    ? trainingData.filter(c => (c.name || "").toLowerCase().includes("trial editor onboarding"))
     : role === "editor"
     ? trainingData.filter(c => !(c.name || "").toLowerCase().includes("sales"))
     : trainingData;
