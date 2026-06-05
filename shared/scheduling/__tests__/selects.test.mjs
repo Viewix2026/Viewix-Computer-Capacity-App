@@ -68,6 +68,36 @@ test("weekend push → shoot Fri, Selects skips Sat to Mon", () => {
   assert.equal(r.selectsDate, "2026-06-01");
 });
 
+test("multi-day shoot → Selects anchors to LAST day + 1, not first day", () => {
+  // Shoot Wed 2026-05-27 .. Fri 2026-05-29 (3-day). Selects must land the
+  // day after the LAST day: Fri+1 = Sat → push to Mon 2026-06-01.
+  // (Regression: previously used the first day, giving Thu 2026-05-28.)
+  const r = computeSelectsTimelineWrites(
+    projectWith("2026-05-27", {}, { endDate: "2026-05-29" }),
+    { editors, weekData: {}, leadId: "ed-lead", allProjects: [] },
+  );
+  assert.ok(r.writes, "expected writes");
+  assert.equal(r.selectsDate, "2026-06-01");
+  assert.equal(findWrite(r.writes, "/startDate"), "2026-06-01");
+  assert.equal(findWrite(r.writes, "/selectsLinkedShootDate"), "2026-05-29");
+});
+
+test("multiple shoots → anchors to the one that FINISHES latest", () => {
+  // A long early shoot (Mon 2026-05-25 .. Thu 2026-05-28) ends after a
+  // later-starting single-day shoot (Wed 2026-05-27). Anchor = Thu+1 = Fri.
+  const proj = {
+    id: "p1",
+    subtasks: {
+      "s-shoot-a": { id: "s-shoot-a", name: "Shoot A", stage: "shoot", startDate: "2026-05-25", endDate: "2026-05-28" },
+      "s-shoot-b": { id: "s-shoot-b", name: "Shoot B", stage: "shoot", startDate: "2026-05-27" },
+      "s-sel": { id: "s-sel", name: "Selects timeline + kick off video", stage: "edit", status: "stuck" },
+    },
+  };
+  const r = computeSelectsTimelineWrites(proj, { editors, weekData: {}, leadId: "ed-lead", allProjects: [] });
+  assert.ok(r.writes, "expected writes");
+  assert.equal(r.selectsDate, "2026-05-29");
+});
+
 test("lead off that day → needsPicker with candidates", () => {
   const leadOffTue = { id: "ed-lead", name: "Lead", defaultDays: { mon: true, tue: false, wed: true, thu: true, fri: true } };
   const r = computeSelectsTimelineWrites(projectWith("2026-05-25"), { editors: [leadOffTue, other], weekData: {}, leadId: "ed-lead", allProjects: [] });
