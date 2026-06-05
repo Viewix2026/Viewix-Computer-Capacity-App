@@ -58,15 +58,19 @@ function isWeekendISO(iso) {
   return dow === 0 || dow === 6;
 }
 
-// The project's canonical shoot date = the LATEST stage==="shoot" subtask
-// startDate (a project can have multiple shoots).
+// The project's canonical shoot anchor = the LAST day of the shoot that
+// finishes latest. A project can have multiple shoots, and each shoot can
+// span several days (startDate..endDate). Selects is dated from this final
+// shoot day — for a multi-day shoot that's the day after the LAST day, not
+// the day after the first.
 export function latestShootDate(project) {
   const subs = project?.subtasks ? Object.values(project.subtasks) : [];
   let latest = null;
   let shootId = null;
   for (const st of subs) {
     if (!isShootSubtask(st) || !st.startDate) continue;
-    if (!latest || st.startDate > latest) { latest = st.startDate; shootId = st.id; }
+    const endDay = st.endDate || st.startDate; // single-day shoots have no endDate
+    if (!latest || endDay > latest) { latest = endDay; shootId = st.id; }
   }
   return { date: latest, shootId };
 }
@@ -117,8 +121,8 @@ export function computeSelectsTimelineWrites(project, ctx = {}) {
   const editorById = new Map((editors || []).map(e => [e.id, e]));
   const leadEditor = leadId ? editorById.get(leadId) : null;
 
-  // selectsDate = shoot + 1; if weekend, push to the lead's next working
-  // day (fall back to the next non-weekend calendar day if no lead).
+  // selectsDate = last shoot day + 1; if weekend, push to the lead's next
+  // working day (fall back to the next non-weekend calendar day if no lead).
   let selectsDate = addDaysISO(shootDate, 1);
   if (isWeekendISO(selectsDate)) {
     const pushed = leadEditor ? nextWorkingDayFor(leadEditor, selectsDate, weekData) : null;
