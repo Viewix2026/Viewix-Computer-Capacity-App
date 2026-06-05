@@ -115,7 +115,10 @@ function normaliseSubtaskStatus(raw) {
 // having to pick them manually each project. Each default's name
 // maps cleanly onto a SUBTASK_STAGE_OPTIONS key via inferStage().
 const SELECTS_TIMELINE_SUBTASK = "Selects timeline + kick off video";
-const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", SELECTS_TIMELINE_SUBTASK, "Revisions", "Edit"];
+// "Revisions" is intentionally not seeded by default — revision rounds are
+// created reactively when the client requests changes (notify-revision.js) or
+// added manually by a producer, never auto-added on project creation.
+const DEFAULT_SUBTASKS = ["Pre Production", "Shoot", SELECTS_TIMELINE_SUBTASK, "Edit"];
 
 // Resolve the editor whose name matches the project lead recorded on
 // the linked /accounts entry. Used to auto-assign the lead-owned
