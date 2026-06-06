@@ -279,7 +279,7 @@ export function Deliveries({ deliveries, setDeliveries, accounts, projects, deep
         return { ...del, videos: newVideos };
       }));
     };
-    const inputSt = { padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none", width: "100%" };
+    const inputSt = { padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--input-bg)", color: "var(--fg)", fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box" };
 
     return (
       <>
@@ -477,10 +477,10 @@ export function Deliveries({ deliveries, setDeliveries, accounts, projects, deep
               <div style={{ fontSize: 13 }}>No videos yet. Click "+ Add Video" to start.</div>
             </div>
           ) : (
-            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflowX: "auto", overflowY: "hidden" }}>
+              <table style={{ width: "100%", minWidth: 1340, borderCollapse: "collapse", fontSize: 12 }}>
                 <thead><tr>
-                  <th style={{ ...TH, textAlign: "left", padding: "8px 12px" }}>Video Name</th>
+                  <th style={{ ...TH, textAlign: "left", padding: "8px 12px", width: 260 }}>Video Name</th>
                   <th style={{ ...TH, textAlign: "left", padding: "8px 12px", width: 200 }}>Link</th>
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 140 }}>Viewix Status</th>
                   <th style={{ ...TH, textAlign: "center", padding: "8px 12px", width: 120 }}>Rev Round 1</th>
