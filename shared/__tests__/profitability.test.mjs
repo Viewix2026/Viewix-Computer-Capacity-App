@@ -416,6 +416,62 @@ test("enrichment: one Won deal claimed by TWO projects => both flagged, sale nev
   assert.equal(rollups.incompleteCount, 2);
 });
 
+test("enrichment: own-value project + blank sibling sharing a deal id (FK) => blank flagged, sale not doubled", () => {
+  // Codex Finding 1: the pre-count guard used to skip own-value projects, so a
+  // deal claimed by ONE own-value project AND one blank FK project escaped the
+  // double-count check — the blank borrowed the same sale the own-value row
+  // already booked, summing one deal twice. Both projects carry the deal's
+  // record id in attioCompanyId (the FK the matcher now reads).
+  const projects = {
+    "proj-own":   { id: "proj-own",   projectName: "Masterton Brand", dealValue: 6517, attioCompanyId: "deal-shared" },
+    "proj-blank": { id: "proj-blank", projectName: "Masterton Brand B", dealValue: null, attioCompanyId: "deal-shared" },
+  };
+  const attioCache = { data: [rawDeal("deal-shared", "Masterton Brand", 6517, "co-mast")] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "proj-own": { crew: 0 }, "proj-blank": { crew: 0 } },
+    commissionInputs: {
+      "proj-own": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "proj-blank": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  const own = perProject["proj-own"];
+  const blank = perProject["proj-blank"];
+  // own-value row keeps its own number and stays complete
+  assert.equal(own.dealValue, 6517);
+  assert.equal(own.dealValueSource, "project");
+  assert.equal(own.complete, true);
+  // blank sibling must NOT borrow the same deal — flagged, no value
+  assert.equal(blank.dealValue, 0);
+  assert.ok(blank.warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.equal(blank.complete, false);
+  // the 6517 sale is counted EXACTLY once (the own-value row), never doubled
+  assert.equal(rollups.totals.dealValue, 6517);
+});
+
+test("enrichment: two blank projects sharing a deal id via attioCompanyId FK => both flagged", () => {
+  // Codex Finding 8: the existing duplicate test matches by NAME; this exercises
+  // the FK path explicitly — different names, same deal record id in
+  // attioCompanyId. Both must be flagged so the sale is never doubled.
+  const projects = {
+    "p1": { id: "p1", projectName: "Totally Different A", dealValue: null, attioCompanyId: "deal-fk-dup" },
+    "p2": { id: "p2", projectName: "Totally Different B", dealValue: null, attioCompanyId: "deal-fk-dup" },
+  };
+  const attioCache = { data: [rawDeal("deal-fk-dup", "Some Deal Name", 5000, "co-x")] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "p1": { crew: 0 }, "p2": { crew: 0 } },
+  });
+  assert.equal(perProject["p1"].dealValue, 0);
+  assert.equal(perProject["p2"].dealValue, 0);
+  assert.ok(perProject["p1"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.ok(perProject["p2"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.equal(rollups.totals.dealValue, 0);
+});
+
 // ── rollups: totals exclude incomplete rows ──────────────────────────
 test("buildRollups: only complete rows enter totals; incomplete counted separately", () => {
   const rows = [

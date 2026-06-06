@@ -249,6 +249,33 @@ test("resolveDealValue: a genuine company id never FK-false-matches (falls throu
   assert.equal(r.dealId, "d-brand-b");
 });
 
+test("resolveDealValue: a present-but-uncached attioDealId does NOT fall back to attioCompanyId as a deal FK", () => {
+  // Codex round 2, Finding 1 (Critical): once attioDealId is populated it is
+  // authoritative and attioCompanyId means a real company id — NOT a deal FK.
+  // So a truthy-but-uncached attioDealId must NOT cause us to grab an unrelated
+  // cached deal sitting in attioCompanyId. Here attioCompanyId points at the
+  // real "Brand Video" deal (12000) but the project is a different job whose
+  // name matches nothing; the safe outcome is NO value (Incomplete), never a
+  // confident wrong attach of 12000.
+  const r = resolveDealValue({ attioDealId: "not-in-index", attioCompanyId: "d-brand-b", projectName: "No Such Deal Name" }, IDX);
+  assert.equal(r, null);
+});
+
+test("resolveDealValue: FK record-id collision with a company id is a KNOWN, documented edge", () => {
+  // The FK path's safety rests on Attio record ids being workspace-unique UUIDs.
+  // IF a project's genuine company id ever equalled some deal's record id (a
+  // ~2^-122 UUID collision), the FK path would match that deal. This test
+  // documents that behaviour explicitly so any future change to it is conscious
+  // — it is NOT an endorsement; the real fix is populating attioDealId upstream.
+  const idx = buildDealIndex({ data: [
+    deal({ id: "shared-id", name: "Unrelated Deal", value: 9900 }),
+    deal({ id: "d-y", name: "Brand Video", value: 12000, companyId: "shared-id" }),
+  ] });
+  const r = resolveDealValue({ projectName: "Brand Video", attioCompanyId: "shared-id" }, idx);
+  assert.equal(r.dealId, "shared-id"); // FK wins over the (correct) name+company match
+  assert.equal(r.value, 9900);
+});
+
 test("resolveDealValue: no candidate => null; blank name => null", () => {
   assert.equal(resolveDealValue({ projectName: "Does Not Exist" }, IDX), null);
   assert.equal(resolveDealValue({ projectName: "" }, IDX), null);
