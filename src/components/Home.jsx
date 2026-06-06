@@ -13,6 +13,7 @@
 // migration effect copies it across to /teamHome.
 
 import { VideoEmbed } from "./shared/VideoEmbed";
+import { VotwReactions } from "./shared/VotwReactions";
 
 export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, teamLunch, isFounder, isFounders }) {
   const th = teamHome || {};
@@ -102,6 +103,7 @@ export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, tea
                   — {votw.creator}
                 </div>
               )}
+              <VotwReactions videoUrl={votw.videoUrl} />
             </div>
           ) : (
             <div style={{ padding: "30px 20px", textAlign: "center", color: "var(--muted)", background: "var(--card)", borderRadius: 10, border: "1px dashed var(--border)" }}>
