@@ -9,6 +9,9 @@ import {
   recomputeRow,
   commissionFor,
   buildRollups,
+  shootHoursByPersonForProject,
+  EST_SHOOT_DAY_HOURS,
+  MAX_SHOOT_DAYS,
   WARNINGS,
 } from "../profitability.js";
 
@@ -437,6 +440,152 @@ test("buildRollups: only complete rows enter totals; incomplete counted separate
   assert.equal(r.byCloser["p-closer"].name, "Closer Carl");
   assert.equal(r.byProductLine["oneOff"].count, 1); // incomplete oneOff excluded
   assert.equal(r.byProductLine["socialPremium"].contribution, 3700);
+});
+
+// ── scheduled shoot labour (booked shoot subtasks) ───────────────────
+const RATES2 = { "ed-1": { costPerHour: 50 }, "crew-jeremy": { costPerHour: 120 }, "crew-steve": { costPerHour: 80 } };
+// one logged edit hour so the project clears the no-logged-time filter
+const EDIT_HOUR = { "ed-1": { "2026-05-20": { "edit-1": { secs: 3600 } } } };
+function shootProject(shootFields) {
+  return { "p": { id: "p", dealValue: 10000, subtasks: {
+    "edit-1": { id: "edit-1", stage: "edit" },
+    "shoot-1": { id: "shoot-1", stage: "shoot", ...shootFields },
+  } } };
+}
+
+test("shoot labour: booked window priced at crew rate, added as its own line", () => {
+  const { perProject } = computeProfitability({
+    projects: shootProject({ startDate: "2026-05-20", endDate: "2026-05-20", startTime: "09:00", endTime: "15:00", assigneeIds: ["crew-jeremy"] }),
+    timeLogs: EDIT_HOUR, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  const r = perProject["p"];
+  assert.equal(r.loggedHours, 1);
+  assert.equal(r.labourCost, 50);          // 1h edit * 50, logged labour only
+  assert.equal(r.shootHours, 6);           // 6h booked window, 1 crew
+  assert.equal(r.shootLabour, 720);        // 6h * 120
+  assert.equal(r.shootHoursEstimated, false);
+  assert.equal(r.productionCost, 50 + 720 + 0);
+  assert.equal(r.productionMargin, 10000 - 770);
+});
+
+test("shoot labour: every assigned crew costed for the FULL window (not split)", () => {
+  const { perProject } = computeProfitability({
+    projects: shootProject({ startDate: "2026-05-20", startTime: "09:00", endTime: "15:00", assigneeIds: ["crew-jeremy", "crew-steve"] }),
+    timeLogs: EDIT_HOUR, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  const r = perProject["p"];
+  assert.equal(r.shootHours, 12);          // 6h * 2 crew
+  assert.equal(r.shootLabour, 6 * 120 + 6 * 80); // each works the full 6h
+});
+
+test("shoot labour: no booked times => estimated standard shoot day, flagged estimated", () => {
+  const { perProject } = computeProfitability({
+    projects: shootProject({ startDate: "2026-05-20", assigneeIds: ["crew-jeremy"] }),
+    timeLogs: EDIT_HOUR, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  const r = perProject["p"];
+  assert.equal(r.shootHours, EST_SHOOT_DAY_HOURS);
+  assert.equal(r.shootLabour, EST_SHOOT_DAY_HOURS * 120);
+  assert.equal(r.shootHoursEstimated, true);
+});
+
+test("shoot labour: multi-day booked window = days x daily window", () => {
+  const { perProject } = computeProfitability({
+    projects: shootProject({ startDate: "2026-05-20", endDate: "2026-05-21", startTime: "09:00", endTime: "13:00", assigneeIds: ["crew-jeremy"] }),
+    timeLogs: EDIT_HOUR, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  assert.equal(perProject["p"].shootHours, 8); // 4h/day * 2 days
+  assert.equal(perProject["p"].shootHoursEstimated, false);
+});
+
+test("shoot labour: shoot with no assigned crew is skipped (not costable here)", () => {
+  const { perProject } = computeProfitability({
+    projects: shootProject({ startDate: "2026-05-20", startTime: "09:00", endTime: "15:00", assigneeIds: [] }),
+    timeLogs: EDIT_HOUR, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  assert.equal(perProject["p"].shootHours, 0);
+  assert.equal(perProject["p"].shootLabour, 0);
+});
+
+test("shoot labour: crew with no rate => 0 shoot labour + missingLabourRate", () => {
+  const { perProject } = computeProfitability({
+    projects: shootProject({ startDate: "2026-05-20", startTime: "09:00", endTime: "15:00", assigneeIds: ["crew-norate"] }),
+    timeLogs: EDIT_HOUR, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  const r = perProject["p"];
+  assert.equal(r.shootHours, 6);
+  assert.equal(r.shootLabour, 0);
+  assert.ok(r.warnings.includes(WARNINGS.MISSING_LABOUR_RATE));
+  assert.ok(r.missingRateFor.includes("crew-norate"));
+});
+
+test("shoot labour: a SHOOT-only project (no logged time) is still dropped (filter unchanged)", () => {
+  const projects = { "shootonly": { id: "shootonly", dealValue: 10000, subtasks: {
+    "shoot-1": { id: "shoot-1", stage: "shoot", startDate: "2026-05-20", startTime: "09:00", endTime: "15:00", assigneeIds: ["crew-jeremy"] },
+  } } };
+  const { perProject } = computeProfitability({ projects, timeLogs: {}, laborCosts: RATES2, costInputs: {}, commissionInputs: {}, commissionPlans: PLANS });
+  assert.equal(perProject["shootonly"], undefined, "shoot booked but no logged time => still dropped");
+});
+
+test("shootHoursByPersonForProject: pure helper sums crew x window, flags estimate, ignores non-shoots", () => {
+  const real = shootHoursByPersonForProject({ subtasks: {
+    s1: { stage: "shoot", startDate: "2026-05-20", startTime: "09:00", endTime: "12:00", assigneeIds: ["a", "b"] }, // 3h each
+    e1: { stage: "edit", startDate: "2026-05-20", assigneeIds: ["a"] },                                            // ignored
+  } });
+  assert.deepEqual(real.byPerson, { a: 3, b: 3 });
+  assert.equal(real.estimated, false);
+  const est = shootHoursByPersonForProject({ subtasks: {
+    s1: { stage: "shoot", startDate: "2026-05-20", assigneeIds: ["a"] }, // no times => estimate
+  } });
+  assert.equal(est.byPerson.a, EST_SHOOT_DAY_HOURS);
+  assert.equal(est.estimated, true);
+});
+
+test("shoot labour: round-trips through recomputeRow (client reprices a persisted row)", () => {
+  const base = { projectId: "p", dealValue: 10000, hoursByPerson: { "ed-1": 1 }, shootHoursByPerson: { "crew-jeremy": 6 }, shootHoursEstimated: false };
+  const first = recomputeRow(base, { laborCosts: RATES2, costInputs: { p: { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS });
+  assert.equal(first.shootLabour, 720);
+  const second = recomputeRow(first, { laborCosts: RATES2, costInputs: { p: { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS });
+  assert.equal(second.shootLabour, first.shootLabour);
+  assert.equal(second.shootHours, 6);
+  assert.equal(second.productionCost, first.productionCost);
+});
+
+test("shoot labour: partial-logged shoot adds only the un-timed remainder (no double-count, no under-count)", () => {
+  const projects = { "p": { id: "p", dealValue: 10000, subtasks: {
+    "shoot-1": { id: "shoot-1", stage: "shoot", startDate: "2026-05-20", startTime: "09:00", endTime: "15:00", assigneeIds: ["crew-jeremy"] }, // 6h booked
+  } } };
+  // crew-jeremy ran the timer for 4h of the 6h shoot
+  const timeLogs = { "crew-jeremy": { "2026-05-20": { "shoot-1": { secs: 4 * 3600 } } } };
+  const { perProject } = computeProfitability({ projects, timeLogs, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS });
+  const r = perProject["p"];
+  assert.equal(r.loggedHours, 4);          // timer truth
+  assert.equal(r.labourCost, 4 * 120);     // 480 logged
+  assert.equal(r.shootHours, 2);           // 6h booked − 4h logged = 2h remainder
+  assert.equal(r.shootLabour, 2 * 120);    // 240 scheduled remainder
+  assert.equal(r.productionCost, 6 * 120); // full 6h window, counted exactly once
+});
+
+test("shoot labour: a fully-logged shoot adds no scheduled hours (logged covers it)", () => {
+  const projects = { "p": { id: "p", dealValue: 10000, subtasks: {
+    "shoot-1": { id: "shoot-1", stage: "shoot", startDate: "2026-05-20", startTime: "09:00", endTime: "15:00", assigneeIds: ["crew-jeremy"] }, // 6h
+  } } };
+  const timeLogs = { "crew-jeremy": { "2026-05-20": { "shoot-1": { secs: 6 * 3600 } } } }; // logged the whole 6h
+  const { perProject } = computeProfitability({ projects, timeLogs, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS });
+  const r = perProject["p"];
+  assert.equal(r.loggedHours, 6);
+  assert.equal(r.shootHours, 0);
+  assert.equal(r.shootLabour, 0);
+});
+
+test("shoot labour: an absurd multi-day span is capped and flagged estimated (one bad endDate can't torch totals)", () => {
+  const { perProject } = computeProfitability({
+    projects: shootProject({ startDate: "2026-05-20", endDate: "2099-01-01", startTime: "09:00", endTime: "17:00", assigneeIds: ["crew-jeremy"] }),
+    timeLogs: EDIT_HOUR, laborCosts: RATES2, costInputs: { "p": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS,
+  });
+  const r = perProject["p"];
+  assert.equal(r.shootHours, MAX_SHOOT_DAYS * 8); // 8h window × capped 14 days
+  assert.equal(r.shootHoursEstimated, true);      // capped => estimated
 });
 
 console.log(`\n${passed} passed`);

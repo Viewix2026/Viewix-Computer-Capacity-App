@@ -30,6 +30,18 @@ import { buildDealIndex, resolveDealValue } from "./attio-extract.js";
 // divide by 1.1 in ONE place rather than hunting every call site.
 export const FIGURES_EX_GST = true;
 
+// A standard shoot day in hours. Used to ESTIMATE a shoot's labour when the
+// booked subtask has no usable start/end time (Jeremy's call: estimate so a
+// shoot always contributes some cost, rather than flag the row). One
+// documented constant so the assumption is a single edit.
+export const EST_SHOOT_DAY_HOURS = 8;
+
+// Bound on a shoot's day span. A stale or mistyped endDate (e.g. years out)
+// would otherwise multiply into an enormous estimate that distorts the
+// totals. Past this many days the span is treated as suspect: capped AND
+// flagged estimated so a single bad date can't quietly torch margin.
+export const MAX_SHOOT_DAYS = 14;
+
 // Frozen warning vocabulary. Anything in a row's warnings[] makes it
 // Incomplete and keeps it out of totals.
 export const WARNINGS = {
@@ -70,6 +82,83 @@ const isBlank = (v) => v == null || v === "";
 export function keepProjectRow(row) {
   if (!row || typeof row !== "object") return false;
   return num(row.loggedHours) > 0 || !!row.duplicateTaskId;
+}
+
+// "HH:MM" -> minutes since midnight, or null if malformed.
+function hhmmToMin(s) {
+  if (typeof s !== "string") return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// Inclusive whole-day span between two YYYY-MM-DD strings (always >= 1). A
+// blank endDate, or one not after start, collapses to a single day.
+function daySpan(startDate, endDate) {
+  if (typeof startDate !== "string" || !startDate) return 1;
+  if (typeof endDate !== "string" || !endDate || endDate <= startDate) return 1;
+  const a = Date.parse(startDate + "T00:00:00Z");
+  const b = Date.parse(endDate + "T00:00:00Z");
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return 1;
+  return Math.round((b - a) / 86400000) + 1;
+}
+
+// Labour-hours for ONE shoot subtask from its booked window, plus whether
+// the figure was estimated. Real window when start+end times are valid
+// (x day span for a multi-day booking); otherwise EST_SHOOT_DAY_HOURS per
+// scheduled day.
+function shootSubtaskHours(st) {
+  const rawDays = daySpan(st.startDate, st.endDate);
+  const days = Math.min(rawDays, MAX_SHOOT_DAYS);
+  const capped = days < rawDays; // suspect span => treat the result as an estimate
+  const a = hhmmToMin(st.startTime);
+  const b = hhmmToMin(st.endTime);
+  if (a != null && b != null && b > a) {
+    return { hours: ((b - a) / 60) * days, estimated: capped };
+  }
+  return { hours: EST_SHOOT_DAY_HOURS * days, estimated: true };
+}
+
+// Scheduled SHOOT labour-hours per crew person for a project, read from its
+// shoot subtasks. Each assigned crew member is costed for the FULL shoot
+// window (two crew on a 6h shoot = 12 person-hours; both work the whole
+// booking). Only subtasks with stage "shoot", a startDate, and >= 1 assignee
+// count; freelance crew without an editor id aren't in assigneeIds and stay
+// in externals. Returns { byPerson, estimated }.
+export function shootHoursByPersonForProject(project, loggedBySubtask = null) {
+  const byPerson = {};
+  let estimated = false;
+  const subs = project && typeof project === "object" ? project.subtasks : null;
+  if (!subs || typeof subs !== "object") return { byPerson, estimated };
+  for (const [stid, st] of Object.entries(subs)) {
+    if (!st || typeof st !== "object" || st.stage !== "shoot") continue;
+    if (!st.startDate) continue; // not scheduled yet => no shoot labour yet
+    const ids = Array.isArray(st.assigneeIds)
+      ? st.assigneeIds
+      : (st.assigneeId ? [st.assigneeId] : []);
+    if (!ids.length) continue; // no crew attributed => not costable here
+    const { hours: windowHours, estimated: est } = shootSubtaskHours(st);
+    if (!(windowHours > 0)) continue;
+    // Subtract any hours the timer ALREADY captured for THIS person on this
+    // shoot, so a partly-logged shoot neither double-counts (logged + full
+    // window) NOR under-counts (skipping the whole shoot loses the rest).
+    const id = st.id || stid;
+    const loggedHere = loggedBySubtask ? (loggedBySubtask.get(id) || loggedBySubtask.get(stid) || null) : null;
+    let addedAny = false;
+    for (const pid of ids) {
+      if (!pid) continue;
+      const already = loggedHere ? num(loggedHere[pid]) : 0;
+      const add = windowHours - already;
+      if (add > 0) {
+        byPerson[pid] = (byPerson[pid] || 0) + add;
+        addedAny = true;
+      }
+    }
+    if (est && addedAny) estimated = true;
+  }
+  return { byPerson, estimated };
 }
 
 // Route a deal's commission to exactly ONE payee.
@@ -155,6 +244,26 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
     }
     labourCost += hours * num(rate);
   }
+
+  // --- scheduled SHOOT labour: crew time on booked shoots the timer never
+  // captured (crew rarely run a stopwatch on location). Derived from the
+  // shoot subtasks' booked window in computeProfitability and carried in
+  // base.shootHoursByPerson so the client reprices it without /projects.
+  // Priced exactly like logged labour (missing rate => missingLabourRate),
+  // but kept as its OWN line so it never masquerades as timer data.
+  const shootHoursByPerson = base.shootHoursByPerson && typeof base.shootHoursByPerson === "object" ? base.shootHoursByPerson : {};
+  let shootLabour = 0;
+  let shootHours = 0;
+  for (const [personId, hrs] of Object.entries(shootHoursByPerson)) {
+    const hours = num(hrs);
+    shootHours += hours;
+    const rate = laborCosts?.[personId]?.costPerHour;
+    if (isBlank(rate)) {
+      if (hours > 0 && !missingRateFor.includes(personId)) missingRateFor.push(personId);
+      continue;
+    }
+    shootLabour += hours * num(rate);
+  }
   if (missingRateFor.length) warnings.push(WARNINGS.MISSING_LABOUR_RATE);
 
   // --- externals: an ABSENT entry is "unknown", not "free" ---
@@ -178,7 +287,7 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
   // "missing value" reads as "go disambiguate" rather than "no deal exists".
   if (base.dealMatchAmbiguous) warnings.push(WARNINGS.DEAL_MATCH_AMBIGUOUS);
 
-  const productionCost = labourCost + externalCosts;
+  const productionCost = labourCost + shootLabour + externalCosts;
   const productionMargin = dealValue - productionCost;
 
   // --- commission (routed, single payee) ---
@@ -204,11 +313,15 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
     productLine: base.productLine || "",
     // round-trip fields (let the client recompute from a persisted row)
     hoursByPerson,
+    shootHoursByPerson,
+    shootHoursEstimated: !!base.shootHoursEstimated,
     duplicateTaskId: !!base.duplicateTaskId,
     missingRateFor,
     // computed
     loggedHours,
     labourCost,
+    shootHours,
+    shootLabour,
     externalCosts,
     productionCost,
     productionMargin,
@@ -284,6 +397,10 @@ export function computeProfitability({
 
   // projectId -> { [personId]: hours }
   const hoursByProject = new Map();
+  // subtask id -> { [personId]: logged hours }, so the shoot derivation can
+  // subtract hours the timer already captured on a shoot — avoiding BOTH a
+  // double-count and the under-count of skipping a partly-logged shoot.
+  const loggedBySubtask = new Map();
   for (const [personId, byDate] of Object.entries(timeLogs || {})) {
     if (!byDate || typeof byDate !== "object") continue;
     for (const byTask of Object.values(byDate)) {
@@ -300,6 +417,9 @@ export function computeProfitability({
         const secs = typeof log === "number" ? log : num(log.secs);
         const hours = secs / 3600;
         if (hours <= 0) continue;
+        let perPerson = loggedBySubtask.get(taskId);
+        if (!perPerson) { perPerson = {}; loggedBySubtask.set(taskId, perPerson); }
+        perPerson[personId] = (perPerson[personId] || 0) + hours;
         let bucket = hoursByProject.get(projectId);
         if (!bucket) { bucket = {}; hoursByProject.set(projectId, bucket); }
         bucket[personId] = (bucket[personId] || 0) + hours;
@@ -339,6 +459,7 @@ export function computeProfitability({
       }
     }
 
+    const shoot = shootHoursByPersonForProject(p, loggedBySubtask);
     const base = {
       projectId: p.id,
       clientName: p.clientName || "",
@@ -351,6 +472,8 @@ export function computeProfitability({
       videoType: p.videoType || "",
       productLine: p.productLine || "",
       hoursByPerson: hoursByProject.get(p.id) || {},
+      shootHoursByPerson: shoot.byPerson,
+      shootHoursEstimated: shoot.estimated,
       duplicateTaskId: dupProjectIds.has(p.id),
     };
     const row = recomputeRow(base, { laborCosts, costInputs, commissionInputs, commissionPlans });
@@ -388,13 +511,13 @@ export function buildRollups(rows, { commissionPlans = {} } = {}) {
   const byCloser = {};
   const byAccountManager = {};
   const totals = {
-    dealValue: 0, labourCost: 0, externalCosts: 0, productionCost: 0,
+    dealValue: 0, labourCost: 0, shootLabour: 0, externalCosts: 0, productionCost: 0,
     productionMargin: 0, commission: 0, contribution: 0, videos: 0,
   };
 
   for (const r of complete) {
     const money = {
-      dealValue: r.dealValue, labourCost: r.labourCost, externalCosts: r.externalCosts,
+      dealValue: r.dealValue, labourCost: r.labourCost, shootLabour: r.shootLabour, externalCosts: r.externalCosts,
       productionCost: r.productionCost, productionMargin: r.productionMargin,
       commission: r.commission, contribution: r.contribution,
       videos: num(r.numberOfVideos), count: 1,
