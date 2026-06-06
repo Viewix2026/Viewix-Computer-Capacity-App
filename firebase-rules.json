@@ -168,6 +168,18 @@
       ".write": "auth != null && (auth.token.role == 'founders' || auth.token.role == 'manager' || auth.token.role == 'founder') && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
+    "votwReactions": {
+      ".read": "auth != null && auth.token.role != null",
+      "$videoKey": {
+        "$emoji": {
+          "$uid": {
+            ".write": "auth != null && $uid === auth.uid && root.child('users').child(auth.uid).child('active').val() === true",
+            ".validate": "newData.isString() || newData.val() === null"
+          }
+        }
+      }
+    },
+
     "socialSchedule": { ".read": false, ".write": false },
     "zernio":         { ".read": false, ".write": false },
     "socialAssets":   { ".read": false, ".write": false }
