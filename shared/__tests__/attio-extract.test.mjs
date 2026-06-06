@@ -199,6 +199,56 @@ test("resolveDealValue: name collision + no/unknown company => ambiguous, no num
   assert.equal(unknownCo.ambiguous, true);
 });
 
+// ── foreign-key (deal record id) matching ────────────────────────────
+// Real-world: api/webhook-deal-won.js stores the won deal's record id in the
+// project's `attioCompanyId` field (Zapier mislabels the deal id as companyId).
+// The id index must match on that, and it must WIN over the name+company path —
+// otherwise the company guard rejects the project's own deal (its attioCompanyId
+// equals the deal id, never the company id) and zeroes a real sale.
+test("buildDealIndex: builds byRecordId, including a nameless Won deal", () => {
+  const idx = buildDealIndex({ data: [
+    deal({ id: "d-1", name: "Named Deal", value: 100 }),
+    deal({ id: "d-2", name: null, value: 200 }), // nameless: dropped by byName, kept by byRecordId
+  ] });
+  assert.equal(idx.byRecordId.size, 2);
+  assert.equal(idx.byRecordId.get("d-2").value, 200);
+  assert.equal(idx.byName.has(""), false); // nameless not indexed by name
+});
+
+test("resolveDealValue: FK match on attioCompanyId (= deal record id) wins over the company guard", () => {
+  // projectName matches d-uniq by name, but attioCompanyId holds that deal's
+  // OWN record id (not co-ausimm). Pre-fix the guard rejected this (co != id);
+  // the FK path must resolve it to the deal's value.
+  const r = resolveDealValue({ projectName: "Corporate video for Spanish translation", attioCompanyId: "d-uniq" }, IDX);
+  assert.equal(r.value, 672);
+  assert.equal(r.dealId, "d-uniq");
+  assert.equal(r.ambiguous, false);
+});
+
+test("resolveDealValue: FK match resolves even with a blank/non-matching projectName", () => {
+  const blank = resolveDealValue({ projectName: "", attioCompanyId: "d-uniq" }, IDX);
+  assert.equal(blank.value, 672);
+  assert.equal(blank.dealId, "d-uniq");
+  const wrongName = resolveDealValue({ projectName: "Totally Different Name", attioCompanyId: "d-brand-b" }, IDX);
+  assert.equal(wrongName.value, 12000);
+  assert.equal(wrongName.dealId, "d-brand-b");
+});
+
+test("resolveDealValue: attioDealId is preferred as the FK when present", () => {
+  const r = resolveDealValue({ projectName: "noise", attioDealId: "d-uniq", attioCompanyId: "co-ausimm" }, IDX);
+  assert.equal(r.dealId, "d-uniq");
+  assert.equal(r.value, 672);
+});
+
+test("resolveDealValue: a genuine company id never FK-false-matches (falls through to name path)", () => {
+  // co-b is a real company id (it's d-brand-b's company) but NOT a deal record
+  // id, so it must miss byRecordId and resolve via the name+company collision
+  // path — exactly the pre-existing behaviour, unchanged.
+  const r = resolveDealValue({ projectName: "Brand Video", attioCompanyId: "co-b" }, IDX);
+  assert.equal(r.value, 12000);
+  assert.equal(r.dealId, "d-brand-b");
+});
+
 test("resolveDealValue: no candidate => null; blank name => null", () => {
   assert.equal(resolveDealValue({ projectName: "Does Not Exist" }, IDX), null);
   assert.equal(resolveDealValue({ projectName: "" }, IDX), null);
