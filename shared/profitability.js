@@ -277,16 +277,18 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
   }
   if (missingRateFor.length) warnings.push(WARNINGS.MISSING_LABOUR_RATE);
 
-  // --- externals: an ABSENT entry is "unknown", not "free" ---
-  // Once a producer has saved the entry (even all zeros + a note), it's a
-  // human confirmation and no longer suspect.
+  // --- externals: freelance crew / travel / gear the timer never caught ---
+  // An ABSENT entry reads as $0 and does NOT block completeness. Founder call
+  // (2026-06-07): shoot labour is now auto-costed from the booked schedule
+  // (above), so the common project genuinely has no extra externals, and real
+  // externals (an external-shooter day, interstate travel/gear) are rare —
+  // flagging every blank as "unknown" held back nearly every row. The field
+  // still adds cost whenever a producer enters one. Accepted trade-off: a
+  // project that DID incur an unentered external understates its cost.
   const ci = costInputs?.[projectId];
-  let externalCosts = 0;
-  if (!ci || typeof ci !== "object") {
-    warnings.push(WARNINGS.MISSING_EXTERNAL_COST);
-  } else {
-    externalCosts = num(ci.crew) + num(ci.travel) + num(ci.location) + num(ci.gear) + num(ci.other);
-  }
+  const externalCosts = (ci && typeof ci === "object")
+    ? num(ci.crew) + num(ci.travel) + num(ci.location) + num(ci.gear) + num(ci.other)
+    : 0;
 
   // --- deal value (ex GST) ---
   // base.dealValue has already been resolved upstream (computeProfitability):
