@@ -175,10 +175,15 @@ export function FoundersProfitability() {
     [rows]
   );
 
-  // every person who logged time (so none can hide from the rate panel)
+  // every person with labour on a row — logged OR scheduled shoot crew — so
+  // none can hide from the rate panel (a shoot-only crew member with no rate
+  // still makes a row Incomplete, so they must be settable here).
   const loggedPersonIds = useMemo(() => {
     const s = new Set();
-    for (const r of rows) for (const id of Object.keys(r.hoursByPerson || {})) s.add(id);
+    for (const r of rows) {
+      for (const id of Object.keys(r.hoursByPerson || {})) s.add(id);
+      for (const id of Object.keys(r.shootHoursByPerson || {})) s.add(id);
+    }
     return s;
   }, [rows]);
 
@@ -262,8 +267,8 @@ export function FoundersProfitability() {
           <span style={{ fontSize: 11, color: C.muted }}>last persisted {relTime(persistedAt)}</span>
         </div>
         <p style={{ fontSize: 12, color: C.muted, margin: "6px 0 0", lineHeight: 1.5, maxWidth: 760 }}>
-          Contribution = deal value − production cost (logged labour + entered externals) − sales commission.
-          It is <strong style={{ color: C.fg }}>before overhead</strong>, so it is not profit. Logged labour only counts time someone ran the timer on; un-logged shoot time must be entered as an external or it is missing.
+          Contribution = deal value − production cost (logged labour + scheduled shoot labour + entered externals) − sales commission.
+          It is <strong style={{ color: C.fg }}>before overhead</strong>, so it is not profit. Labour counts timer time plus shoot time auto-costed from the booked schedule at crew rates; other un-logged costs (freelance crew, travel, gear) go in externals.
         </p>
       </div>
 
@@ -436,7 +441,7 @@ export function FoundersProfitability() {
               <span title="Sourced from the matched Attio Won deal (the project had no value of its own)" style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: 0.3, color: "#60A5FA", border: "1px solid rgba(96,165,250,0.4)", borderRadius: 4, padding: "1px 4px", verticalAlign: "middle" }}>ATTIO</span>
             )}
           </td>
-          <td style={td}>{money(r.labourCost)}</td>
+          <td style={td}>{money(num(r.labourCost) + num(r.shootLabour))}</td>
           <td style={td}>{money(r.externalCosts)}</td>
           <td style={td}>{money(r.commission)}</td>
           <td style={{ ...td, fontWeight: 700, color: r.contribution < 0 ? "#F472B6" : C.fg }}>{money(r.contribution)}</td>
@@ -501,7 +506,11 @@ export function FoundersProfitability() {
                   <table style={{ borderCollapse: "collapse", fontSize: 12 }}><tbody>
                     {[
                       ["Logged hours", `${(r.loggedHours || 0).toFixed(1)}h`],
-                      ["Labour", money(r.labourCost)],
+                      ["Labour (logged)", money(r.labourCost)],
+                      ...(num(r.shootHours) > 0 ? [
+                        ["Shoot hours", `${num(r.shootHours).toFixed(1)}h`],
+                        [r.shootHoursEstimated ? "Shoot labour (est)" : "Shoot labour", money(r.shootLabour)],
+                      ] : []),
                       ["Externals", money(r.externalCosts)],
                       ["Production cost", money(r.productionCost)],
                       ["Production margin", money(r.productionMargin)],
