@@ -14,7 +14,7 @@ process.env.ATTIO_API_KEY = "test-attio-key";
 
 const mod = await import("./ghl-lead-webhook.js");
 const handler = mod.default;
-const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName } = mod;
+const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName, buildDealInfo } = mod;
 
 function mockRes() {
   return {
@@ -94,6 +94,41 @@ test("flattenGhlBody: customData merges to top level", () => {
   assert.equal(flattenGhlBody({ stage: "Lead", customData: { stage: "Won" } }).stage, "Lead");
   // tolerates missing/none customData
   assert.equal(flattenGhlBody({ email: "a@b.com" }).email, "a@b.com");
+});
+
+test("buildDealInfo: captures top-level survey answers from a REAL GHL payload, excludes standard fields + nested objects", () => {
+  // Shape mirrors a real Rhythm Republic survey lead.
+  const body = {
+    "Form Multichoice Question 1": "",
+    "Survey Question 1 ": "I know I should do it, but I don't have time.",
+    "Survey Question 2": "More inbound leads from Facebook and Instagram.",
+    "Survey Question 3": "Pre Revenue",
+    "What's currently your biggest goal or hurdle? ": "New business starting from scratch",
+    company_name: "Rhythm Republic",
+    contact_id: "abc", email: "ray@x.com", full_name: "Ray R", phone: "+61400000000",
+    contact_source: "2-step funnel | meta ads", contact_type: "lead", country: "AU",
+    tags: "", timezone: "Australia/Sydney", date_created: "2026-06-07T08:06:48.579Z",
+    location: { name: "Viewix" }, workflow: { name: "ATTIO SYNC" },
+    attributionSource: { fbc: "fb.2...", url: "https://..." }, customData: { secret: "s" },
+  };
+  const info = buildDealInfo(body);
+  assert.equal(info,
+    "Survey Question 1: I know I should do it, but I don't have time.\n" +
+    "Survey Question 2: More inbound leads from Facebook and Instagram.\n" +
+    "Survey Question 3: Pre Revenue\n" +
+    "What's currently your biggest goal or hurdle?: New business starting from scratch");
+  for (const bad of ["Rhythm Republic", "ray@x.com", "fb.2", "Viewix", "ATTIO SYNC", "meta ads", "Australia/Sydney"]) {
+    assert.ok(!info.includes(bad), `leaked standard field: ${bad}`);
+  }
+  assert.ok(!info.includes("Form Multichoice")); // blank answer dropped
+});
+
+test("buildDealInfo: humanises technical keys; tolerates empty/null/array", () => {
+  assert.equal(buildDealInfo({ businessGoals: "Leads", monthly_budget: "$5k" }), "Business Goals: Leads\nMonthly Budget: $5k");
+  assert.equal(buildDealInfo({ secret: "s", customData: { secret: "s" } }), ""); // only plumbing → nothing
+  assert.equal(buildDealInfo(null), "");
+  assert.equal(buildDealInfo(undefined), "");
+  assert.equal(buildDealInfo([{ goals: "x" }]), ""); // array → ignored
 });
 
 test("splitName: derives first/last from full_name when not provided", () => {

@@ -8,7 +8,11 @@ A Meta/Social lead completes a funnel **survey** in GoHighLevel. The workflow's 
 
 1. **Company** — deduped by exact name search (search-then-create). **Optional** — only when the payload carries a company name (GHL's survey trigger often doesn't).
 2. **Person** — found by email; existing identity preserved, new emails created. First/last derived from `full_name` when GHL sends only that.
-3. **Deal** — keyed by unique **`ghl_contact_id`** (one deal per contact; a returning lead updates it rather than duplicating), owner Jeremy, source `Advertising`, value A$0. Stage driven by which funnel step fired (see below).
+3. **Deal** — keyed by unique **`ghl_contact_id`** (one deal per contact; a returning lead updates it rather than duplicating), owner Jeremy, source `Advertising`, value A$0. Stage driven by which funnel step fired (see below). **`deal_info`** holds the lead's survey/form answers.
+
+### Survey answers → `deal_info` (automatic, no GHL mapping)
+
+GHL's survey/form webhook puts each answer at the **top level** of the payload, keyed by the question label (verified against real leads — e.g. `"Survey Question 2": "More inbound leads..."`, `"What's currently your biggest goal or hurdle? ": "..."`). So **nothing is added in GHL** — the answers already arrive. The endpoint captures them into the `deal_info` text attribute by **deny-listing** the known standard/plumbing fields (`contact_id`, `email`, `full_name`, `phone`, `company_name`, `location`, `workflow`, `attributionSource`, `customData`, etc.) and skipping nested objects — so whatever questions a given form sends are captured as humanised `Label: value` lines. Written on create; on refire it refreshes only when answers are present (never wiped by a blank refire).
 
 ### GHL payload shape (real, captured)
 
