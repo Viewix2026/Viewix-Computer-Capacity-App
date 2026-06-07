@@ -16,6 +16,7 @@ import {
   parseVideoCount,
   extractNumberOfVideos,
   extractDealPersonId,
+  extractDealPeopleIds,
   extractPersonEmail,
   extractPersonFirstName,
   resolveDeal,
@@ -318,6 +319,26 @@ test("extractDealPersonId: returns id only for exactly ONE associated person", (
   assert.equal(extractDealPersonId({ values: {} }), null);
 });
 
+// ── carry-across: extractDealPeopleIds (full list, distinguishes 0/1/>1) ──
+test("extractDealPeopleIds: returns ALL associated person ids in order", () => {
+  const one = { values: { associated_people: [{ target_record_id: "person-1" }] } };
+  assert.deepEqual(extractDealPeopleIds(one), ["person-1"]);
+  const none = { values: { associated_people: [] } };
+  assert.deepEqual(extractDealPeopleIds(none), []);
+  // >1 — full list preserved (the backfill uses length to stamp blocked_multi,
+  // it does NOT auto-pick one)
+  const many = { values: { associated_people: [{ target_record_id: "a" }, { record_id: "b" }] } };
+  assert.deepEqual(extractDealPeopleIds(many), ["a", "b"]);
+  // null cells filtered out
+  const messy = { values: { associated_people: [{ target_record_id: "x" }, {}, { record_id: "y" }] } };
+  assert.deepEqual(extractDealPeopleIds(messy), ["x", "y"]);
+  assert.deepEqual(extractDealPeopleIds({ values: {} }), []);
+  // a duplicated single contact dedupes to ONE id (so the backfill heals it,
+  // not mis-stamps blocked_multi)
+  const dup = { values: { associated_people: [{ target_record_id: "p" }, { record_id: "p" }] } };
+  assert.deepEqual(extractDealPeopleIds(dup), ["p"]);
+});
+
 // ── carry-across: person extractors ──────────────────────────────────
 test("extractPersonEmail / extractPersonFirstName: present, absent, mononym", () => {
   const p = { values: { email_addresses: [{ email_address: " raj@x.com " }], name: [{ first_name: "Raj", full_name: "Raj Pandita" }] } };
@@ -332,6 +353,15 @@ test("extractPersonEmail / extractPersonFirstName: present, absent, mononym", ()
   // absent
   assert.equal(extractPersonEmail({ values: {} }), null);
   assert.equal(extractPersonFirstName({ values: {} }), null);
+});
+
+// ── carry-across: extractPersonEmail rejects malformed addresses (F6) ──
+test("extractPersonEmail: returns null for a non-email-shaped value", () => {
+  // A malformed Attio email must never become a client's send target.
+  assert.equal(extractPersonEmail({ values: { email_addresses: [{ email_address: "not-an-email" }] } }), null);
+  assert.equal(extractPersonEmail({ values: { email_addresses: [{ value: "   " }] } }), null);
+  // valid address still passes (and is trimmed)
+  assert.equal(extractPersonEmail({ values: { email_addresses: [{ value: " a@b.co " }] } }), "a@b.co");
 });
 
 // ── carry-across: buildDealIndex includeZeroValue + new entry fields ──
@@ -353,6 +383,7 @@ test("buildDealIndex includeZeroValue: indexes a $0 Won deal; default excludes i
   const entry = idx.byName.get("footage only shoot")[0];
   assert.equal(entry.numberOfVideos, 0);
   assert.equal(entry.personId, "person-9");
+  assert.deepEqual(entry.peopleIds, ["person-9"]);
   assert.equal(entry.recordId, "z1");
 });
 

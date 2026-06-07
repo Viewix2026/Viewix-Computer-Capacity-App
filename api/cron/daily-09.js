@@ -143,6 +143,15 @@ function listSubtasks(project) {
 // Slack post for the same-day-shoot fallback. Goes to #scheduling so
 // the producers monitoring shoot logistics see it; they decide
 // whether to reach out manually.
+
+// #scheduling channel id for this cron's per-pass summaries (the
+// "did not go to plan" nags). Hardcoded default with an env override,
+// mirroring PROD_MGMT_CHANNEL_ID in _email/send.js — works on deploy
+// with zero new Vercel config. Per Jeremy 2026-06-07: route the
+// scheduling summaries here (where the team acts), NOT prod-management.
+// Pass-crash alerts (postCronPassError) deliberately stay in prod-mgmt.
+const SCHEDULING_CHANNEL_ID = process.env.SLACK_SCHEDULING_CHANNEL_ID || "C0B2JG54GJX";
+
 async function postSchedulingAlert(line) {
   const url = process.env.SLACK_SCHEDULING_WEBHOOK_URL;
   if (!url) {
@@ -178,7 +187,7 @@ async function passShootTomorrow({ projects, editors, accounts, today, tomorrow 
       if (start === tomorrow) {
         evaluated++;
         if (!SHOOT_OK_STATUS.has(st.status)) {
-          counters.skipped_missing++;
+          counters.skipped_bad_status++;
           continue;
         }
         // Resolve { to, cc } via the shared helper. Primary missing
@@ -187,11 +196,11 @@ async function passShootTomorrow({ projects, editors, accounts, today, tomorrow 
         // has no clientContact yet.
         const { to: clientEmail, cc } = resolveProjectEmailRecipients(project, accounts);
         if (!clientEmail) {
-          counters.skipped_missing++;
+          counters.skipped_no_email++;
           continue;
         }
         if (!st.id) {
-          counters.skipped_missing++;
+          counters.skipped_no_subtask_id++;
           continue;
         }
         const shoot = buildShootContext({ subtask: st, editors });
@@ -333,7 +342,7 @@ async function passInEditSuite({ projects, editors, accounts }) {
     // project the webhook just stamped).
     const { to: clientEmail, cc } = resolveProjectEmailRecipients(fresh, accounts);
     if (!clientEmail) {
-      counters.skipped_missing++;
+      counters.skipped_no_email++;
       continue;
     }
 
@@ -458,7 +467,7 @@ export default async function handler(req, res) {
       sameDaySkipped: r.sameDaySkipped,
       counters: r.counters,
     };
-    await postCronSummary("daily-09 · Pass 1 ShootTomorrow", r.counters);
+    await postCronSummary("daily-09 · Pass 1 ShootTomorrow", r.counters, SCHEDULING_CHANNEL_ID);
   } catch (e) {
     console.error("daily-09 Pass 1 failed:", e);
     summary.pass1 = { error: e.message };
@@ -488,7 +497,7 @@ export default async function handler(req, res) {
   try {
     const r = await passInEditSuite({ projects, editors, accounts });
     summary.pass3 = { counters: r.counters };
-    await postCronSummary("daily-09 · Pass 3 InEditSuite", r.counters);
+    await postCronSummary("daily-09 · Pass 3 InEditSuite", r.counters, SCHEDULING_CHANNEL_ID);
   } catch (e) {
     console.error("daily-09 Pass 3 failed:", e);
     summary.pass3 = { error: e.message };
