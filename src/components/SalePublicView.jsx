@@ -61,7 +61,9 @@ export function SalePublicView() {
 
   useEffect(() => {
     if (!shortId && !saleIdParam) return;
-    document.title = "Viewix — Deposit Payment";
+    // Neutral title — this page serves deposits, balances, subscriptions
+    // and single-payment (pay-in-full) sales. `sale` isn't loaded yet here.
+    document.title = "Viewix — Payment";
     initFB();
     let unsub = () => {};
     // `cancelled` guard: if the effect re-fires (or the component
@@ -212,6 +214,9 @@ function StudioPayment({ sale, clientSecret, error, onComplete }) {
   const schedule = Array.isArray(sale.schedule) ? sale.schedule : [];
   const firstSlice = schedule[0];
   const firstName = (sale.clientName || "there").split(/\s+/)[0];
+  // A Custom schedule collapsed to one slice is "pay in full" — there's
+  // no deposit/balance split, so the deposit-framed hero copy is wrong.
+  const isPayInFull = cfg.kind === "paid_in_full" || (cfg.kind === "custom" && schedule.length <= 1);
 
   // Embedded Checkout options — the onComplete callback lets us stay
   // on-page when Stripe finishes. `clientSecret` must be stable per
@@ -244,14 +249,16 @@ function StudioPayment({ sale, clientSecret, error, onComplete }) {
         <section style={{ paddingTop: 48, paddingBottom: 20, textAlign: "center" }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 999, background: "#fff", border: "1px solid var(--line)", fontSize: 12 }}>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: "var(--orange)", boxShadow: "0 0 0 4px rgba(248,119,0,.12)" }} />
-            <span style={{ color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace" }}>READY FOR YOUR DEPOSIT</span>
+            <span style={{ color: "var(--muted)", fontFamily: "'JetBrains Mono', monospace" }}>{isPayInFull ? "READY FOR PAYMENT" : "READY FOR YOUR DEPOSIT"}</span>
           </div>
           <h1 className="studio-hero" style={{ fontWeight: 800, lineHeight: 0.98, margin: "22px auto 12px", maxWidth: 820, letterSpacing: "-0.02em", fontSize: "clamp(40px, 6vw, 72px)" }}>
             Let's get it made,<br/>
             <span style={{ color: "var(--orange)" }}>{firstName}</span>.
           </h1>
           <p style={{ fontSize: 17, color: "var(--muted)", maxWidth: 560, margin: "0 auto", lineHeight: 1.5 }}>
-            You're one deposit away from locking in your {videoTypeLabel(sale.videoType).toLowerCase()} project. Review the scope and schedule below, then pay securely through Stripe.
+            {isPayInFull
+              ? <>You're one payment away from locking in your {videoTypeLabel(sale.videoType).toLowerCase()} project. Review the scope below, then pay securely through Stripe.</>
+              : <>You're one deposit away from locking in your {videoTypeLabel(sale.videoType).toLowerCase()} project. Review the scope and schedule below, then pay securely through Stripe.</>}
           </p>
         </section>
 
@@ -387,7 +394,9 @@ function StudioSchedule({ sale, cfg }) {
     : cfg.kind === "deposit_plus_manual"
       ? "The balance is charged manually when your project wraps — no auto-charge."
       : cfg.kind === "custom"
-        ? "Future instalments are charged to the card you enter today on the dates shown."
+        ? (schedule.length > 1
+            ? "Future instalments are charged to the card you enter today on the dates shown."
+            : "")
         : "";
 
   return (
@@ -500,7 +509,11 @@ function StudioConsent({ sale, cfg }) {
           <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--ink)" }}>hello@viewix.com.au</span>.
         </>
       )}
-      {cfg.kind === "paid_in_full" && (
+      {/* Paid-in-full copy covers both the preset paid_in_full kind and a
+          Custom schedule collapsed to a single slice (no future charges,
+          so futureCustom is empty and the multi-slice block above is
+          skipped — without this the consent box would render empty). */}
+      {(cfg.kind === "paid_in_full" || (cfg.kind === "custom" && futureCustom.length === 0)) && (
         <>You're paying for this project <strong>in full</strong> today. A receipt will be emailed once the payment clears.</>
       )}
     </div>
@@ -536,6 +549,11 @@ function StudioThankYou({ sale, thankYou, justPaid }) {
   const videoSrc = embedUrl(slot.videoUrl);
   const nextSteps = (slot.nextStepsCopy || "").trim();
   const pkgLabel = packageLabel(sale.videoType, sale.packageKey);
+  // Pay-in-full (single-slice custom or preset paid_in_full) has no
+  // deposit — say "payment is in", not "deposit is in".
+  const tyCfg = scheduleForVideoType(sale.videoType);
+  const tySchedule = Array.isArray(sale.schedule) ? sale.schedule : [];
+  const isPayInFull = tyCfg.kind === "paid_in_full" || (tyCfg.kind === "custom" && tySchedule.length <= 1);
 
   // Order reference — "VWX-<8 from Stripe intent>-<2 from client name>".
   // Falls back to shortId if the webhook hasn't stamped
@@ -613,7 +631,7 @@ function StudioThankYou({ sale, thankYou, justPaid }) {
             <span className="vx-accent">{useFirstName ? firstName : (sale.clientName || "there")}</span>.
           </h1>
           <p className="vx-hero-sub">
-            Your {videoTypeLabel(sale.videoType)}: {pkgLabel} Pack deposit is in. We're genuinely excited to start creating with you — here's how the next few weeks look.
+            Your {videoTypeLabel(sale.videoType)}: {pkgLabel} Pack {isPayInFull ? "payment is in" : "deposit is in"}. We're genuinely excited to start creating with you — here's how the next few weeks look.
           </p>
         </section>
 
@@ -637,7 +655,9 @@ function StudioThankYou({ sale, thankYou, justPaid }) {
             ) : (
               <>
                 <p className="vx-note-quote">
-                  "Deposit's in — you're locked in. Now the fun part: we pin down the brief, the creative direction, and the shoot dates."
+                  {isPayInFull
+                    ? "Payment's in — you're locked in. Now the fun part: we pin down the brief, the creative direction, and the shoot dates."
+                    : "Deposit's in — you're locked in. Now the fun part: we pin down the brief, the creative direction, and the shoot dates."}
                 </p>
                 <p className="vx-note-p">
                   Before our pre-production call, watch the 2-minute walkthrough — it covers how the Viewix system turns a single shoot day into a library of ad variations.

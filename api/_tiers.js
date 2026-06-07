@@ -331,8 +331,10 @@ export const SALE_VIDEO_TYPES = [
 ];
 
 // Bounds on the founder-defined Custom schedule. Row 0 is always the
-// deposit/now slice — these limits are inclusive of it.
-export const CUSTOM_MIN_SLICES = 2;
+// deposit/now slice — these limits are inclusive of it. A single slice
+// is the "pay in full" case: one charge at checkout, no balance to
+// follow. The Custom editor exposes this via a "Pay in full" toggle.
+export const CUSTOM_MIN_SLICES = 1;
 export const CUSTOM_MAX_SLICES = 6;
 
 // ─── GST (Australia) ────────────────────────────────────────────────

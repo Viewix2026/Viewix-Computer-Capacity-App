@@ -516,7 +516,7 @@ export function Sale({
                 </div>
               </div>
               <div>
-                <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Paid as ({(()=>{const k=scheduleForVideoType(form.videoType).kind; return k==="deposit_plus_manual"?"deposit + manual balance":k==="subscription_monthly"?"3 auto-payments":k==="custom"?"custom schedule":"paid in full";})()})</div>
+                <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Paid as ({(()=>{const k=scheduleForVideoType(form.videoType).kind; if(k==="custom") return (form.schedule||[]).length<=1?"paid in full":"custom schedule"; return k==="deposit_plus_manual"?"deposit + manual balance":k==="subscription_monthly"?"3 auto-payments":"paid in full";})()})</div>
                 <div style={{display:"grid",gap:4,fontSize:12,fontFamily:"'JetBrains Mono',monospace"}}>
                   {(form.schedule||[]).map((s,i)=>(
                     <div key={s.sliceId||i} style={{display:"flex",justifyContent:"space-between",color:s.trigger==="now"?"var(--fg)":"var(--muted)"}}>
@@ -932,6 +932,35 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation, locked
     onChange(rows.filter((_, i) => i !== idx));
   };
 
+  // ── Pay-in-full toggle ───────────────────────────────────────────
+  // A single slice (charged at checkout, no balance) is the pay-in-full
+  // case. The toggle collapses the schedule down to one full-amount row
+  // or expands it back to a default deposit + balance schedule. Disabled
+  // once any slice has moved money — switching modes would orphan a
+  // paid/processing row (server would reject it anyway).
+  const payInFull = rows.length === 1;
+  const anyLocked = !!(locks && rows.some(r => isLocked(r.sliceId)));
+  const setPayInFull = () => {
+    if (payInFull || anyLocked) return;
+    const total = sumCustomSlicesExGst(rows);
+    const first = rows[0] || {};
+    const keepLabel = (first.label || "").trim();
+    onChange([{
+      sliceId: first.sliceId || newSliceId(),
+      label: keepLabel && keepLabel !== "Deposit" ? keepLabel : "Full payment",
+      amountExGst: total,
+      offsetDays: 0,
+      trigger: "now",
+    }]);
+  };
+  const setSchedule = () => {
+    if (!payInFull || anyLocked) return;
+    const total = sumCustomSlicesExGst(rows);
+    const seeded = seedCustomSlices(total);
+    if (rows[0]?.sliceId) seeded[0].sliceId = rows[0].sliceId; // keep deposit row's id
+    onChange(seeded);
+  };
+
   // Day-or-week display unit is row-local UI state. We always persist
   // offsetDays — the unit is just how the input is rendered. The
   // helpers in api/_sale-schedules.js auto-detect "days" when the
@@ -969,23 +998,46 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation, locked
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
         <label style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-          Custom Schedule ({rows.length}/{CUSTOM_MAX_SLICES} instalments · ex-GST)
+          {payInFull ? "Full payment · ex-GST" : `Custom Schedule (${rows.length}/${CUSTOM_MAX_SLICES} instalments · ex-GST)`}
         </label>
-        <button
-          onClick={addRow}
-          disabled={rows.length >= CUSTOM_MAX_SLICES}
-          style={{
-            ...BTN,
-            background: rows.length >= CUSTOM_MAX_SLICES ? "#374151" : "var(--accent)",
-            color: rows.length >= CUSTOM_MAX_SLICES ? "#9CA3AF" : "white",
-            opacity: rows.length >= CUSTOM_MAX_SLICES ? 0.5 : 1,
-            cursor: rows.length >= CUSTOM_MAX_SLICES ? "not-allowed" : "pointer",
-          }}
-        >
-          + Add instalment
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* Pay-in-full / Schedule mode toggle */}
+          <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
+            <button
+              onClick={setPayInFull}
+              disabled={anyLocked}
+              title={anyLocked ? "Can't switch — a slice has already been paid" : "Charge the full amount once, at checkout"}
+              style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: payInFull ? "var(--accent)" : "transparent", color: payInFull ? "white" : "var(--muted)", fontSize: 11, fontWeight: 700, cursor: anyLocked ? "not-allowed" : "pointer", opacity: anyLocked ? 0.5 : 1 }}
+            >
+              Pay in full
+            </button>
+            <button
+              onClick={setSchedule}
+              disabled={anyLocked}
+              title={anyLocked ? "Can't switch — a slice has already been paid" : "Split into deposit + instalments"}
+              style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: !payInFull ? "var(--accent)" : "transparent", color: !payInFull ? "white" : "var(--muted)", fontSize: 11, fontWeight: 700, cursor: anyLocked ? "not-allowed" : "pointer", opacity: anyLocked ? 0.5 : 1 }}
+            >
+              Schedule
+            </button>
+          </div>
+          {!payInFull && (
+            <button
+              onClick={addRow}
+              disabled={rows.length >= CUSTOM_MAX_SLICES}
+              style={{
+                ...BTN,
+                background: rows.length >= CUSTOM_MAX_SLICES ? "#374151" : "var(--accent)",
+                color: rows.length >= CUSTOM_MAX_SLICES ? "#9CA3AF" : "white",
+                opacity: rows.length >= CUSTOM_MAX_SLICES ? 0.5 : 1,
+                cursor: rows.length >= CUSTOM_MAX_SLICES ? "not-allowed" : "pointer",
+              }}
+            >
+              + Add instalment
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={{ display: "grid", gap: 8 }}>
@@ -1110,7 +1162,9 @@ function CustomScheduleEditor({ slices, onChange, totalExGst, validation, locked
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
       }}>
         <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>
-          Offsets are counted from <strong>when the deposit clears</strong>, not today. If the deposit pays late, instalment dates shift with it.
+          {payInFull
+            ? <>The full amount is charged once, at checkout. No balance to follow.</>
+            : <>Offsets are counted from <strong>when the deposit clears</strong>, not today. If the deposit pays late, instalment dates shift with it.</>}
         </div>
         <div style={{ fontSize: 13, fontFamily: "'JetBrains Mono', monospace", color: (validation && validation.ok) ? "var(--fg)" : "#F59E0B" }}>
           Total ex-GST: <strong>{fmtCurExact(sumRows)}</strong>
