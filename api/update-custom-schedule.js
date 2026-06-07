@@ -20,6 +20,7 @@
 //
 // Returns: 200 { ok: true, sale }.
 
+import Stripe from "stripe";
 import { adminGet, adminPatch } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 import {
@@ -147,11 +148,43 @@ export default async function handler(req, res) {
       existingSchedule: sale.schedule || [],
     });
 
+    // Stale-session guard. An open Checkout session was minted against
+    // the schedule as it was THEN — its charge amount and the mandate
+    // copy the customer consented to. If this edit changes the schedule
+    // (the first slice's amount, the instalment count, or any future
+    // amount / due date / trigger), a customer still holding the old
+    // session could pay under terms that no longer apply — and for a
+    // single-slice schedule that payment would mark the whole sale PAID
+    // at the wrong figure with no balance left to recover. So expire the
+    // stale session and drop the stored id whenever the schedule changes
+    // at all, forcing the next checkout to mint fresh at the new terms.
+    // (The webhook also rejects a charge whose amount doesn't match the
+    // current slice — see markSlicePaid — so a mid-flight race is caught
+    // there too.) Best-effort: never fail the edit if Stripe is
+    // unreachable, but always clear the id so reuse can't return it.
+    const fingerprint = (sch) => (Array.isArray(sch) ? sch : [])
+      .map(s => { const r = s || {}; return `${Math.round(Number(r.amount || 0) * 100)}:${r.dueDateKeySydney || ""}:${r.trigger || ""}`; })
+      .join("|");
+    const scheduleChanged = fingerprint(sale.schedule) !== fingerprint(schedule);
+    let clearSession = false;
+    if (sale.stripeCheckoutSessionId && scheduleChanged) {
+      clearSession = true;
+      const secret = process.env.STRIPE_SECRET_KEY;
+      if (secret) {
+        try {
+          await new Stripe(secret).checkout.sessions.expire(sale.stripeCheckoutSessionId);
+        } catch (e) {
+          console.warn("update-custom-schedule: could not expire stale session:", e.message || e);
+        }
+      }
+    }
+
     const nextVersion = (Number(sale.customScheduleVersion) || 0) + 1;
     await adminPatch(`/sales/${saleId}`, {
       customSlices,
       schedule,
       customScheduleVersion: nextVersion,
+      ...(clearSession ? { stripeCheckoutSessionId: null } : {}),
       // Recompute totals from the source of truth even though they
       // should match — protects against the (impossible) drift.
       totalExGst: sale.totalExGst,

@@ -54,7 +54,7 @@ async function readRawBody(req) {
 // For Custom slice 0 (deposit), also re-anchor the rest of the
 // schedule to the actual paid timestamp so future dueAt values reflect
 // when the deposit truly cleared (clients sometimes pay days late).
-async function markSlicePaid(saleId, { sliceId, sliceIdx } = {}, patch = {}) {
+async function markSlicePaid(saleId, { sliceId, sliceIdx, paidAmountCents } = {}, patch = {}) {
   const sale = await adminGet(`/sales/${saleId}`);
   if (!sale) {
     console.warn("markSlicePaid: sale not found:", saleId);
@@ -79,6 +79,23 @@ async function markSlicePaid(saleId, { sliceId, sliceIdx } = {}, patch = {}) {
   // Idempotency — Stripe retries webhook deliveries; never double-count.
   if (schedule[targetIdx].status === "paid") {
     return { allPaid: schedule.every(s => s.status === "paid"), slice: schedule[targetIdx] };
+  }
+
+  // Amount sanity-check. The charge must match what the CURRENT schedule
+  // says this slice costs. The dangerous case: a customer pays a stale
+  // checkout link (the old open session only ever charges the old first
+  // slice) after the schedule was edited — e.g. a deposit+balance plan
+  // collapsed to a single pay-in-full slice. Marking that slice paid
+  // would flag the whole sale PAID for the wrong (lower) figure. Instead
+  // flag it for human review and bail without marking paid.
+  const expectedCents = Math.round(Number(schedule[targetIdx].amount || 0) * 100);
+  if (Number.isFinite(paidAmountCents) && paidAmountCents > 0 && expectedCents > 0 && paidAmountCents !== expectedCents) {
+    console.warn(`markSlicePaid: amount mismatch on sale ${saleId} slice ${targetIdx} — paid ${paidAmountCents}c, expected ${expectedCents}c. Flagging for review.`);
+    await adminPatch(`/sales/${saleId}`, {
+      paymentReviewRequired: true,
+      paymentReviewNote: `Charge of $${(paidAmountCents / 100).toFixed(2)} doesn't match slice "${schedule[targetIdx].label}" (expects $${(expectedCents / 100).toFixed(2)}). Likely a stale payment link paid after the schedule changed. Reconcile in Stripe.`,
+    });
+    return { mismatch: true, expectedCents, paidAmountCents, slice: schedule[targetIdx] };
   }
 
   schedule[targetIdx] = {
@@ -109,9 +126,17 @@ async function markSlicePaid(saleId, { sliceId, sliceIdx } = {}, patch = {}) {
       // Keep the original schedule with the just-paid deposit; don't fail the webhook.
       nextSchedule = schedule;
     }
+    // Defensive: a rebuild from empty/malformed customSlices yields []
+    // and `[].every()` is vacuously true — which would silently mark the
+    // sale fully paid with NO schedule. Never let the rebuild drop rows;
+    // fall back to the schedule we already had the just-paid row in.
+    if (!Array.isArray(nextSchedule) || nextSchedule.length === 0) {
+      nextSchedule = schedule;
+    }
   }
 
-  const allPaid = nextSchedule.every(s => s.status === "paid");
+  // `length > 0` guard so an empty schedule can never flip paid:true.
+  const allPaid = nextSchedule.length > 0 && nextSchedule.every(s => s.status === "paid");
   await adminPatch(`/sales/${saleId}`, {
     schedule: nextSchedule,
     paid: allPaid,
@@ -287,21 +312,27 @@ export default async function handler(req, res) {
         }
       }
 
-      const result = await markSlicePaid(saleId, { sliceId, sliceIdx }, {
+      const result = await markSlicePaid(saleId, { sliceId, sliceIdx, paidAmountCents: intent.amount_received }, {
         stripePaymentIntentId: intent.id,
         amountPaid: intent.amount_received / 100,
         receiptUrl,
       });
 
-      // Slack notify — "deposit received" for sliceIdx=0,
-      //                 "balance received" for later slices.
       const amount = (intent.amount_received / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
       const clientName = intent.metadata?.clientName || "Unknown";
       const pkg = `${intent.metadata?.videoType || "?"} · ${intent.metadata?.packageKey || "?"}`;
-      const label = Number(sliceIdx) === 0 ? "Deposit" : "Balance";
-      const emoji = Number(sliceIdx) === 0 ? ":moneybag:" : ":white_check_mark:";
-      const allDone = result?.allPaid ? " · *project fully paid*" : "";
-      await slackNotify(`${emoji} *${label} received* — *${clientName}* paid ${amount}${allDone}\n> ${pkg}`);
+      if (result?.mismatch) {
+        // Stale-link payment: flagged for review, NOT marked paid.
+        const expected = (result.expectedCents / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+        await slackNotify(`:warning: *Payment needs review* — *${clientName}* paid ${amount} but the current schedule expects ${expected}. Likely a stale payment link paid after the schedule changed — reconcile in Stripe.\n> ${pkg}`);
+      } else {
+        // Slack notify — "deposit received" for sliceIdx=0,
+        //                 "balance received" for later slices.
+        const label = Number(sliceIdx) === 0 ? "Deposit" : "Balance";
+        const emoji = Number(sliceIdx) === 0 ? ":moneybag:" : ":white_check_mark:";
+        const allDone = result?.allPaid ? " · *project fully paid*" : "";
+        await slackNotify(`${emoji} *${label} received* — *${clientName}* paid ${amount}${allDone}\n> ${pkg}`);
+      }
     }
 
     // ─── invoice.paid ──────────────────────────────────────────────
@@ -415,15 +446,18 @@ export default async function handler(req, res) {
             return s;
           });
           // allDone now means every slice is either paid OR cancelled
-          // (i.e. the schedule has reached a terminal state).
-          const allDone = updatedSchedule.every(s => s.status === "paid" || s.status === "cancelled");
+          // (i.e. the schedule has reached a terminal state). The
+          // length>0 guard stops an empty schedule from reading as
+          // vacuously "all paid/cancelled".
+          const allDone = updatedSchedule.length > 0 && updatedSchedule.every(s => s.status === "paid" || s.status === "cancelled");
           await adminPatch(`/sales/${saleId}`, {
             schedule: updatedSchedule,
             stripeSubscriptionActive: false,
             // Only set top-level paid=true if every slice paid (no
             // cancellations). A partial-paid + cancelled sale stays
-            // paid: false so it shows up in "AWAITING" filters.
-            ...(updatedSchedule.every(s => s.status === "paid") ? { paid: true, paidAt: new Date().toISOString() } : {}),
+            // paid: false so it shows up in "AWAITING" filters. An empty
+            // schedule can never flip paid:true (length>0 guard).
+            ...(updatedSchedule.length > 0 && updatedSchedule.every(s => s.status === "paid") ? { paid: true, paidAt: new Date().toISOString() } : {}),
           });
           if (cancelledCount > 0) {
             await slackNotify(`:warning: *Subscription ended early* — ${sub.metadata?.clientName || saleId} · ${cancelledCount} unpaid instalment(s) marked cancelled. Subscription died mid-plan (manual cancel, dunning failure, or expired card). Reconcile in Stripe Dashboard.`);

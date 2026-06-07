@@ -253,6 +253,9 @@ export default async function handler(req, res) {
     // schedule and re-orders pending rows.
     else if (cfg.kind === "custom") {
       const amountCents = Math.round(firstSlice.amount * 100);
+      // Single-slice custom = pay in full. There's no later charge, so
+      // don't save the card off-session — nothing would ever use it.
+      const hasFutureSlices = schedule.length > 1;
       session = await stripe.checkout.sessions.create({
         ui_mode: "embedded_page",
         mode: "payment",
@@ -269,7 +272,7 @@ export default async function handler(req, res) {
           },
         }],
         payment_intent_data: {
-          setup_future_usage: "off_session",
+          ...(hasFutureSlices ? { setup_future_usage: "off_session" } : {}),
           description: `${descriptorBase} — ${firstSlice.label || "Deposit"}`,
           metadata: {
             saleId: sale.id,
