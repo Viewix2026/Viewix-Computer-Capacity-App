@@ -371,9 +371,13 @@ export default async function handler(req, res) {
       // so one slow/failed fetch skips only that person and never burns the
       // run's time budget or writes a partial/wrong address.
       const personCache = new Map(); // personId -> { email, firstName } | null
+      // CONFIRMED no-email ids only: a person we successfully fetched + parsed
+      // whose email is genuinely absent/invalid. A transient failure (timeout /
+      // 429 / 5xx / network) must NOT land here — it leaves the project
+      // unstamped so the next run retries instead of showing a wrong reason.
+      const personNoEmailIds = new Set();
       const distinctPersonIds = [...new Set(needsContact.map(n => n.personId))];
       const toFetch = distinctPersonIds.slice(0, MAX_PEOPLE_FETCH_PER_RUN);
-      const fetchedIds = new Set(toFetch);
       clientContactRemaining = Math.max(0, distinctPersonIds.length - toFetch.length);
       for (const pid of toFetch) {
         try {
@@ -381,27 +385,29 @@ export default async function handler(req, res) {
             headers,
             signal: AbortSignal.timeout(PERSON_FETCH_TIMEOUT_MS),
           });
+          // Non-OK (incl. 429/5xx) is treated as transient — leave unstamped.
           if (!pr.ok) { personCache.set(pid, null); peopleFetched++; continue; }
           const pj = await pr.json();
           const person = pj?.data || null;
           const email = person ? extractPersonEmail(person) : null; // validated inside extractPersonEmail
-          if (!email) { personCache.set(pid, null); peopleFetched++; continue; }
+          if (!email) { personCache.set(pid, null); personNoEmailIds.add(pid); peopleFetched++; continue; }
           personCache.set(pid, { email, firstName: person ? extractPersonFirstName(person) : null });
           peopleFetched++;
         } catch {
+          // Timeout / network error — transient, leave unstamped for retry.
           personCache.set(pid, null);
         }
       }
 
       // Pass B: leaf-patch ONLY the still-blank child fields (re-read right
       // before so a producer edit is never clobbered). A single-person deal
-      // whose person has no usable email is stamped; a person we didn't reach
-      // this run (cap or timeout) is left UNSTAMPED so the next run retries
-      // cleanly instead of showing a misleading reason.
+      // whose person has a CONFIRMED missing email is stamped; a person we
+      // didn't reach this run (cap, timeout, or HTTP error) is left UNSTAMPED
+      // so the next run retries cleanly instead of showing a misleading reason.
       for (const { projectId, personId } of needsContact) {
         const resolved = personCache.get(personId);
         if (!resolved || !resolved.email) {
-          if (fetchedIds.has(personId)) contactStamps.set(projectId, "blocked_person_no_email");
+          if (personNoEmailIds.has(personId)) contactStamps.set(projectId, "blocked_person_no_email");
           continue;
         }
         const live = (await fbGet(`/projects/${projectId}/clientContact`).catch(() => null)) || {};
