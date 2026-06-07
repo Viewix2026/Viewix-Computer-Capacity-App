@@ -206,10 +206,19 @@ export function normName(s) {
 // deal with a record id regardless of value, because numberOfVideos / client
 // contact must be recoverable even from a $0 (footage-only) Won deal. Each entry
 // carries `numberOfVideos` + `personId` so the backfill can read them without a
-// second pass over the raw cache. Returns { byName: Map }.
+// second pass over the raw cache.
+//
+// Returns { byName: Map, byRecordId: Map }. byRecordId is the FOREIGN-KEY index:
+// projects created by api/webhook-deal-won.js carry the won deal's record id (it
+// lands in the project's `attioCompanyId` field — the Zapier payload maps the
+// deal id there, NOT the company id; see matchDealEntry). Matching on that id is
+// far stronger than name matching: it is the exact deal that created the project,
+// immune to name edits and same-name collisions. Nameless deals are still indexed
+// here (id-match needs no name), so byRecordId is a superset of byName's records.
 export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
   const deals = Array.isArray(attioCache?.data) ? attioCache.data : [];
   const byName = new Map();
+  const byRecordId = new Map();
   const seen = new Set();
   for (const d of deals) {
     if (!isWonStage(extractStage(d))) continue;
@@ -227,8 +236,6 @@ export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
     // a genuine collision across DIFFERENT record ids still keeps both.
     if (seen.has(recordId)) continue;
     seen.add(recordId);
-    const name = normName(extractDealName(d));
-    if (!name) continue;
     const entry = {
       recordId,
       value,
@@ -237,11 +244,16 @@ export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
       companyId: extractDealCompanyId(d),
       closeDate: extractDate(d),
     };
+    // Index by record id first — a confident foreign key even for a deal whose
+    // name is blank (which the byName index below would drop).
+    byRecordId.set(recordId, entry);
+    const name = normName(extractDealName(d));
+    if (!name) continue;
     let arr = byName.get(name);
     if (!arr) { arr = []; byName.set(name, arr); }
     arr.push(entry);
   }
-  return { byName };
+  return { byName, byRecordId };
 }
 
 // Core matcher shared by resolveDealValue + resolveDeal. CONFIDENT only when the
@@ -253,6 +265,38 @@ export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
 //   { kind: "match", entry }    confident single match
 function matchDealEntry(project, dealIndex) {
   if (!dealIndex || !dealIndex.byName) return { kind: "none" };
+
+  // FOREIGN-KEY FAST PATH (strongest signal, tried first). Projects created by
+  // api/webhook-deal-won.js carry their won deal's Attio record id — it lands in
+  // `attioCompanyId` because the Zapier payload mislabels the deal id as
+  // companyId (attioDealId is never populated today; the proper upstream fix is
+  // to populate attioDealId at the webhook, after which attioCompanyId can stop
+  // doubling as a deal FK). A record-id hit IS the deal that created this
+  // project: confident regardless of name edits, same-name collisions, or a
+  // blank projectName. This rescued the company-guard rejections that were
+  // zeroing ~16 real deal values (e.g. Masterton $6,517, Market Leader $18,888).
+  //
+  // Why a genuine company id in attioCompanyId won't false-match: Attio record
+  // ids are workspace-unique UUIDs, so a company's id colliding with some deal's
+  // id is a ~2^-122 event, not a contract guarantee — a real company id simply
+  // misses byRecordId in practice and falls through to the name path below.
+  //
+  // `attioDealId || attioCompanyId` (NOT independent tries of both) is load-
+  // bearing for safety. It encodes the field's lifecycle: TODAY attioDealId is
+  // null and attioCompanyId carries the deal id, so attioCompanyId is used. Once
+  // the upstream webhook fix populates attioDealId, THAT becomes authoritative
+  // and attioCompanyId reverts to meaning a real company id. So when attioDealId
+  // is present but misses the index (a Lost/uncached deal), we must NOT fall
+  // back to attioCompanyId as a deal FK — doing so would attach an UNRELATED
+  // cached deal's revenue and mark the row Complete with zero corroboration. The
+  // `||` short-circuits to attioDealId, misses, and drops to the name path
+  // (worst case a revenue MISS = Incomplete = safe), instead of a confident
+  // wrong attach. (Codex round 2, Finding 1.)
+  const fk = project?.attioDealId || project?.attioCompanyId || null;
+  if (fk && dealIndex.byRecordId && dealIndex.byRecordId.has(fk)) {
+    return { kind: "match", entry: dealIndex.byRecordId.get(fk) };
+  }
+
   const key = normName(project?.projectName);
   if (!key) return { kind: "none" };
   const cands = dealIndex.byName.get(key);

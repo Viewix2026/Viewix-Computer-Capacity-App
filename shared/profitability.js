@@ -379,16 +379,22 @@ export function computeProfitability({
   // projects whose own dealValue is blank (the common case).
   const dealIndex = buildDealIndex(attioCache);
 
-  // Pre-count CONFIDENT Attio claims per deal id. If two different projects
-  // (same name + company) both resolve to the SAME Won deal, attaching its
-  // value to both would sum one sale into the totals twice. So a deal
-  // claimed by >1 project is treated as ambiguous for ALL claimants below —
-  // no number attached, row flagged. Projects with their OWN dealValue don't
-  // consume a deal and are unaffected.
+  // Pre-count CONFIDENT claims per deal id. If two different projects both
+  // resolve to the SAME Won deal, attaching its value to both would sum one
+  // sale into the totals twice. So a deal claimed by >1 project is treated as
+  // ambiguous for every BLANK claimant below — no number attached, row flagged.
+  //
+  // Count EVERY project that resolves to a deal id, INCLUDING those with their
+  // own dealValue. An own-value project still consumes its deal: if a blank
+  // sibling resolves (by foreign-key id or name) to that same deal, the blank
+  // must NOT also borrow it, or the one sale lands twice — once as the own
+  // value, once as the borrowed value. (The own-value project keeps its own
+  // number regardless; only blank projects consult this count.) This closes the
+  // hole the FK matcher widened: a project and its blank duplicate now commonly
+  // share one deal id via attioCompanyId.
   const attioClaimCounts = new Map();
   for (const p of Object.values(projects || {})) {
     if (!p || typeof p !== "object" || !p.id) continue;
-    if (num(p.dealValue) > 0) continue;
     const m = resolveDealValue(p, dealIndex);
     if (m && m.value > 0 && m.dealId) {
       attioClaimCounts.set(m.dealId, (attioClaimCounts.get(m.dealId) || 0) + 1);
