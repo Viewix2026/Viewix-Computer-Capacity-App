@@ -8,7 +8,11 @@ A Meta/Social lead completes a funnel **survey** in GoHighLevel. The workflow's 
 
 1. **Company** — deduped by exact name search (search-then-create). **Optional** — only when the payload carries a company name (GHL's survey trigger often doesn't).
 2. **Person** — found by email; existing identity preserved, new emails created. First/last derived from `full_name` when GHL sends only that.
-3. **Deal** — keyed by unique **`ghl_contact_id`** (one deal per contact; a returning lead updates it rather than duplicating), owner Jeremy, source `Advertising`, value A$0. Stage driven by which funnel step fired (see below).
+3. **Deal** — keyed by unique **`ghl_contact_id`** (one deal per contact; a returning lead updates it rather than duplicating), owner Jeremy, source `Advertising`, value A$0. Stage driven by which funnel step fired (see below). **`deal_info`** holds the lead's survey/form answers.
+
+### Survey answers → `deal_info`
+
+GHL's webhook auto-sends only standard contact fields, **not** the survey answers (those are contact custom fields). To capture them, add each answer as a **custom-data row** in the GHL webhook (key = label, value = the survey field merge tag) — same place as `secret`. The endpoint bundles every `customData` row except `secret`/`stage` into the `deal_info` text attribute as humanised `Label: value` lines (e.g. `Goals: Grow my brand`). Written on create; on refire it refreshes only when the call carries customData (never wiped by a blank refire).
 
 ### GHL payload shape (real, captured)
 

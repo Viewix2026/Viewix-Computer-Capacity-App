@@ -14,7 +14,7 @@ process.env.ATTIO_API_KEY = "test-attio-key";
 
 const mod = await import("./ghl-lead-webhook.js");
 const handler = mod.default;
-const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName } = mod;
+const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName, buildDealInfo } = mod;
 
 function mockRes() {
   return {
@@ -94,6 +94,23 @@ test("flattenGhlBody: customData merges to top level", () => {
   assert.equal(flattenGhlBody({ stage: "Lead", customData: { stage: "Won" } }).stage, "Lead");
   // tolerates missing/none customData
   assert.equal(flattenGhlBody({ email: "a@b.com" }).email, "a@b.com");
+});
+
+test("buildDealInfo: bundles survey rows, skips secret/stage, humanises keys", () => {
+  const info = buildDealInfo({
+    secret: "s", stage: "Meeting Booked",
+    goals: "Grow my brand", monthly_budget: "$5k", businessType: "E-commerce",
+  });
+  assert.equal(info, "Goals: Grow my brand\nMonthly Budget: $5k\nBusiness Type: E-commerce");
+});
+
+test("buildDealInfo: empty/blank rows dropped; nothing → empty string", () => {
+  assert.equal(buildDealInfo({ secret: "s" }), "");          // only secret → nothing
+  assert.equal(buildDealInfo({ goals: "  ", note: "" }), ""); // blanks dropped
+  assert.equal(buildDealInfo(null), "");
+  assert.equal(buildDealInfo(undefined), "");
+  assert.equal(buildDealInfo([{ goals: "x" }]), "");          // array → ignored
+  assert.equal(buildDealInfo({ goals: "Leads", n: 3 }), "Goals: Leads\nN: 3"); // non-string coerced
 });
 
 test("splitName: derives first/last from full_name when not provided", () => {
