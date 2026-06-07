@@ -54,7 +54,7 @@ const RoasCalculatorPublicView = lazy(() => import("./components/RoasCalculator"
 // identifier collision with the /clients/ work portal below; the export in
 // src/features/clientPortal stays as-is (no edits to that merged code).
 const AnalyticsClientPortal    = lazy(() => import("./features/clientPortal/ClientPortal").then(m => ({ default: m.ClientPortal })));
-const Nurture                  = lazy(() => import("./components/Nurture").then(m => ({ default: m.Nurture })));
+// Nurture tab sunset 2026-06-07 — UI unwired, component files + api/nurture-stage-webhook.js preserved. See render-block breadcrumb below to revive.
 const Users                    = lazy(() => import("./components/Users").then(m => ({ default: m.Users })));
 // /clients/ logged-in client work portal (PR #164).
 const ClientPortal             = lazy(() => import("./components/portal/ClientPortal").then(m => ({ default: m.ClientPortal })));
@@ -68,7 +68,6 @@ export default function App(){
   const[foundersTab,setFoundersTab]=useState("dashboard");
   const[resourceTab,setResourceTab]=useState("roas");
   const[saleTab,setSaleTab]=useState("payment");
-  const[nurtureTab,setNurtureTab]=useState("lapsed");
 
   // ─── Hash-based deep-linking ───────────────────────────────────────
   // Format: #<tool>[/<subTab>][/<recordId>]
@@ -577,7 +576,6 @@ export default function App(){
       {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
-      {isFounder&&<SideIcon icon="🌱" label="Nurture" active={tool==="nurture"} onClick={()=>setTool("nurture")}/>}
       {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {(isFounder||isLead)&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>{
         // Clear any leftover #projects/teamBoard or #projects/deliveries
@@ -814,8 +812,14 @@ export default function App(){
     {tool==="socialConnections"&&(isFounder||isLead)&&(<SocialConnections/>)}
     {tool==="preproduction"&&(isFounder||isLead)&&(<Preproduction role={role} isFounder={isFounder} dealProjects={projects} route={route.tool==="preproduction"?route:null}/>)}
 
-    {/* ═══ NURTURE — sequence hub (Lapsed Proposals + 5 stub sub-tabs) ═══ */}
-    {tool==="nurture"&&isFounder&&(<Nurture attioDeals={attioDeals} isFounder={isFounder} nurtureTab={nurtureTab} setNurtureTab={setNurtureTab} route={route.tool==="nurture"?route:null}/>)}
+    {/* ═══ NURTURE — SUNSET 2026-06-07 (large build, deprioritised; on roadmap to revive) ═══
+         Tab removed from the dashboard. Build fully preserved & reversible:
+           • Components dormant on disk: src/components/Nurture*.jsx (8 files)
+           • Backend still capturing: api/nurture-stage-webhook.js stamps /nurture/quotedAt/{dealId} on Attio "Quoted"
+         To revive: (1) re-add the lazy import near the other lazy() imports,
+                    (2) restore `const[nurtureTab,setNurtureTab]=useState("lapsed");`,
+                    (3) restore the 🌱 SideIcon in the sidebar,
+                    (4) restore the <Nurture .../> render block here. */}
 
     {/* ═══ RESOURCES ═══ */}
     {tool==="resources"&&(isFounder||role==="closer")&&(<>
