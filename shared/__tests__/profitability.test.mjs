@@ -9,6 +9,7 @@ import {
   recomputeRow,
   commissionFor,
   buildRollups,
+  isInternalProject,
   shootHoursByPersonForProject,
   EST_SHOOT_DAY_HOURS,
   MAX_SHOOT_DAYS,
@@ -473,6 +474,35 @@ test("enrichment: two blank projects sharing a deal id via attioCompanyId FK => 
   assert.ok(perProject["p1"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
   assert.ok(perProject["p2"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
   assert.equal(rollups.totals.dealValue, 0);
+});
+
+// ── internal Viewix projects are excluded entirely ───────────────────
+test("isInternalProject: matches clientName 'Viewix' case/space-insensitively, not real clients", () => {
+  assert.equal(isInternalProject({ clientName: "Viewix" }), true);
+  assert.equal(isInternalProject({ clientName: "  viewix " }), true);
+  assert.equal(isInternalProject({ clientName: "Hola Health" }), false);
+  assert.equal(isInternalProject({ clientName: "" }), false);
+  assert.equal(isInternalProject({}), false);
+  assert.equal(isInternalProject(null), false);
+});
+
+test("computeProfitability: Viewix's own internal project is excluded from rows AND totals", () => {
+  const projects = {
+    "client-1": { id: "client-1", clientName: "Acme", projectName: "Client Job", dealValue: 5000 },
+    "viewix-1": { id: "viewix-1", clientName: "Viewix", projectName: "Founder Video", dealValue: null },
+  };
+  const timeLogs = withHour(projects); // both log an hour — internal still dropped
+  const { perProject, rollups } = computeProfitability({
+    projects, timeLogs, laborCosts: RATES,
+    costInputs: { "client-1": { crew: 0 } },
+    commissionInputs: { "client-1": { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
+    commissionPlans: PLANS,
+  });
+  assert.ok(perProject["client-1"], "real client project kept");
+  assert.equal(perProject["viewix-1"], undefined, "internal Viewix project excluded from rows");
+  // internal project never contributes to incompleteCount or any total
+  assert.equal(rollups.incompleteCount, 0);
+  assert.equal(rollups.completeCount, 1);
 });
 
 // ── rollups: totals exclude incomplete rows ──────────────────────────

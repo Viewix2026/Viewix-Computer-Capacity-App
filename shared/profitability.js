@@ -84,6 +84,17 @@ export function keepProjectRow(row) {
   return num(row.loggedHours) > 0 || !!row.duplicateTaskId;
 }
 
+// Viewix's OWN internal projects (BTS, founder content, internal sandboxes,
+// admin placeholders like "Leave") carry clientName "Viewix" and have no client
+// deal — they are cost-only, never revenue. Excluded from the margin instrument
+// entirely (founder call) so the view shows only real client work. There is no
+// `internal` flag on project records; clientName is the only signal. Applied in
+// computeProfitability so these never reach a row OR consume an Attio deal claim.
+const INTERNAL_CLIENT_NAMES = new Set(["viewix"]);
+export function isInternalProject(p) {
+  return !!p && INTERNAL_CLIENT_NAMES.has(String(p.clientName || "").trim().toLowerCase());
+}
+
 // "HH:MM" -> minutes since midnight, or null if malformed.
 function hhmmToMin(s) {
   if (typeof s !== "string") return null;
@@ -395,6 +406,7 @@ export function computeProfitability({
   const attioClaimCounts = new Map();
   for (const p of Object.values(projects || {})) {
     if (!p || typeof p !== "object" || !p.id) continue;
+    if (isInternalProject(p)) continue; // internal work claims no deal
     const m = resolveDealValue(p, dealIndex);
     if (m && m.value > 0 && m.dealId) {
       attioClaimCounts.set(m.dealId, (attioClaimCounts.get(m.dealId) || 0) + 1);
@@ -440,6 +452,7 @@ export function computeProfitability({
   const perProject = {};
   for (const p of Object.values(projects || {})) {
     if (!p || typeof p !== "object" || !p.id) continue;
+    if (isInternalProject(p)) continue; // Viewix's own cost-only work, not revenue
 
     // Sold-for amount. The project's OWN value wins when present (captured
     // for THIS project, zero matching risk). Attio only fills a blank, and

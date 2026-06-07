@@ -19,7 +19,7 @@ import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { fbListenSafe, fbSet } from "../firebase";
 import { pct, fmtCur } from "../utils";
 import { DEF_EDS } from "../config";
-import { recomputeRow, buildRollups, keepProjectRow, WARNINGS } from "../../shared/profitability.js";
+import { recomputeRow, buildRollups, keepProjectRow, isInternalProject, WARNINGS } from "../../shared/profitability.js";
 
 const PL_LABEL = {
   metaAds: "Meta Ads",
@@ -150,7 +150,11 @@ export function FoundersProfitability() {
     () => Object.entries(profitability)
       .filter(([k]) => k !== "_rollups")
       .map(([, r]) => r)
-      .filter((r) => r && typeof r === "object"),
+      .filter((r) => r && typeof r === "object")
+      // Drop Viewix's own internal projects immediately (matches the cron's
+      // computeProfitability exclusion) so they vanish before the next rollup,
+      // not just after it. Rows carry clientName, so the same check applies.
+      .filter((r) => !isInternalProject(r)),
     [profitability]
   );
   const rows = useMemo(
