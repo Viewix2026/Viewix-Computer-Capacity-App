@@ -13,6 +13,8 @@ import {
   summariseByCategory,
   summariseOverall,
   filterFactsByDays,
+  weekStartKey,
+  buildWeeklySeries,
 } from "../src/timeLogStats.js";
 
 // ─── helpers ───
@@ -215,6 +217,62 @@ test("filterFactsByDays scopes by lastLogDate relative to a ref date", () => {
   const recent = filterFactsByDays(facts, 30, "2026-06-07");
   assert.deepEqual(recent.map((f) => f.taskId), ["a"]);
   assert.equal(filterFactsByDays(facts, 0, "2026-06-07").length, 2); // 0 → unfiltered
+});
+
+test("weekStartKey returns the UTC Monday of the week and is stable across the week", () => {
+  const mon = weekStartKey("2026-05-06"); // a Wednesday
+  assert.equal(new Date(mon + "T00:00:00Z").getUTCDay(), 1, "is a Monday");
+  // every day Mon..Sun of that week maps to the same Monday
+  for (const d of ["2026-05-04", "2026-05-05", "2026-05-06", "2026-05-10"]) {
+    assert.equal(weekStartKey(d), mon);
+  }
+  assert.notEqual(weekStartKey("2026-05-11"), mon); // next week
+  assert.equal(weekStartKey("garbage"), null);
+});
+
+test("buildWeeklySeries: continuous weeks, per-category averages, null gaps", () => {
+  const idx = new Map([
+    ["v1", { status: "done", videoType: "Live Action", parentName: "A: 1" }],
+    ["v2", { status: "done", videoType: "Live Action", parentName: "A: 2" }],
+    ["v3", { status: "done", videoType: "Starter Pack - Social Media", parentName: "B: 3" }],
+  ]);
+  const logs = {
+    ed1: {
+      "2026-05-05": { v1: { secs: SECS(2), stage: "edit" } },   // wk 05-04 Corporate
+      "2026-05-06": { v2: { secs: SECS(4), stage: "edit" } },   // wk 05-04 Corporate
+      "2026-05-19": { v3: { secs: SECS(1), stage: "edit" } },   // wk 05-18 Social (skips 05-11)
+    },
+  };
+  const { weeks, series } = buildWeeklySeries(buildVideoFacts(logs, idx));
+  assert.deepEqual(weeks, ["2026-05-04", "2026-05-11", "2026-05-18"]); // continuous incl. empty middle week
+  const corp = series.find((s) => s.category === "Corporate Video");
+  const soc = series.find((s) => s.category === "Social Media");
+  assert.deepEqual(corp.points.map((p) => p.y), [3, null, null]); // (2+4)/2 in wk1, gaps after
+  assert.deepEqual(soc.points.map((p) => p.y), [null, null, 1]);
+  assert.equal(corp.points[0].n, 2);
+});
+
+test("editLastDate anchors on the last EDIT day even when a later revision exists", () => {
+  const idx = new Map([["v1", { status: "done", videoType: "Live Action", parentName: "A: 1" }]]);
+  const logs = {
+    ed1: {
+      "2026-05-05": { v1: { secs: SECS(2), stage: "edit" } },
+      "2026-05-07": { v1: { secs: SECS(1), stage: "edit" } },       // last EDIT
+      "2026-05-20": { v1: { secs: SECS(3), stage: "revisions" } },  // later revision
+    },
+  };
+  const f = buildVideoFacts(logs, idx).find((x) => x.taskId === "v1");
+  assert.equal(f.editLastDate, "2026-05-07");   // edit anchor, NOT the revision
+  assert.equal(f.lastLogDate, "2026-05-20");    // overall last log is the revision
+  // the weekly line anchors the video to the EDIT week (of 05-07 = Mon 05-04)
+  const { weeks } = buildWeeklySeries([f]);
+  assert.equal(weeks[0], weekStartKey("2026-05-07"));
+});
+
+test("buildWeeklySeries excludes revision-only videos (no edit anchor)", () => {
+  const idx = new Map([["v3", { status: "done", videoType: "", parentName: "A: 3" }]]);
+  const logs = { ed1: { "2026-05-05": { v3: { secs: SECS(4), stage: "revisions" } } } };
+  assert.deepEqual(buildWeeklySeries(buildVideoFacts(logs, idx)), { weeks: [], series: [] });
 });
 
 test("empty inputs never throw or divide by zero", () => {
