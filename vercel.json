@@ -89,6 +89,9 @@
     },
     "api/sync-shoot-calendar.js": {
       "maxDuration": 60
+    },
+    "api/ghl-lead-webhook.js": {
+      "maxDuration": 60
     }
   },
   "crons": [
