@@ -14,7 +14,7 @@ process.env.ATTIO_API_KEY = "test-attio-key";
 
 const mod = await import("./ghl-lead-webhook.js");
 const handler = mod.default;
-const { isUniqueConflict, validStage, isForwardStage } = mod;
+const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName } = mod;
 
 function mockRes() {
   return {
@@ -61,15 +61,49 @@ test("FINDING 3: array body with valid secret returns 400", async () => {
   assert.equal(res.statusCode, 400);
 });
 
-test("valid secret but blank required fields → 422 preflight hard-stop", async () => {
+test("GHL nests secret under customData → auth still passes (reaches preflight, not 401)", async () => {
+  // Real GHL shape: secret lives in customData, and the only required fields are
+  // contact_id + email. Missing those → 422 (NOT 401), proving the customData
+  // secret was accepted and company/business name is NOT required.
   const res = await run({
     method: "POST",
     headers: {},
-    body: { secret: "test-secret", opportunityId: "  ", businessName: "", email: "" },
+    body: { customData: { secret: "test-secret" }, contact_id: "  ", email: "" },
   });
   assert.equal(res.statusCode, 422);
   assert.ok(Array.isArray(res.body.missing));
-  assert.deepEqual(res.body.missing.sort(), ["businessName", "email", "opportunityId"]);
+  assert.deepEqual(res.body.missing.sort(), ["contact_id", "email"]);
+  assert.ok(!res.body.missing.includes("businessName")); // company is optional
+  assert.ok(!res.body.missing.includes("company_name"));
+});
+
+test("wrong customData secret still 401s", async () => {
+  const res = await run({
+    method: "POST", headers: {},
+    body: { customData: { secret: "nope" }, contact_id: "abc", email: "x@y.com" },
+  });
+  assert.equal(res.statusCode, 401);
+});
+
+test("flattenGhlBody: customData merges to top level", () => {
+  const flat = flattenGhlBody({ contact_id: "c1", email: "a@b.com", customData: { secret: "s", stage: "Meeting Booked" } });
+  assert.equal(flat.contact_id, "c1");
+  assert.equal(flat.secret, "s");
+  assert.equal(flat.stage, "Meeting Booked");
+  // top-level wins over customData on collision
+  assert.equal(flattenGhlBody({ stage: "Lead", customData: { stage: "Won" } }).stage, "Lead");
+  // tolerates missing/none customData
+  assert.equal(flattenGhlBody({ email: "a@b.com" }).email, "a@b.com");
+});
+
+test("splitName: derives first/last from full_name when not provided", () => {
+  assert.deepEqual(splitName("Con Koumoulas", "", ""), { first: "Con", last: "Koumoulas", full: "Con Koumoulas" });
+  assert.deepEqual(splitName("Madonna", "", ""), { first: "Madonna", last: "", full: "Madonna" });
+  assert.deepEqual(splitName("Mary Jane Watson", "", ""), { first: "Mary", last: "Jane Watson", full: "Mary Jane Watson" });
+  // explicit first/last are respected (not overwritten)
+  assert.deepEqual(splitName("ignored", "Jane", "Doe"), { first: "Jane", last: "Doe", full: "ignored" });
+  // empty everything
+  assert.deepEqual(splitName("", "", ""), { first: "", last: "", full: "" });
 });
 
 test("isUniqueConflict: 409 status is a conflict", () => {
