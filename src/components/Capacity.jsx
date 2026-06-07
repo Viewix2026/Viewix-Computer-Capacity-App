@@ -16,6 +16,7 @@ import {
 } from "../utils";
 import { Badge, Metric, NumIn, UBar, FChart } from "./UIComponents";
 import { Grid } from "./Grid";
+import { TimeLogAnalytics } from "./TimeLogAnalytics";
 import { VideoEmbed } from "./shared/VideoEmbed";
 
 // Relative-time string for the "Auto · updated Xh ago" caption.
@@ -528,7 +529,7 @@ export function Capacity({
           </div>
         </>)}
 
-        {capTab === "timelogs" && <TimeLogsView allTimeLogs={allTimeLogs} editors={editors} timeLogDate={timeLogDate} setTimeLogDate={setTimeLogDate} timeLogLoading={timeLogLoading} />}
+        {capTab === "timelogs" && <TimeLogsView allTimeLogs={allTimeLogs} editors={editors} projects={projects} timeLogDate={timeLogDate} setTimeLogDate={setTimeLogDate} timeLogLoading={timeLogLoading} />}
 
         {capTab === "lunch" && (
           <div style={{ maxWidth: 700, margin: "0 auto" }}>
@@ -640,7 +641,7 @@ export function Capacity({
 
 // ─── Time logs sub-view ───
 // Self-contained so the data transforms only run when this tab is mounted.
-function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeLogLoading }) {
+function TimeLogsView({ allTimeLogs, editors, projects, timeLogDate, setTimeLogDate, timeLogLoading }) {
   const fmtHM = (secs) => {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
@@ -650,6 +651,7 @@ function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeL
     if (secs > 0) return `${secs}s`;
     return "0m";
   };
+  const [subTab, setSubTab] = useState("daily");
   const editorMap = {};
   editors.forEach(ed => { editorMap[ed.id] = ed.name; });
 
@@ -709,6 +711,15 @@ function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeL
 
   return (
     <div>
+      <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3, marginBottom: 20, width: "fit-content" }}>
+        {[{ k: "daily", l: "Daily" }, { k: "analytics", l: "Analytics" }].map(t => (
+          <button key={t.k} onClick={() => setSubTab(t.k)} style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: subTab === t.k ? "var(--card)" : "transparent", color: subTab === t.k ? "var(--fg)" : "var(--muted)" }}>{t.l}</button>
+        ))}
+      </div>
+
+      {subTab === "analytics" && <TimeLogAnalytics allTimeLogs={allTimeLogs} projects={projects} />}
+
+      {subTab === "daily" && (<>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={datePrev} style={NB}>&larr;</button>
@@ -821,6 +832,7 @@ function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeL
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }
