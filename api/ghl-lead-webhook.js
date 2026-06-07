@@ -50,9 +50,43 @@ const ATTIO_BASE = "https://api.attio.com/v2";
 
 // Jeremy's Attio workspace_member_id — Deal owner (actor-reference, required).
 const OWNER_MEMBER_ID = "e90aec93-f56e-4f28-8df8-065c63ab1a2d";
-const DEAL_STAGE = "Lead";        // status attr, written by title string
+const DEAL_STAGE = "Lead";        // status attr, written by title string; default on create
 const DEAL_SOURCE = "Advertising"; // select attr
 const PERSON_CONTACT_TYPE = "Potential Customer"; // only set on NEW people
+
+// Deal pipeline stages in pipeline order (from the live Attio schema). The rank
+// drives FORWARD-ONLY stage moves: a webhook may advance a deal (e.g. STEP 2
+// "Meeting Booked" lifts a "Lead"), but may NEVER pull it backwards — a deal the
+// sales team moved to Quoted/Won, or a repeated STEP 2 reminder, can't regress.
+const STAGE_RANK = {
+  "Lead": 1,
+  "Meeting Booked": 2,
+  "Quoted": 3,
+  "On Hold": 4,
+  "Won": 5,
+  "Lost": 6,
+};
+
+// Validate a requested stage title against the known pipeline; unknown → null
+// (treated as "no stage requested" rather than writing garbage to Attio).
+export function validStage(title) {
+  const t = String(title || "").trim();
+  return Object.prototype.hasOwnProperty.call(STAGE_RANK, t) ? t : null;
+}
+
+// Pull a deal's current stage title out of an Attio record's values.
+function dealStageTitle(record) {
+  const s = record?.values?.stage;
+  const first = Array.isArray(s) ? s[0] : s;
+  return first?.status?.title ?? first?.title ?? null;
+}
+
+// Should we move `current` → `requested`? Only when strictly forward.
+export function isForwardStage(current, requested) {
+  const c = STAGE_RANK[current] ?? 0;
+  const r = STAGE_RANK[requested] ?? 0;
+  return r > c;
+}
 
 const SLACK_CHANNEL = process.env.SLACK_SCHEDULE_CHANNEL_ID;
 const SLACK_TOKEN = process.env.SLACK_SCHEDULE_BOT_TOKEN;
@@ -138,7 +172,8 @@ async function createPerson({ firstName, lastName, fullName, email, phone, compa
   return id;
 }
 
-// Look up the single deal carrying this unique ghl_opportunity_id (null = none).
+// Look up the single deal carrying this unique ghl_opportunity_id. Returns
+// { id, stage } so callers can make a forward-only stage decision, or null.
 async function queryDealByOpp(opportunityId) {
   const r = await attioFetch("POST", "/objects/deals/records/query", {
     filter: { ghl_opportunity_id: opportunityId },
@@ -148,15 +183,19 @@ async function queryDealByOpp(opportunityId) {
     const err = new Error(`Deal query failed (${r.status}): ${r.raw?.slice(0, 300)}`);
     err.step = "Deal"; err.statusCode = r.status; throw err;
   }
-  return r.json?.data?.[0]?.id?.record_id || null;
+  const rec = r.json?.data?.[0];
+  if (!rec?.id?.record_id) return null;
+  return { id: rec.id.record_id, stage: dealStageTitle(rec) };
 }
 
-// Create a brand-new deal with the lead defaults.
-async function createDeal({ opportunityId, dealName, companyId, personId }) {
+// Create a brand-new deal. `stage` defaults to Lead but a STEP-2 ("Meeting
+// Booked") call lands the deal at that stage directly if no Lead row existed
+// yet (e.g. STEP 1 never fired or failed).
+async function createDeal({ opportunityId, dealName, companyId, personId, stage }) {
   const values = {
     ghl_opportunity_id: opportunityId,
     name: dealName,
-    stage: DEAL_STAGE,
+    stage: stage || DEAL_STAGE,
     owner: [{ referenced_actor_type: "workspace-member", referenced_actor_id: OWNER_MEMBER_ID }],
     source: DEAL_SOURCE,
     value: 0,
@@ -174,17 +213,19 @@ async function createDeal({ opportunityId, dealName, companyId, personId }) {
   return id;
 }
 
-// Refresh an EXISTING deal without touching live pipeline state. Stage, value,
-// owner and source are deliberately left alone: once a human (or a later
-// automation) has moved this deal forward or set its value, a GHL refire / retry
-// / manual replay must never reset it to Lead/A$0. We only backfill the
-// company/person associations that may have been missing on the first run. If
-// there's nothing new to link, we leave the deal entirely as-is rather than
-// firing an empty PATCH.
-async function refreshDeal(recordId, { companyId, personId }) {
+// Refresh an EXISTING deal. value/owner/source are NEVER touched — a refire,
+// retry or replay must not reset them. Associations are backfilled if missing.
+// Stage is moved ONLY forward: `requestedStage` advances the deal iff it ranks
+// strictly higher than `currentStage` (so STEP 2 lifts a Lead to Meeting Booked,
+// but a repeated STEP 2 reminder, or a deal the team moved to Quoted/Won, is
+// left exactly where it is). If nothing changes, no PATCH is fired.
+async function refreshDeal(recordId, { companyId, personId, currentStage, requestedStage }) {
   const values = {};
   if (companyId) values.associated_company = [{ target_object: "companies", target_record_id: companyId }];
   if (personId) values.associated_people = [{ target_object: "people", target_record_id: personId }];
+  if (requestedStage && isForwardStage(currentStage, requestedStage)) {
+    values.stage = requestedStage;
+  }
   if (Object.keys(values).length === 0) return recordId;
 
   const r = await attioFetch("PATCH", `/objects/deals/records/${recordId}`, { data: { values } });
@@ -196,26 +237,28 @@ async function refreshDeal(recordId, { companyId, personId }) {
 }
 
 // Idempotent deal write keyed by the unique ghl_opportunity_id. The same
-// opportunity always maps to one deal, but a refire must NOT overwrite live
-// pipeline state — so we split create from update instead of a blind PUT-upsert:
-//   - no existing deal → create with the lead defaults
-//   - existing deal     → refresh associations only (stage/value/owner/source
-//                          preserved)
+// opportunity always maps to one deal; a refire must NOT overwrite live pipeline
+// state — so we split create from update instead of a blind PUT-upsert:
+//   - no existing deal → create at `stage` (default Lead)
+//   - existing deal     → backfill associations + advance stage FORWARD-ONLY
+//                          (value/owner/source always preserved)
 // The query→create window is closed by Attio's uniqueness on
 // ghl_opportunity_id: a racing second create hits a uniqueness conflict and we
 // recover by re-querying and refreshing the winner — the same idiom as the
 // person upsert above.
-async function upsertDeal({ opportunityId, dealName, companyId, personId }) {
+async function upsertDeal({ opportunityId, dealName, companyId, personId, stage }) {
   const existing = await queryDealByOpp(opportunityId);
   if (existing) {
-    return refreshDeal(existing, { companyId, personId });
+    return refreshDeal(existing.id, { companyId, personId, currentStage: existing.stage, requestedStage: stage });
   }
   try {
-    return await createDeal({ opportunityId, dealName, companyId, personId });
+    return await createDeal({ opportunityId, dealName, companyId, personId, stage });
   } catch (e) {
     if (isUniqueConflict(e)) {
       const requeried = await queryDealByOpp(opportunityId);
-      if (requeried) return refreshDeal(requeried, { companyId, personId });
+      if (requeried) {
+        return refreshDeal(requeried.id, { companyId, personId, currentStage: requeried.stage, requestedStage: stage });
+      }
     }
     throw e;
   }
@@ -359,6 +402,10 @@ export default async function handler(req, res) {
   const lastName = String(body.lastName || body.last_name || "").trim();
   const email = String(body.email || "").trim();
   const phone = String(body.phone || "").trim();
+  // Optional per-workflow stage. STEP 1 (opt-in) sends nothing → defaults to
+  // Lead on create. STEP 2 (booking confirmed) sends "Meeting Booked" →
+  // advances the deal forward-only. Unknown values are ignored, never written.
+  const requestedStage = validStage(body.stage);
   const dealName = `${fullName || email || "Lead"} - ${businessName || "Unknown"}`;
 
   // ── Phase 1.5 preflight hard-stop ──
@@ -432,7 +479,7 @@ export default async function handler(req, res) {
     }
 
     // ── Phase 4: Deal (upsert by unique ghl_opportunity_id) ──
-    dealId = await upsertDeal({ opportunityId, dealName, companyId, personId });
+    dealId = await upsertDeal({ opportunityId, dealName, companyId, personId, stage: requestedStage });
 
     await writeLog(opportunityId, {
       status: "synced", companyId, personId, dealId, companyStatus,

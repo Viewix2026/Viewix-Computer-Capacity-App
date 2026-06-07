@@ -14,7 +14,7 @@ process.env.ATTIO_API_KEY = "test-attio-key";
 
 const mod = await import("./ghl-lead-webhook.js");
 const handler = mod.default;
-const { isUniqueConflict } = mod;
+const { isUniqueConflict, validStage, isForwardStage } = mod;
 
 function mockRes() {
   return {
@@ -87,4 +87,38 @@ test("isUniqueConflict: unrelated errors are NOT misclassified as conflicts", ()
   assert.equal(isUniqueConflict({ statusCode: 500, message: "internal error" }), false);
   assert.equal(isUniqueConflict({}), false);
   assert.equal(isUniqueConflict(null), false);
+});
+
+test("validStage: only known pipeline stages pass; anything else → null", () => {
+  assert.equal(validStage("Lead"), "Lead");
+  assert.equal(validStage("Meeting Booked"), "Meeting Booked");
+  assert.equal(validStage(" Meeting Booked "), "Meeting Booked"); // trimmed
+  assert.equal(validStage("Won"), "Won");
+  assert.equal(validStage("Closed Won"), null); // not a real Attio stage
+  assert.equal(validStage(""), null);
+  assert.equal(validStage(undefined), null);
+  assert.equal(validStage("constructor"), null); // no prototype-key leakage
+});
+
+test("isForwardStage: advances forward only, never regresses", () => {
+  // STEP 2 lifts a Lead → Meeting Booked
+  assert.equal(isForwardStage("Lead", "Meeting Booked"), true);
+  // repeated STEP 2 reminder on an already-booked deal → no move
+  assert.equal(isForwardStage("Meeting Booked", "Meeting Booked"), false);
+  // deal the team advanced to Quoted/Won must NOT be pulled back to Meeting Booked
+  assert.equal(isForwardStage("Quoted", "Meeting Booked"), false);
+  assert.equal(isForwardStage("Won", "Meeting Booked"), false);
+  assert.equal(isForwardStage("Lost", "Meeting Booked"), false);
+  // a missing/unknown current stage is treated as rank 0 → any known stage advances
+  assert.equal(isForwardStage(null, "Lead"), true);
+  // unknown requested stage never advances
+  assert.equal(isForwardStage("Lead", "Bogus"), false);
+});
+
+test("STEP 1 refire (no/Lead stage) never advances an existing deal", () => {
+  // STEP 1 sends no stage → requestedStage resolves to null/Lead; an existing
+  // Lead (or anything further) is never moved by a STEP 1 refire.
+  assert.equal(isForwardStage("Lead", validStage(undefined)), false); // null requested
+  assert.equal(isForwardStage("Lead", "Lead"), false);
+  assert.equal(isForwardStage("Meeting Booked", "Lead"), false);
 });

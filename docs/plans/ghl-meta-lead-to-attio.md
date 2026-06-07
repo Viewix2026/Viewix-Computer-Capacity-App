@@ -1,6 +1,6 @@
 # GHL Meta Lead → Attio (middleware)
 
-**Owner:** Jeremy · **Endpoint:** `api/ghl-lead-webhook.js` · **Status:** built, pending Attio attribute + env var + validation
+**Owner:** Jeremy · **Endpoint:** `api/ghl-lead-webhook.js` · **Status:** built + hardened + two-step capture; pending `GHL_WEBHOOK_SECRET` env var + GHL workflow wiring
 
 ## What it does
 
@@ -8,7 +8,16 @@ A Meta ad lead lands in GoHighLevel as an Opportunity (pipeline `2-Step Funnel |
 
 1. **Company** — deduped by exact name search (search-then-create).
 2. **Person** — found by email; existing identity preserved, new emails created.
-3. **Deal** — upsert by unique `ghl_opportunity_id`, stage `Lead`, owner Jeremy, source `Advertising`, value A$0.
+3. **Deal** — keyed by unique `ghl_opportunity_id`, owner Jeremy, source `Advertising`, value A$0. Stage is driven by which funnel step fired (see below).
+
+## Two-step capture (Lead → Meeting Booked)
+
+The same opportunity flows through two GHL funnel steps, each wired to this endpoint with its own optional `stage` field:
+
+- **STEP 1 — opt-in** (Nurture workflow): sends **no** `stage` → the Deal is **created at `Lead`**.
+- **STEP 2 — booking confirmed**: sends `stage: "Meeting Booked"` → the **same** Deal is **advanced to `Meeting Booked`**.
+
+Stage moves are **forward-only** (ranked by pipeline order `Lead < Meeting Booked < Quoted < On Hold < Won < Lost`): a STEP 2 reminder firing repeatedly, or a deal the sales team has moved to Quoted/Won, can never be pulled backwards. `value`/`owner`/`source` are never touched on update. Unknown `stage` values are ignored (never written). If STEP 2 fires with no prior Deal (STEP 1 missed/failed), the Deal is created directly at `Meeting Booked`. Verified against the live API end-to-end (opt-in → booking → repeat reminder → manual Quoted → reminder cannot regress).
 
 ## Why middleware (not GHL → Attio direct)
 
@@ -51,7 +60,10 @@ Note: the Attio MCP write tools abstract value formats (owner = bare email, phon
 
 1. ~~**Attio:** create Deals attribute `ghl_opportunity_id` (Text, Unique).~~ **Done** — created via API, slug confirmed `ghl_opportunity_id`, `is_unique: true`.
 2. **Vercel env:** set `GHL_WEBHOOK_SECRET` (new shared secret). `ATTIO_API_KEY`, `FIREBASE_SERVICE_ACCOUNT`, `SLACK_SCHEDULE_CHANNEL_ID`, `SLACK_SCHEDULE_BOT_TOKEN` already exist.
-3. **GHL workflow:** Custom Webhook → `POST https://<dashboard-domain>/api/ghl-lead-webhook` with JSON body (Content-Type `application/json`) mapping merge tags to: `secret`, `opportunityId` (`{{opportunity.id}}`), `businessName` (`{{opportunity.business_name}}`), `fullName` (`{{contact.full_name}}`), `firstName`, `lastName`, `email` (`{{contact.email}}`), `phone` (`{{contact.phone}}`). Confirm each token resolves in a test send first.
+3. **GHL workflows (4 total: STEP 1 + STEP 2 per funnel — Meta Ads & Social Retainer):** each is a dedicated "→ Attio Sync" workflow (clone the funnel-step's Nurture workflow to inherit the exact trigger, strip its actions, add one Webhook action). Webhook → `POST https://planner.viewix.com.au/api/ghl-lead-webhook`, Content-Type `application/json`, body mapping: `secret`, `opportunityId` (`{{opportunity.id}}`), `businessName` (`{{opportunity.business_name}}`), `fullName` (`{{contact.full_name}}`), `firstName`, `lastName`, `email` (`{{contact.email}}`), `phone` (`{{contact.phone}}`).
+   - **STEP 1 (opt-in) workflows:** omit `stage` (Deal created at `Lead`).
+   - **STEP 2 (booking confirmed) workflows:** add `stage` = `Meeting Booked` (literal string) → advances the Deal forward-only.
+   - Confirm each merge tag resolves in a test send first. Both funnels share the same endpoint + secret; Deals never collide (keyed by `ghl_opportunity_id`).
 
 ## Validation (byte-exact, before go-live)
 
