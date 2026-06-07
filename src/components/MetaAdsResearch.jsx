@@ -1744,6 +1744,50 @@ function ScriptStep({ project, onPatch }) {
               </tbody>
             </table>
           </div>
+
+          {/* Client feedback checklist — the new Scripting flow previously
+              had no way to see or clear client comments (that lived only on
+              the legacy Preproduction page). Editing a commented cell now
+              auto-resolves it; this list shows what's left and lets the
+              producer tick off anything handled another way. Resolved items
+              drop off the client's share URL (public view hides them). */}
+          {project.clientFeedback && Object.values(project.clientFeedback).some(fb => fb && fb.text) && (() => {
+            const COL_LABELS = { hook: "Hook", explainPain: "Explain the Pain", results: "Results", offer: "The Offer", whyOffer: "Why the Offer", cta: "CTA", headline: "Meta Ad Headline", adCopy: "Meta Ad Copy" };
+            const labelFor = fb => fb.column === "_row" ? "Whole video" : fb.column === "section" ? "Section" : (COL_LABELS[fb.column] || fb.column || "");
+            const entries = Object.entries(project.clientFeedback).filter(([, fb]) => fb && fb.text);
+            const outstanding = entries.filter(([, fb]) => !fb.resolved).length;
+            return (
+              <div style={{ marginTop: 20, padding: 14, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>
+                  Client Feedback — {outstanding} outstanding
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12, lineHeight: 1.4 }}>
+                  Editing a commented cell auto-clears its comment. Tick anything you've handled another way (an approval, a regenerate) so it drops off the client's share link.
+                </div>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {entries.sort(([, a], [, b]) => (a.resolved ? 1 : 0) - (b.resolved ? 1 : 0)).map(([key, fb]) => (
+                    <div key={key} style={{ padding: "10px 14px", background: fb.resolved ? "var(--bg)" : "var(--card)", border: `1px solid ${fb.resolved ? "var(--border)" : "rgba(245,158,11,0.3)"}`, borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 10, opacity: fb.resolved ? 0.6 : 1 }}>
+                      <input type="checkbox" checked={!!fb.resolved}
+                        onChange={e => {
+                          fbSet(`/preproduction/metaAds/${project.id}/clientFeedback/${key}/resolved`, e.target.checked);
+                          fbSet(`/preproduction/metaAds/${project.id}/clientFeedback/${key}/resolvedAt`, e.target.checked ? new Date().toISOString() : null);
+                        }}
+                        style={{ marginTop: 3, cursor: "pointer", accentColor: "var(--accent)" }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 12, color: "var(--fg)", marginBottom: 2 }}>{fb.text}</div>
+                        <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                          {fb.cellId && <span>{fb.cellId}</span>}
+                          {labelFor(fb) && <span> / {labelFor(fb)}</span>}
+                          {fb.submittedAt && <span> / {new Date(fb.submittedAt).toLocaleDateString("en-AU")}</span>}
+                        </div>
+                      </div>
+                      {fb.resolved && <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 600 }}>Resolved</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </>
       )}
 
@@ -1801,6 +1845,31 @@ function RewriteModal({ project, target, onClose, onDone }) {
 
   const isRow = target.mode === "row";
 
+  // When a producer rewrites/edits the cell (or whole script) a client
+  // commented on, that comment is addressed — mark it resolved so it
+  // drops off the client's share URL (the public view hides resolved
+  // feedback). clientFeedback writes are open to any authed user in
+  // firebase-rules.json, so this client-side write is safe for the
+  // editor role even though scriptTable writes have to route through the
+  // API. The feedback key convention is set by the public view:
+  // `${rowId}_${column}` per cell, `${rowId}__row` for whole-video.
+  const resolveAddressedFeedback = () => {
+    const fb = project?.clientFeedback;
+    if (!fb) return;
+    const now = new Date().toISOString();
+    // A whole-script rewrite addresses every comment on that row (the
+    // row-level note + any per-cell comments); a cell edit only the one.
+    const keys = isRow
+      ? Object.keys(fb).filter(k => k.startsWith(`${target.rowId}_`))
+      : [`${target.rowId}_${target.column}`];
+    for (const key of keys) {
+      if (fb[key] && fb[key].text && !fb[key].resolved) {
+        fbSet(`/preproduction/metaAds/${project.id}/clientFeedback/${key}/resolved`, true);
+        fbSet(`/preproduction/metaAds/${project.id}/clientFeedback/${key}/resolvedAt`, now);
+      }
+    }
+  };
+
   const submitAi = async () => {
     if (!instruction.trim()) return;
     if (inFlightRef.current) return;
@@ -1818,6 +1887,7 @@ function RewriteModal({ project, target, onClose, onDone }) {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      resolveAddressedFeedback();
       if (isMountedRef.current) onDone?.();
     } catch (e) {
       if (isMountedRef.current) setError(e.message);
@@ -1857,6 +1927,7 @@ function RewriteModal({ project, target, onClose, onDone }) {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error + (d.detail ? ` — ${d.detail}` : ""));
+      resolveAddressedFeedback();
       if (isMountedRef.current) onDone?.();
     } catch (e) {
       if (isMountedRef.current) setError(e.message || String(e));

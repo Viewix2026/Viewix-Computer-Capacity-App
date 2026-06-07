@@ -169,15 +169,23 @@ export function PreproductionPublicView() {
   };
 
   const getFeedback = (cellId, column) => {
+    let fb = null;
     if (projectType === "socialOrganic") {
-      const fb = project?.preproductionDoc?.clientFeedback;
-      if (!fb) return null;
+      const all = project?.preproductionDoc?.clientFeedback;
+      if (!all) return null;
       // Producer-side writes path-style keys; we translate back here.
       const key = (cellId || "").replace(/\./g, "_");
-      return fb[key] || null;
+      fb = all[key] || null;
+    } else {
+      if (!project?.clientFeedback) return null;
+      fb = project.clientFeedback[`${cellId}_${column}`] || null;
     }
-    if (!project?.clientFeedback) return null;
-    return project.clientFeedback[`${cellId}_${column}`] || null;
+    // Once the producer addresses a comment (adjusts the scene, or ticks
+    // it off the feedback checklist) it's marked resolved. Hide it from
+    // the client's share view — otherwise the yellow "needs addressing"
+    // dot lingers on a comment that's already been actioned.
+    if (fb && fb.resolved) return null;
+    return fb;
   };
 
   if (loading) return (
