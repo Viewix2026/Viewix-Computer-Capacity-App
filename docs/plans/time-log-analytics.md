@@ -1,6 +1,14 @@
 # Time Log Analytics sub-tab
 
-A new **Analytics** sub-view inside the existing **Time Logs** tab (Capacity Planner).
+> **Update (post-ship):** moved to **Founders → Time Log Analytics** (out of Capacity / Time
+> Logs) and now **leads with a weekly line graph** — one line per category, Y = avg edit
+> hours/video, each video anchored on its edit-completion week. Weekly (not monthly) buckets
+> make a real line viable on the current ~6 weeks of data (monthly would be 2 dots). The
+> snapshot sections (KPIs, revision burden, five-number spread) remain below the chart as
+> supporting detail. New: `MultiSeriesLineChart.jsx` (hand-rolled SVG) + `buildWeeklySeries`
+> in `timeLogStats.js`. The "v2 trend" below is therefore now partly shipped.
+
+A new **Analytics** sub-view (originally inside the Time Logs tab; now under Founders).
 
 > **v1 is a SNAPSHOT, not a trend.** The original ask was "average time to edit a kind of
 > video over time" (line charts). A gate-zero coverage audit against real Firebase data

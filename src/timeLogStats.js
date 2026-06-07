@@ -118,7 +118,8 @@ export function buildVideoFacts(allTimeLogs, index) {
 
   const facts = [];
   for (const f of acc.values()) {
-    const idx = [...f.editDays].map(utcDay).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b);
+    const editDates = [...f.editDays].filter((k) => !Number.isNaN(utcDay(k))).sort();
+    const idx = editDates.map(utcDay);
     facts.push({
       taskId: f.taskId,
       category: f.category,
@@ -127,10 +128,71 @@ export function buildVideoFacts(allTimeLogs, index) {
       hasEdit: f.editSecs > 0,
       hasRevision: f.revisionSecs > 0,
       editSpanDays: idx.length ? idx[idx.length - 1] - idx[0] : 0,
+      // edit-completion anchor: the latest day this video had an edit log.
+      editLastDate: editDates.length ? editDates[editDates.length - 1] : null,
       lastLogDate: f.lastLogDate,
     });
   }
   return facts;
+}
+
+// Monday (UTC) of the week containing dateKey, as "YYYY-MM-DD". null if bad.
+export function weekStartKey(dateKey) {
+  const d = utcDay(dateKey);
+  if (Number.isNaN(d)) return null;
+  const dow = new Date(d * 86400000).getUTCDay(); // 0=Sun..6=Sat
+  return dayIdxToKey(d - ((dow + 6) % 7));
+}
+
+function dayIdxToKey(dayIdx) {
+  const dt = new Date(dayIdx * 86400000);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
+// Continuous list of Monday keys from startKey..endKey inclusive.
+function continuousWeeks(startKey, endKey) {
+  const start = utcDay(startKey);
+  const end = utcDay(endKey);
+  const out = [];
+  if (Number.isNaN(start) || Number.isNaN(end)) return out;
+  for (let d = start; d <= end; d += 7) out.push(dayIdxToKey(d));
+  return out;
+}
+
+// Weekly time series of AVERAGE edit hours per video, one series per category.
+// Each video is anchored on its edit-completion week (week of its last edit
+// log). Weekly (not monthly) because the dataset is only weeks deep — monthly
+// would be 1-2 points. Empty weeks emit null (a gap, not a fake 0).
+export function buildWeeklySeries(facts) {
+  const vids = facts.filter((f) => f.hasEdit && f.editLastDate);
+  if (!vids.length) return { weeks: [], series: [] };
+
+  const byWeekCat = new Map(); // `${week}|${cat}` -> {sum, n}
+  const weekSet = new Set();
+  const catN = new Map(); // category -> total videos (for ordering)
+  for (const f of vids) {
+    const wk = weekStartKey(f.editLastDate);
+    if (!wk) continue;
+    weekSet.add(wk);
+    catN.set(f.category, (catN.get(f.category) || 0) + 1);
+    const key = `${wk}|${f.category}`;
+    const cur = byWeekCat.get(key) || { sum: 0, n: 0 };
+    cur.sum += f.editSecs / 3600;
+    cur.n += 1;
+    byWeekCat.set(key, cur);
+  }
+  const sortedWeeks = [...weekSet].sort();
+  const weeks = continuousWeeks(sortedWeeks[0], sortedWeeks[sortedWeeks.length - 1]);
+  const categories = [...catN.keys()].sort((a, b) => catN.get(b) - catN.get(a) || a.localeCompare(b));
+  const series = categories.map((category) => ({
+    category,
+    n: catN.get(category),
+    points: weeks.map((wk, x) => {
+      const cell = byWeekCat.get(`${wk}|${category}`);
+      return { x, y: cell ? cell.sum / cell.n : null, n: cell ? cell.n : 0 };
+    }),
+  }));
+  return { weeks, series };
 }
 
 // ─── stats helpers ───

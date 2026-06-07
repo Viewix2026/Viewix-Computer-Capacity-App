@@ -10,6 +10,7 @@
 
 import { useState, useMemo } from "react";
 import { Metric } from "./UIComponents";
+import { MultiSeriesLineChart } from "./MultiSeriesLineChart";
 import { CAT_COLORS } from "../config";
 import { todayKey } from "../utils";
 import {
@@ -18,6 +19,7 @@ import {
   summariseByCategory,
   summariseOverall,
   filterFactsByDays,
+  buildWeeklySeries,
 } from "../timeLogStats";
 
 const PERIODS = [{ k: 0, label: "All" }, { k: 30, label: "Last 30d" }, { k: 90, label: "Last 90d" }];
@@ -33,14 +35,20 @@ const sectionSub = { fontSize: 11, color: "var(--muted)", margin: "0 0 14px" };
 export function TimeLogAnalytics({ allTimeLogs, projects }) {
   const [days, setDays] = useState(0);
 
-  const { cats, overall } = useMemo(() => {
+  const { cats, overall, weekly } = useMemo(() => {
     const idx = buildProjectIndex(projects);
     const all = buildVideoFacts(allTimeLogs || {}, idx);
     const f = filterFactsByDays(all, days, todayKey());
-    return { cats: summariseByCategory(f), overall: summariseOverall(f) };
+    // The line graph is the over-time view, so it always uses FULL history
+    // (the period toggle scopes only the snapshot sections below it).
+    return { cats: summariseByCategory(f), overall: summariseOverall(f), weekly: buildWeeklySeries(all) };
   }, [allTimeLogs, projects, days]);
 
-  const scopeLabel = `Native completed videos · ${fmtDate(overall.firstDate)} – ${fmtDate(overall.lastDate)} · n=${overall.n}`;
+  const editVideoN = weekly.series.reduce((s, x) => s + x.n, 0);
+  const chartLabel = weekly.weeks.length
+    ? `Full history · ${fmtDate(weekly.weeks[0])} – ${fmtDate(weekly.weeks[weekly.weeks.length - 1])} · ${editVideoN} edited videos`
+    : "Full history";
+  const snapshotLabel = `Completed videos · ${fmtDate(overall.firstDate)} – ${fmtDate(overall.lastDate)} · n=${overall.n}`;
 
   // headline: revision burden, worst (highest) first; n/a (null burden) sorts last.
   const burdenRows = [...cats].sort((a, b) => {
@@ -65,24 +73,23 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
     </div>
   );
 
-  if (!overall.n) {
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={sectionSub}>No completed-video time logs in this period.</div>
-          {periodBar}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
-      {/* Scope + period */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 11, color: "var(--muted)", ...mono }}>{scopeLabel}</div>
-        {periodBar}
+      {/* Period toggle (scopes the snapshot below; the chart is always full history) */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>{periodBar}</div>
+
+      {/* Edit-time trend — the line graph (always full history) */}
+      <div>
+        <h3 style={sectionTitle}>Average edit time per video, over time</h3>
+        <p style={sectionSub}>Weekly trend, one line per category — each video plotted in the week its edit finished. {chartLabel}.</p>
+        <MultiSeriesLineChart weeks={weekly.weeks} series={weekly.series} colorFor={colorFor} />
       </div>
+
+      {overall.n === 0 ? (
+        <div style={sectionSub}>No completed videos in the selected period — adjust the filter above for the snapshot breakdown.</div>
+      ) : (<>
+      {/* Snapshot scope */}
+      <div style={{ fontSize: 11, color: "var(--muted)", ...mono }}>{snapshotLabel}</div>
 
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
@@ -160,6 +167,7 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
           ))}
         </div>
       </div>
+      </>)}
     </div>
   );
 }

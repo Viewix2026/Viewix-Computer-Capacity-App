@@ -66,6 +66,7 @@ export default function App(){
   const[tool,setTool]=useState("home");
   const[capTab,setCapTab]=useState("dashboard");
   const[foundersTab,setFoundersTab]=useState("dashboard");
+  const[allTimeLogs,setAllTimeLogs]=useState({});
   const[resourceTab,setResourceTab]=useState("roas");
   const[saleTab,setSaleTab]=useState("payment");
 
@@ -342,6 +343,7 @@ export default function App(){
       // /foundersData is owner-tier data. Managers use /teamHome for
       // shared home-page fields and don't need the private founders node.
       if(isFounders)listen("/foundersData",data=>{if(data)setFoundersData(data);});
+      if(isFounders)listen("/timeLogs",data=>{if(data)setAllTimeLogs(data);});
       // /sales listener moved to useSalesSync — see src/sync/.
       listen("/salePricing",data=>{if(data)setSalePricing(data);});
       listen("/saleThankYou",data=>{if(data)setSaleThankYou(data);});
@@ -874,6 +876,7 @@ export default function App(){
         buyerJourney={buyerJourney} setBuyerJourney={setBuyerJourney}
         turnaround={turnaround} setTurnaround={setTurnaround}
         accounts={accounts}
+        allTimeLogs={allTimeLogs} projects={projects}
       />
     )}
 
