@@ -28,7 +28,7 @@ Jeremy already runs Vercel functions + Firebase for the Viewix Dashboard, so the
    - **1 match** → reuse.
    - **0 matches** → create, serialised by an RTDB transaction lock keyed on the normalised name (closes the common same-name concurrent-create race; degrades to plain create if lock infra is down — accepted TOCTOU for v1).
 5. **Person** — query by email first. Found → reuse untouched (never downgrade a Current Customer to "Potential Customer" or move them off their company). Not found → create with name/email/phone/company + `contact_type: Potential Customer`. Blank phone is omitted (empty `original_phone_number` 400s). **Concurrent same-new-email race:** if the create hits an email uniqueness conflict (409 / "value_already_exists"), re-query by email and continue — the winner's record exists, so this opportunity still gets its deal instead of being dropped.
-6. **Deal** — `PUT /objects/deals/records?matching_attribute=ghl_opportunity_id`. Keying on the unique opportunity id is the real refire guarantee: the same opportunity updates its one deal instead of spawning duplicates. Company/people refs included only when resolved.
+6. **Deal** — keyed by the unique `ghl_opportunity_id`, but **edit-safe, not a blind upsert**. Query by opp id first: no deal → `POST` create with lead defaults (stage `Lead`, owner Jeremy, source `Advertising`, value A$0); existing deal → `PATCH` that backfills only the company/person associations and **deliberately leaves `stage`/`value`/`owner`/`source` untouched**, so a refire/retry/replay can never reset a deal the sales team has advanced (e.g. Meeting Booked / A$5000) back to Lead/A$0. The query→create window is closed by Attio's uniqueness on `ghl_opportunity_id`: a racing second create hits a uniqueness conflict and recovers by re-querying + refreshing the winner (same idiom as the person path). Empirically verified: advancing a deal then refiring preserves stage + value.
 7. **Result log** — `synced` (ids + companyStatus + reusedPerson) or `failed` (step + statusCode + error). Failures also Slack-alert with everything resolved so far + opp id for replay.
 8. **Response / retry ownership** — on Attio failure we write the failure log **strictly**: if it succeeds we return 200 (suppress GHL retry; we own replay). If even the durable write fails (Firebase down/misconfigured) we return **502 so GHL retries** rather than silently lose the lead — the Slack alert flags the degraded path. GHL retry is safe because every step is idempotent (company lock+requery, person query-first + 409-recovery, deal upsert by unique key). Bad secret (401) and unusable payload (422) are the only other non-200s.
 
@@ -43,15 +43,15 @@ Jeremy already runs Vercel functions + Firebase for the Viewix Dashboard, so the
 | Deals `value` | currency AUD |
 | Companies `name` | text, **not unique** → search only, never an upsert matcher |
 | People `email_addresses` | unique |
-| `ghl_opportunity_id` | **does not exist yet — create it (Text, Unique)** |
+| `ghl_opportunity_id` | **created** — Text, Unique (api_slug `ghl_opportunity_id`, confirmed via API) |
 
 Note: the Attio MCP write tools abstract value formats (owner = bare email, phone = string, name = "Last, First"). GHL/this endpoint hit the **raw REST API**, which needs the object forms above. That's why the endpoint builds raw JSON, not MCP shapes.
 
 ## Prerequisites before go-live
 
-1. **Attio:** create Deals attribute `Ghl opportunity id` → type **Text**, **Unique = on**. Confirm api_slug is exactly `ghl_opportunity_id` (re-pull via MCP); if Attio slugs it differently, update the `matching_attribute` query string in `upsertDeal`.
+1. ~~**Attio:** create Deals attribute `ghl_opportunity_id` (Text, Unique).~~ **Done** — created via API, slug confirmed `ghl_opportunity_id`, `is_unique: true`.
 2. **Vercel env:** set `GHL_WEBHOOK_SECRET` (new shared secret). `ATTIO_API_KEY`, `FIREBASE_SERVICE_ACCOUNT`, `SLACK_SCHEDULE_CHANNEL_ID`, `SLACK_SCHEDULE_BOT_TOKEN` already exist.
-3. **GHL workflow:** Custom Webhook → `POST https://<dashboard-domain>/api/ghl-lead-webhook` with JSON body mapping merge tags to: `secret`, `opportunityId` (`{{opportunity.id}}`), `businessName` (`{{opportunity.business_name}}`), `fullName` (`{{contact.full_name}}`), `firstName`, `lastName`, `email` (`{{contact.email}}`), `phone` (`{{contact.phone}}`). Confirm each token resolves in a test send first.
+3. **GHL workflow:** Custom Webhook → `POST https://<dashboard-domain>/api/ghl-lead-webhook` with JSON body (Content-Type `application/json`) mapping merge tags to: `secret`, `opportunityId` (`{{opportunity.id}}`), `businessName` (`{{opportunity.business_name}}`), `fullName` (`{{contact.full_name}}`), `firstName`, `lastName`, `email` (`{{contact.email}}`), `phone` (`{{contact.phone}}`). Confirm each token resolves in a test send first.
 
 ## Validation (byte-exact, before go-live)
 

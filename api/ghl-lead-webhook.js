@@ -303,7 +303,7 @@ async function writeLog(opportunityId, data, { strict = false } = {}) {
 // Attio rejects a duplicate unique value (e.g. a second person with the same
 // email) — surfaced as 409 or a uniqueness message. We treat that as a
 // recoverable race, not a hard failure.
-function isUniqueConflict(e) {
+export function isUniqueConflict(e) {
   if (e?.statusCode === 409) return true;
   const m = (e?.message || "").toLowerCase();
   return m.includes("uniqueness") || m.includes("already exists")
@@ -333,11 +333,22 @@ export default async function handler(req, res) {
   if (!SECRET) return res.status(500).json({ error: "GHL_WEBHOOK_SECRET not configured" });
   if (!ATTIO_KEY) return res.status(500).json({ error: "ATTIO_API_KEY not configured" });
 
-  const body = req.body || {};
-  const providedSecret = body.secret || req.headers["x-ghl-secret"];
+  // Auth stays the first gate. Pull the secret defensively — req.body may be a
+  // string/array/undefined if a caller sends the wrong Content-Type and Vercel
+  // doesn't JSON-parse it, so guard the property access.
+  const bodyIsObject = req.body && typeof req.body === "object" && !Array.isArray(req.body);
+  const providedSecret = (bodyIsObject ? req.body.secret : undefined) || req.headers["x-ghl-secret"];
   if (providedSecret !== SECRET) {
     return res.status(401).json({ error: "Invalid or missing secret" });
   }
+
+  // Reject a non-object body (wrong Content-Type, raw string, array) cleanly
+  // instead of letting field extraction silently produce blanks and a confusing
+  // 422 "missing fields".
+  if (!bodyIsObject) {
+    return res.status(400).json({ error: "Invalid body — expected a JSON object" });
+  }
+  const body = req.body;
 
   // Normalise inbound fields (trim everything; GHL merge tags can carry stray
   // whitespace which would break the exact company name match).
