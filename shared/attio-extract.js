@@ -119,15 +119,37 @@ export function extractDealPersonId(d) {
   return cell?.target_record_id || cell?.record_id || null;
 }
 
+// All associated person record_ids on the deal, in Attio order. Where
+// extractDealPersonId returns null for 0 or >1 (so the backfill never guesses a
+// single contact), this exposes the full list so the carry-across backfill can
+// DISTINGUISH a zero-person deal (nothing to fetch) from a multi-person deal
+// (never auto-pick — surface for a human to choose) and stamp the project with
+// the reason it can't self-heal.
+export function extractDealPeopleIds(d) {
+  const v = d?.values || {};
+  const ref = v.associated_people;
+  const arr = Array.isArray(ref) ? ref : (ref ? [ref] : []);
+  const ids = arr
+    .map((cell) => cell?.target_record_id || cell?.record_id || null)
+    .filter(Boolean);
+  // Dedupe: Attio can repeat the same person reference in the cell. A deal with
+  // one real-but-duplicated contact must read as ONE person (so the backfill
+  // heals it) rather than two (which would wrongly stamp blocked_multi).
+  return [...new Set(ids)];
+}
+
 // --- person-record extractors (raw Attio person, fetched per-id) ---
 
 // First email on a person record. Attio email cells carry `email_address`
-// (fall through `value`). Returns null when the person has no email.
+// (fall through `value`). Returns null when the person has no email OR the
+// value isn't email-shaped — a malformed Attio address must never be written
+// as a client's send target (mirrors EMAIL_LIGHT in _email/getProjectContext.js).
 export function extractPersonEmail(person) {
   const v = person?.values || {};
   const cell = Array.isArray(v.email_addresses) ? v.email_addresses[0] : v.email_addresses;
-  const email = cell?.email_address || cell?.value;
-  return email ? String(email).trim() : null;
+  const raw = cell?.email_address || cell?.value;
+  const email = raw ? String(raw).trim() : "";
+  return (email.includes("@") && email.length < 255) ? email : null;
 }
 
 // First name from a person record. Attio personal-name cells carry `first_name`
@@ -241,6 +263,7 @@ export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
       value,
       numberOfVideos: extractNumberOfVideos(d),
       personId: extractDealPersonId(d),
+      peopleIds: extractDealPeopleIds(d),
       companyId: extractDealCompanyId(d),
       closeDate: extractDate(d),
     };

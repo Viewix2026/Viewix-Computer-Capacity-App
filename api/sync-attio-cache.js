@@ -19,7 +19,14 @@ import { buildDealIndex, resolveDeal, extractPersonEmail, extractPersonFirstName
 // fetches one person record per project that still lacks a client email; on the
 // first historical run hundreds could qualify, which would blow the cron's time
 // budget. Bound it and let the backlog converge over a few nights (idempotent).
-const MAX_PEOPLE_FETCH_PER_RUN = 50;
+// 100 (was 50): multi-person deals are no longer fetched (they're stamped for a
+// human), so the per-night single-person backlog is small — 100 + bounded
+// per-request timeouts stays well inside the 300s budget.
+const MAX_PEOPLE_FETCH_PER_RUN = 100;
+
+// Per-request timeout on each Attio person GET. Without it, one stalled request
+// could burn the whole run's 300s budget and silently skip the rest of the sync.
+const PERSON_FETCH_TIMEOUT_MS = 8000;
 
 const FB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -38,6 +45,16 @@ async function fbPatch(path, data) {
   const { err } = getAdmin();
   if (!err) return adminPatch(path, data);
   await fetch(`${FB_URL}${path}.json`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+}
+// Remove a project's contactBackfill diagnostic node (RTDB deletes a child set
+// to null). Called when the backfill heals a project's contact so the daily
+// digest never reads a stale blocked_* reason. Fails soft — best-effort cleanup.
+async function clearContactStamp(projectId) {
+  try {
+    await fbPatch(`/projects/${projectId}`, { contactBackfill: null });
+  } catch (e) {
+    console.warn(`clearContactStamp(${projectId}) failed:`, e.message);
+  }
 }
 
 function getStage(deal) {
@@ -287,6 +304,7 @@ export default async function handler(req, res) {
     let clientContactBackfilled = 0;
     let peopleFetched = 0;
     let clientContactRemaining = 0;
+    let contactBlocked = 0;
     try {
       // includeZeroValue: a footage-only ($0) Won deal still carries a real
       // video count + client, which the default value>0 gate would hide.
@@ -305,46 +323,68 @@ export default async function handler(req, res) {
       }
       const claimedOnce = (dealId) => dealId && dealClaimCounts.get(dealId) === 1;
 
-      // Pass A: numberOfVideos (write immediately) + collect clientContact work.
+      // Pass A: numberOfVideos (write immediately for a confident match) +
+      // classify every blank-contact project — either queue a single-person
+      // fetch, or STAMP why it can't self-heal so the daily digest can name the
+      // reason. We NEVER auto-pick a contact on a multi-person deal (no Attio
+      // primary-contact signal exists — guessing risks emailing a finance/
+      // assistant contact about a shoot).
       const needsContact = []; // { projectId, personId }
+      const contactStamps = new Map(); // projectId -> blocked_* reason
       for (const p of projects) {
         const m = resolveDeal(p, dealIndex);
-        if (!m || m.ambiguous || !claimedOnce(m.dealId)) continue;
-        const entry = m.entry;
+        const matched = m && !m.ambiguous && claimedOnce(m.dealId);
 
-        // numberOfVideos — only when the project's value is genuinely blank
+        // numberOfVideos — only on a confident match, only when genuinely blank
         // (== null catches null + undefined; an explicit 0 is "set", skipped).
-        if (p.numberOfVideos == null && entry.numberOfVideos != null) {
+        if (matched && p.numberOfVideos == null && m.entry.numberOfVideos != null) {
           // Re-read the leaf right before writing so a producer edit landing
           // between the snapshot and now is never clobbered.
           const live = await fbGet(`/projects/${p.id}/numberOfVideos`).catch(() => null);
           if (live == null) {
-            await fbPatch(`/projects/${p.id}`, { numberOfVideos: entry.numberOfVideos, updatedAt: lastSyncedAt });
+            await fbPatch(`/projects/${p.id}`, { numberOfVideos: m.entry.numberOfVideos, updatedAt: lastSyncedAt });
             numberOfVideosBackfilled++;
           }
         }
 
-        // clientContact email — queue the deal's single associated person
-        // (entry.personId is null for zero/>1-person deals, so we never guess).
+        // clientContact — only act when the email is genuinely blank.
         const emailBlank = !((p.clientContact?.email || "").trim());
-        if (emailBlank && entry.personId) {
-          needsContact.push({ projectId: p.id, personId: entry.personId });
+        if (!emailBlank) continue;
+
+        if (!matched) {
+          // Couldn't tie this project to a single Won deal — can't self-heal.
+          contactStamps.set(p.id, (m && m.ambiguous) ? "blocked_ambiguous" : "blocked_no_deal");
+          continue;
+        }
+
+        const peopleIds = Array.isArray(m.entry.peopleIds) ? m.entry.peopleIds : [];
+        if (peopleIds.length === 1) {
+          needsContact.push({ projectId: p.id, personId: peopleIds[0] });
+        } else if (peopleIds.length === 0) {
+          contactStamps.set(p.id, "blocked_zero");  // deal has no person attached in Attio
+        } else {
+          contactStamps.set(p.id, "blocked_multi"); // >1 contact — a human must pick
         }
       }
 
-      // Fetch distinct people, bounded + per-id isolated so one failure skips
-      // only that person and never writes a partial/wrong address.
+      // Fetch distinct people, bounded + per-id isolated + per-request timeout
+      // so one slow/failed fetch skips only that person and never burns the
+      // run's time budget or writes a partial/wrong address.
       const personCache = new Map(); // personId -> { email, firstName } | null
       const distinctPersonIds = [...new Set(needsContact.map(n => n.personId))];
       const toFetch = distinctPersonIds.slice(0, MAX_PEOPLE_FETCH_PER_RUN);
+      const fetchedIds = new Set(toFetch);
       clientContactRemaining = Math.max(0, distinctPersonIds.length - toFetch.length);
       for (const pid of toFetch) {
         try {
-          const pr = await fetch(`https://api.attio.com/v2/objects/people/records/${pid}`, { headers });
-          if (!pr.ok) { personCache.set(pid, null); continue; }
+          const pr = await fetch(`https://api.attio.com/v2/objects/people/records/${pid}`, {
+            headers,
+            signal: AbortSignal.timeout(PERSON_FETCH_TIMEOUT_MS),
+          });
+          if (!pr.ok) { personCache.set(pid, null); peopleFetched++; continue; }
           const pj = await pr.json();
           const person = pj?.data || null;
-          const email = person ? extractPersonEmail(person) : null;
+          const email = person ? extractPersonEmail(person) : null; // validated inside extractPersonEmail
           if (!email) { personCache.set(pid, null); peopleFetched++; continue; }
           personCache.set(pid, { email, firstName: person ? extractPersonFirstName(person) : null });
           peopleFetched++;
@@ -354,18 +394,36 @@ export default async function handler(req, res) {
       }
 
       // Pass B: leaf-patch ONLY the still-blank child fields (re-read right
-      // before so a producer edit is never clobbered). A person with no email
-      // leaves the project blank rather than writing a fake address.
+      // before so a producer edit is never clobbered). A single-person deal
+      // whose person has no usable email is stamped; a person we didn't reach
+      // this run (cap or timeout) is left UNSTAMPED so the next run retries
+      // cleanly instead of showing a misleading reason.
       for (const { projectId, personId } of needsContact) {
         const resolved = personCache.get(personId);
-        if (!resolved || !resolved.email) continue;
+        if (!resolved || !resolved.email) {
+          if (fetchedIds.has(personId)) contactStamps.set(projectId, "blocked_person_no_email");
+          continue;
+        }
         const live = (await fbGet(`/projects/${projectId}/clientContact`).catch(() => null)) || {};
         const patch = {};
         if (!((live.email || "").trim())) patch.email = resolved.email;
         if (!((live.firstName || "").trim()) && resolved.firstName) patch.firstName = resolved.firstName;
-        if (Object.keys(patch).length === 0) continue;
+        if (Object.keys(patch).length === 0) {
+          contactStamps.delete(projectId); // already filled by a producer — healed
+          await clearContactStamp(projectId); // drop any stale blocked_* node
+          continue;
+        }
         await fbPatch(`/projects/${projectId}/clientContact`, patch);
         clientContactBackfilled++;
+        contactStamps.delete(projectId); // healed — no blocker to report
+        await clearContactStamp(projectId); // drop any stale blocked_* node
+      }
+
+      // Persist the diagnostic stamps so the daily digest can say WHY a
+      // still-blank project isn't self-healing. Additive, leaf-patched.
+      for (const [projectId, status] of contactStamps) {
+        await fbPatch(`/projects/${projectId}/contactBackfill`, { status, checkedAt: lastSyncedAt });
+        contactBlocked++;
       }
     } catch (carryErr) {
       console.error("carry-across backfill error:", carryErr);
@@ -423,6 +481,7 @@ export default async function handler(req, res) {
         clientContact: clientContactBackfilled,
         peopleFetched,
         clientContactRemaining,
+        contactBlocked,
       },
       lastSyncedAt,
     });

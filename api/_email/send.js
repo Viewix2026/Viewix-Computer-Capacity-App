@@ -55,14 +55,18 @@ const PENDING_TTL_MS = 60 * 1000; // stale-lock cutoff
 // a missing invite logs a warning, never breaks the cron.
 const PROD_MGMT_CHANNEL_ID = process.env.SLACK_PROD_MGMT_CHANNEL_ID || "C0AEX112NP9";
 
-async function postProdAlert(text) {
+// channelId defaults to prod-management. Callers that want a different
+// channel (e.g. daily-09 routing its scheduling summaries to #scheduling)
+// pass an explicit id. Fails soft on a missing token/channel or a
+// non-member bot — an alert is never allowed to break a cron.
+async function postProdAlert(text, channelId = PROD_MGMT_CHANNEL_ID) {
   const botToken = process.env.SLACK_SCHEDULE_BOT_TOKEN;
-  if (!botToken || !PROD_MGMT_CHANNEL_ID) {
+  if (!botToken || !channelId) {
     console.warn("send.js postProdAlert: bot token / channel id missing — alert dropped:", text);
     return;
   }
   try {
-    await slackPostMessage({ channel: PROD_MGMT_CHANNEL_ID, text, botToken });
+    await slackPostMessage({ channel: channelId, text, botToken });
   } catch (e) {
     console.warn("send.js postProdAlert failed:", e.message);
   }
@@ -79,7 +83,14 @@ function newCounters() {
     skipped_inFlight: 0,
     skipped_killSwitch: 0,
     skipped_dryRun: 0,
-    skipped_missing: 0,
+    // The old single `skipped_missing` lumped three distinct, separately-
+    // actionable failures together, so the Slack nag couldn't say WHY a
+    // client didn't get emailed. Split by cause so every alert is self-
+    // describing (see postCronSummary). All three are "didn't go to plan".
+    skipped_no_email: 0,      // no/invalid client email — fix the project record
+    skipped_no_subject: 0,    // email had no subject — internal/template issue
+    skipped_bad_status: 0,    // shoot subtask not in a schedulable status
+    skipped_no_subtask_id: 0, // shoot subtask has no id — data repair needed
     failed: 0,
   };
 }
@@ -211,11 +222,11 @@ export async function send({ template, idempotencyKey, to, cc, subject, props, p
   // primary means we don't have a clearly addressed recipient, so we
   // skip rather than send a touchpoint to additional clients only.
   if (!to) {
-    if (c) c.skipped_missing++;
+    if (c) c.skipped_no_email++;
     return { state: "skipped", reason: "missing_to" };
   }
   if (!subject) {
-    if (c) c.skipped_missing++;
+    if (c) c.skipped_no_subject++;
     return { state: "skipped", reason: "missing_subject" };
   }
 
@@ -442,36 +453,42 @@ export async function send({ template, idempotencyKey, to, cc, subject, props, p
 // it speaks to the production-management channel (via postProdAlert),
 // never project-leads.
 //
-// "Didn't go to plan" = failures OR skipped_missing (Jeremy's call):
-//   - counters.failed       a send genuinely failed (render / no key /
-//                            Resend error / timeout)
-//   - counters.skipped_missing  a client did NOT get their email
-//                            because the project is missing client
-//                            email / core fields — a real, silent,
-//                            client-impacting gap a founder must see
-//                            and fix (add the missing contact info).
-// Every other counter (sent, skipped_alreadySent, skipped_inFlight,
-// skipped_dryRun, skipped_killSwitch) is normal/expected → silent.
-export async function postCronSummary(label, counters) {
-  const failed = counters?.failed || 0;
-  const skippedMissing = counters?.skipped_missing || 0;
-  if (failed === 0 && skippedMissing === 0) return; // healthy run — say nothing
+// "Didn't go to plan" = a send failed OR any client was skipped for a
+// fixable reason. Each reason is its OWN counter so the alert names the
+// exact cause instead of an opaque `skipped_missing=N` (a producer
+// reading the nag must know whether to add a client email, fix a shoot
+// status, or repair a malformed subtask). Every other counter (sent,
+// skipped_alreadySent, skipped_inFlight, skipped_dryRun,
+// skipped_killSwitch) is normal/expected → silent.
+//
+// channelId routes the post; defaults to prod-management. daily-09
+// passes the #scheduling id so its scheduling summaries land where the
+// team acts on them.
+const CRON_PROBLEM_REASONS = [
+  ["failed", "Sends failed — check the email log / Resend."],
+  ["skipped_no_email", "A client could not be emailed (no/invalid client email) — fix the project record."],
+  ["skipped_bad_status", "A shoot was skipped because its subtask status isn't schedulable — check the project."],
+  ["skipped_no_subtask_id", "A shoot was skipped because its subtask has no id — data repair needed on the project."],
+  ["skipped_no_subject", "An email was skipped with no subject — internal/template issue."],
+];
+export async function postCronSummary(label, counters, channelId) {
+  const present = CRON_PROBLEM_REASONS.filter(([k]) => (counters?.[k] || 0) > 0);
+  if (present.length === 0) return; // healthy run — say nothing
 
   // Lead with the problem counters; append the full breakdown for
-  // context so whoever's in prod-mgmt can see scope at a glance.
-  const problems = [];
-  if (failed > 0) problems.push(`failed=${failed}`);
-  if (skippedMissing > 0) problems.push(`skipped_missing=${skippedMissing}`);
+  // context, then one plain-English line per cause so the nag is
+  // self-describing.
+  const problems = present.map(([k]) => `${k}=${counters[k]}`);
   const fullBreakdown = Object.entries(counters)
     .filter(([, v]) => v > 0)
     .map(([k, v]) => `${k}=${v}`)
     .join(" · ");
+  const detail = present.map(([, msg]) => `> ${msg}`).join("\n");
   const text =
     `:warning: *${label}* did not go to plan — ${problems.join(" · ")}\n` +
     `> full: ${fullBreakdown}\n` +
-    `> ${failed > 0 ? "Sends failed — check the email log / Resend." : ""}` +
-    `${skippedMissing > 0 ? " A client could not be emailed (missing client email or shoot fields) — fix the project record." : ""}`;
-  await postProdAlert(text);
+    detail;
+  await postProdAlert(text, channelId);
 }
 
 // Cron pass crashed entirely (the try/catch in daily-09 around each

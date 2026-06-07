@@ -24,6 +24,7 @@ import { fingerprintFlag, FLAG_SEVERITY } from "../shared/scheduling/flags.js";
 import { inferStage } from "../shared/scheduling/stages.js";
 import { buildAwareness } from "../shared/scheduling/awareness.js";
 import { narrateBrain } from "./_scheduling-narrate.js";
+import { resolveProjectEmailRecipients } from "./_email/getProjectContext.js";
 
 export const config = { maxDuration: 60 };
 
@@ -78,12 +79,13 @@ async function runDailyDigest({ skipPost = false } = {}) {
   const today = todaySydney();
 
   // Read everything once. Heavy day, but it's once per day.
-  const [projectsRaw, editorsRaw, weekDataRaw, timeLogsRaw, salesRaw] = await Promise.all([
+  const [projectsRaw, editorsRaw, weekDataRaw, timeLogsRaw, salesRaw, accountsRaw] = await Promise.all([
     adminGet("/projects"),
     adminGet("/editors"),
     adminGet("/weekData"),
     adminGet("/timeLogs"),
     adminGet("/sales"),
+    adminGet("/accounts"),
   ]);
   const projects = projectsRaw || {};
   const editorsList = Array.isArray(editorsRaw) ? editorsRaw : Object.values(editorsRaw || {});
@@ -91,6 +93,7 @@ async function runDailyDigest({ skipPost = false } = {}) {
   const weekData = weekDataRaw || {};
   const timeLogs = timeLogsRaw || {};
   const sales = salesRaw || {};
+  const accounts = accountsRaw || {};
 
   // Compute videoTypeStats from /timeLogs and cache it. This is the
   // ONLY place that recomputes — every other surface reads the cache.
@@ -132,8 +135,13 @@ async function runDailyDigest({ skipPost = false } = {}) {
   // to the existing digest — doesn't gate on flags being clear.
   const customSalesAlerts = collectCustomSalesAlerts(sales, today);
 
+  // Projects that will hit a client-email pass soon but are missing the
+  // client contact — the proactive list that lets the team clear the
+  // recurring skipped_no_email nags before they fire. Additive.
+  const contactGaps = collectContactGaps(projects, accounts, today);
+
   const blocks = buildDigestBlocks({
-    today, flags, todayScheduled, todayUnassigned, narration, customSalesAlerts,
+    today, flags, todayScheduled, todayUnassigned, narration, customSalesAlerts, contactGaps,
   });
 
   if (skipPost) {
@@ -233,9 +241,105 @@ function fmtCurAU(amount) {
   return Number(amount).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 }
 
+// Statuses daily-09 will actually send a ShootTomorrow email for (mirrors
+// SHOOT_OK_STATUS in api/cron/daily-09.js). Kept in sync deliberately so the
+// contact-gap list reflects the cron's real send gate, not a looser filter.
+const DIGEST_SHOOT_OK_STATUS = new Set(["scheduled", "inProgress", "waitingClient"]);
+
+// Human reason for the digest, keyed off the nightly sync's contactBackfill
+// stamp (api/sync-attio-cache.js). Tells the team WHY a project isn't
+// self-healing so they know whether to add a contact in Attio or set it here.
+const CONTACT_BLOCK_REASON = {
+  blocked_zero: "deal has no contact in Attio",
+  blocked_multi: "multiple contacts on the deal — pick one",
+  blocked_person_no_email: "linked Attio contact has no email",
+  blocked_ambiguous: "couldn't match the deal confidently",
+  blocked_no_deal: "no matching Won deal found",
+};
+
+// Projects that WILL hit a client-email pass soon — a schedulable upcoming
+// shoot (Pass 1 gate) or an in-progress edit (Pass 3 gate) — but whose client
+// contact is incomplete. Mirrors daily-09's send conditions so every row is a
+// real, imminent skip, not a dead/archived project. Split into `blocked`
+// (no resolvable email → the send is skipped) and `firstNameOnly` (email is
+// fine but no first name → the email sends addressed to "there", cosmetic).
+//
+// `blocked` counts BOTH gate types (a no-email project nags every run until
+// fixed). `firstNameOnly` is restricted to UPCOMING SHOOTS only: a missing
+// first name is fixable before tomorrow's ShootTomorrow send, whereas an
+// in-progress edit's InEditSuite email has already gone out as "there" — so
+// re-listing it daily is noise with no possible action.
+function collectContactGaps(projects, accounts, today) {
+  const blocked = [];
+  const firstNameOnly = [];
+  for (const [pid, p] of Object.entries(projects || {})) {
+    if (!p || typeof p !== "object") continue;
+
+    let imminentSend = false;   // either gate — drives the blocked list
+    let imminentShoot = false;  // upcoming shoot only — drives firstNameOnly
+    for (const st of Object.values(p.subtasks || {})) {
+      if (!st || typeof st !== "object") continue;
+      if (st.stage === "shoot") {
+        if (st.id && st.startDate && st.startDate >= today && DIGEST_SHOOT_OK_STATUS.has(st.status)) {
+          imminentSend = true; imminentShoot = true; break;
+        }
+      } else if (st.stage === "edit" && st.status === "inProgress") {
+        imminentSend = true;
+        // keep scanning — a later shoot subtask may still set imminentShoot
+      }
+    }
+    if (!imminentSend) continue;
+
+    const { to } = resolveProjectEmailRecipients(p, accounts);
+    const firstName = (p.clientContact?.firstName || "").trim();
+    const base = {
+      clientName: p.clientName || "(unknown client)",
+      projectName: p.projectName || "(untitled)",
+      firstName,
+      email: to || "",
+    };
+    if (!to) {
+      blocked.push({ ...base, reason: CONTACT_BLOCK_REASON[p.contactBackfill?.status] || null });
+    } else if (!firstName && imminentShoot) {
+      firstNameOnly.push(base);
+    }
+  }
+  return { blocked, firstNameOnly };
+}
+
+// Block Kit section for the contact gaps. Two groups, blocking first. Capped
+// at 10 each with "+N more". Returns null when there's nothing to report.
+function buildContactGapsBlock(gaps) {
+  const blocked = gaps?.blocked || [];
+  const firstNameOnly = gaps?.firstNameOnly || [];
+  if (!blocked.length && !firstNameOnly.length) return null;
+
+  const lines = [];
+  if (blocked.length) {
+    lines.push(`:no_entry: *No client email — send blocked (${blocked.length})*`);
+    blocked.slice(0, 10).forEach(r => {
+      const why = r.reason ? ` · _${r.reason}_` : "";
+      lines.push(`• *${r.clientName}* — first: ${r.firstName || "—"} · email: MISSING${why} · ${r.projectName}`);
+    });
+    if (blocked.length > 10) lines.push(`• +${blocked.length - 10} more`);
+  }
+  if (firstNameOnly.length) {
+    if (lines.length) lines.push("");
+    lines.push(`:warning: *First name missing — sends as "there" (${firstNameOnly.length})*`);
+    firstNameOnly.slice(0, 10).forEach(r => {
+      lines.push(`• *${r.clientName}* — \`${r.email}\` · ${r.projectName}`);
+    });
+    if (firstNameOnly.length > 10) lines.push(`• +${firstNameOnly.length - 10} more`);
+  }
+  return {
+    type: "section",
+    text: { type: "mrkdwn", text: `:busts_in_silhouette: *Client contact gaps*\n${lines.join("\n")}` },
+  };
+}
+
 // ─── Block Kit builder ─────────────────────────────────────────────
 
-function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narration, customSalesAlerts }) {
+function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narration, customSalesAlerts, contactGaps }) {
   const headerDate = formatHeaderDate(today);
   const blocks = [
     {
@@ -252,6 +356,8 @@ function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narr
     });
     const salesBlock = buildCustomSalesBlock(customSalesAlerts);
     if (salesBlock) blocks.push(salesBlock);
+    const contactBlock = buildContactGapsBlock(contactGaps);
+    if (contactBlock) blocks.push(contactBlock);
     blocks.push(linkButtonsBlock());
     return blocks;
   }
@@ -300,6 +406,9 @@ function buildDigestBlocks({ today, flags, todayScheduled, todayUnassigned, narr
 
   const salesBlock = buildCustomSalesBlock(customSalesAlerts);
   if (salesBlock) blocks.push(salesBlock);
+
+  const contactBlock = buildContactGapsBlock(contactGaps);
+  if (contactBlock) blocks.push(contactBlock);
 
   blocks.push(linkButtonsBlock());
   return blocks;
