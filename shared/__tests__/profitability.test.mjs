@@ -131,11 +131,22 @@ test("recomputeRow: person logged time but no rate => missingLabourRate + counts
   assert.equal(row.complete, false);
 });
 
-test("recomputeRow: no cost-input entry => missingExternalCost (unknown != free)", () => {
+test("recomputeRow: no cost-input entry => externals $0, NO warning, does not block completeness", () => {
+  // Founder call 2026-06-07: a blank externals entry reads as $0, not "unknown".
+  // Shoot labour is auto-costed from the schedule; real externals are rare, so
+  // missing externals must NOT hold a row out of the totals.
   const base = { projectId: "p", dealValue: 5000, hoursByPerson: {} };
-  const row = recomputeRow(base, { laborCosts: {}, costInputs: {}, commissionInputs: { p: { dealType: "new", closerId: "p-closer" } }, commissionPlans: PLANS });
-  assert.ok(row.warnings.includes(WARNINGS.MISSING_EXTERNAL_COST));
-  assert.equal(row.complete, false);
+  const row = recomputeRow(base, {
+    laborCosts: {},
+    costInputs: {}, // no entry at all
+    commissionInputs: { p: { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
+    commissionPlans: PLANS,
+  });
+  assert.equal(row.externalCosts, 0);
+  assert.ok(!row.warnings.includes(WARNINGS.MISSING_EXTERNAL_COST));
+  // deal value known, no logged labour, commission fully assigned => COMPLETE
+  // even though no externals entry exists.
+  assert.equal(row.complete, true);
 });
 
 test("recomputeRow: saved cost entry of all zeros is a confirmation, no warning", () => {
