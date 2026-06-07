@@ -111,13 +111,27 @@ export function splitName(fullName, firstName, lastName) {
   return { first, last, full: full || [first, last].filter(Boolean).join(" ") };
 }
 
-// Survey/form answers ride in as extra rows under GHL's `customData` (the same
-// place as `secret`/`stage`). Bundle every other customData row into a tidy
-// "Label: value" block for the Attio Deal's `deal_info` text attribute. Keys
-// are humanised (snake/camel → spaced Title-ish) so "businessGoals" reads as
-// "Business Goals". Returns "" when there's nothing to capture.
-const DEAL_INFO_SKIP = new Set(["secret", "stage"]);
+// GHL's survey/form webhook puts the answers at the TOP LEVEL of the payload,
+// keyed by the question label (e.g. "Survey Question 2", "What's your biggest
+// goal?"), alongside the standard contact/plumbing fields. We capture the
+// answers into the Attio Deal's `deal_info` text attribute by DENY-listing the
+// known standard fields and skipping nested objects (location, workflow,
+// attributionSource, contact, user, customData) — so whatever survey questions
+// a given form sends are captured automatically, with no GHL-side mapping.
+const DEAL_INFO_DENY = new Set([
+  "secret", "stage",
+  "contact_id", "contactId", "contact", "opportunityId", "opportunity_id",
+  "email", "full_name", "fullName", "first_name", "firstName", "last_name", "lastName",
+  "phone", "company_name", "companyName", "businessName", "business_name",
+  "country", "date_created", "dateCreated", "full_address", "fullAddress",
+  "address1", "city", "state", "postal_code", "postalCode", "website", "date_of_birth",
+  "contact_type", "contactType", "contact_source", "contactSource", "source",
+  "tags", "timezone", "location", "workflow", "customData", "attributionSource", "user",
+]);
 function humaniseKey(k) {
+  // Keys that already read as a question (contain whitespace) are kept as-is;
+  // technical snake/camel keys are spaced + title-cased.
+  if (/\s/.test(k)) return String(k).trim().replace(/\s+/g, " ");
   return String(k)
     .replace(/[_-]+/g, " ")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -125,12 +139,13 @@ function humaniseKey(k) {
     .trim()
     .replace(/\b\w/g, c => c.toUpperCase());
 }
-export function buildDealInfo(rawCustomData) {
-  if (!rawCustomData || typeof rawCustomData !== "object" || Array.isArray(rawCustomData)) return "";
+export function buildDealInfo(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
   const lines = [];
-  for (const [k, v] of Object.entries(rawCustomData)) {
-    if (DEAL_INFO_SKIP.has(k)) continue;
-    const val = v == null ? "" : String(v).trim();
+  for (const [k, v] of Object.entries(body)) {
+    if (DEAL_INFO_DENY.has(k)) continue;
+    if (v == null || typeof v === "object") continue; // skip nested GHL objects/arrays
+    const val = String(v).trim();
     if (!val) continue;
     lines.push(`${humaniseKey(k)}: ${val}`);
   }
@@ -467,10 +482,9 @@ export default async function handler(req, res) {
   // defaults to Lead on create. STEP 2 sends "Meeting Booked" → advances the
   // deal forward-only. Unknown values are ignored, never written.
   const requestedStage = validStage(body.stage);
-  // Survey/form answers: any extra customData rows (beyond secret/stage) →
-  // bundled into the deal_info text attribute. Read from the ORIGINAL nested
-  // customData so we capture exactly the rows the GHL webhook added.
-  const dealInfo = buildDealInfo(req.body.customData);
+  // Survey/form answers arrive at the TOP LEVEL of GHL's payload (keyed by
+  // question label) — capture them into deal_info, deny-listing standard fields.
+  const dealInfo = buildDealInfo(body);
   const dealName = businessName
     ? `${fullName || email || "Lead"} - ${businessName}`
     : (fullName || email || "Lead");
