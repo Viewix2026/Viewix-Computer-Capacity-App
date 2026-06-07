@@ -1495,7 +1495,16 @@ async function handleGenerateBrandTruth(req, res) {
   if (project.attioCompanyId) {
     const accounts = await fbGet("/accounts");
     if (accounts) {
-      const acct = Object.values(accounts).find(a => a?.attioId === project.attioCompanyId);
+      // Match by Attio id OR companyName. attioId can be a deal id (webhook-
+      // created accounts) or a company id (UI "Sync with Attio"), while
+      // project.attioCompanyId always holds a deal id — so an id-only match
+      // silently misses UI-synced accounts. The name fallback (used everywhere
+      // else, e.g. resolveAccountForProject) restores their Attio context.
+      const acct = Object.values(accounts).find(a =>
+        (a?.attioId && a.attioId === project.attioCompanyId) ||
+        (a?.companyName && project.companyName &&
+          a.companyName.trim().toLowerCase() === project.companyName.trim().toLowerCase())
+      );
       if (acct) {
         const bits = [];
         if (acct.industry) bits.push(`Industry: ${acct.industry}`);
