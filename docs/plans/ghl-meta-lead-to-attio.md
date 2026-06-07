@@ -1,18 +1,31 @@
 # GHL Meta Lead → Attio (middleware)
 
-**Owner:** Jeremy · **Endpoint:** `api/ghl-lead-webhook.js` · **Status:** built + hardened + two-step capture; pending `GHL_WEBHOOK_SECRET` env var + GHL workflow wiring
+**Owner:** Jeremy · **Endpoint:** `api/ghl-lead-webhook.js` · **Status:** built + hardened + two-step capture + adapted to GHL's real survey payload (contact-keyed); pending `GHL_WEBHOOK_SECRET` env var + GHL workflow wiring
 
 ## What it does
 
-A Meta ad lead lands in GoHighLevel as an Opportunity (pipeline `2-Step Funnel | Discovery Sessions`, source `2-Step Funnel | Meta Ads`). A GHL Custom Webhook action POSTs the opportunity + contact to this endpoint, which maintains three linked Attio records:
+A Meta/Social lead completes a funnel **survey** in GoHighLevel. The workflow's **Webhook** action POSTs the **contact** to this endpoint (the survey trigger gives a contact, **not** an opportunity — there's no opportunity id). It maintains up to three linked Attio records:
 
-1. **Company** — deduped by exact name search (search-then-create).
-2. **Person** — found by email; existing identity preserved, new emails created.
-3. **Deal** — keyed by unique `ghl_opportunity_id`, owner Jeremy, source `Advertising`, value A$0. Stage is driven by which funnel step fired (see below).
+1. **Company** — deduped by exact name search (search-then-create). **Optional** — only when the payload carries a company name (GHL's survey trigger often doesn't).
+2. **Person** — found by email; existing identity preserved, new emails created. First/last derived from `full_name` when GHL sends only that.
+3. **Deal** — keyed by unique **`ghl_contact_id`** (one deal per contact; a returning lead updates it rather than duplicating), owner Jeremy, source `Advertising`, value A$0. Stage driven by which funnel step fired (see below).
+
+### GHL payload shape (real, captured)
+
+GHL sends the contact's standard fields at the **top level** (snake_case) and any custom rows nested under **`customData`**:
+
+```json
+{ "contact_id": "TaYkOp8F9qB0mzhZXW9M", "full_name": "Con Koumoulas",
+  "email": "lead@example.com", "phone": "+61419617571",
+  "company_name": "Water World Pty Ltd",
+  "customData": { "secret": "…", "stage": "Meeting Booked" } }
+```
+
+So the endpoint **flattens `customData`** and reads snake_case-first with camelCase fallback. The auth `secret` and the optional `stage` live under `customData`. **GHL auto-includes the contact fields** — the only custom-data rows you add in GHL are `secret` (always) and `stage` (STEP 2 only).
 
 ## Two-step capture (Lead → Meeting Booked)
 
-The same opportunity flows through two GHL funnel steps, each wired to this endpoint with its own optional `stage` field:
+The same contact flows through two GHL funnel steps, each wired to this endpoint with its own optional `stage` (under `customData`):
 
 - **STEP 1 — opt-in** (Nurture workflow): sends **no** `stage` → the Deal is **created at `Lead`**.
 - **STEP 2 — booking confirmed**: sends `stage: "Meeting Booked"` → the **same** Deal is **advanced to `Meeting Booked`**.
@@ -29,16 +42,16 @@ Jeremy already runs Vercel functions + Firebase for the Viewix Dashboard, so the
 
 ## Flow (as implemented)
 
-1. **Auth** — `secret` in body or `x-ghl-secret` header must equal `GHL_WEBHOOK_SECRET`. Else 401.
-2. **Preflight hard-stop** — `opportunityId`, `businessName`, `email` all required. Blank → Slack alert + 422 (no retry). Guards the *plumbing* (broken merge tag, manual opp in pipeline), since a blank value collapses records onto one junk row.
-3. **Durable "pending" log** written up front (`/ghlLeadSync/attempts/<hash(oppId)>`), so a mid-flight crash stays visible.
-4. **Company** — query by exact name (`limit:5`):
+1. **Auth** — `secret` from `customData.secret` (GHL's nesting), top-level `secret`, or `x-ghl-secret` header must equal `GHL_WEBHOOK_SECRET`. Else 401.
+2. **Preflight hard-stop** — `contact_id` + `email` required (company/business name is **optional**). Blank → Slack alert + 422 (no retry). Guards the *plumbing* (mis-nested customData, wrong trigger): a blank key collapses records (blank email → one empty person, blank contact id → one empty deal).
+3. **Durable "pending" log** written up front (`/ghlLeadSync/attempts/<hash(contact_id)>`, raw payload), so a mid-flight crash stays visible.
+4. **Company** — only if a company name is present; else skipped (`companyStatus: none`). When present, query by exact name (`limit:5`):
    - **2+ matches** → ambiguous. Slack alert with candidate Attio links; lead proceeds **without** a company link (never lost, never cross-linked). Manual link later.
    - **1 match** → reuse.
    - **0 matches** → create, serialised by an RTDB transaction lock keyed on the normalised name (closes the common same-name concurrent-create race; degrades to plain create if lock infra is down — accepted TOCTOU for v1).
-5. **Person** — query by email first. Found → reuse untouched (never downgrade a Current Customer to "Potential Customer" or move them off their company). Not found → create with name/email/phone/company + `contact_type: Potential Customer`. Blank phone is omitted (empty `original_phone_number` 400s). **Concurrent same-new-email race:** if the create hits an email uniqueness conflict (409 / "value_already_exists"), re-query by email and continue — the winner's record exists, so this opportunity still gets its deal instead of being dropped.
-6. **Deal** — keyed by the unique `ghl_opportunity_id`, but **edit-safe, not a blind upsert**. Query by opp id first: no deal → `POST` create with lead defaults (stage `Lead`, owner Jeremy, source `Advertising`, value A$0); existing deal → `PATCH` that backfills only the company/person associations and **deliberately leaves `stage`/`value`/`owner`/`source` untouched**, so a refire/retry/replay can never reset a deal the sales team has advanced (e.g. Meeting Booked / A$5000) back to Lead/A$0. The query→create window is closed by Attio's uniqueness on `ghl_opportunity_id`: a racing second create hits a uniqueness conflict and recovers by re-querying + refreshing the winner (same idiom as the person path). Empirically verified: advancing a deal then refiring preserves stage + value.
-7. **Result log** — `synced` (ids + companyStatus + reusedPerson) or `failed` (step + statusCode + error). Failures also Slack-alert with everything resolved so far + opp id for replay.
+5. **Person** — query by email first. Found → reuse untouched (never downgrade a Current Customer to "Potential Customer" or move them off their company). Not found → create with name (first/last derived from `full_name` if needed) / email / phone / company + `contact_type: Potential Customer`. Blank phone is omitted (empty `original_phone_number` 400s). **Concurrent same-new-email race:** if the create hits an email uniqueness conflict (409 / "value_already_exists"), re-query by email and continue — the winner's record exists, so the lead still gets its deal instead of being dropped.
+6. **Deal** — keyed by the unique `ghl_contact_id`, **edit-safe, not a blind upsert**. Query by contact id first: no deal → `POST` create (stage `Lead` or the requested stage, owner Jeremy, source `Advertising`, value A$0); existing deal → `PATCH` that backfills associations and advances the stage **forward-only**, deliberately leaving `value`/`owner`/`source` (and any non-forward stage) untouched — so a refire/retry/replay can never reset a deal the sales team advanced (e.g. Quoted / A$5000). The query→create window is closed by Attio's uniqueness on `ghl_contact_id`: a racing second create hits a uniqueness conflict and recovers by re-querying + refreshing the winner. Empirically verified end-to-end against live Attio.
+7. **Result log** — `synced` (ids + companyStatus + reusedPerson) or `failed` (step + statusCode + error). Failures also Slack-alert with everything resolved so far + contact id for replay.
 8. **Response / retry ownership** — on Attio failure we write the failure log **strictly**: if it succeeds we return 200 (suppress GHL retry; we own replay). If even the durable write fails (Firebase down/misconfigured) we return **502 so GHL retries** rather than silently lose the lead — the Slack alert flags the degraded path. GHL retry is safe because every step is idempotent (company lock+requery, person query-first + 409-recovery, deal upsert by unique key). Bad secret (401) and unusable payload (422) are the only other non-200s.
 
 ## Verified Attio facts (live schema, 2026)
@@ -52,18 +65,19 @@ Jeremy already runs Vercel functions + Firebase for the Viewix Dashboard, so the
 | Deals `value` | currency AUD |
 | Companies `name` | text, **not unique** → search only, never an upsert matcher |
 | People `email_addresses` | unique |
-| `ghl_opportunity_id` | **created** — Text, Unique (api_slug `ghl_opportunity_id`, confirmed via API) |
+| `ghl_contact_id` | **created** — Text, Unique (title "GHL Contact Id", api_slug `ghl_contact_id`, confirmed via API). Was `ghl_opportunity_id`; renamed since GHL's survey trigger sends a contact id, not an opportunity id. |
 
 Note: the Attio MCP write tools abstract value formats (owner = bare email, phone = string, name = "Last, First"). GHL/this endpoint hit the **raw REST API**, which needs the object forms above. That's why the endpoint builds raw JSON, not MCP shapes.
 
 ## Prerequisites before go-live
 
-1. ~~**Attio:** create Deals attribute `ghl_opportunity_id` (Text, Unique).~~ **Done** — created via API, slug confirmed `ghl_opportunity_id`, `is_unique: true`.
-2. **Vercel env:** set `GHL_WEBHOOK_SECRET` (new shared secret). `ATTIO_API_KEY`, `FIREBASE_SERVICE_ACCOUNT`, `SLACK_SCHEDULE_CHANNEL_ID`, `SLACK_SCHEDULE_BOT_TOKEN` already exist.
-3. **GHL workflows (4 total: STEP 1 + STEP 2 per funnel — Meta Ads & Social Retainer):** each is a dedicated "→ Attio Sync" workflow (clone the funnel-step's Nurture workflow to inherit the exact trigger, strip its actions, add one Webhook action). Webhook → `POST https://planner.viewix.com.au/api/ghl-lead-webhook`, Content-Type `application/json`, body mapping: `secret`, `opportunityId` (`{{opportunity.id}}`), `businessName` (`{{opportunity.business_name}}`), `fullName` (`{{contact.full_name}}`), `firstName`, `lastName`, `email` (`{{contact.email}}`), `phone` (`{{contact.phone}}`).
-   - **STEP 1 (opt-in) workflows:** omit `stage` (Deal created at `Lead`).
-   - **STEP 2 (booking confirmed) workflows:** add `stage` = `Meeting Booked` (literal string) → advances the Deal forward-only.
-   - Confirm each merge tag resolves in a test send first. Both funnels share the same endpoint + secret; Deals never collide (keyed by `ghl_opportunity_id`).
+1. ~~**Attio:** create the deal dedup attribute.~~ **Done** — `ghl_contact_id` (Text, Unique) created/renamed via API.
+2. **Vercel env:** set `GHL_WEBHOOK_SECRET` (shared secret; must match the `secret` custom-data value in every GHL workflow). `ATTIO_API_KEY`, `FIREBASE_SERVICE_ACCOUNT`, `SLACK_SCHEDULE_CHANNEL_ID`, `SLACK_SCHEDULE_BOT_TOKEN` already exist.
+3. **GHL workflows (4 total: STEP 1 + STEP 2 per funnel — Meta Ads & Social Retainer):** each is a dedicated "→ Attio Sync" workflow (clone the funnel-step's Nurture workflow to inherit the exact **Survey Submitted** trigger, strip its actions, add one **Webhook** action). Webhook → `POST https://planner.viewix.com.au/api/ghl-lead-webhook`.
+   - **Custom data is minimal** — GHL auto-includes the contact fields (`contact_id`, `full_name`, `email`, `phone`, `company_name`) in its standard payload, so you only add:
+     - `secret` = the `GHL_WEBHOOK_SECRET` value (**all** workflows)
+     - `stage` = `Meeting Booked` (**STEP 2 workflows only**; STEP 1 omits it → Deal stays at `Lead`)
+   - Test each with GHL's **"Test workflow"** (pick a real contact) — the survey trigger can't be fired by hand. Both funnels share the same endpoint + secret; Deals never collide (keyed by `ghl_contact_id`).
 
 ## Validation (byte-exact, before go-live)
 

@@ -1,36 +1,36 @@
 // api/ghl-lead-webhook.js
 // Middleware webhook: GoHighLevel Meta-ad lead → three linked Attio records.
 //
-// When a Meta ad lead lands in GHL as an Opportunity (pipeline
-// "2-Step Funnel | Discovery Sessions", source "2-Step Funnel | Meta Ads"),
-// the GHL workflow POSTs the opportunity + contact here. We then maintain in
-// Attio:
-//   1. Company  — deduped by exact name search (search-then-create)
+// When a Meta/Social lead completes a funnel survey in GHL, the workflow's
+// Webhook action POSTs the CONTACT here (the survey trigger gives a contact, not
+// an opportunity — there is no opportunity id). We then maintain in Attio:
+//   1. Company  — deduped by exact name search (search-then-create); OPTIONAL,
+//                 only when the payload carries a company name
 //   2. Person   — upsert by email; existing identity is PRESERVED (never
 //                 clobber an existing person's company/contact_type)
-//   3. Deal     — keyed by unique `ghl_opportunity_id`: created once with lead
-//                 defaults; refires only backfill associations and NEVER reset
-//                 live stage/value/owner/source (refire-safe, edit-safe)
+//   3. Deal     — keyed by unique `ghl_contact_id` (one deal per contact):
+//                 created at Lead; refires backfill associations and advance the
+//                 stage FORWARD-ONLY, never resetting live stage/value/owner/source
 //
 // Why middleware instead of GHL→Attio direct webhooks:
 //   - The Attio API key stays server-side (env), never in GHL.
 //   - GHL authenticates with a shared secret only.
 //   - We get a durable Firebase attempt log + raw-payload capture for replay.
-//   - We can branch on company match-count (GHL can't count array length) and
-//     protect existing person identity (GHL upsert can't conditionally write).
+//   - We adapt GHL's native payload shape and protect existing person identity
+//     (a GHL upsert can't conditionally write).
 //
-// Expected payload from the GHL Custom Webhook action (field names flexible —
-// map whatever your GHL merge tags emit into these keys):
+// GHL's workflow Webhook sends the contact's standard fields at the TOP LEVEL
+// (snake_case) and any custom rows nested under `customData`. Real payload:
 // {
-//   "secret": "<GHL_WEBHOOK_SECRET>",        // or header x-ghl-secret
-//   "opportunityId": "{{opportunity.id}}",
-//   "businessName":  "{{opportunity.business_name}}",
-//   "fullName":      "{{contact.full_name}}",
-//   "firstName":     "{{contact.first_name}}",   // optional
-//   "lastName":      "{{contact.last_name}}",     // optional
-//   "email":         "{{contact.email}}",
-//   "phone":         "{{contact.phone}}"          // optional, E.164 (+61…)
+//   "contact_id": "TaYkOp8F9qB0mzhZXW9M",   // → dedup key (ghl_contact_id)
+//   "full_name":  "Con Koumoulas",
+//   "email":      "lead@example.com",
+//   "phone":      "+61419617571",            // present when set
+//   "company_name": "Water World Pty Ltd",   // present when set → Company
+//   "customData": { "secret": "…", "stage": "Meeting Booked" }  // stage on STEP 2
 // }
+// (Auth secret + the optional stage live under customData; everything else is
+// read with snake_case-first, camelCase fallback.)
 //
 // Response: 200 { ok, status, companyId, personId, dealId, ... } once the
 // attempt is durably logged. We own retries via the Firebase log + Slack
@@ -86,6 +86,29 @@ export function isForwardStage(current, requested) {
   const c = STAGE_RANK[current] ?? 0;
   const r = STAGE_RANK[requested] ?? 0;
   return r > c;
+}
+
+// GHL's survey-trigger webhook nests custom data (secret, stage) under
+// `customData` and sends contact fields at the top level under its own snake_case
+// keys. Flatten so the handler can read everything from one object. Top-level
+// keys win over customData on collision (shouldn't happen, but be deterministic).
+export function flattenGhlBody(body) {
+  const custom = (body && typeof body.customData === "object" && body.customData) || {};
+  return { ...custom, ...body };
+}
+
+// GHL may send only `full_name` (no first/last). Attio's person name wants
+// first/last, so split on the last space when first/last aren't provided.
+export function splitName(fullName, firstName, lastName) {
+  const full = String(fullName || "").trim();
+  let first = String(firstName || "").trim();
+  let last = String(lastName || "").trim();
+  if (!first && !last && full) {
+    const parts = full.split(/\s+/);
+    first = parts.shift() || "";
+    last = parts.join(" ");
+  }
+  return { first, last, full: full || [first, last].filter(Boolean).join(" ") };
 }
 
 const SLACK_CHANNEL = process.env.SLACK_SCHEDULE_CHANNEL_ID;
@@ -172,11 +195,11 @@ async function createPerson({ firstName, lastName, fullName, email, phone, compa
   return id;
 }
 
-// Look up the single deal carrying this unique ghl_opportunity_id. Returns
+// Look up the single deal carrying this unique ghl_contact_id. Returns
 // { id, stage } so callers can make a forward-only stage decision, or null.
-async function queryDealByOpp(opportunityId) {
+async function queryDealByContact(contactId) {
   const r = await attioFetch("POST", "/objects/deals/records/query", {
-    filter: { ghl_opportunity_id: opportunityId },
+    filter: { ghl_contact_id: contactId },
     limit: 1,
   });
   if (!r.ok) {
@@ -191,9 +214,9 @@ async function queryDealByOpp(opportunityId) {
 // Create a brand-new deal. `stage` defaults to Lead but a STEP-2 ("Meeting
 // Booked") call lands the deal at that stage directly if no Lead row existed
 // yet (e.g. STEP 1 never fired or failed).
-async function createDeal({ opportunityId, dealName, companyId, personId, stage }) {
+async function createDeal({ contactId, dealName, companyId, personId, stage }) {
   const values = {
-    ghl_opportunity_id: opportunityId,
+    ghl_contact_id: contactId,
     name: dealName,
     stage: stage || DEAL_STAGE,
     owner: [{ referenced_actor_type: "workspace-member", referenced_actor_id: OWNER_MEMBER_ID }],
@@ -236,26 +259,26 @@ async function refreshDeal(recordId, { companyId, personId, currentStage, reques
   return recordId;
 }
 
-// Idempotent deal write keyed by the unique ghl_opportunity_id. The same
-// opportunity always maps to one deal; a refire must NOT overwrite live pipeline
-// state — so we split create from update instead of a blind PUT-upsert:
+// Idempotent deal write keyed by the unique ghl_contact_id. The same GHL
+// contact always maps to one deal (a returning lead updates it rather than
+// spawning a duplicate); a refire must NOT overwrite live pipeline state — so
+// we split create from update instead of a blind PUT-upsert:
 //   - no existing deal → create at `stage` (default Lead)
 //   - existing deal     → backfill associations + advance stage FORWARD-ONLY
 //                          (value/owner/source always preserved)
-// The query→create window is closed by Attio's uniqueness on
-// ghl_opportunity_id: a racing second create hits a uniqueness conflict and we
-// recover by re-querying and refreshing the winner — the same idiom as the
-// person upsert above.
-async function upsertDeal({ opportunityId, dealName, companyId, personId, stage }) {
-  const existing = await queryDealByOpp(opportunityId);
+// The query→create window is closed by Attio's uniqueness on ghl_contact_id:
+// a racing second create hits a uniqueness conflict and we recover by
+// re-querying and refreshing the winner — the same idiom as the person upsert.
+async function upsertDeal({ contactId, dealName, companyId, personId, stage }) {
+  const existing = await queryDealByContact(contactId);
   if (existing) {
     return refreshDeal(existing.id, { companyId, personId, currentStage: existing.stage, requestedStage: stage });
   }
   try {
-    return await createDeal({ opportunityId, dealName, companyId, personId, stage });
+    return await createDeal({ contactId, dealName, companyId, personId, stage });
   } catch (e) {
     if (isUniqueConflict(e)) {
-      const requeried = await queryDealByOpp(opportunityId);
+      const requeried = await queryDealByContact(contactId);
       if (requeried) {
         return refreshDeal(requeried.id, { companyId, personId, currentStage: requeried.stage, requestedStage: stage });
       }
@@ -318,10 +341,10 @@ async function resolveCompany(name) {
 }
 
 // ─── Firebase durable log ───────────────────────────────────────────────────
-// Keyed by opportunity id (RTDB-safe? GHL opportunity ids are alphanumeric —
-// hash to be safe against `. # $ / [ ]`). Stores raw payload for replay.
-function logKey(opportunityId) {
-  return crypto.createHash("sha256").update(String(opportunityId)).digest("hex").slice(0, 24);
+// Keyed by the GHL contact id, hashed to be RTDB-safe against `. # $ / [ ]`.
+// Stores the raw payload for replay.
+function logKey(id) {
+  return crypto.createHash("sha256").update(String(id)).digest("hex").slice(0, 24);
 }
 
 // `strict: true` makes the write throw on any failure (missing Firebase config
@@ -329,13 +352,13 @@ function logKey(opportunityId) {
 // retry (return 200) if we KNOW the lead is durably recorded for replay. If the
 // log can't be written, the lead must not silently vanish — we surface the
 // failure so the caller can let GHL retry instead.
-async function writeLog(opportunityId, data, { strict = false } = {}) {
+async function writeLog(id, data, { strict = false } = {}) {
   const { err } = getAdmin();
   if (err) {
     if (strict) throw new Error(`Durable log unavailable: ${err}`);
     return; // best-effort: no Firebase configured — don't fail the lead
   }
-  const path = `/ghlLeadSync/attempts/${logKey(opportunityId)}`;
+  const path = `/ghlLeadSync/attempts/${logKey(id)}`;
   if (strict) {
     await adminPatch(path, data); // let it throw — caller decides retry policy
     return;
@@ -378,9 +401,13 @@ export default async function handler(req, res) {
 
   // Auth stays the first gate. Pull the secret defensively — req.body may be a
   // string/array/undefined if a caller sends the wrong Content-Type and Vercel
-  // doesn't JSON-parse it, so guard the property access.
+  // doesn't JSON-parse it, so guard the property access. GHL's workflow webhook
+  // nests custom data under `customData`, so accept the secret there too.
   const bodyIsObject = req.body && typeof req.body === "object" && !Array.isArray(req.body);
-  const providedSecret = (bodyIsObject ? req.body.secret : undefined) || req.headers["x-ghl-secret"];
+  const providedSecret =
+    (bodyIsObject ? req.body.secret : undefined) ||
+    (bodyIsObject && req.body.customData && typeof req.body.customData === "object" ? req.body.customData.secret : undefined) ||
+    req.headers["x-ghl-secret"];
   if (providedSecret !== SECRET) {
     return res.status(401).json({ error: "Invalid or missing secret" });
   }
@@ -391,66 +418,74 @@ export default async function handler(req, res) {
   if (!bodyIsObject) {
     return res.status(400).json({ error: "Invalid body — expected a JSON object" });
   }
-  const body = req.body;
+  // GHL nests custom data (secret/stage) under `customData` and sends contact
+  // fields at the top level under its own keys — flatten to read uniformly.
+  const body = flattenGhlBody(req.body);
 
-  // Normalise inbound fields (trim everything; GHL merge tags can carry stray
-  // whitespace which would break the exact company name match).
-  const opportunityId = String(body.opportunityId || body.opportunity_id || "").trim();
-  const businessName = String(body.businessName || body.business_name || "").trim();
-  const fullName = String(body.fullName || body.full_name || "").trim();
-  const firstName = String(body.firstName || body.first_name || "").trim();
-  const lastName = String(body.lastName || body.last_name || "").trim();
+  // Normalise inbound fields against GHL's native payload (snake_case) with
+  // camelCase fallbacks so a future direct-mapped caller also works.
+  const contactId = String(body.contact_id || body.contactId || body.opportunityId || "").trim();
   const email = String(body.email || "").trim();
+  // Business/company name is OPTIONAL — GHL's survey trigger doesn't reliably
+  // send one. If present we dedupe/create a company; if absent the lead still
+  // becomes a Person + Deal, just without a company link.
+  const businessName = String(body.company_name || body.businessName || body.business_name || "").trim();
   const phone = String(body.phone || "").trim();
-  // Optional per-workflow stage. STEP 1 (opt-in) sends nothing → defaults to
-  // Lead on create. STEP 2 (booking confirmed) sends "Meeting Booked" →
-  // advances the deal forward-only. Unknown values are ignored, never written.
+  const { first: firstName, last: lastName, full: fullName } =
+    splitName(body.full_name || body.fullName, body.first_name || body.firstName, body.last_name || body.lastName);
+  // Optional per-workflow stage (from customData). STEP 1 sends nothing →
+  // defaults to Lead on create. STEP 2 sends "Meeting Booked" → advances the
+  // deal forward-only. Unknown values are ignored, never written.
   const requestedStage = validStage(body.stage);
-  const dealName = `${fullName || email || "Lead"} - ${businessName || "Unknown"}`;
+  const dealName = businessName
+    ? `${fullName || email || "Lead"} - ${businessName}`
+    : (fullName || email || "Lead");
 
   // ── Phase 1.5 preflight hard-stop ──
-  // Guards the PLUMBING, not the Meta form. A mistyped merge tag, a broken GHL
-  // mapping, or a manual opportunity dropped in this pipeline all produce a
-  // blank value — and a blank value collapses records (every blank-email lead
-  // overwrites one empty person, blank opp-id overwrites one empty deal, blank
-  // name makes one junk company). One check prevents all three.
+  // GHL's survey webhook always carries a contact_id + email; if either is blank
+  // the plumbing is broken (mis-nested customData, wrong trigger). A blank key
+  // would collapse records — blank email overwrites one empty person, blank
+  // contact id overwrites one empty deal — so stop rather than write junk.
   const missing = [];
-  if (!opportunityId) missing.push("opportunityId");
-  if (!businessName) missing.push("businessName");
+  if (!contactId) missing.push("contact_id");
   if (!email) missing.push("email");
   if (missing.length) {
     await slackAlert(
       `🚨 GHL→Attio lead rejected — missing required field(s): *${missing.join(", ")}*\n`
-      + `Business: ${businessName || "—"} · Email: ${email || "—"} · Opp ID: ${opportunityId || "—"}\n`
-      + `_Check the GHL workflow merge-tag mapping._`,
+      + `Email: ${email || "—"} · Contact ID: ${contactId || "—"}\n`
+      + `_Check the GHL workflow webhook (secret/contact mapping)._`,
     );
-    if (opportunityId) await writeLog(opportunityId, {
-      opportunityId, status: "rejected", reason: `missing: ${missing.join(",")}`,
-      payload: body, updatedAt: new Date().toISOString(),
+    if (contactId) await writeLog(contactId, {
+      contactId, status: "rejected", reason: `missing: ${missing.join(",")}`,
+      payload: req.body, updatedAt: new Date().toISOString(),
     });
     return res.status(422).json({ ok: false, error: "Missing required field(s)", missing });
   }
 
   // Durable "pending" record up front so a mid-flight crash is still visible/replayable.
-  await writeLog(opportunityId, {
-    opportunityId, businessName, email, fullName, status: "pending",
-    payload: body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  await writeLog(contactId, {
+    contactId, businessName, email, fullName, status: "pending",
+    payload: req.body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
 
   let companyId = null, personId = null, dealId = null, companyStatus = null;
   try {
-    // ── Phase 2: Company ──
-    const company = await resolveCompany(businessName);
-    companyStatus = company.status;
-    companyId = company.companyId;
-    if (company.status === "ambiguous") {
-      const links = company.candidateIds.map(id => `<${companyUrl(id)}|${id}>`).join("  ·  ");
-      await slackAlert(
-        `⚠️ GHL→Attio: *${company.candidateIds.length}+ companies* match "${businessName}" — manual link needed.\n`
-        + `Lead captured WITHOUT a company link (person + deal still created).\n`
-        + `Candidates: ${links}\n`
-        + `Contact: ${fullName} · ${email} · Opp ID: ${opportunityId}`,
-      );
+    // ── Phase 2: Company (only when a business name is present) ──
+    if (businessName) {
+      const company = await resolveCompany(businessName);
+      companyStatus = company.status;
+      companyId = company.companyId;
+      if (company.status === "ambiguous") {
+        const links = company.candidateIds.map(id => `<${companyUrl(id)}|${id}>`).join("  ·  ");
+        await slackAlert(
+          `⚠️ GHL→Attio: *${company.candidateIds.length}+ companies* match "${businessName}" — manual link needed.\n`
+          + `Lead captured WITHOUT a company link (person + deal still created).\n`
+          + `Candidates: ${links}\n`
+          + `Contact: ${fullName} · ${email} · Contact ID: ${contactId}`,
+        );
+      }
+    } else {
+      companyStatus = "none";
     }
 
     // ── Phase 3: Person (identity-protecting upsert) ──
@@ -478,10 +513,10 @@ export default async function handler(req, res) {
       }
     }
 
-    // ── Phase 4: Deal (upsert by unique ghl_opportunity_id) ──
-    dealId = await upsertDeal({ opportunityId, dealName, companyId, personId, stage: requestedStage });
+    // ── Phase 4: Deal (upsert by unique ghl_contact_id) ──
+    dealId = await upsertDeal({ contactId, dealName, companyId, personId, stage: requestedStage });
 
-    await writeLog(opportunityId, {
+    await writeLog(contactId, {
       status: "synced", companyId, personId, dealId, companyStatus,
       reusedPerson: !!existingPerson, error: null, updatedAt: new Date().toISOString(),
     });
@@ -505,8 +540,8 @@ export default async function handler(req, res) {
     // durable copy — it must contain everything a replay needs, not just ids.
     let logged = false;
     try {
-      await writeLog(opportunityId, {
-        opportunityId, businessName, email, fullName, payload: body,
+      await writeLog(contactId, {
+        contactId, businessName, email, fullName, payload: req.body,
         status: "failed", failedStep: step, statusCode,
         companyId, personId, dealId, error: e.message, updatedAt: new Date().toISOString(),
       }, { strict: true });
@@ -517,10 +552,10 @@ export default async function handler(req, res) {
 
     await slackAlert(
       `🚨 GHL→Attio sync failure — step: *${step}*${statusCode ? ` (HTTP ${statusCode})` : ""}\n`
-      + `Contact: ${fullName} · Business: ${businessName} · Email: ${email}\n`
+      + `Contact: ${fullName} · Business: ${businessName || "—"} · Email: ${email}\n`
       + `Resolved so far: company=${companyId || "—"} person=${personId || "—"} deal=${dealId || "—"}\n`
       + `Error: ${e.message}\n`
-      + `Opp ID: ${opportunityId} — ${logged ? "logged for replay." : "⚠️ DURABLE LOG FAILED — asking GHL to retry."}`,
+      + `Contact ID: ${contactId} — ${logged ? "logged for replay." : "⚠️ DURABLE LOG FAILED — asking GHL to retry."}`,
     );
 
     if (logged) {
