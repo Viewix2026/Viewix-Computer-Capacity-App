@@ -214,6 +214,10 @@ export default function App(){
 
   // Founders state
   const[foundersData,setFoundersData]=useState({});
+  // Goals live in their own /foundersGoals node, written via direct leaf
+  // writes from FoundersGoals.jsx (NOT the bulk-write loop) so no
+  // /foundersData metric writer can ever clobber them.
+  const[foundersGoals,setFoundersGoals]=useState({});
   const[foundersMetrics,setFoundersMetrics]=useState({});
   const[attioDeals,setAttioDeals]=useState(null);
   const[attioLoading,setAttioLoading]=useState(false);
@@ -343,6 +347,10 @@ export default function App(){
       // /foundersData is owner-tier data. Managers use /teamHome for
       // shared home-page fields and don't need the private founders node.
       if(isFounders)listen("/foundersData",data=>{if(data)setFoundersData(data);});
+      // data||{} (not if(data)) so deleting the last goal — which makes the
+      // node null — clears local state instead of leaving a stale goal on
+      // screen until reload.
+      if(isFounders)listen("/foundersGoals",data=>{setFoundersGoals(data||{});});
       if(isFounders)listen("/timeLogs",data=>{if(data)setAllTimeLogs(data);});
       // /sales listener moved to useSalesSync — see src/sync/.
       listen("/salePricing",data=>{if(data)setSalePricing(data);});
@@ -868,6 +876,7 @@ export default function App(){
     {tool==="founders"&&isFounders&&(
       <Founders
         foundersData={foundersData} setFoundersData={setFoundersData}
+        foundersGoals={foundersGoals} setFoundersGoals={setFoundersGoals}
         foundersMetrics={foundersMetrics} setFoundersMetrics={setFoundersMetrics}
         foundersTab={foundersTab} setFoundersTab={setFoundersTab}
         attioDeals={attioDeals} setAttioDeals={setAttioDeals}

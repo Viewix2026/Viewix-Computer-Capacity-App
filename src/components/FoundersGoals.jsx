@@ -1,7 +1,12 @@
 // FoundersGoals — sub-tab where the founder logs structured business
-// goals (target value + unit + deadline + notes). Goals are stored
-// at /foundersGoals/{goalId} via foundersData.goals — same write
-// pattern the rest of the Founders area already uses.
+// goals (target value + unit + deadline + notes). Goals live in their
+// OWN top-level RTDB node /foundersGoals/{goalId}, written via direct
+// leaf writes (fbSet) — NOT nested under /foundersData. This is
+// deliberate: /foundersData is rewritten as a whole blob by the
+// App.jsx bulk-write loop and patched by server jobs (webhook-deal-won,
+// sync-attio-cache), any of which would clobber a nested goals subtree.
+// A separate node + leaf writes makes that structurally impossible —
+// the same pattern /accounts, /sales, /deliveries, /projects use.
 //
 // On first open, if there's no goal whose source === "revenueTarget",
 // we auto-create one from the existing revenueTarget / currentRevenue
@@ -11,6 +16,7 @@
 // foundersData.revenueTarget field.
 
 import { useState, useEffect, useMemo } from "react";
+import { fbSet } from "../firebase";
 
 const UNIT_OPTIONS = [
   { value: "$",       label: "$ (currency)" },
@@ -49,8 +55,8 @@ const newGoal = () => ({
   updatedAt: new Date().toISOString(),
 });
 
-export function FoundersGoals({ foundersData, setFoundersData }) {
-  const goals = foundersData?.goals || {};
+export function FoundersGoals({ foundersGoals, setFoundersGoals, foundersData }) {
+  const goals = foundersGoals || {};
   const goalsList = useMemo(() =>
     Object.values(goals).filter(Boolean).sort((a, b) =>
       (a.deadline || "9999").localeCompare(b.deadline || "9999")
@@ -60,9 +66,15 @@ export function FoundersGoals({ foundersData, setFoundersData }) {
 
   // Auto-create the revenue-target goal once, derived from the
   // existing /foundersData.revenueTarget + currentRevenue fields.
-  // After this initial write, the goal lives in /foundersGoals and
-  // the producer can edit title / deadline / notes; the headline
-  // dashboard target still reads from foundersData.revenueTarget.
+  // The goal is persisted to /foundersGoals (its own node); the
+  // headline dashboard target still reads from foundersData.revenueTarget.
+  //
+  // Depends on revenueTarget (+ goalsList) rather than [] so it fires
+  // once the founders data actually loads — at mount foundersData is
+  // still {} and a []-dep effect would read an absent target and bail
+  // forever. The source === "revenueTarget" guard makes it idempotent:
+  // after the optimistic write goalsList updates, the guard trips, and
+  // the effect re-runs into a no-op (no double-create, no loop).
   useEffect(() => {
     if (!foundersData) return;
     const hasRevenueGoal = goalsList.some(g => g.source === "revenueTarget");
@@ -81,21 +93,23 @@ export function FoundersGoals({ foundersData, setFoundersData }) {
       notes: "Auto-created from the dashboard's Revenue Target. Editable like any other goal — the dashboard's right-hand number keeps reading the original /foundersData.revenueTarget field, so updating this goal's target also won't move the dashboard. Update the dashboard target separately if needed.",
       source: "revenueTarget",
     };
-    setFoundersData(p => ({ ...p, goals: { ...(p?.goals || {}), [auto.id]: auto } }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    setFoundersGoals(p => ({ ...(p || {}), [auto.id]: auto }));
+    fbSet("/foundersGoals/" + auto.id, auto);
+  }, [foundersData, goalsList, setFoundersGoals]);
 
   const upsert = (goal) => {
     const next = { ...goal, updatedAt: new Date().toISOString() };
-    setFoundersData(p => ({ ...p, goals: { ...(p?.goals || {}), [goal.id]: next } }));
+    setFoundersGoals(p => ({ ...(p || {}), [goal.id]: next }));
+    fbSet("/foundersGoals/" + goal.id, next);
   };
   const remove = (id) => {
     if (!window.confirm("Delete this goal?")) return;
-    setFoundersData(p => {
-      const g = { ...(p?.goals || {}) };
+    setFoundersGoals(p => {
+      const g = { ...(p || {}) };
       delete g[id];
-      return { ...p, goals: g };
+      return g;
     });
+    fbSet("/foundersGoals/" + id, null); // RTDB null = delete leaf
   };
   const addNew = () => {
     const g = newGoal();

@@ -3,7 +3,7 @@
 // The "Advisor" backend for the Founders tab. Two POST actions:
 //
 //   action: "runAnalysis"
-//     Reads /foundersData (north-stars + goals), /foundersMetrics
+//     Reads /foundersData (north-stars), /foundersGoals (goals), /foundersMetrics
 //     (12-month history), /attioCache (Attio deal data) and feeds a
 //     compact summary to Claude Opus 4.7. Saves the resulting
 //     briefing to /foundersBriefings/{id} and returns it.
@@ -143,7 +143,7 @@ function summariseAttioMonthly(attioCache) {
   return monthly;
 }
 
-function buildContext({ foundersData = {}, foundersMetrics = {}, attioCache = null }) {
+function buildContext({ foundersData = {}, foundersGoals = {}, foundersMetrics = {}, attioCache = null }) {
   const lines = [];
   const now = new Date();
   const ymKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -230,7 +230,8 @@ function buildContext({ foundersData = {}, foundersMetrics = {}, attioCache = nu
   }
 
   // ── Goals ──
-  const goals = Object.values(foundersData.goals || {}).filter(Boolean);
+  // Goals live in their own /foundersGoals node (not foundersData.goals).
+  const goals = Object.values(foundersGoals || {}).filter(Boolean);
   if (goals.length > 0) {
     lines.push("## Active goals");
     for (const g of goals) {
@@ -284,14 +285,16 @@ async function runAnalysis() {
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) throw new Error("ANTHROPIC_API_KEY not configured");
 
-  const [foundersData, foundersMetrics, attioCache] = await Promise.all([
+  const [foundersData, foundersGoals, foundersMetrics, attioCache] = await Promise.all([
     fbGet("/foundersData"),
+    fbGet("/foundersGoals"),
     fbGet("/foundersMetrics"),
     fbGet("/attioCache"),
   ]);
 
   const userContext = buildContext({
     foundersData: foundersData || {},
+    foundersGoals: foundersGoals || {},
     foundersMetrics: foundersMetrics || {},
     attioCache: attioCache || null,
   });
