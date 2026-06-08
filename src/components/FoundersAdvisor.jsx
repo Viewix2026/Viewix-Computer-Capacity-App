@@ -197,7 +197,7 @@ export function FoundersAdvisor() {
         <div>
           <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Advisor</div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2, lineHeight: 1.5, maxWidth: 640 }}>
-            Claude Opus 4.7 reads your dashboard insights, goals, and last 12 months of history, then writes a strategic briefing. Auto-runs every Monday and posts the executive summary to Slack; you can also run it on demand and re-post any past briefing.
+            Claude Opus 4.7 reads your dashboard insights, goals, and last 12 months of history, then writes a strategic briefing. Auto-runs every Sunday evening and posts the executive summary to Slack; you can also run it on demand and re-post any past briefing.
           </div>
         </div>
         <button onClick={runAnalysis} disabled={running}
