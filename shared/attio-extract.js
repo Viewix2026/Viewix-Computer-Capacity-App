@@ -285,7 +285,8 @@ export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
 //   { kind: "none" }            no index / blank name / no candidates
 //   { kind: "mismatch" }        single candidate whose KNOWN company disagrees
 //   { kind: "ambiguous" }       >1 candidate that company can't disambiguate
-//   { kind: "match", entry }    confident single match
+//   { kind: "match", entry, via } confident match; via "fk" (deal id) or "name".
+//                               resolveDealValue trusts ONLY via "fk" for revenue.
 function matchDealEntry(project, dealIndex) {
   if (!dealIndex || !dealIndex.byName) return { kind: "none" };
 
@@ -317,7 +318,7 @@ function matchDealEntry(project, dealIndex) {
   // wrong attach. (Codex round 2, Finding 1.)
   const fk = project?.attioDealId || project?.attioCompanyId || null;
   if (fk && dealIndex.byRecordId && dealIndex.byRecordId.has(fk)) {
-    return { kind: "match", entry: dealIndex.byRecordId.get(fk) };
+    return { kind: "match", entry: dealIndex.byRecordId.get(fk), via: "fk" };
   }
 
   const key = normName(project?.projectName);
@@ -332,31 +333,42 @@ function matchDealEntry(project, dealIndex) {
     // its company and the deal's (known) company differs. Then it's a
     // cross-client name collision: refuse (a confident wrong match is worse).
     if (cid && only.companyId && only.companyId !== cid) return { kind: "mismatch" };
-    return { kind: "match", entry: only };
+    return { kind: "match", entry: only, via: "name" };
   }
 
   // Multiple deals share this name — disambiguate by the project's company.
   if (cid) {
     const byCo = cands.filter((c) => c.companyId && c.companyId === cid);
-    if (byCo.length === 1) return { kind: "match", entry: byCo[0] };
+    if (byCo.length === 1) return { kind: "match", entry: byCo[0], via: "name" };
   }
 
   // Can't uniquely resolve — do NOT guess.
   return { kind: "ambiguous" };
 }
 
-// Resolve a project to its Won deal's value. Returns null when there is no
-// candidate at all (caller then leaves the project's own value / missing-value
-// handling); an object with value:null + ambiguous flag on a mismatch/tie; or
-// the value + dealId on a confident match. Contract unchanged from the original
-// (profitability.js depends on it byte-for-byte).
+// Resolve a project to its Won deal's value — from the Attio deal ID (foreign
+// key) ONLY. A name match is NOT trusted for revenue (see below), so it yields
+// no value. Returns null when there is no candidate (or only a name match);
+// { value:null, ambiguous } on a mismatch/tie; or { value, dealId } on a
+// confident deal-id match.
 export function resolveDealValue(project, dealIndex) {
   const m = matchDealEntry(project, dealIndex);
   switch (m.kind) {
     case "none":      return null;
     case "mismatch":  return { value: null, dealId: null, ambiguous: false };
     case "ambiguous": return { value: null, dealId: null, ambiguous: true };
-    default:          return { value: m.entry.value, dealId: m.entry.recordId, ambiguous: false };
+    case "match":
+      // Deal VALUE is sourced from the Attio deal ID (foreign key) ONLY. A name
+      // match is too weak to attach revenue: generic project names ("Brand
+      // Video", "Day in the life") collide across clients, so a single same-named
+      // Won deal could be a DIFFERENT client's — attaching wrong revenue and
+      // marking the row Complete (Codex round 3, HIGH). So a name match yields NO
+      // value; the row stays Incomplete for manual entry. Name matching still
+      // serves resolveDeal (contact / video-count backfill), where a wrong guess
+      // is harmless. Founder's call: rely on the deal id, not the name.
+      if (m.via !== "fk") return null;
+      return { value: m.entry.value, dealId: m.entry.recordId, ambiguous: false };
+    default:          return null;
   }
 }
 
@@ -366,7 +378,26 @@ export function resolveDealValue(project, dealIndex) {
 // deal (no candidate OR a cross-client name collision). Never guesses.
 export function resolveDeal(project, dealIndex) {
   const m = matchDealEntry(project, dealIndex);
-  if (m.kind === "match")     return { entry: m.entry, dealId: m.entry.recordId, ambiguous: false };
+  if (m.kind === "match")     return { entry: m.entry, dealId: m.entry.recordId, ambiguous: false, via: m.via };
   if (m.kind === "ambiguous") return { entry: null, dealId: null, ambiguous: true };
   return null; // none or mismatch -> no confident deal to backfill from
+}
+
+// The deal record ids a project could be CLAIMING, for the double-count guard in
+// computeProfitability — distinct from resolveDealValue (attaches a value, FK
+// only) and resolveDeal (backfill, one confident match). Returns the FK id when
+// it hits the index, else EVERY same-name Won-deal candidate. Counting every
+// candidate makes an ambiguous cross-client name claim conservatively consume
+// each deal it could be, so an FK sibling pointing at any of them is flagged
+// instead of doubling the sale. Over-counting is safe: the guard only blocks a
+// blank row's borrow (=> Incomplete), it never attaches a value.
+export function resolveDealClaims(project, dealIndex) {
+  if (!dealIndex || !dealIndex.byName) return [];
+  const fk = project?.attioDealId || project?.attioCompanyId || null;
+  if (fk && dealIndex.byRecordId && dealIndex.byRecordId.has(fk)) return [fk];
+  const key = normName(project?.projectName);
+  if (!key) return [];
+  const cands = dealIndex.byName.get(key);
+  if (!cands || !cands.length) return [];
+  return cands.map((c) => c.recordId).filter(Boolean);
 }

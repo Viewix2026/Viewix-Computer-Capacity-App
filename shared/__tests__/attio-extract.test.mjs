@@ -13,13 +13,14 @@ import {
   normName,
   buildDealIndex,
   resolveDealValue,
+  resolveDeal,
+  resolveDealClaims,
   parseVideoCount,
   extractNumberOfVideos,
   extractDealPersonId,
   extractDealPeopleIds,
   extractPersonEmail,
   extractPersonFirstName,
-  resolveDeal,
 } from "../attio-extract.js";
 
 let passed = 0;
@@ -130,7 +131,7 @@ test("buildDealIndex: SAME record id twice (cache dup) => ONE candidate, resolve
   ] };
   const idx = buildDealIndex(cache);
   assert.equal(idx.byName.get("highway upgrade film").length, 1);
-  const r = resolveDealValue({ projectName: "Highway Upgrade Film" }, idx);
+  const r = resolveDealValue({ projectName: "Highway Upgrade Film", attioCompanyId: "dup-1" }, idx);
   assert.equal(r.value, 9000);
   assert.equal(r.dealId, "dup-1");
   assert.equal(r.ambiguous, false);
@@ -159,22 +160,23 @@ const IDX = buildDealIndex({ data: [
   deal({ id: "d-brand-b", name: "Brand Video", value: 12000, companyId: "co-b" }),
 ] });
 
-test("resolveDealValue: unique name match returns value + dealId, not ambiguous", () => {
-  const r = resolveDealValue({ projectName: "Corporate video for Spanish translation" }, IDX);
-  assert.equal(r.value, 672);
-  assert.equal(r.dealId, "d-uniq");
-  assert.equal(r.ambiguous, false);
+test("resolveDealValue: a name-only match yields NO value (id-only — name is not trusted for revenue)", () => {
+  // Generic project names collide across clients, so a same-named Won deal could
+  // be a different client's. Value comes from the deal id (FK) only; a name match
+  // resolves to null so the row stays Incomplete for manual entry.
+  assert.equal(resolveDealValue({ projectName: "Corporate video for Spanish translation" }, IDX), null);
 });
 
-test("resolveDealValue: case/whitespace-insensitive match", () => {
-  const r = resolveDealValue({ projectName: "  corporate VIDEO for   spanish translation " }, IDX);
-  assert.equal(r.value, 672);
+test("resolveDeal: name match is case/whitespace-insensitive (backfill still name-matches)", () => {
+  // resolveDeal (contact / video-count backfill) still uses name matching, where a
+  // wrong guess is harmless — so the case/whitespace normalisation lives here now.
+  const r = resolveDeal({ projectName: "  corporate VIDEO for   spanish translation " }, IDX);
+  assert.equal(r.dealId, "d-uniq");
 });
 
-test("resolveDealValue: single match + MATCHING company still resolves", () => {
-  const r = resolveDealValue({ projectName: "Corporate video for Spanish translation", attioCompanyId: "co-ausimm" }, IDX);
-  assert.equal(r.value, 672);
-  assert.equal(r.dealId, "d-uniq");
+test("resolveDealValue: name + matching company STILL yields no value (only the deal id sources revenue)", () => {
+  // Even a real company id is only for disambiguation, never a revenue source.
+  assert.equal(resolveDealValue({ projectName: "Corporate video for Spanish translation", attioCompanyId: "co-ausimm" }, IDX), null);
 });
 
 test("resolveDealValue: single name match but project's company DISAGREES => no value (some other client's deal)", () => {
@@ -184,11 +186,11 @@ test("resolveDealValue: single name match but project's company DISAGREES => no 
   assert.equal(r.ambiguous, false);
 });
 
-test("resolveDealValue: name collision disambiguated by company id", () => {
-  const r = resolveDealValue({ projectName: "Brand Video", attioCompanyId: "co-b" }, IDX);
-  assert.equal(r.value, 12000);
+test("resolveDeal: name collision still disambiguated by company id (backfill path)", () => {
+  // Collision disambiguation by company still serves the backfill (resolveDeal);
+  // it no longer sources a deal VALUE (that needs the deal id).
+  const r = resolveDeal({ projectName: "Brand Video", attioCompanyId: "co-b" }, IDX);
   assert.equal(r.dealId, "d-brand-b");
-  assert.equal(r.ambiguous, false);
 });
 
 test("resolveDealValue: name collision + no/unknown company => ambiguous, no number guessed", () => {
@@ -241,13 +243,11 @@ test("resolveDealValue: attioDealId is preferred as the FK when present", () => 
   assert.equal(r.value, 672);
 });
 
-test("resolveDealValue: a genuine company id never FK-false-matches (falls through to name path)", () => {
-  // co-b is a real company id (it's d-brand-b's company) but NOT a deal record
-  // id, so it must miss byRecordId and resolve via the name+company collision
-  // path — exactly the pre-existing behaviour, unchanged.
-  const r = resolveDealValue({ projectName: "Brand Video", attioCompanyId: "co-b" }, IDX);
-  assert.equal(r.value, 12000);
-  assert.equal(r.dealId, "d-brand-b");
+test("resolveDealValue: a genuine company id never FK-false-matches, and name yields no value", () => {
+  // co-b is a real company id (d-brand-b's company), NOT a deal record id, so it
+  // misses byRecordId — no FK false-match. It then hits the name path, which is
+  // NOT trusted for revenue (id-only), so the value is null (row stays Incomplete).
+  assert.equal(resolveDealValue({ projectName: "Brand Video", attioCompanyId: "co-b" }, IDX), null);
 });
 
 test("resolveDealValue: a present-but-uncached attioDealId does NOT fall back to attioCompanyId as a deal FK", () => {
@@ -281,6 +281,15 @@ test("resolveDealValue: no candidate => null; blank name => null", () => {
   assert.equal(resolveDealValue({ projectName: "Does Not Exist" }, IDX), null);
   assert.equal(resolveDealValue({ projectName: "" }, IDX), null);
   assert.equal(resolveDealValue({ projectName: "x" }, null), null);
+});
+
+test("resolveDealClaims: FK => [id]; unique name => [id]; ambiguous => ALL ids; none => []", () => {
+  // the double-count guard's claim resolver: over-counts on ambiguity (safe).
+  assert.deepEqual(resolveDealClaims({ attioCompanyId: "d-uniq" }, IDX), ["d-uniq"]);
+  assert.deepEqual(resolveDealClaims({ projectName: "Corporate video for Spanish translation" }, IDX), ["d-uniq"]);
+  assert.deepEqual(resolveDealClaims({ projectName: "Brand Video" }, IDX).sort(), ["d-brand-a", "d-brand-b"]);
+  assert.deepEqual(resolveDealClaims({ projectName: "Nope" }, IDX), []);
+  assert.deepEqual(resolveDealClaims({ projectName: "" }, IDX), []);
 });
 
 // ── carry-across: parseVideoCount ────────────────────────────────────
