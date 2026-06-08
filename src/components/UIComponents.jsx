@@ -1,5 +1,6 @@
 import { sCol, gSC, pct } from "../utils";
 import { BTN } from "../config";
+import { Icon, ICON_PATHS } from "./Icon";
 
 export function Badge({ util, large }) {
   const s = large ? gSC(util) : sCol(util);
@@ -77,11 +78,71 @@ export function StatusSelect({ value, options, colors, onChange, disabled }) {
   );
 }
 
-export function SideIcon({ icon, label, active, onClick }) {
+// ── Pop sidebar rail ────────────────────────────────────────────────
+// Every tab carries a signature hue; the glyph rides a soft tinted tile,
+// and the active item ignites into a vivid gradient with a glow + colour
+// edge-marker. The gradient tiles restore the warmth/cuteness of the old
+// emoji rail while giving the chrome a deliberate, designed feel.
+//
+// RAIL_GLYPH flips the in-tile glyph between the original emoji ("emoji",
+// the shipped default — keeps the familiar look) and a crisp SVG line set
+// ("line" — device-consistent, no emoji rendering variance) in the same
+// Pop treatment.
+export const RAIL_GLYPH = "emoji";
+
+// Signature hue + line-icon name per tab. App.jsx passes `name` (and may
+// override `hue`); the emoji it already passes is kept for the emoji
+// variant and as a fallback.
+export const NAV_META = {
+  home:      { icon: "home",      hue: 32 },
+  founders:  { icon: "founders",  hue: 85 },
+  capacity:  { icon: "capacity",  hue: 240 },
+  sale:      { icon: "sale",      hue: 152 },
+  accounts:  { icon: "accounts",  hue: 292 },
+  projects:  { icon: "projects",  hue: 58 },
+  analytics: { icon: "analytics", hue: 196 },
+  socials:   { icon: "socials",   hue: 218 },
+  preprod:   { icon: "preprod",   hue: 100 },
+  editors:   { icon: "editors",   hue: 350 },
+  training:  { icon: "training",  hue: 272 },
+  resources: { icon: "resources", hue: 175 },
+  users:     { icon: "users",     hue: 15 },
+};
+
+export function SideIcon({ icon, name, hue, label, active, onClick }) {
+  const meta = NAV_META[name] || {};
+  const h = hue ?? meta.hue ?? 220;
+  const glyphName = meta.icon || name;
+  const tile = {
+    width: 40, height: 36, borderRadius: 11, display: "flex", alignItems: "center", justifyContent: "center",
+    transition: "all .18s ease", transform: active ? "translateY(-1px)" : "none",
+    background: active
+      ? `linear-gradient(150deg, oklch(0.72 0.19 ${h}), oklch(0.55 0.17 ${h + 18}))`
+      : `oklch(0.70 0.12 ${h} / 0.16)`,
+    border: active ? `1px solid oklch(0.85 0.12 ${h} / 0.6)` : `1px solid oklch(0.70 0.12 ${h} / 0.10)`,
+    color: active ? "#fff" : `oklch(0.80 0.135 ${h})`,
+    boxShadow: active
+      ? `0 6px 16px -6px oklch(0.65 0.2 ${h} / 0.85), inset 0 1px 0 rgba(255,255,255,0.35)`
+      : "none",
+  };
   return (
-    <button onClick={onClick} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 8px", borderRadius: 8, border: "none", background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent)" : "var(--muted)", cursor: "pointer", width: "100%", transition: "all 0.15s" }} title={label}>
-      <span style={{ fontSize: 20 }}>{icon}</span>
-      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.03em", textTransform: "uppercase" }}>{label}</span>
+    <button onClick={onClick} title={label} style={{
+      display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "5px 5px",
+      borderRadius: 10, border: "none", background: "transparent", cursor: "pointer", width: "100%",
+      position: "relative",
+    }}>
+      {active && <span style={{ position: "absolute", left: -7, top: "50%", transform: "translateY(-50%)",
+        width: 3, height: 24, borderRadius: 3, background: `oklch(0.78 0.17 ${h})`,
+        boxShadow: `0 0 12px oklch(0.78 0.18 ${h} / 0.9)` }} />}
+      <div style={tile}>
+        {/* Emoji mode, or line mode with no matching glyph path, falls back
+            to the emoji so a tile is never rendered empty. */}
+        {(RAIL_GLYPH === "emoji" || !ICON_PATHS[glyphName]) && icon
+          ? <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
+          : <Icon name={glyphName} size={20} sw={active ? 2.1 : 1.85} />}
+      </div>
+      <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase",
+        color: active ? `oklch(0.86 0.13 ${h})` : "var(--muted)" }}>{label}</span>
     </button>
   );
 }

@@ -224,7 +224,35 @@ export const BTN = { padding: "6px 14px", borderRadius: 6, border: "none", fontS
 // ─── CSS ───
 export const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;600;700;800&display=swap');
-:root{--bg:#0B0F1A;--fg:#E8ECF4;--card:#131825;--border:#1E2A3A;--border-light:#161D2C;--muted:#5A6B85;--accent:#0082FA;--accent-soft:rgba(0,130,250,0.12);--bar-bg:#1A2030;--input-bg:#0F1520;}
+/* Unified Design Language tokens. The brand hues are unchanged (Viewix Blue
+   #0082FA, Orange #F87700); the neutral ramp is deepened and layered so
+   surfaces read as real elevation, and the text scale gains a legible
+   secondary step the old tokens lacked. Existing variable NAMES are preserved
+   so every tab that already consumes --bg/--card/--accent/etc. inherits the
+   refined palette with no edits; the new tokens (--rail, --card-2, --fg-2,
+   status hues, radii, elevation) are additive for components that opt in. */
+:root{
+  /* surfaces (dark, low → high) */
+  --bg:#0A0E17;--rail:#0D1220;--card:#141A29;--card-2:#19202F;--inset:#0E131F;
+  /* hairlines */
+  --border:#222D40;--border-soft:#1A2231;--border-light:#1A2231;
+  /* text — 4-step hierarchy */
+  --fg:#EAEEF6;--fg-2:#9DABC2;--muted:#61728C;--faint:#3D4B62;
+  /* brand + status */
+  --accent:#0082FA;--accent-bright:#3DA2FF;--accent-soft:rgba(0,130,250,0.13);
+  --orange:#F87700;--orange-soft:rgba(248,119,0,0.13);
+  --success:#1EC081;--success-soft:rgba(30,192,129,0.13);
+  --amber:#F5A623;--amber-soft:rgba(245,166,35,0.13);
+  --danger:#F2545B;--purple:#9B7BF0;--purple-soft:rgba(155,123,240,0.14);--pink:#EC6FA8;
+  /* radii scale */
+  --r1:6px;--r2:8px;--r3:10px;--r4:14px;--r5:18px;
+  /* elevation */
+  --shadow1:0 1px 2px rgba(0,0,0,0.4);--shadow2:0 8px 24px -14px rgba(0,0,0,0.8);
+  --shadow3:0 18px 48px -22px rgba(0,0,0,0.9);
+  --glow:0 0 0 1px rgba(0,130,250,0.18), 0 10px 32px -16px rgba(0,130,250,0.55);
+  /* legacy aliases kept for existing consumers */
+  --bar-bg:#19202F;--input-bg:#0E131F;
+}
 *{box-sizing:border-box;margin:0;padding:0;}
 input[type="number"]::-webkit-inner-spin-button,input[type="number"]::-webkit-outer-spin-button{-webkit-appearance:none;}
 input[type="number"]{-moz-appearance:textfield;}
