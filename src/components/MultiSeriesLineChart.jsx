@@ -15,11 +15,28 @@ const W = 640;
 const PAD = { l: 44, r: 16, t: 14, b: 30 };
 
 const fmtH = (h) => `${(h || 0).toFixed(1)}h`;
+// axis tick labels: add a 2nd decimal when the step is sub-0.1h so small
+// increments don't all render as "0.0h".
+const fmtTickH = (h, step) => `${(h || 0).toFixed(step < 0.1 ? 2 : 1)}h`;
 const fmtWeek = (key) => {
   if (!key) return "";
   const d = new Date(key + "T00:00:00");
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 };
+
+// "Nice" y-axis: rounds the data max up to a clean ceiling and returns evenly
+// spaced increment values (1/2/5 × 10ⁿ) so the axis reads in round numbers.
+function niceAxis(dataMax) {
+  if (!(dataMax > 0)) return { ticks: [0, 0.5], max: 0.5, step: 0.5 };
+  const rawStep = dataMax / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+  const max = Math.ceil(dataMax / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= max + step * 1e-6; v += step) ticks.push(Number(v.toFixed(6)));
+  return { ticks, max, step };
+}
 
 export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yLabel = "avg edit h / video" }) {
   const [hover, setHover] = useState(null); // hovered week index
@@ -51,7 +68,9 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
   // hidden — guards against a phantom "reset" from stale hidden entries.
   const hasCurrentHidden = series.some((s) => hidden.has(s.category));
   const allY = visible.flatMap((s) => s.points.map((p) => p.y)).filter((y) => y != null);
-  const yMax = Math.max(0.5, Math.max(...allY, 0) * 1.15);
+  const yAxis = niceAxis(Math.max(...allY, 0));
+  const yMax = yAxis.max;
+  const xLabelEvery = Math.max(1, Math.ceil(weeks.length / 8)); // thin x labels if many weeks
 
   const xAt = (i) => PAD.l + (weeks.length === 1 ? innerW / 2 : (i / (weeks.length - 1)) * innerW);
   const yAt = (y) => PAD.t + innerH - (y / yMax) * innerH;
@@ -68,7 +87,6 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
     return d;
   };
 
-  const ticks = [...new Set([0, Math.floor((weeks.length - 1) / 2), weeks.length - 1])];
   const onMove = (e) => {
     // Map client X → viewBox X off the whole SVG (it's width:100% with
     // preserveAspectRatio="none", so 0..W maps linearly to its client width).
@@ -117,9 +135,23 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
           <line x1={PAD.l} y1={PAD.t} x2={PAD.l} y2={PAD.t + innerH} stroke="var(--border)" strokeWidth={1} />
           <line x1={PAD.l} y1={PAD.t + innerH} x2={PAD.l + innerW} y2={PAD.t + innerH} stroke="var(--border)" strokeWidth={1} />
 
-          {/* y ticks 0 + max */}
-          <text x={PAD.l - 6} y={PAD.t + innerH} textAnchor="end" dominantBaseline="middle" fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">0</text>
-          <text x={PAD.l - 6} y={PAD.t} textAnchor="end" dominantBaseline="middle" fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">{fmtH(yMax)}</text>
+          {/* y gridlines + increment labels */}
+          {yAxis.ticks.map((t, i) => (
+            <g key={`y${i}`}>
+              {i > 0 && <line x1={PAD.l} y1={yAt(t)} x2={PAD.l + innerW} y2={yAt(t)} stroke="var(--border)" strokeWidth={1} strokeOpacity={0.4} strokeDasharray="2 3" />}
+              <text x={PAD.l - 6} y={yAt(t)} textAnchor="end" dominantBaseline="middle" fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">{fmtTickH(t, yAxis.step)}</text>
+            </g>
+          ))}
+          {/* x gridlines + increment labels (one per week, labels thinned if many) */}
+          {weeks.map((wk, i) => {
+            const showLabel = i % xLabelEvery === 0 || i === weeks.length - 1;
+            return (
+              <g key={`x${i}`}>
+                <line x1={xAt(i)} y1={PAD.t} x2={xAt(i)} y2={PAD.t + innerH} stroke="var(--border)" strokeWidth={1} strokeOpacity={0.22} />
+                {showLabel && <text x={xAt(i)} y={PAD.t + innerH + 14} textAnchor={i === 0 ? "start" : i === weeks.length - 1 ? "end" : "middle"} fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">{fmtWeek(wk)}</text>}
+              </g>
+            );
+          })}
 
           {/* hover guide line (only when something is plotted) */}
           {hover != null && visible.length > 0 && (
@@ -138,11 +170,6 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
           {visible.length === 0 && (
             <text x={PAD.l + innerW / 2} y={PAD.t + innerH / 2} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="var(--muted)">All lines hidden — click a category above to show it</text>
           )}
-
-          {/* x ticks */}
-          {ticks.map((t, i) => (
-            <text key={i} x={xAt(t)} y={PAD.t + innerH + 16} textAnchor={i === 0 ? "start" : i === ticks.length - 1 ? "end" : "middle"} fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">{fmtWeek(weeks[t])}</text>
-          ))}
 
           {/* y-axis label */}
           <text x={PAD.l} y={PAD.t - 4} textAnchor="start" fontSize={9} fill="var(--muted)">{yLabel}</text>

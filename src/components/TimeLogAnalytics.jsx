@@ -20,6 +20,7 @@ import {
   summariseOverall,
   filterFactsByDays,
   buildWeeklySeries,
+  computeDailyAllocations,
 } from "../timeLogStats";
 
 const PERIODS = [{ k: 0, label: "All" }, { k: 30, label: "Last 30d" }, { k: 90, label: "Last 90d" }];
@@ -34,15 +35,21 @@ const sectionSub = { fontSize: 11, color: "var(--muted)", margin: "0 0 14px" };
 
 export function TimeLogAnalytics({ allTimeLogs, projects }) {
   const [days, setDays] = useState(0);
+  const [adjusted, setAdjusted] = useState(true); // default to the paid-hours-adjusted view
 
   const { cats, overall, weekly } = useMemo(() => {
     const idx = buildProjectIndex(projects);
-    const all = buildVideoFacts(allTimeLogs || {}, idx);
+    const allocations = computeDailyAllocations(allTimeLogs || {});
+    const all = buildVideoFacts(allTimeLogs || {}, idx, allocations);
     const f = filterFactsByDays(all, days, todayKey());
     // The line graph is the over-time view, so it always uses FULL history
     // (the period toggle scopes only the snapshot sections below it).
-    return { cats: summariseByCategory(f), overall: summariseOverall(f), weekly: buildWeeklySeries(all) };
-  }, [allTimeLogs, projects, days]);
+    return {
+      cats: summariseByCategory(f, adjusted),
+      overall: summariseOverall(f, adjusted),
+      weekly: buildWeeklySeries(all, adjusted),
+    };
+  }, [allTimeLogs, projects, days, adjusted]);
 
   const editVideoN = weekly.series.reduce((s, x) => s + x.n, 0);
   const chartLabel = weekly.weeks.length
@@ -73,16 +80,36 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
     </div>
   );
 
+  const modeBar = (
+    <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
+      {[{ k: true, label: "Adjusted" }, { k: false, label: "Logged" }].map((m) => (
+        <button key={String(m.k)} onClick={() => setAdjusted(m.k)}
+          title={m.k ? "Logged edit time + each task's share of unlogged paid hours" : "Raw reported time only"}
+          style={{ padding: "5px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600,
+            background: adjusted === m.k ? "var(--card)" : "transparent", color: adjusted === m.k ? "var(--fg)" : "var(--muted)" }}>
+          {m.label}
+        </button>
+      ))}
+    </div>
+  );
+  const editLabel = adjusted ? "adjusted edit h / video" : "edit h / video";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
-      {/* Period toggle (scopes the snapshot below; the chart is always full history) */}
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>{periodBar}</div>
+      {/* Toggles: Adjusted/Logged (affects all metrics) + period (scopes the snapshot) */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        {modeBar}
+        {periodBar}
+      </div>
 
       {/* Edit-time trend — the line graph (always full history) */}
       <div>
-        <h3 style={sectionTitle}>Average edit time per video, over time</h3>
-        <p style={sectionSub}>Weekly trend, one line per category — each video plotted in the week its edit finished. {chartLabel}.</p>
-        <MultiSeriesLineChart weeks={weekly.weeks} series={weekly.series} colorFor={colorFor} />
+        <h3 style={sectionTitle}>Average {adjusted ? "adjusted " : ""}edit time per video, over time</h3>
+        <p style={sectionSub}>
+          Weekly trend, one line per category — each video plotted in the week its edit finished. {chartLabel}.
+          {adjusted && " Adjusted = logged edit time + each task's share of unlogged paid hours (8h/day)."}
+        </p>
+        <MultiSeriesLineChart weeks={weekly.weeks} series={weekly.series} colorFor={colorFor} yLabel={editLabel} />
       </div>
 
       {overall.n === 0 ? (
@@ -94,15 +121,15 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
         <Metric label="Completed Videos" value={overall.n} sub="edit/revision tracked" />
-        <Metric label="Median Edit / Video" value={fmtH(overall.medianEditH)} sub={`mean ${fmtH(overall.meanEditH)}`} />
+        <Metric label={`Median ${adjusted ? "Adj. " : ""}Edit / Video`} value={fmtH(overall.medianEditH)} sub={`mean ${fmtH(overall.meanEditH)}`} />
         <Metric label="Revision Rate" value={fmtPct(overall.revisionRate)} sub="videos needing revisions" />
         <Metric label="Revision Burden" value={fmtPct(overall.revisionBurden)} sub="revision ÷ edit hours" accent="#F87700" />
       </div>
 
       {/* Edit time by category */}
       <div>
-        <h3 style={sectionTitle}>Edit time by category</h3>
-        <p style={sectionSub}>Median edit hours per video (bar). Mean shown alongside — the gap reveals long-tail jobs.</p>
+        <h3 style={sectionTitle}>{adjusted ? "Adjusted edit" : "Edit"} time by category</h3>
+        <p style={sectionSub}>Median {editLabel} (bar). Mean shown alongside — the gap reveals long-tail jobs.</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {cats.map((c) => (
             <div key={c.category} style={{ display: "grid", gridTemplateColumns: "150px 1fr 150px", alignItems: "center", gap: 12 }}>
@@ -125,7 +152,7 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
       <div>
         <h3 style={sectionTitle}>Revision burden by category</h3>
         <p style={sectionSub}>
-          Revision hours as a share of edit hours — the pricing/process signal.
+          Revision hours as a share of edit hours (logged, unaffected by the Adjusted toggle) — the pricing/process signal.
           {worstBurden && (
             <> Heaviest: <strong style={{ color: "#F87700" }}>{worstBurden.category} ({fmtPct(worstBurden.revisionBurden)})</strong>.</>
           )}
@@ -143,7 +170,7 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
                 </div>
                 <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right", ...mono }}>
                   <strong style={{ color: "var(--fg)" }}>{fmtPct(c.revisionBurden)}</strong>
-                  {" · "}edit {fmtH(c.editHPerVideo)} · rev {fmtH(c.revisionHPerVideo)} · {fmtPct(c.revisionRate)} revised
+                  {" · "}edit {fmtH(c.editHPerVideoLogged)} · rev {fmtH(c.revisionHPerVideo)} · {fmtPct(c.revisionRate)} revised
                 </div>
               </div>
             );
@@ -153,8 +180,8 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
 
       {/* Spread (five-number summary) */}
       <div>
-        <h3 style={sectionTitle}>Edit-time spread by category</h3>
-        <p style={sectionSub}>Five-number summary of edit hours per video (min · p25 · median · p75 · p90).</p>
+        <h3 style={sectionTitle}>{adjusted ? "Adjusted edit-time" : "Edit-time"} spread by category</h3>
+        <p style={sectionSub}>Five-number summary of {editLabel} (min · p25 · median · p75 · p90).</p>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {cats.map((c) => (
             <div key={c.category} style={{ display: "grid", gridTemplateColumns: "150px 1fr", alignItems: "center", gap: 12 }}>
