@@ -101,7 +101,7 @@
     },
     {
       "path": "/api/founders-advisor",
-      "schedule": "0 22 * * 0"
+      "schedule": "0 8 * * 0"
     },
     {
       "path": "/api/sync-attio-cache",
