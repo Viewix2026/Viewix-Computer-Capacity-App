@@ -360,8 +360,8 @@ function withHour(projects) {
   return timeLogs;
 }
 
-test("enrichment: blank project dealValue is filled from matched Attio Won deal", () => {
-  const projects = { "proj-x": { id: "proj-x", clientName: "AusIMM", projectName: "Spanish Translation", dealValue: null } };
+test("enrichment: blank project dealValue is filled from the Attio Won deal by deal id (FK)", () => {
+  const projects = { "proj-x": { id: "proj-x", clientName: "AusIMM", projectName: "Spanish Translation", dealValue: null, attioCompanyId: "deal-x" } };
   const attioCache = { data: [rawDeal("deal-x", "Spanish Translation", 672, "co-ausimm")] };
   const timeLogs = withHour(projects);
   const { perProject } = computeProfitability({
@@ -400,12 +400,27 @@ test("enrichment: ambiguous match => no number, DEAL_MATCH_AMBIGUOUS + missing v
   assert.equal(r.complete, false);
 });
 
+test("enrichment: a name-only match (no deal id) attaches NO value — row stays Incomplete (id-only safety)", () => {
+  // A blank-value project whose NAME matches a Won deal but has no deal-id FK must
+  // NOT inherit that deal's value — it could be a different client's same-named
+  // deal. Codex round 3 HIGH: never attach a wrong value and mark it Complete.
+  const projects = { "nameonly": { id: "nameonly", projectName: "Brand Video", dealValue: null } };
+  const attioCache = { data: [rawDeal("deal-bv", "Brand Video", 8000, "co-a")] };
+  const timeLogs = withHour(projects);
+  const { perProject } = computeProfitability({ projects, attioCache, timeLogs, laborCosts: RATES, costInputs: { "nameonly": { crew: 0 } }, commissionInputs: {}, commissionPlans: PLANS });
+  const r = perProject["nameonly"];
+  assert.equal(r.dealValue, 0);
+  assert.equal(r.dealValueSource, "none");
+  assert.ok(r.warnings.includes(WARNINGS.MISSING_OR_ZERO_DEAL_VALUE));
+  assert.equal(r.complete, false);
+});
+
 test("enrichment: one Won deal claimed by TWO projects => both flagged, sale never double-counted", () => {
   const projects = {
-    "proj-1": { id: "proj-1", projectName: "Recurring Social", dealValue: null },
-    "proj-2": { id: "proj-2", projectName: "Recurring Social", dealValue: null },
+    "proj-1": { id: "proj-1", projectName: "Recurring Social", dealValue: null, attioCompanyId: "deal-dup" },
+    "proj-2": { id: "proj-2", projectName: "Recurring Social", dealValue: null, attioCompanyId: "deal-dup" },
   };
-  // a single deal both same-named projects would otherwise each claim in full
+  // both projects carry the SAME deal id (FK) -> both resolve to the one deal
   const attioCache = { data: [rawDeal("deal-dup", "Recurring Social", 5000, "co-x")] };
   const timeLogs = withHour(projects);
   const { perProject, rollups } = computeProfitability({
@@ -464,6 +479,63 @@ test("enrichment: own-value project + blank sibling sharing a deal id (FK) => bl
   assert.equal(blank.complete, false);
   // the 6517 sale is counted EXACTLY once (the own-value row), never doubled
   assert.equal(rollups.totals.dealValue, 6517);
+});
+
+test("enrichment: own-value project claims its deal by NAME (no FK) + blank FK sibling => blank flagged, sale not doubled", () => {
+  // Codex round 4: value sourcing is deal-id-only, but the CLAIM guard must still
+  // see an own-value project's confident NAME match (it has NO fk) — else its
+  // blank duplicate (which carries the deal id) borrows the same sale and doubles
+  // it. This is the case the FK-only own+blank test above does NOT cover.
+  const projects = {
+    "own":   { id: "own",   projectName: "Masterton Brand", dealValue: 6517 },                              // own value, name claim, no fk
+    "blank": { id: "blank", projectName: "Renamed Job",     dealValue: null, attioCompanyId: "deal-mast" }, // fk to the same deal
+  };
+  const attioCache = { data: [rawDeal("deal-mast", "Masterton Brand", 6517, "co-mast")] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "own": { crew: 0 }, "blank": { crew: 0 } },
+    commissionInputs: {
+      "own": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "blank": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  assert.equal(perProject["own"].dealValue, 6517);
+  assert.equal(perProject["own"].complete, true);
+  assert.equal(perProject["blank"].dealValue, 0);
+  assert.ok(perProject["blank"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.equal(perProject["blank"].complete, false);
+  assert.equal(rollups.totals.dealValue, 6517); // counted ONCE (via own's name claim), never doubled
+});
+
+test("enrichment: own-value project with an AMBIGUOUS name claim + blank FK sibling => blank flagged, sale not doubled", () => {
+  // Codex round 5: an own-value project whose name collides across clients (so its
+  // name claim is ambiguous) must STILL consume EVERY deal it might be — else a
+  // blank FK sibling pointing at one of the colliders double-counts the sale.
+  const projects = {
+    "own":   { id: "own",   projectName: "Brand Video", dealValue: 8000 },                         // own value, ambiguous name, no fk
+    "blank": { id: "blank", projectName: "Renamed",     dealValue: null, attioCompanyId: "bv-a" }, // fk to ONE of the colliders
+  };
+  const attioCache = { data: [
+    rawDeal("bv-a", "Brand Video", 8000, "co-a"),
+    rawDeal("bv-b", "Brand Video", 12000, "co-b"),
+  ] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "own": { crew: 0 }, "blank": { crew: 0 } },
+    commissionInputs: {
+      "own": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "blank": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  assert.equal(perProject["own"].dealValue, 8000);
+  assert.equal(perProject["own"].complete, true);
+  assert.equal(perProject["blank"].dealValue, 0);
+  assert.ok(perProject["blank"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.equal(rollups.totals.dealValue, 8000); // counted once (own); blank flagged, never doubled
 });
 
 test("enrichment: two blank projects sharing a deal id via attioCompanyId FK => both flagged", () => {

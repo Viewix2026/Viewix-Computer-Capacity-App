@@ -23,7 +23,7 @@
 // (cron) and in the browser bundle (UI), and is trivially unit-testable.
 // The one intra-shared import below (attio-extract) is itself isomorphic
 // and dependency-free.
-import { buildDealIndex, resolveDealValue } from "./attio-extract.js";
+import { buildDealIndex, resolveDealValue, resolveDealClaims } from "./attio-extract.js";
 
 // Single documented gate. Deal values are ex GST today, so the math uses
 // them directly. If deal values ever become GST-inclusive, flip this and
@@ -409,9 +409,15 @@ export function computeProfitability({
   for (const p of Object.values(projects || {})) {
     if (!p || typeof p !== "object" || !p.id) continue;
     if (isInternalProject(p)) continue; // internal work claims no deal
-    const m = resolveDealValue(p, dealIndex);
-    if (m && m.value > 0 && m.dealId) {
-      attioClaimCounts.set(m.dealId, (attioClaimCounts.get(m.dealId) || 0) + 1);
+    // Count EVERY deal id this project could be CLAIMING — its FK deal, or (no
+    // FK) every same-name candidate, so even an AMBIGUOUS cross-client name claim
+    // conservatively consumes each deal it might be. That stops a blank FK sibling
+    // from borrowing a sale an own-value project already represents. Value
+    // sourcing stays deal-id-only (resolveDealValue); this is the CLAIM count
+    // only, and over-counting is safe — it can only flag a blank row Incomplete,
+    // never attach a wrong number.
+    for (const id of resolveDealClaims(p, dealIndex)) {
+      attioClaimCounts.set(id, (attioClaimCounts.get(id) || 0) + 1);
     }
   }
 
