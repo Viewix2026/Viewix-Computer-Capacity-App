@@ -21,6 +21,45 @@ import { categorizeContent } from "./utils.js";
 
 const SECS_PER_H = 3600;
 const EDIT_STAGES = new Set(["edit", "revisions"]);
+export const PAID_DAY_SECS = 8 * SECS_PER_H; // editors are paid 8h/day
+
+// Per-task "allocated" seconds: the unlogged-but-paid time redistributed onto
+// the tasks an editor actually worked. Editors underreport, so for each
+// (editor, day) we take gap = max(0, 8h − total logged that day) — across ALL
+// stages, so a shoot-heavy day doesn't create a fake editing gap — and split
+// it EVENLY across the distinct tasks worked that day (gap ÷ tasks). A task
+// accrues these daily shares across every day it was touched. Total allocated
+// never exceeds the 8h paid. Returns Map(taskId -> allocatedSecs).
+export function computeDailyAllocations(allTimeLogs) {
+  const alloc = new Map();
+  for (const dates of Object.values(allTimeLogs || {})) {
+    if (!dates || typeof dates !== "object") continue;
+    for (const [dateKey, dayData] of Object.entries(dates)) {
+      if (!dayData || typeof dayData !== "object") continue;
+      if (Number.isNaN(utcDay(dateKey))) continue;
+      let totalLogged = 0;
+      const tasks = [];
+      for (const [taskId, val] of Object.entries(dayData)) {
+        if (taskId.startsWith("_")) continue;
+        const secs = Number(typeof val === "number" ? val : val?.secs);
+        if (!Number.isFinite(secs) || secs <= 0) continue;
+        totalLogged += secs;
+        tasks.push(taskId); // dayData keys are unique → distinct tasks
+      }
+      const gap = Math.max(0, PAID_DAY_SECS - totalLogged);
+      if (!tasks.length || gap <= 0) continue;
+      const share = gap / tasks.length;
+      for (const taskId of tasks) alloc.set(taskId, (alloc.get(taskId) || 0) + share);
+    }
+  }
+  return alloc;
+}
+
+// Edit seconds for a video under the chosen mode: logged edit time, plus its
+// allocated share of unlogged paid hours when adjusted.
+function editSecsOf(v, adjusted) {
+  return v.editSecs + (adjusted ? (v.allocatedSecs || 0) : 0);
+}
 
 // "Edit" / "Pre Production" / "revisions" → "edit" / "preproduction" / "revisions"
 export function normStage(stage) {
@@ -76,7 +115,7 @@ export function buildProjectIndex(projects) {
 // allTimeLogs + index -> one fact row PER in-scope video (taskId).
 // This is the single source of truth — every downstream denominator is
 // derived from it, so edit/revision metrics can't drift apart.
-export function buildVideoFacts(allTimeLogs, index) {
+export function buildVideoFacts(allTimeLogs, index, allocations) {
   const acc = new Map();
   for (const dates of Object.values(allTimeLogs || {})) {
     if (!dates || typeof dates !== "object") continue;
@@ -127,6 +166,8 @@ export function buildVideoFacts(allTimeLogs, index) {
       revisionSecs: f.revisionSecs,
       hasEdit: f.editSecs > 0,
       hasRevision: f.revisionSecs > 0,
+      // Unlogged paid time redistributed onto this task (0 if not supplied).
+      allocatedSecs: allocations ? (allocations.get(f.taskId) || 0) : 0,
       editSpanDays: idx.length ? idx[idx.length - 1] - idx[0] : 0,
       // edit-completion anchor: the latest day this video had an edit log.
       editLastDate: editDates.length ? editDates[editDates.length - 1] : null,
@@ -163,7 +204,7 @@ function continuousWeeks(startKey, endKey) {
 // Each video is anchored on its edit-completion week (week of its last edit
 // log). Weekly (not monthly) because the dataset is only weeks deep — monthly
 // would be 1-2 points. Empty weeks emit null (a gap, not a fake 0).
-export function buildWeeklySeries(facts) {
+export function buildWeeklySeries(facts, adjusted = false) {
   const vids = facts.filter((f) => f.hasEdit && f.editLastDate);
   if (!vids.length) return { weeks: [], series: [] };
 
@@ -177,7 +218,7 @@ export function buildWeeklySeries(facts) {
     catN.set(f.category, (catN.get(f.category) || 0) + 1);
     const key = `${wk}|${f.category}`;
     const cur = byWeekCat.get(key) || { sum: 0, n: 0 };
-    cur.sum += f.editSecs / 3600;
+    cur.sum += editSecsOf(f, adjusted) / SECS_PER_H;
     cur.n += 1;
     byWeekCat.set(key, cur);
   }
@@ -214,10 +255,19 @@ function quantile(sorted, p) {
   return sorted[Math.max(0, Math.min(sorted.length - 1, idx))];
 }
 
-function statBlock(vids) {
+// `adjusted` switches the EDIT-time metrics (median/mean/five-number/per-video)
+// to include allocated unlogged hours. Revision metrics stay logged-based —
+// they're a structural edit:revision ratio that allocation doesn't inform — so
+// revisionBurden uses LOGGED edit secs regardless of mode.
+function statBlock(vids, adjusted = false) {
   const n = vids.length;
-  const editH = vids.filter((v) => v.hasEdit).map((v) => v.editSecs / SECS_PER_H).sort((a, b) => a - b);
-  const sumEditSecs = vids.reduce((s, v) => s + v.editSecs, 0);
+  // Edit sums are over EDIT videos only — a revision-only video carries an
+  // allocated share but no logged edit (hasEdit=false), and must not leak its
+  // allocation into adjusted edit totals.
+  const editVids = vids.filter((v) => v.hasEdit);
+  const editH = editVids.map((v) => editSecsOf(v, adjusted) / SECS_PER_H).sort((a, b) => a - b);
+  const sumEditAdj = editVids.reduce((s, v) => s + editSecsOf(v, adjusted), 0);
+  const sumEditLogged = editVids.reduce((s, v) => s + v.editSecs, 0);
   const sumRevSecs = vids.reduce((s, v) => s + v.revisionSecs, 0);
   const revisedN = vids.filter((v) => v.hasRevision).length;
   const p25 = quantile(editH, 0.25);
@@ -235,20 +285,23 @@ function statBlock(vids) {
     p90: quantile(editH, 0.9),
     max: editH.length ? editH[editH.length - 1] : 0,
     outliers,
-    totalEditH: sumEditSecs / SECS_PER_H,
+    totalEditH: sumEditAdj / SECS_PER_H,
     totalRevisionH: sumRevSecs / SECS_PER_H,
-    editHPerVideo: n ? sumEditSecs / n / SECS_PER_H : 0,
+    editHPerVideo: n ? sumEditAdj / n / SECS_PER_H : 0,
+    // always-logged edit per video — used where it must stay coherent with the
+    // logged-based revision burden ratio, regardless of the adjusted toggle.
+    editHPerVideoLogged: n ? sumEditLogged / n / SECS_PER_H : 0,
     revisionHPerVideo: n ? sumRevSecs / n / SECS_PER_H : 0,
     revisionRate: n ? revisedN / n : 0,
     // null = "n/a" rather than Infinity when a category has revision time
-    // but no logged edit time (edit predates tracking).
-    revisionBurden: sumEditSecs > 0 ? sumRevSecs / sumEditSecs : null,
+    // but no logged edit time. Always logged-based (structural ratio).
+    revisionBurden: sumEditLogged > 0 ? sumRevSecs / sumEditLogged : null,
     avgRevisionHAmongRevised: revisedN ? sumRevSecs / revisedN / SECS_PER_H : 0,
   };
 }
 
 // Per-category rows, sorted by sample size (n) desc.
-export function summariseByCategory(facts) {
+export function summariseByCategory(facts, adjusted = false) {
   const byCat = new Map();
   for (const f of facts) {
     if (!byCat.has(f.category)) byCat.set(f.category, []);
@@ -256,17 +309,17 @@ export function summariseByCategory(facts) {
   }
   const rows = [];
   for (const [category, vids] of byCat.entries()) {
-    rows.push({ category, ...statBlock(vids) });
+    rows.push({ category, ...statBlock(vids, adjusted) });
   }
   rows.sort((a, b) => b.n - a.n);
   return rows;
 }
 
 // Overall KPI block + the date range that scopes it.
-export function summariseOverall(facts) {
+export function summariseOverall(facts, adjusted = false) {
   const dates = facts.map((f) => f.lastLogDate).filter(Boolean).sort();
   return {
-    ...statBlock(facts),
+    ...statBlock(facts, adjusted),
     firstDate: dates[0] || null,
     lastDate: dates[dates.length - 1] || null,
   };

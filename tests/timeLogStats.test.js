@@ -15,6 +15,7 @@ import {
   filterFactsByDays,
   weekStartKey,
   buildWeeklySeries,
+  computeDailyAllocations,
 } from "../src/timeLogStats.js";
 
 // ─── helpers ───
@@ -273,6 +274,89 @@ test("buildWeeklySeries excludes revision-only videos (no edit anchor)", () => {
   const idx = new Map([["v3", { status: "done", videoType: "", parentName: "A: 3" }]]);
   const logs = { ed1: { "2026-05-05": { v3: { secs: SECS(4), stage: "revisions" } } } };
   assert.deepEqual(buildWeeklySeries(buildVideoFacts(logs, idx)), { weeks: [], series: [] });
+});
+
+test("computeDailyAllocations splits the day's unlogged paid gap evenly across tasks worked", () => {
+  const logs = {
+    ed1: {
+      "2026-05-04": {
+        t1: { secs: SECS(4), stage: "edit" },
+        t2: { secs: SECS(3), stage: "edit" },     // total 7h, gap 1h, 2 tasks → 0.5h each
+      },
+      "2026-05-05": {
+        t3: { secs: SECS(8), stage: "edit" },      // exactly 8h → gap 0 → no allocation
+      },
+      "2026-05-06": {
+        t1: { secs: SECS(2), stage: "edit" },
+        t4: { secs: SECS(2), stage: "shoot" },     // total 4h ALL stages, gap 4h, 2 tasks → 2h each
+        _running: { taskId: "t1", startedAt: 1 },  // ignored
+      },
+    },
+  };
+  const a = computeDailyAllocations(logs);
+  assert.equal(a.get("t1"), SECS(0.5) + SECS(2)); // share from day1 + day3
+  assert.equal(a.get("t2"), SECS(0.5));
+  assert.equal(a.get("t3") || 0, 0);              // no gap on a full 8h day
+  assert.equal(a.get("t4"), SECS(2));             // a shoot task gets a share too (gap is all-stages)
+});
+
+test("buildVideoFacts attaches allocatedSecs from the allocation map (0 when absent)", () => {
+  const idx = new Map([["v1", { status: "done", videoType: "Live Action", parentName: "A: 1" }]]);
+  const logs = { ed1: { "2026-05-04": { v1: { secs: SECS(2), stage: "edit" } } } };
+  assert.equal(buildVideoFacts(logs, idx, new Map([["v1", SECS(1)]]))[0].allocatedSecs, SECS(1));
+  assert.equal(buildVideoFacts(logs, idx)[0].allocatedSecs, 0);
+});
+
+test("adjusted mode adds allocated hours to edit metrics; revision burden stays logged", () => {
+  const idx = new Map([
+    ["v1", { status: "done", videoType: "Live Action", parentName: "A: 1" }],
+    ["v2", { status: "done", videoType: "Live Action", parentName: "A: 2" }],
+  ]);
+  const logs = {
+    ed1: {
+      "2026-05-04": { v1: { secs: SECS(2), stage: "edit" }, v2: { secs: SECS(4), stage: "edit" } },
+      "2026-05-05": { v1: { secs: SECS(2), stage: "revisions" } },
+    },
+  };
+  const facts = buildVideoFacts(logs, idx, new Map([["v1", SECS(1)], ["v2", SECS(1)]]));
+  const logged = summariseOverall(facts, false);
+  const adjusted = summariseOverall(facts, true);
+  assert.equal(logged.medianEditH, 3);            // median of logged edit [2,4]
+  assert.equal(adjusted.medianEditH, 4);          // median of adjusted edit [3,5]
+  assert.equal(logged.editHPerVideo, 3);
+  assert.equal(adjusted.editHPerVideo, 4);
+  // revision burden = logged revision / logged edit, identical in both modes
+  assert.ok(Math.abs(logged.revisionBurden - 2 / 6) < 1e-9);
+  assert.equal(adjusted.revisionBurden, logged.revisionBurden);
+});
+
+test("revision-only video's allocation never leaks into adjusted edit totals", () => {
+  const idx = new Map([
+    ["vEdit", { status: "done", videoType: "Live Action", parentName: "A: edit" }],
+    ["vRev", { status: "done", videoType: "Live Action", parentName: "A: rev" }],
+  ]);
+  const logs = {
+    ed1: {
+      "2026-05-04": { vEdit: { secs: SECS(2), stage: "edit" } },
+      "2026-05-05": { vRev: { secs: SECS(1), stage: "revisions" } }, // no edit logs
+    },
+  };
+  // vRev gets a big allocation (sole log on a light day), but it has no edit.
+  const facts = buildVideoFacts(logs, idx, new Map([["vEdit", SECS(1)], ["vRev", SECS(7)]]));
+  const adj = summariseOverall(facts, true);
+  // adjusted edit/video must reflect ONLY vEdit's 2h+1h=3h, spread over n=2 → 1.5h.
+  // It must NOT include vRev's 7h allocation.
+  assert.equal(adj.totalEditH, 3);
+  assert.equal(adj.editHPerVideo, 1.5);
+  assert.equal(adj.medianEditH, 3); // median over the single edit video
+});
+
+test("buildWeeklySeries honours the adjusted flag", () => {
+  const idx = new Map([["v1", { status: "done", videoType: "Live Action", parentName: "A: 1" }]]);
+  const logs = { ed1: { "2026-05-04": { v1: { secs: SECS(2), stage: "edit" } } } };
+  const facts = buildVideoFacts(logs, idx, new Map([["v1", SECS(1)]]));
+  assert.equal(buildWeeklySeries(facts, false).series[0].points[0].y, 2);
+  assert.equal(buildWeeklySeries(facts, true).series[0].points[0].y, 3);
 });
 
 test("empty inputs never throw or divide by zero", () => {
