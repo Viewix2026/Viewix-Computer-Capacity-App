@@ -231,7 +231,7 @@ test("weekStartKey returns the UTC Monday of the week and is stable across the w
   assert.equal(weekStartKey("garbage"), null);
 });
 
-test("buildWeeklySeries: continuous weeks, per-category averages, null gaps", () => {
+test("buildWeeklySeries: continuous weeks, per-category medians, null gaps", () => {
   const idx = new Map([
     ["v1", { status: "done", videoType: "Live Action", parentName: "A: 1" }],
     ["v2", { status: "done", videoType: "Live Action", parentName: "A: 2" }],
@@ -349,6 +349,21 @@ test("revision-only video's allocation never leaks into adjusted edit totals", (
   assert.equal(adj.totalEditH, 3);
   assert.equal(adj.editHPerVideo, 1.5);
   assert.equal(adj.medianEditH, 3); // median over the single edit video
+});
+
+test("buildWeeklySeries plots the weekly MEDIAN per category (robust to an outlier)", () => {
+  const idx = new Map([1, 2, 3, 4].map((i) => [
+    `v${i}`, { status: "done", videoType: "Live Action", parentName: `A: ${i}` },
+  ]));
+  // four Corporate videos in one week: 1h, 1h, 2h, 20h (one big outlier)
+  const logs = { ed1: { "2026-05-04": {} } };
+  Object.entries({ v1: 1, v2: 1, v3: 2, v4: 20 }).forEach(([id, h]) => {
+    logs.ed1["2026-05-04"][id] = { secs: SECS(h), stage: "edit" };
+  });
+  const { series } = buildWeeklySeries(buildVideoFacts(logs, idx));
+  // median of [1,1,2,20] = 1.5 (mean would be a misleading 6.0)
+  assert.equal(series[0].points[0].y, 1.5);
+  assert.equal(series[0].points[0].n, 4);
 });
 
 test("buildWeeklySeries honours the adjusted flag", () => {
