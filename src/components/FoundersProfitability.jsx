@@ -72,11 +72,11 @@ const ACCENT = { blue: "#0082FA", green: "#1EC081", amber: "#F5A623", orange: "#
 const PL_COLOR = { metaAds: "#FF8A80", socialPremium: "#0082FA", socialOrganic: "#22D3EE", oneOff: "#1EC081" };
 const plColor = (k) => PL_COLOR[k] || C.muted;
 
-// Headline metric card with a glowing coloured top edge.
+// Headline metric card with a calm coloured top edge (no glow).
 function MetricCard({ label, value, accent }) {
   return (
     <div style={{ position: "relative", padding: "16px 18px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: accent, boxShadow: `0 1px 14px 0 ${accent}` }} />
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: accent, opacity: 0.6 }} />
       <div style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 9, lineHeight: 1.3 }}>{label}</div>
       <div style={{ fontFamily: MONO, fontSize: 23, fontWeight: 600, color: C.fg, letterSpacing: -0.5 }}>{value}</div>
     </div>
@@ -111,11 +111,11 @@ function ContribBar({ value }) {
   );
 }
 
-// Section header: glowing coloured dot + uppercase title + muted right note.
+// Section header: coloured dot + uppercase title + muted right note.
 function SectionHeader({ dot, title, note }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 11 }}>
-      <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, boxShadow: `0 0 8px 0 ${dot}` }} />
+      <span style={{ width: 6, height: 6, borderRadius: 99, background: dot, opacity: 0.85 }} />
       <span style={{ fontSize: 11, fontWeight: 700, color: C.fg, textTransform: "uppercase", letterSpacing: 1 }}>{title}</span>
       {note && <span style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>{note}</span>}
     </div>
