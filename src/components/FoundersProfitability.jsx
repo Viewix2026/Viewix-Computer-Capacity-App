@@ -38,6 +38,7 @@ const WARN_LABEL = {
   [WARNINGS.MISSING_OR_ZERO_DEAL_VALUE]: "Deal value missing or zero",
   [WARNINGS.DUPLICATE_TASK_ID]: "Duplicate task id — labour may misattribute",
   [WARNINGS.DEAL_MATCH_AMBIGUOUS]: "Attio match not unique — set this deal's value manually",
+  [WARNINGS.DUPLICATE_DEAL]: "Duplicate deal — another project counts this sale; merge or correct it",
 };
 
 const money = (v) => fmtCur(Number(v) || 0);
