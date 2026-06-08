@@ -23,6 +23,12 @@ const fmtWeek = (key) => {
 
 export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yLabel = "avg edit h / video" }) {
   const [hover, setHover] = useState(null); // hovered week index
+  const [hidden, setHidden] = useState(() => new Set()); // categories toggled off via legend
+  const toggle = (cat) => setHidden((prev) => {
+    const next = new Set(prev);
+    next.has(cat) ? next.delete(cat) : next.add(cat);
+    return next;
+  });
 
   if (!weeks || weeks.length < 2) {
     return (
@@ -37,7 +43,11 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
   const innerW = W - PAD.l - PAD.r;
   const innerH = H - PAD.t - PAD.b;
 
-  const allY = series.flatMap((s) => s.points.map((p) => p.y)).filter((y) => y != null);
+  // Only the toggled-on lines drive the render AND the y-axis scale, so
+  // hiding an outlier category (e.g. a spiky Corporate week) rescales the
+  // chart to make the remaining lines readable.
+  const visible = series.filter((s) => !hidden.has(s.category));
+  const allY = visible.flatMap((s) => s.points.map((p) => p.y)).filter((y) => y != null);
   const yMax = Math.max(0.5, Math.max(...allY, 0) * 1.15);
 
   const xAt = (i) => PAD.l + (weeks.length === 1 ? innerW / 2 : (i / (weeks.length - 1)) * innerW);
@@ -69,14 +79,32 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
 
   return (
     <div>
-      {/* Legend */}
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
-        {series.map((s) => (
-          <span key={s.category} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--muted)" }}>
-            <span style={{ width: 16, height: 3, borderRadius: 2, background: colorFor(s.category), display: "inline-block" }} />
-            {s.category} <span style={{ opacity: 0.6 }}>· n={s.n}</span>
-          </span>
-        ))}
+      {/* Legend — click a category to show/hide its line */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+        {series.map((s) => {
+          const off = hidden.has(s.category);
+          return (
+            <button
+              key={s.category}
+              onClick={() => toggle(s.category)}
+              title={off ? "Show this line" : "Hide this line"}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11,
+                color: "var(--muted)", background: "transparent", border: "1px solid var(--border)",
+                borderRadius: 999, padding: "3px 10px", cursor: "pointer",
+                opacity: off ? 0.4 : 1, textDecoration: off ? "line-through" : "none",
+              }}
+            >
+              <span style={{ width: 16, height: 3, borderRadius: 2, background: colorFor(s.category), display: "inline-block", opacity: off ? 0.5 : 1 }} />
+              {s.category} <span style={{ opacity: 0.6 }}>· n={s.n}</span>
+            </button>
+          );
+        })}
+        {hidden.size > 0 && (
+          <button onClick={() => setHidden(new Set())} style={{ fontSize: 11, color: "var(--accent)", background: "transparent", border: "none", cursor: "pointer", padding: "3px 4px" }}>
+            reset
+          </button>
+        )}
       </div>
 
       <div style={{ position: "relative" }}>
@@ -94,8 +122,8 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
             <line x1={xAt(hover)} y1={PAD.t} x2={xAt(hover)} y2={PAD.t + innerH} stroke="var(--border)" strokeWidth={1} strokeDasharray="3 3" />
           )}
 
-          {/* series */}
-          {series.map((s) => (
+          {/* series (only the toggled-on ones) */}
+          {visible.map((s) => (
             <g key={s.category}>
               <path d={pathFor(s.points)} fill="none" stroke={colorFor(s.category)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
               {s.points.map((p) => p.y == null ? null : (
@@ -103,6 +131,9 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
               ))}
             </g>
           ))}
+          {visible.length === 0 && (
+            <text x={PAD.l + innerW / 2} y={PAD.t + innerH / 2} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="var(--muted)">All lines hidden — click a category above to show it</text>
+          )}
 
           {/* x ticks */}
           {ticks.map((t, i) => (
@@ -120,7 +151,7 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
         {hover != null && (
           <div style={{ position: "absolute", top: 0, left: `${(xAt(hover) / W) * 100}%`, transform: xAt(hover) > W / 2 ? "translateX(-105%)" : "translateX(5%)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 11, pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", minWidth: 130, zIndex: 5 }}>
             <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Week of {fmtWeek(weeks[hover])}</div>
-            {series.map((s) => {
+            {visible.map((s) => {
               const p = s.points[hover];
               return (
                 <div key={s.category} style={{ display: "flex", justifyContent: "space-between", gap: 10, color: "var(--muted)" }}>
