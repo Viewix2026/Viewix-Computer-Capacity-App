@@ -571,15 +571,17 @@ export default function App(){
 
   return(<div style={{fontFamily:"'DM Sans',-apple-system,sans-serif",background:"var(--bg)",color:"var(--fg)",minHeight:"100vh",display:"flex"}}><style>{CSS}</style>
 
-    {/* Sidebar */}
-    <div style={{width:72,background:"var(--card)",borderRight:"1px solid var(--border)",display:"flex",flexDirection:"column",alignItems:"center",padding:"16px 8px",gap:4,flexShrink:0}}>
+    {/* Sidebar — Pop rail: every tab carries a signature hue (see NAV_META
+        in UIComponents). The `icon` emoji is retained so the emoji-in-Pop
+        variant can be compared via RAIL_GLYPH; `name` keys the hue + glyph. */}
+    <div style={{width:76,background:"var(--rail)",borderRight:"1px solid var(--border)",display:"flex",flexDirection:"column",alignItems:"center",padding:"13px 9px 11px",gap:1,flexShrink:0}}>
       <div style={{marginBottom:12}}><Logo h={20}/></div>
-      <SideIcon icon="🏠" label="Home" active={tool==="home"} onClick={()=>setTool("home")}/>
-      {isFounders&&<SideIcon icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
-      {isFounder&&<SideIcon icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
-      {(isFounder||role==="closer")&&<SideIcon icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
-      {isFounder&&<SideIcon icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
-      {(isFounder||isLead)&&<SideIcon icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>{
+      <SideIcon name="home" icon="🏠" label="Home" active={tool==="home"} onClick={()=>setTool("home")}/>
+      {isFounders&&<SideIcon name="founders" icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
+      {isFounder&&<SideIcon name="capacity" icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
+      {(isFounder||role==="closer")&&<SideIcon name="sale" icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
+      {isFounder&&<SideIcon name="accounts" icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
+      {(isFounder||isLead)&&<SideIcon name="projects" icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>{
         // Clear any leftover #projects/teamBoard or #projects/deliveries
         // so the click lands on the default Projects sub-tab. Without
         // this the Projects component's deep-link effect would replay
@@ -589,13 +591,13 @@ export default function App(){
         setRoute({tool:null,subTab:null,recordId:null});
         setTool("projects");
       }}/>}
-      {(isFounder||isLead)&&<SideIcon icon="📈" label="Analytics" active={tool==="analytics"} onClick={()=>setTool("analytics")}/>}
-      {(isFounder||isLead)&&<SideIcon icon="🔗" label="Socials" active={tool==="socialConnections"} onClick={()=>setTool("socialConnections")}/>}
-      {(isFounder||isLead)&&<SideIcon icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
-      {(isFounder||isLead||role==="editor"||role==="trial")&&<SideIcon icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
-      <SideIcon icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
-      {(isFounder||role==="closer")&&<SideIcon icon="📚" label="Resources" active={tool==="resources"} onClick={()=>setTool("resources")}/>}
-      {isFounders&&<SideIcon icon="👤" label="Users" active={tool==="users"} onClick={()=>setTool("users")}/>}
+      {(isFounder||isLead)&&<SideIcon name="analytics" icon="📈" label="Analytics" active={tool==="analytics"} onClick={()=>setTool("analytics")}/>}
+      {(isFounder||isLead)&&<SideIcon name="socials" icon="🔗" label="Socials" active={tool==="socialConnections"} onClick={()=>setTool("socialConnections")}/>}
+      {(isFounder||isLead)&&<SideIcon name="preprod" icon="✏️" label="Pre-Prod" active={tool==="preproduction"} onClick={()=>setTool("preproduction")}/>}
+      {(isFounder||isLead||role==="editor"||role==="trial")&&<SideIcon name="editors" icon="🎬" label="Editors" active={tool==="editors"} onClick={()=>setTool("editors")}/>}
+      <SideIcon name="training" icon="🎓" label="Training" active={tool==="training"} onClick={()=>setTool("training")}/>
+      {(isFounder||role==="closer")&&<SideIcon name="resources" icon="📚" label="Resources" active={tool==="resources"} onClick={()=>setTool("resources")}/>}
+      {isFounders&&<SideIcon name="users" icon="👤" label="Users" active={tool==="users"} onClick={()=>setTool("users")}/>}
       <div style={{flex:1}}/>
       <button onClick={logout} style={{padding:"8px",borderRadius:6,border:"none",background:"transparent",color:"var(--muted)",fontSize:9,fontWeight:600,cursor:"pointer",textTransform:"uppercase"}}>Log Out</button>
     </div>
@@ -606,8 +608,10 @@ export default function App(){
         covers tab content/buttons. */}
     <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,overflow:"hidden"}}>
 
-    {/* App header bar */}
-    <div style={{flexShrink:0,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"8px 16px",borderBottom:"1px solid var(--border)",background:"var(--card)"}}>
+    {/* App header bar — shares the rail surface so the chrome reads as one
+        continuous frame. A notifications affordance belongs here once that
+        feature is real; omitted for now rather than ship a dead bell. */}
+    <div style={{flexShrink:0,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"8px 16px",borderBottom:"1px solid var(--border)",background:"var(--rail)"}}>
       <UserBadge editors={editors} email={authUser?.email||getCurrentUserEmail()} name={authUser?.displayName||getCurrentUserName()} photoURL={authUser?.photoURL||getCurrentUserPhotoURL()}/>
     </div>
 
