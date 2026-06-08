@@ -104,9 +104,9 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
 
       {/* Edit-time trend — the line graph (always full history) */}
       <div>
-        <h3 style={sectionTitle}>Average {adjusted ? "adjusted " : ""}edit time per video, over time</h3>
+        <h3 style={sectionTitle}>Median {adjusted ? "adjusted " : ""}edit time per video, over time</h3>
         <p style={sectionSub}>
-          Weekly trend, one line per category — each video plotted in the week its edit finished. {chartLabel}.
+          Weekly median, one line per category — each video plotted in the week its edit finished (median so outlier days don't drag the line). {chartLabel}.
           {adjusted && " Adjusted = logged edit time + each task's share of unlogged paid hours (8h/day)."}
         </p>
         <MultiSeriesLineChart weeks={weekly.weeks} series={weekly.series} colorFor={colorFor} yLabel={editLabel} />

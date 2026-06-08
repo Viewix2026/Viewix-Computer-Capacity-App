@@ -200,15 +200,17 @@ function continuousWeeks(startKey, endKey) {
   return out;
 }
 
-// Weekly time series of AVERAGE edit hours per video, one series per category.
-// Each video is anchored on its edit-completion week (week of its last edit
-// log). Weekly (not monthly) because the dataset is only weeks deep — monthly
-// would be 1-2 points. Empty weeks emit null (a gap, not a fake 0).
+// Weekly time series of MEDIAN edit hours per video, one series per category.
+// Median (not mean) so the line is robust to the few tasks that absorb a large
+// paid-hours allocation on a light/half day — those outliers no longer drag the
+// trend. Each video is anchored on its edit-completion week (week of its last
+// edit log). Weekly (not monthly) because the dataset is only weeks deep.
+// Empty weeks emit null (a gap, not a fake 0).
 export function buildWeeklySeries(facts, adjusted = false) {
   const vids = facts.filter((f) => f.hasEdit && f.editLastDate);
   if (!vids.length) return { weeks: [], series: [] };
 
-  const byWeekCat = new Map(); // `${week}|${cat}` -> {sum, n}
+  const byWeekCat = new Map(); // `${week}|${cat}` -> number[] (per-video edit hours)
   const weekSet = new Set();
   const catN = new Map(); // category -> total videos (for ordering)
   for (const f of vids) {
@@ -217,10 +219,9 @@ export function buildWeeklySeries(facts, adjusted = false) {
     weekSet.add(wk);
     catN.set(f.category, (catN.get(f.category) || 0) + 1);
     const key = `${wk}|${f.category}`;
-    const cur = byWeekCat.get(key) || { sum: 0, n: 0 };
-    cur.sum += editSecsOf(f, adjusted) / SECS_PER_H;
-    cur.n += 1;
-    byWeekCat.set(key, cur);
+    const arr = byWeekCat.get(key) || [];
+    arr.push(editSecsOf(f, adjusted) / SECS_PER_H);
+    byWeekCat.set(key, arr);
   }
   const sortedWeeks = [...weekSet].sort();
   const weeks = continuousWeeks(sortedWeeks[0], sortedWeeks[sortedWeeks.length - 1]);
@@ -229,8 +230,8 @@ export function buildWeeklySeries(facts, adjusted = false) {
     category,
     n: catN.get(category),
     points: weeks.map((wk, x) => {
-      const cell = byWeekCat.get(`${wk}|${category}`);
-      return { x, y: cell ? cell.sum / cell.n : null, n: cell ? cell.n : 0 };
+      const arr = byWeekCat.get(`${wk}|${category}`);
+      return { x, y: arr && arr.length ? median([...arr].sort((a, b) => a - b)) : null, n: arr ? arr.length : 0 };
     }),
   }));
   return { weeks, series };
