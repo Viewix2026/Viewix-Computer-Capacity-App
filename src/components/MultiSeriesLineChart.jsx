@@ -47,6 +47,9 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
   // hiding an outlier category (e.g. a spiky Corporate week) rescales the
   // chart to make the remaining lines readable.
   const visible = series.filter((s) => !hidden.has(s.category));
+  // Only true if a category that ACTUALLY exists in the current series is
+  // hidden — guards against a phantom "reset" from stale hidden entries.
+  const hasCurrentHidden = series.some((s) => hidden.has(s.category));
   const allY = visible.flatMap((s) => s.points.map((p) => p.y)).filter((y) => y != null);
   const yMax = Math.max(0.5, Math.max(...allY, 0) * 1.15);
 
@@ -87,6 +90,7 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
             <button
               key={s.category}
               onClick={() => toggle(s.category)}
+              aria-pressed={!off}
               title={off ? "Show this line" : "Hide this line"}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11,
@@ -100,7 +104,7 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
             </button>
           );
         })}
-        {hidden.size > 0 && (
+        {hasCurrentHidden && (
           <button onClick={() => setHidden(new Set())} style={{ fontSize: 11, color: "var(--accent)", background: "transparent", border: "none", cursor: "pointer", padding: "3px 4px" }}>
             reset
           </button>
@@ -117,8 +121,8 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
           <text x={PAD.l - 6} y={PAD.t + innerH} textAnchor="end" dominantBaseline="middle" fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">0</text>
           <text x={PAD.l - 6} y={PAD.t} textAnchor="end" dominantBaseline="middle" fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">{fmtH(yMax)}</text>
 
-          {/* hover guide line */}
-          {hover != null && (
+          {/* hover guide line (only when something is plotted) */}
+          {hover != null && visible.length > 0 && (
             <line x1={xAt(hover)} y1={PAD.t} x2={xAt(hover)} y2={PAD.t + innerH} stroke="var(--border)" strokeWidth={1} strokeDasharray="3 3" />
           )}
 
@@ -147,8 +151,8 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
           <rect x={PAD.l} y={PAD.t} width={innerW} height={innerH} fill="transparent" style={{ cursor: "crosshair" }} onMouseMove={onMove} onMouseLeave={() => setHover(null)} />
         </svg>
 
-        {/* tooltip */}
-        {hover != null && (
+        {/* tooltip (suppressed when no lines are visible) */}
+        {hover != null && visible.length > 0 && (
           <div style={{ position: "absolute", top: 0, left: `${(xAt(hover) / W) * 100}%`, transform: xAt(hover) > W / 2 ? "translateX(-105%)" : "translateX(5%)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 11, pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", minWidth: 130, zIndex: 5 }}>
             <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Week of {fmtWeek(weeks[hover])}</div>
             {visible.map((s) => {
