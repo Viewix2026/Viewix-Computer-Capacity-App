@@ -10,6 +10,7 @@ import {
   commissionFor,
   buildRollups,
   isInternalProject,
+  keepProjectRow,
   shootHoursByPersonForProject,
   EST_SHOOT_DAY_HOURS,
   MAX_SHOOT_DAYS,
@@ -557,6 +558,266 @@ test("enrichment: two blank projects sharing a deal id via attioCompanyId FK => 
   assert.ok(perProject["p1"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
   assert.ok(perProject["p2"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
   assert.equal(rollups.totals.dealValue, 0);
+});
+
+// ── own-value duplicate dedup (DUPLICATE_DEAL) ───────────────────────
+// Two project records for the SAME Attio sale, EACH with its own dealValue > 0,
+// used to both count (a 6517 sale shown as 13034) because the claim guard was
+// only consulted for BLANK rows. Now one canonical row counts and the rest are
+// flagged DUPLICATE_DEAL: exactly once, never twice, never zero.
+test("enrichment: two OWN-VALUE projects sharing a deal id (FK) => sale counts ONCE, duplicate flagged not doubled", () => {
+  // THE BUG: both projects carry their OWN dealValue AND the same deal record id
+  // in attioCompanyId. Each booked the 6517 sale — totals showed 13034. Now ONE
+  // canonical row counts and the other is flagged DUPLICATE_DEAL (Incomplete,
+  // excluded). (Viewix copies the FULL deal value onto each project and never
+  // splits one deal across rows, so shared-deal own-value rows are always
+  // duplicates to collapse, not partial splits to sum.)
+  const projects = {
+    "proj-a": { id: "proj-a", projectName: "Masterton Brand",    dealValue: 6517, attioCompanyId: "deal-dup" },
+    "proj-b": { id: "proj-b", projectName: "Masterton Brand v2", dealValue: 6517, attioCompanyId: "deal-dup" },
+  };
+  const attioCache = { data: [rawDeal("deal-dup", "Masterton Brand", 6517, "co-mast")] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "proj-a": { crew: 0 }, "proj-b": { crew: 0 } },
+    commissionInputs: {
+      "proj-a": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "proj-b": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  const a = perProject["proj-a"];
+  const b = perProject["proj-b"];
+  // equal values both match Attio => tie broken on lowest id => proj-a canonical
+  assert.equal(a.complete, true);
+  assert.equal(a.dealValue, 6517);
+  assert.ok(!a.warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  // duplicate keeps showing its OWN value (honest) but is flagged + incomplete
+  assert.equal(b.dealValue, 6517);
+  assert.equal(b.dealValueSource, "project");
+  assert.ok(b.warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  assert.equal(b.complete, false);
+  // the sale lands EXACTLY once in the totals — not 13034
+  assert.equal(rollups.totals.dealValue, 6517);
+  assert.equal(rollups.completeCount, 1);
+  assert.equal(rollups.incompleteCount, 1);
+});
+
+test("enrichment: own-value duplicates that DISAGREE => the record matching the Attio value is canonical (not lowest id)", () => {
+  // Founder call (Match Attio value): when two duplicate records carry DIFFERENT
+  // values, trust the one whose value equals the Attio deal. Here the LOWER id
+  // holds a stale 5000 while the higher id holds the true 6517 — the Attio match
+  // must win over the id tiebreak, or totals would carry the wrong number.
+  const projects = {
+    "proj-aaa": { id: "proj-aaa", projectName: "Stale Clone", dealValue: 5000, attioCompanyId: "deal-z" }, // wrong value, lowest id
+    "proj-zzz": { id: "proj-zzz", projectName: "True Record", dealValue: 6517, attioCompanyId: "deal-z" }, // matches Attio
+  };
+  const attioCache = { data: [rawDeal("deal-z", "Whatever", 6517, "co-z")] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "proj-aaa": { crew: 0 }, "proj-zzz": { crew: 0 } },
+    commissionInputs: {
+      "proj-aaa": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "proj-zzz": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  // the Attio-matching record (6517) is canonical even though it has the HIGHER id
+  assert.equal(perProject["proj-zzz"].complete, true);
+  assert.ok(!perProject["proj-zzz"].warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  assert.equal(perProject["proj-aaa"].complete, false);
+  assert.ok(perProject["proj-aaa"].warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  // totals carry the TRUE 6517 once — not the stale 5000, not 11517
+  assert.equal(rollups.totals.dealValue, 6517);
+  assert.equal(rollups.completeCount, 1);
+});
+
+test("enrichment: two own-value + one blank sibling on one deal => canonical counts once, both others flagged", () => {
+  // Mixed claimants: the canonical own-value row counts; the duplicate own-value
+  // row gets DUPLICATE_DEAL; the blank sibling keeps its existing ambiguous-match
+  // treatment (never borrows). The 8000 sale still lands exactly once.
+  const projects = {
+    "own-1":   { id: "own-1",   projectName: "Trio Deal", dealValue: 8000, attioCompanyId: "deal-trio" },
+    "own-2":   { id: "own-2",   projectName: "Trio Deal", dealValue: 8000, attioCompanyId: "deal-trio" },
+    "blank-3": { id: "blank-3", projectName: "Trio Deal", dealValue: null, attioCompanyId: "deal-trio" },
+  };
+  const attioCache = { data: [rawDeal("deal-trio", "Trio Deal", 8000, "co-trio")] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "own-1": { crew: 0 }, "own-2": { crew: 0 }, "blank-3": { crew: 0 } },
+    commissionInputs: {
+      "own-1": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "own-2": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "blank-3": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  // own-1 (lowest id, value matches Attio) is canonical
+  assert.equal(perProject["own-1"].complete, true);
+  assert.equal(perProject["own-1"].dealValue, 8000);
+  // own-2 is the duplicate
+  assert.ok(perProject["own-2"].warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  assert.equal(perProject["own-2"].complete, false);
+  // blank sibling keeps the existing ambiguous-match treatment (never borrows)
+  assert.equal(perProject["blank-3"].dealValue, 0);
+  assert.ok(perProject["blank-3"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.equal(perProject["blank-3"].complete, false);
+  // 8000 counted exactly once
+  assert.equal(rollups.totals.dealValue, 8000);
+  assert.equal(rollups.completeCount, 1);
+  assert.equal(rollups.incompleteCount, 2);
+});
+
+test("enrichment: own-value duplicate where only the NON-canonical-by-value has logged time => surviving row carries the sale, never zero", () => {
+  // Canonical selection must prefer a claimant that WOULD COUNT (survives the
+  // no-logged-time filter and is Complete). proj-empty matches the Attio value but
+  // has no logged time (it would be dropped); proj-worked has the team's hours. If
+  // the empty clone were canonical it would be dropped and the worked row flagged
+  // — zeroing the sale. The worked row must win and count.
+  const projects = {
+    "proj-empty":  { id: "proj-empty",  projectName: "Clone A", dealValue: 6517, attioCompanyId: "deal-e" }, // matches Attio, NO logged time
+    "proj-worked": { id: "proj-worked", projectName: "Clone B", dealValue: 6000, attioCompanyId: "deal-e", subtasks: { "pw-t": { id: "pw-t" } } }, // has logged time
+  };
+  const attioCache = { data: [rawDeal("deal-e", "Clone", 6517, "co-e")] };
+  const timeLogs = { "ed-1": { "2026-05-20": { "pw-t": { secs: 3600 } } } }; // only proj-worked logs an hour
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "proj-worked": { crew: 0 } },
+    commissionInputs: { "proj-worked": { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
+    commissionPlans: PLANS,
+  });
+  // empty clone is dropped (no logged time); the worked row survives + counts
+  assert.equal(perProject["proj-empty"], undefined);
+  assert.ok(perProject["proj-worked"]);
+  assert.equal(perProject["proj-worked"].complete, true);
+  assert.ok(!perProject["proj-worked"].warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  // the sale counts ONCE (6000, the surviving row's own value) — never zero
+  assert.equal(rollups.totals.dealValue, 6000);
+  assert.equal(rollups.completeCount, 1);
+});
+
+test("enrichment: a would-be canonical that is Incomplete loses to a Complete sibling (no zeroing — Codex round 1 #1/#2)", () => {
+  // Canonical is chosen from rows that WOULD COUNT, not a pre-guess. proj-x matches
+  // the Attio value AND has the lower id (the old tiebreakers) but is Incomplete (a
+  // logged person has no labour rate); proj-y has a different value but is fully
+  // Complete. proj-y must carry the sale — flagging it would zero the sale outright.
+  const projects = {
+    "proj-x": { id: "proj-x", projectName: "Clone X", dealValue: 6517, attioCompanyId: "deal-q", subtasks: { "x-t": { id: "x-t" } } }, // matches Attio, lower id, but Incomplete
+    "proj-y": { id: "proj-y", projectName: "Clone Y", dealValue: 6000, attioCompanyId: "deal-q", subtasks: { "y-t": { id: "y-t" } } }, // Complete
+  };
+  const attioCache = { data: [rawDeal("deal-q", "Clone", 6517, "co-q")] };
+  const timeLogs = {
+    "no-rate-person": { "2026-05-20": { "x-t": { secs: 3600 } } }, // proj-x logged by a person with NO rate => missingLabourRate => Incomplete
+    "ed-1":           { "2026-05-20": { "y-t": { secs: 3600 } } }, // proj-y logged by ed-1 (rate 50) => Complete
+  };
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "proj-x": { crew: 0 }, "proj-y": { crew: 0 } },
+    commissionInputs: {
+      "proj-x": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "proj-y": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  // proj-x is Incomplete on its own (missing labour rate) — it can't carry the sale
+  assert.equal(perProject["proj-x"].complete, false);
+  assert.ok(perProject["proj-x"].warnings.includes(WARNINGS.MISSING_LABOUR_RATE));
+  // proj-y is the canonical: Complete, NOT flagged duplicate, counts
+  assert.equal(perProject["proj-y"].complete, true);
+  assert.ok(!perProject["proj-y"].warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  // the sale is counted once (6000, the Complete row) — NOT zero
+  assert.equal(rollups.totals.dealValue, 6000);
+  assert.equal(rollups.completeCount, 1);
+});
+
+test("enrichment: own-value clone PAIR + a blank sibling on one deal => sale once, blank ambiguous, one dup flagged (orthogonal mechanisms)", () => {
+  // The blank-claimant guard (DEAL_MATCH_AMBIGUOUS) and the own-value dedup
+  // (DUPLICATE_DEAL) are orthogonal — they must coexist without double-counting.
+  // Two own-value clones + one blank sibling all share the deal: one own-value
+  // canonical counts, the other own-value clone is DUPLICATE_DEAL, the blank is
+  // DEAL_MATCH_AMBIGUOUS. The 9000 sale lands exactly once.
+  const projects = {
+    "own-1":   { id: "own-1",   projectName: "Quad Deal", dealValue: 9000, attioCompanyId: "deal-quad" },
+    "own-2":   { id: "own-2",   projectName: "Quad Deal", dealValue: 9000, attioCompanyId: "deal-quad" },
+    "blank-3": { id: "blank-3", projectName: "Quad Deal", dealValue: null, attioCompanyId: "deal-quad" },
+  };
+  const attioCache = { data: [rawDeal("deal-quad", "Quad Deal", 9000, "co-quad")] };
+  const timeLogs = withHour(projects);
+  const { perProject, rollups } = computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "own-1": { crew: 0 }, "own-2": { crew: 0 }, "blank-3": { crew: 0 } },
+    commissionInputs: {
+      "own-1": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "own-2": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "blank-3": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  // exactly one own-value row is complete + counted; the other is the flagged dup
+  const ownComplete = [perProject["own-1"], perProject["own-2"]].filter((r) => r.complete);
+  assert.equal(ownComplete.length, 1, "exactly one own-value clone counts");
+  const ownDup = [perProject["own-1"], perProject["own-2"]].find((r) => !r.complete);
+  assert.ok(ownDup.warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  // blank sibling is ambiguous, NEVER DUPLICATE_DEAL, never counts
+  assert.equal(perProject["blank-3"].dealValue, 0);
+  assert.ok(perProject["blank-3"].warnings.includes(WARNINGS.DEAL_MATCH_AMBIGUOUS));
+  assert.ok(!perProject["blank-3"].warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  // 9000 counted exactly once across BOTH mechanisms
+  assert.equal(rollups.totals.dealValue, 9000);
+  assert.equal(rollups.completeCount, 1);
+  assert.equal(rollups.incompleteCount, 2);
+});
+
+test("computeProfitability: does NOT mutate the input projects (duplicateDeal stays internal)", () => {
+  // The finalize loop's `base.duplicateDeal = true` must not dirty the caller's
+  // projects: `base` is a fresh object literal, never the project record. Lock the
+  // invariant — the input comes back pristine, with no duplicateDeal leaked onto it.
+  const projects = {
+    "proj-a": { id: "proj-a", projectName: "Dup", dealValue: 6517, attioCompanyId: "deal-d", subtasks: { "a-t": { id: "a-t" } } },
+    "proj-b": { id: "proj-b", projectName: "Dup", dealValue: 6517, attioCompanyId: "deal-d", subtasks: { "b-t": { id: "b-t" } } },
+  };
+  const attioCache = { data: [rawDeal("deal-d", "Dup", 6517, "co-d")] };
+  const timeLogs = { "ed-1": { "2026-05-20": { "a-t": { secs: 3600 }, "b-t": { secs: 3600 } } } };
+  const before = JSON.stringify(projects);
+  computeProfitability({
+    projects, attioCache, timeLogs, laborCosts: RATES,
+    costInputs: { "proj-a": { crew: 0 }, "proj-b": { crew: 0 } },
+    commissionInputs: {
+      "proj-a": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+      "proj-b": { dealType: "new", closerId: "p-closer", leadSource: "provided" },
+    },
+    commissionPlans: PLANS,
+  });
+  assert.equal(JSON.stringify(projects), before, "input projects must not be mutated");
+  assert.equal(projects["proj-a"].duplicateDeal, undefined);
+  assert.equal(projects["proj-b"].duplicateDeal, undefined);
+});
+
+test("recomputeRow: duplicateDeal flag round-trips AND the row still survives keepProjectRow (client reprices a persisted duplicate row)", () => {
+  // A real persisted duplicate has logged hours (else the cron would have dropped
+  // it), so the live UI both keeps it visible AND re-derives DUPLICATE_DEAL from the
+  // round-tripped flag without re-running cross-project detection.
+  const base = { projectId: "p", dealValue: 6517, hoursByPerson: { "ed-1": 2 }, duplicateDeal: true };
+  const first = recomputeRow(base, {
+    laborCosts: RATES, costInputs: { p: { crew: 0 } },
+    commissionInputs: { p: { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
+    commissionPlans: PLANS,
+  });
+  assert.ok(first.warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  assert.equal(first.complete, false);
+  assert.equal(first.duplicateDeal, true);
+  assert.ok(keepProjectRow(first), "duplicate row with logged hours stays visible in the UI");
+  // feed the OUTPUT back in as base — the flag and Incomplete state must persist
+  const second = recomputeRow(first, {
+    laborCosts: RATES, costInputs: { p: { crew: 0 } },
+    commissionInputs: { p: { dealType: "new", closerId: "p-closer", leadSource: "provided" } },
+    commissionPlans: PLANS,
+  });
+  assert.ok(second.warnings.includes(WARNINGS.DUPLICATE_DEAL));
+  assert.equal(second.duplicateDeal, true);
 });
 
 // ── internal Viewix projects are excluded entirely ───────────────────

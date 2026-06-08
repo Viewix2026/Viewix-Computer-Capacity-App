@@ -60,6 +60,13 @@ export const WARNINGS = {
   // pick one confidently, so no value was sourced. The row is Incomplete
   // until the deal is renamed in Attio or its value set on the project.
   DEAL_MATCH_AMBIGUOUS: "dealMatchAmbiguous",
+  // Two+ projects, EACH carrying its own dealValue, resolve to the SAME Attio
+  // deal id — one sale recorded as multiple (duplicated/cloned) project rows.
+  // computeProfitability keeps ONE canonical row counting and stamps this on the
+  // rest, so the sale lands in totals exactly once instead of N times. The
+  // flagged duplicate stays Incomplete (excluded) but still shows its own value
+  // so the founder can confirm/merge which project owns the sale.
+  DUPLICATE_DEAL: "duplicateDeal",
 };
 
 const num = (v) => {
@@ -238,6 +245,12 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
   const hoursByPerson = base.hoursByPerson && typeof base.hoursByPerson === "object" ? base.hoursByPerson : {};
   const warnings = [];
   if (base.duplicateTaskId) warnings.push(WARNINGS.DUPLICATE_TASK_ID);
+  // A non-canonical own-value duplicate of a shared Attio sale (set upstream in
+  // computeProfitability). Forces Incomplete so the sale, already counted on the
+  // canonical row, is not summed a second time here. Carried on `base` so the
+  // client's live recompute re-flags a persisted duplicate without re-running the
+  // cross-project detection (same pattern as duplicateTaskId / dealMatchAmbiguous).
+  if (base.duplicateDeal) warnings.push(WARNINGS.DUPLICATE_DEAL);
 
   // --- labour: price each person's logged hours at their cost rate ---
   // A person who logged time but has no rate counts as 0 labour AND
@@ -321,6 +334,7 @@ export function recomputeRow(base, { laborCosts = {}, costInputs = {}, commissio
     dealValueSource: base.dealValueSource || (dealValue > 0 ? "project" : "none"),
     attioDealId: base.attioDealId || null,
     dealMatchAmbiguous: !!base.dealMatchAmbiguous,
+    duplicateDeal: !!base.duplicateDeal,
     numberOfVideos: base.numberOfVideos ?? null,
     videoType: base.videoType || "",
     productLine: base.productLine || "",
@@ -406,6 +420,17 @@ export function computeProfitability({
   // hole the FK matcher widened: a project and its blank duplicate now commonly
   // share one deal id via attioCompanyId.
   const attioClaimCounts = new Map();
+  // OWN-VALUE claimants per deal id: projects carrying their OWN dealValue > 0
+  // that ALSO resolve to a real Attio deal id. The blank-claimant guard above
+  // never protected these — an own-value row keeps its number unconditionally —
+  // so two own-value rows for ONE sale (a re-fired webhook or cloned project, each
+  // carrying the deal's FULL value) each booked it, summing one sale twice (Codex:
+  // a 6517 deal counted as 13034). After the rows are computed below, exactly ONE
+  // canonical claimant keeps counting and the rest are flagged DUPLICATE_DEAL: the
+  // sale lands once, never twice (the bug) and never zero (the naive "flag both"
+  // fix). Each entry carries the project's own value AND the deal's Attio value so
+  // the canonical pick can prefer the record most likely to be the true sale.
+  const ownClaimantsByDeal = new Map();
   for (const p of Object.values(projects || {})) {
     if (!p || typeof p !== "object" || !p.id) continue;
     if (isInternalProject(p)) continue; // internal work claims no deal
@@ -418,6 +443,17 @@ export function computeProfitability({
     // never attach a wrong number.
     for (const id of resolveDealClaims(p, dealIndex)) {
       attioClaimCounts.set(id, (attioClaimCounts.get(id) || 0) + 1);
+    }
+    // Own-value duplicate detection needs a CONFIDENT single-deal resolution, so it
+    // uses resolveDealValue (not the broader claim set above): only a project that
+    // resolves to exactly one valued deal can be the SAME sale as another such row.
+    if (num(p.dealValue) > 0) {
+      const m = resolveDealValue(p, dealIndex);
+      if (m && m.value > 0 && m.dealId) {
+        let arr = ownClaimantsByDeal.get(m.dealId);
+        if (!arr) { arr = []; ownClaimantsByDeal.set(m.dealId, arr); }
+        arr.push({ id: p.id, ownValue: num(p.dealValue), attioValue: m.value });
+      }
     }
   }
 
@@ -453,11 +489,18 @@ export function computeProfitability({
     }
   }
 
-  // One row per project. Status is NOT filtered: realized margin on
-  // completed work is the most valuable signal, and the cron replaces the
-  // whole node nightly so nothing goes stale. Incomplete rows are flagged,
+  // One row per project, built in TWO passes so the deal-dedup can choose its
+  // canonical from REAL rows. Status is NOT filtered on completion: realized
+  // margin on completed work is the most valuable signal, and the cron replaces
+  // the whole node nightly so nothing goes stale. Incomplete rows are flagged,
   // not hidden.
+  //
+  // Pass 1: compute every row WITHOUT the duplicateDeal flag, remembering each
+  // base so a flagged loser can be recomputed. Pass 2 (below) resolves contested
+  // sales, then a finalize loop stamps the losers and applies the keep filter.
   const perProject = {};
+  const baseById = new Map();   // projectId -> base (lets a flagged loser be recomputed)
+  const rowById = new Map();    // projectId -> row computed WITHOUT duplicateDeal
   for (const p of Object.values(projects || {})) {
     if (!p || typeof p !== "object" || !p.id) continue;
     if (isInternalProject(p)) continue; // Viewix's own cost-only work, not revenue
@@ -502,14 +545,73 @@ export function computeProfitability({
       shootHoursByPerson: shoot.byPerson,
       shootHoursEstimated: shoot.estimated,
       duplicateTaskId: dupProjectIds.has(p.id),
+      duplicateDeal: false, // provisional — resolved in the dedup pass below
     };
-    const row = recomputeRow(base, { laborCosts, costInputs, commissionInputs, commissionPlans });
-    // Strict: drop projects nobody logged time on so the calculator shows
-    // only jobs the team actually worked. A duplicateTaskId row survives
-    // (its hours are misattributed, not absent) so its warning stays
-    // visible. See keepProjectRow.
+    baseById.set(p.id, base);
+    rowById.set(p.id, recomputeRow(base, { laborCosts, costInputs, commissionInputs, commissionPlans }));
+  }
+
+  // Resolve each contested sale to ONE canonical owner, chosen from the rows just
+  // computed. A row "would count" only if it survives keepProjectRow AND is
+  // Complete — exactly the rows that reach the headline totals. The canonical is
+  // the claimant that would count, preferring the record whose own value matches
+  // the Attio deal (the truer sale when clones disagree, compared in integer cents
+  // so float drift can't mis-classify), then the lowest project id. Every OTHER
+  // own-value claimant is flagged DUPLICATE_DEAL.
+  //
+  // Choosing from rows that genuinely count is what makes the dedup strip ONLY the
+  // double-count: it can never zero a sale by flagging the one good row while the
+  // canonical turns out dropped or Incomplete (Codex round 1, #1/#2). If NONE of
+  // the claimants would count, the sale was already absent from the totals, so the
+  // pick is moot and flagging the rest changes nothing.
+  //
+  // The dedup is computed here in the cron (the sole writer of /profitability); the
+  // live UI inherits the persisted duplicateDeal flag and does NOT re-run this
+  // cross-project pass, so a manual fix (e.g. zeroing one clone's value) may not
+  // re-evaluate the canonical until the next nightly run — identical to how
+  // duplicateTaskId and dealMatchAmbiguous already lag.
+  // A row reaches the headline totals iff it survives keepProjectRow (it has
+  // logged time, or is held visible by a duplicateTaskId collision) AND is
+  // Complete. Because a duplicateTaskId row is always Incomplete, it can never win
+  // canonical here — a corrupt-hours row must not be the one that carries the sale.
+  // If EVERY claimant is such a row, none wins and the sale stays out of totals,
+  // which is the conservative, correct outcome.
+  const wouldCount = (id) => {
+    const r = rowById.get(id);
+    return !!r && keepProjectRow(r) && r.complete;
+  };
+  const matchesAttio = (c) => Math.round(c.ownValue * 100) === Math.round(c.attioValue * 100);
+  const duplicateDealProjectIds = new Set();
+  for (const claimants of ownClaimantsByDeal.values()) {
+    if (claimants.length < 2) continue; // a lone own-value claimant: nothing to dedupe
+    const canonical = claimants.slice().sort((a, b) => {
+      const ac = wouldCount(a.id) ? 0 : 1;            // a row that lands in totals wins
+      const bc = wouldCount(b.id) ? 0 : 1;
+      if (ac !== bc) return ac - bc;
+      const am = matchesAttio(a) ? 0 : 1;             // then the value matching Attio
+      const bm = matchesAttio(b) ? 0 : 1;
+      if (am !== bm) return am - bm;
+      // Tie-break lowest id. Firebase push-ids are lexicographically time-ordered,
+      // so this deterministically prefers the OLDER record, and the cron reloads
+      // all projects each run, so the pick is stable run-to-run.
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    })[0];
+    for (const c of claimants) if (c.id !== canonical.id) duplicateDealProjectIds.add(c.id);
+  }
+
+  // Finalize: stamp the flagged duplicates (recomputing so DUPLICATE_DEAL lands and
+  // the row reads Incomplete), then apply the keep filter. Untouched rows reuse the
+  // pass-1 row. A duplicateTaskId row survives even at 0 logged hours (its hours are
+  // misattributed, not absent) so its warning stays visible. See keepProjectRow.
+  for (const [pid, row0] of rowById) {
+    let row = row0;
+    if (duplicateDealProjectIds.has(pid)) {
+      const base = baseById.get(pid);
+      base.duplicateDeal = true;
+      row = recomputeRow(base, { laborCosts, costInputs, commissionInputs, commissionPlans });
+    }
     if (!keepProjectRow(row)) continue;
-    perProject[p.id] = row;
+    perProject[pid] = row;
   }
 
   const rollups = buildRollups(Object.values(perProject), { commissionPlans });
