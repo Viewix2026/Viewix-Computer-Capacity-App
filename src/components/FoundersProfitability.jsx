@@ -54,29 +54,78 @@ function relTime(ms) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+// Dark "fintech dashboard" palette (matches the Profitability mockup): a
+// near-black surface with subtly lifted panels, JetBrains Mono numbers and
+// DM Sans text. Explicit colours (not theme vars) so the tab renders the
+// mockup look regardless of the app theme.
 const C = {
-  bg: "var(--bg)", card: "var(--card)", fg: "var(--fg)",
-  muted: "var(--muted)", border: "var(--border)",
+  bg: "#0A0E17",
+  panel: "#0E1422",
+  card: "#141B2B",
+  fg: "#E7EBF2",
+  muted: "#7C879B",
+  border: "rgba(255,255,255,0.07)",
 };
+const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace";
+const SANS = "'DM Sans', system-ui, -apple-system, sans-serif";
+const ACCENT = { blue: "#0082FA", green: "#1EC081", amber: "#F5A623", orange: "#F87700", pink: "#F472B6", coral: "#FF8A80" };
+const PL_COLOR = { metaAds: "#FF8A80", socialPremium: "#0082FA", socialOrganic: "#22D3EE", oneOff: "#1EC081" };
+const plColor = (k) => PL_COLOR[k] || C.muted;
 
-function Card({ label, tone = "green", children }) {
-  const tones = {
-    green: "rgba(16,185,129,0.35)", blue: "rgba(0,130,250,0.40)",
-    pink: "rgba(244,114,182,0.35)", amber: "rgba(245,158,11,0.35)",
-  };
-  const ring = tones[tone] || tones.green;
+// Headline metric card with a glowing coloured top edge.
+function MetricCard({ label, value, accent }) {
   return (
-    <div style={{ padding: "14px 18px", background: C.bg, border: `1px solid ${ring}`, borderRadius: 10, boxShadow: `0 0 0 1px ${ring}` }}>
-      <div style={{ fontSize: 10, fontWeight: 800, color: C.muted, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>{label}</div>
-      {children}
+    <div style={{ position: "relative", padding: "16px 18px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: accent, boxShadow: `0 1px 14px 0 ${accent}` }} />
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 9, lineHeight: 1.3 }}>{label}</div>
+      <div style={{ fontFamily: MONO, fontSize: 23, fontWeight: 600, color: C.fg, letterSpacing: -0.5 }}>{value}</div>
     </div>
   );
 }
 
 function Pill({ text, color }) {
   return (
-    <span style={{ display: "inline-block", fontSize: 10, fontWeight: 700, color, border: `1px solid ${color}`, borderRadius: 999, padding: "1px 7px", whiteSpace: "nowrap" }}>{text}</span>
+    <span style={{ display: "inline-block", fontFamily: SANS, fontSize: 10, fontWeight: 700, color, background: `${color}1A`, border: `1px solid ${color}55`, borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap" }}>{text}</span>
   );
+}
+
+// Product-line tag: coloured tint pill (coral Meta, blue Social Premium, …).
+function Tag({ k }) {
+  if (!k || !PL_COLOR[k]) return <span style={{ color: C.muted, fontStyle: "italic" }}>{plLabel(k)}</span>;
+  const c = plColor(k);
+  return <span style={{ fontFamily: SANS, fontSize: 9.5, fontWeight: 700, color: c, background: `${c}1A`, border: `1px solid ${c}44`, borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: 0.5 }}>{plLabel(k)}</span>;
+}
+
+// Contribution-% mini bar that ramps coral → orange → amber → green.
+function ContribBar({ value }) {
+  if (value == null) return <span style={{ fontFamily: MONO, color: C.muted }}>—</span>;
+  const p = Math.max(0, Math.min(1, value));
+  const col = value >= 0.85 ? ACCENT.green : value >= 0.7 ? ACCENT.amber : value >= 0 ? ACCENT.orange : ACCENT.coral;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 9, justifyContent: "flex-end" }}>
+      <span style={{ width: 46, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+        <span style={{ display: "block", height: "100%", width: `${p * 100}%`, background: col, borderRadius: 3 }} />
+      </span>
+      <span style={{ fontFamily: MONO, color: col, fontWeight: 600, minWidth: 34, textAlign: "right" }}>{pct(value)}</span>
+    </span>
+  );
+}
+
+// Section header: glowing coloured dot + uppercase title + muted right note.
+function SectionHeader({ dot, title, note }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 11 }}>
+      <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, boxShadow: `0 0 8px 0 ${dot}` }} />
+      <span style={{ fontSize: 11, fontWeight: 700, color: C.fg, textTransform: "uppercase", letterSpacing: 1 }}>{title}</span>
+      {note && <span style={{ marginLeft: "auto", fontSize: 11, color: C.muted }}>{note}</span>}
+    </div>
+  );
+}
+
+// Money cell that dims an explicit $0 (the mockup keeps zeros quiet).
+function MoneyCell({ v }) {
+  const n = Number(v) || 0;
+  return <span style={{ color: n === 0 ? "rgba(255,255,255,0.22)" : C.fg }}>{money(v)}</span>;
 }
 
 function Num({ value, onCommit, width = 78, placeholder = "" }) {
@@ -87,7 +136,7 @@ function Num({ value, onCommit, width = 78, placeholder = "" }) {
       value={value === "" || value == null ? "" : String(value)}
       placeholder={placeholder}
       onChange={(e) => onCommit(e.target.value === "" ? "" : Number(e.target.value))}
-      style={{ width, padding: "4px 6px", fontSize: 12, background: C.card, color: C.fg, border: `1px solid ${C.border}`, borderRadius: 5 }}
+      style={{ width, padding: "5px 8px", fontSize: 12, fontFamily: MONO, background: C.card, color: C.fg, border: `1px solid ${C.border}`, borderRadius: 6 }}
     />
   );
 }
@@ -101,10 +150,10 @@ function Sel({ value, onChange, options, placeholder }) {
   );
 }
 
-const th = { textAlign: "right", padding: "6px 8px", fontSize: 10, fontWeight: 800, color: C.muted, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` };
+const th = { textAlign: "right", padding: "10px 14px", fontSize: 9.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.6, whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` };
 const thL = { ...th, textAlign: "left" };
-const td = { textAlign: "right", padding: "7px 8px", fontSize: 12, color: C.fg, whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` };
-const tdL = { ...td, textAlign: "left" };
+const td = { textAlign: "right", padding: "12px 14px", fontSize: 12.5, fontFamily: MONO, color: C.fg, whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` };
+const tdL = { ...td, textAlign: "left", fontFamily: SANS };
 
 export function FoundersProfitability() {
   // cron-persisted snapshot (read-only display base)
@@ -262,11 +311,11 @@ export function FoundersProfitability() {
   const noSnapshot = baseRows.length === 0 && !persistedAt;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 22, fontFamily: SANS, background: C.bg, color: C.fg, padding: "22px 24px", borderRadius: 16 }}>
       {/* header */}
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 18, fontWeight: 800, color: C.fg }}>Profitability</span>
+          <span style={{ fontFamily: SANS, fontSize: 22, fontWeight: 800, color: C.fg, letterSpacing: -0.3 }}>Profitability</span>
           <Pill text="Figures ex GST" color="#0082FA" />
           <span style={{ fontSize: 11, color: C.muted }}>last persisted {relTime(persistedAt)}</span>
         </div>
@@ -293,22 +342,12 @@ export function FoundersProfitability() {
       </div>
 
       {/* headline cards — COMPLETE rows only */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
-        <Card label="Contribution (before overhead)" tone={totals.contribution >= 0 ? "green" : "pink"}>
-          <div style={{ fontSize: 22, fontWeight: 800, color: C.fg }}>{money(totals.contribution)}</div>
-        </Card>
-        <Card label="Blended Contribution %" tone="blue">
-          <div style={{ fontSize: 22, fontWeight: 800, color: C.fg }}>{pctOr(totals.contributionPct)}</div>
-        </Card>
-        <Card label="Production Margin %" tone="amber">
-          <div style={{ fontSize: 22, fontWeight: 800, color: C.fg }}>{pctOr(totals.productionMarginPct)}</div>
-        </Card>
-        <Card label="Total Commission" tone="pink">
-          <div style={{ fontSize: 22, fontWeight: 800, color: C.fg }}>{money(totals.commission)}</div>
-        </Card>
-        <Card label="Contribution / Video" tone="green">
-          <div style={{ fontSize: 22, fontWeight: 800, color: C.fg }}>{totals.perVideoContribution == null ? "—" : money(totals.perVideoContribution)}</div>
-        </Card>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(168px, 1fr))", gap: 12 }}>
+        <MetricCard label="Contribution (before overhead)" accent={totals.contribution >= 0 ? ACCENT.blue : ACCENT.coral} value={money(totals.contribution)} />
+        <MetricCard label="Blended Contribution %" accent={ACCENT.blue} value={pctOr(totals.contributionPct)} />
+        <MetricCard label="Production Margin %" accent={ACCENT.amber} value={pctOr(totals.productionMarginPct)} />
+        <MetricCard label="Total Commission" accent={ACCENT.pink} value={money(totals.commission)} />
+        <MetricCard label="Contribution / Video" accent={ACCENT.green} value={totals.perVideoContribution == null ? "—" : money(totals.perVideoContribution)} />
       </div>
       <div style={{ fontSize: 11, color: C.muted, marginTop: -8 }}>
         Totals cover <strong style={{ color: C.fg }}>{rollups.completeCount}</strong> complete {rollups.completeCount === 1 ? "project" : "projects"} ({money(totals.dealValue)} deal value).
@@ -318,8 +357,8 @@ export function FoundersProfitability() {
       {/* by product line */}
       {Object.keys(rollups.byProductLine).length > 0 && (
         <section>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.fg, marginBottom: 8 }}>By product line <span style={{ fontWeight: 400, color: C.muted }}>(complete only)</span></div>
-          <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          <SectionHeader dot={ACCENT.blue} title="By product line" note="complete only" />
+          <div style={{ overflowX: "auto", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12 }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr>
                 <th style={thL}>Line</th><th style={th}>Deals</th><th style={th}>Videos</th><th style={th}>Deal value</th><th style={th}>Production cost</th><th style={th}>Commission</th><th style={th}>Contribution</th><th style={th}>Contrib %</th>
@@ -327,14 +366,14 @@ export function FoundersProfitability() {
               <tbody>
                 {Object.entries(rollups.byProductLine).sort((a, b) => (a[1].contribution / (a[1].dealValue || 1)) - (b[1].contribution / (b[1].dealValue || 1))).map(([k, v]) => (
                   <tr key={k}>
-                    <td style={tdL}>{plLabel(k)}</td>
+                    <td style={tdL}><Tag k={k} /></td>
                     <td style={td}>{v.count || 0}</td>
                     <td style={td}>{v.videos || 0}</td>
                     <td style={td}>{money(v.dealValue)}</td>
                     <td style={td}>{money(v.productionCost)}</td>
-                    <td style={td}>{money(v.commission)}</td>
+                    <td style={td}><MoneyCell v={v.commission} /></td>
                     <td style={{ ...td, fontWeight: 700 }}>{money(v.contribution)}</td>
-                    <td style={td}>{v.dealValue > 0 ? pct(v.contribution / v.dealValue) : "—"}</td>
+                    <td style={td}><ContribBar value={v.dealValue > 0 ? v.contribution / v.dealValue : null} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -345,8 +384,8 @@ export function FoundersProfitability() {
 
       {/* projects */}
       <section>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.fg, marginBottom: 8 }}>Projects <span style={{ fontWeight: 400, color: C.muted }}>(worst contribution % first — click a row to edit costs & commission)</span></div>
-        <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+        <SectionHeader dot={ACCENT.green} title={`Projects · ${completeRows.length + incompleteRows.length}`} note="worst contribution % first · click a row to edit costs & commission" />
+        <div style={{ overflowX: "auto", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12 }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
               <th style={thL}>Client / Project</th><th style={thL}>Product</th><th style={th}>Deal</th><th style={th}>Labour</th><th style={th}>Ext.</th><th style={th}>Commission</th><th style={th}>Contribution</th><th style={th}>Contrib %</th><th style={th}>Status</th>
@@ -433,24 +472,24 @@ export function FoundersProfitability() {
     const co = costInputsM[r.projectId];
     return (
       <Fragment key={r.projectId}>
-        <tr onClick={() => setExpandedId(open ? null : r.projectId)} style={{ cursor: "pointer", background: open ? "rgba(0,130,250,0.06)" : "transparent" }}>
+        <tr onClick={() => setExpandedId(open ? null : r.projectId)} style={{ cursor: "pointer", background: open ? "rgba(0,130,250,0.07)" : "transparent" }}>
           <td style={tdL}>
-            <div style={{ fontWeight: 600 }}>{r.clientName || "(no client)"}</div>
-            {r.projectName && <div style={{ fontSize: 11, color: C.muted }}>{r.projectName}</div>}
+            <div style={{ fontWeight: 700, color: C.fg }}>{r.clientName || "(no client)"}</div>
+            {r.projectName && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{r.projectName}</div>}
           </td>
-          <td style={tdL}>{plLabel(r.productLine)}</td>
+          <td style={tdL}><Tag k={r.productLine} /></td>
           <td style={td}>
             {money(r.dealValue)}
             {r.dealValueSource === "attio" && (
-              <span title="Sourced from the matched Attio Won deal (the project had no value of its own)" style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: 0.3, color: "#60A5FA", border: "1px solid rgba(96,165,250,0.4)", borderRadius: 4, padding: "1px 4px", verticalAlign: "middle" }}>ATTIO</span>
+              <span title="Sourced from the matched Attio Won deal (the project had no value of its own)" style={{ marginLeft: 6, fontFamily: SANS, fontSize: 8.5, fontWeight: 800, letterSpacing: 0.4, color: ACCENT.blue, background: `${ACCENT.blue}1A`, border: `1px solid ${ACCENT.blue}55`, borderRadius: 4, padding: "1px 4px", verticalAlign: "middle" }}>ATTIO</span>
             )}
           </td>
           <td style={td}>{money(num(r.labourCost) + num(r.shootLabour))}</td>
-          <td style={td}>{money(r.externalCosts)}</td>
-          <td style={td}>{money(r.commission)}</td>
-          <td style={{ ...td, fontWeight: 700, color: r.contribution < 0 ? "#F472B6" : C.fg }}>{money(r.contribution)}</td>
-          <td style={td}>{pctOr(r.contributionPct)}</td>
-          <td style={td}>{r.complete ? <Pill text="Complete" color="#10B981" /> : <Pill text="Incomplete" color="#F59E0B" />}</td>
+          <td style={td}><MoneyCell v={r.externalCosts} /></td>
+          <td style={td}><MoneyCell v={r.commission} /></td>
+          <td style={{ ...td, fontWeight: 700, color: r.contribution < 0 ? ACCENT.coral : C.fg }}>{money(r.contribution)}</td>
+          <td style={td}><ContribBar value={r.contributionPct} /></td>
+          <td style={td}>{r.complete ? <Pill text="Complete" color={ACCENT.green} /> : <Pill text="Incomplete" color={ACCENT.amber} />}</td>
         </tr>
         {open && (
           <tr>
@@ -535,4 +574,4 @@ export function FoundersProfitability() {
   }
 }
 
-const collapseBtn = { background: "transparent", border: "none", color: "var(--fg)", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "4px 0", textAlign: "left" };
+const collapseBtn = { background: "transparent", border: "none", color: C.fg, fontFamily: SANS, fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "4px 0", textAlign: "left" };
