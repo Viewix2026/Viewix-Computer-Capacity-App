@@ -5,7 +5,7 @@ import { logoBg } from "../utils";
 
 // ─── Constants ───
 const RS_STATUS_COLORS = {
-  draft: { bg: "rgba(90,107,133,0.15)", fg: "#5A6B85" },
+  draft: { bg: "rgba(90,107,133,0.15)", fg: "#61728C" },
   final: { bg: "rgba(34,197,94,0.15)", fg: "#22C55E" },
 };
 const RS_STATUS_LABELS = { draft: "Draft", final: "Final" };
@@ -703,7 +703,7 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
                           {cellCount || ""}
                         </td>
                         <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", width: 30 }}>
-                          <button onClick={() => removeTimeSlot(activeDayIdx, si)} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14 }}>×</button>
+                          <button onClick={() => removeTimeSlot(activeDayIdx, si)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14 }}>×</button>
                         </td>
                       </tr>
                     );

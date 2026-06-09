@@ -1618,7 +1618,7 @@ function ScriptStep({ project, onPatch }) {
           {pushed && (
             <div style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(34,197,94,0.12)", color: "#22C55E", borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
               <span>✓ Pushed {new Date(runsheetHandoff.pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
-              <span style={{ color: "#5A6B85", fontSize: 10, fontWeight: 500 }}>
+              <span style={{ color: "var(--muted)", fontSize: 10, fontWeight: 500 }}>
                 Find it in <span style={{ color: "#22C55E", fontWeight: 700 }}>Pre-Prod → Runsheets</span>
               </span>
             </div>

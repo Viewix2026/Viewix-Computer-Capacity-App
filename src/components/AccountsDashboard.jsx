@@ -67,7 +67,7 @@ const STATUS_COLORS = {
   "Completed": { bg: "rgba(16,185,129,0.12)", color: "#10B981" },
   "Skipped": { bg: "rgba(245,158,11,0.12)", color: "#F59E0B" },
   "TBC": { bg: "rgba(139,92,246,0.12)", color: "#8B5CF6" },
-  "N/A": { bg: "rgba(90,107,133,0.12)", color: "#5A6B85" },
+  "N/A": { bg: "rgba(90,107,133,0.12)", color: "#61728C" },
 };
 
 function addDays(dateStr, days) {
@@ -832,9 +832,9 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, projec
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
                           {accountList.length > 1 && (
-                            <button onClick={() => setMergeAcctId(acct.id)} title="Merge with another account (fold a duplicate into this one)" style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 13, padding: "2px 5px", lineHeight: 1 }}>⇄</button>
+                            <button onClick={() => setMergeAcctId(acct.id)} title="Merge with another account (fold a duplicate into this one)" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, padding: "2px 5px", lineHeight: 1 }}>⇄</button>
                           )}
-                          <button onClick={() => removeClient(acct.id)} title="Remove this client" style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14, padding: "2px 6px" }}>x</button>
+                          <button onClick={() => removeClient(acct.id)} title="Remove this client" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, padding: "2px 6px" }}>x</button>
                         </div>
                       </td>
                     </tr>

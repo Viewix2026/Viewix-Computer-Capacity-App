@@ -379,18 +379,18 @@ function SparkChart({ entries, field }) {
             <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
         </defs>
-        <text x={PAD.l - 4} y={PAD.t + 4} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMax)}</text>
-        <text x={PAD.l - 4} y={PAD.t + ch} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMin)}</text>
-        <line x1={PAD.l} y1={PAD.t + ch} x2={W - PAD.r} y2={PAD.t + ch} stroke="#1E2A3A" strokeWidth={1} />
+        <text x={PAD.l - 4} y={PAD.t + 4} fill="#61728C" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMax)}</text>
+        <text x={PAD.l - 4} y={PAD.t + ch} fill="#61728C" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">{yTick(yMin)}</text>
+        <line x1={PAD.l} y1={PAD.t + ch} x2={W - PAD.r} y2={PAD.t + ch} stroke="#222D40" strokeWidth={1} />
         <path d={areaD} fill={`url(#grad-${field.key})`} />
         <path d={dPath} fill="none" stroke={colour} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" filter={`url(#glow-${field.key})`} />
         {points.length > 0 && (
-          <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r={3.5} fill={colour} stroke="#0B0F1A" strokeWidth={1.5} filter={`url(#glow-${field.key})`} />
+          <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r={3.5} fill={colour} stroke="#0A0E17" strokeWidth={1.5} filter={`url(#glow-${field.key})`} />
         )}
-        <text x={PAD.l} y={H - 6} fill="#5A6B85" fontSize={8} textAnchor="start" fontFamily="'JetBrains Mono',monospace">
+        <text x={PAD.l} y={H - 6} fill="#61728C" fontSize={8} textAnchor="start" fontFamily="'JetBrains Mono',monospace">
           {fmtDate(entries[0].date)}
         </text>
-        <text x={W - PAD.r} y={H - 6} fill="#5A6B85" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">
+        <text x={W - PAD.r} y={H - 6} fill="#61728C" fontSize={8} textAnchor="end" fontFamily="'JetBrains Mono',monospace">
           {fmtDate(entries[entries.length - 1].date)}
         </text>
       </svg>
@@ -615,7 +615,6 @@ function MonthlyRevenueChart({ chronological, monthlyByKey, now, maxRev, monthly
 
 export function Founders({
   foundersData, setFoundersData,
-  foundersGoals, setFoundersGoals,
   foundersMetrics, setFoundersMetrics,
   foundersTab, setFoundersTab,
   attioDeals, setAttioDeals,
@@ -675,11 +674,8 @@ export function Founders({
             avgRetainerValue:  m.avgRetainerValue  || p.avgRetainerValue,
             leadPipelineValue: m.leadPipelineValue || p.leadPipelineValue,
             closingRate:       m.closingRate       || p.closingRate,
-            // Fold YTD revenue into the same merge. The old code called an
-            // undefined updateRevenue() here, which threw and was swallowed
-            // by .catch — so manual Sync silently failed to persist currentRevenue.
-            currentRevenue:    m.ytdRevenue > 0 ? m.ytdRevenue : p.currentRevenue,
           }));
+          if (m.ytdRevenue > 0) updateRevenue(m.ytdRevenue);
         }
         setAttioLoading(false);
       })
@@ -937,7 +933,7 @@ export function Founders({
           <FoundersTrendGrid metrics={foundersMetrics} />
         </>)}
 
-        {foundersTab === "goals" && <FoundersGoals foundersGoals={foundersGoals} setFoundersGoals={setFoundersGoals} foundersData={foundersData} />}
+        {foundersTab === "goals" && <FoundersGoals foundersData={foundersData} setFoundersData={setFoundersData} />}
         {foundersTab === "advisor" && <FoundersAdvisor foundersData={foundersData} foundersMetrics={foundersMetrics} attioDeals={attioDeals} />}
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}

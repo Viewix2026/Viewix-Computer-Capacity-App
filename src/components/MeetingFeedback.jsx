@@ -39,7 +39,7 @@ const btnSecondary = {
 };
 
 function ratingColor(rating) {
-  if (!rating) return { bg: "rgba(90,107,133,0.15)", fg: "#5A6B85" };
+  if (!rating) return { bg: "rgba(90,107,133,0.15)", fg: "#61728C" };
   if (rating >= 8) return { bg: "rgba(34,197,94,0.15)", fg: "#22C55E" };
   if (rating >= 6) return { bg: "rgba(59,130,246,0.15)", fg: "#3B82F6" };
   if (rating >= 4) return { bg: "rgba(245,158,11,0.15)", fg: "#F59E0B" };
@@ -243,7 +243,7 @@ export function MeetingFeedback() {
                     const tag = raw.startsWith("hot") ? { label: "HOT", c: "#EF4444" }
                             : raw.startsWith("warm") ? { label: "WARM", c: "#F59E0B" }
                             : raw.startsWith("cold") ? { label: "COLD", c: "#3B82F6" }
-                            : raw.startsWith("dead") ? { label: "DEAD", c: "#5A6B85" }
+                            : raw.startsWith("dead") ? { label: "DEAD", c: "#61728C" }
                             : null;
                     return (
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", background: "var(--bg)", borderRadius: 8 }}>

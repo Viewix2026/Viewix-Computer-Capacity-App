@@ -50,7 +50,7 @@ export function FoundersLearnings() {
               <span style={{ fontSize: 13, color: "var(--fg)" }}>{l.rule}</span>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => fbSet(`/preproduction/promptLearnings/${id}/active`, false)} style={{ ...NB2, fontSize: 10, padding: "3px 8px" }}>Disable</button>
-                <button onClick={() => { if (window.confirm("Delete this learning?")) fbSet(`/preproduction/promptLearnings/${id}`, null); }} style={{ background: "none", border: "none", color: "#5A6B85", cursor: "pointer", fontSize: 12 }}>x</button>
+                <button onClick={() => { if (window.confirm("Delete this learning?")) fbSet(`/preproduction/promptLearnings/${id}`, null); }} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 12 }}>x</button>
               </div>
             </div>
           ))}

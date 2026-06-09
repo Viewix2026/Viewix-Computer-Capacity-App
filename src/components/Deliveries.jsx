@@ -519,7 +519,7 @@ export function Deliveries({ deliveries, setDeliveries, accounts, projects, deep
                         title={v.posted ? "Posted — click to unmark" : "Mark as posted"}
                         style={{ cursor: "pointer", accentColor: "#10B981", width: 16, height: 16 }} />
                     </td>
-                    <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><button onClick={() => removeVideo(v.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 16 }}>x</button></td>
+                    <td style={{ padding: "6px 12px", borderBottom: "1px solid var(--border-light)", textAlign: "center" }}><button onClick={() => removeVideo(v.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16 }}>x</button></td>
                   </tr>
                 ))}</tbody>
               </table>

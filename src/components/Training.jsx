@@ -336,7 +336,7 @@ export function Training({
                                 <button onClick={e => { e.stopPropagation(); reorderMod(cat.id, mod.id, -1); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 10, padding: "2px 4px" }} title="Move up">▲</button>
                                 <button onClick={e => { e.stopPropagation(); reorderMod(cat.id, mod.id, 1); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 10, padding: "2px 4px" }} title="Move down">▼</button>
                                 <button onClick={e => { e.stopPropagation(); setEditModId(mod.id); setEditModName(mod.name); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 10, padding: "2px 4px" }} title="Rename">✏️</button>
-                                <button onClick={e => { e.stopPropagation(); deleteMod(cat.id, mod.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14, padding: "2px 4px" }}>x</button>
+                                <button onClick={e => { e.stopPropagation(); deleteMod(cat.id, mod.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, padding: "2px 4px" }}>x</button>
                               </>
                             )}
                             {editModId !== mod.id && <span style={{ color: "var(--muted)", fontSize: 14, cursor: "pointer" }} onClick={() => setActiveModuleId(mod.id)}>→</span>}

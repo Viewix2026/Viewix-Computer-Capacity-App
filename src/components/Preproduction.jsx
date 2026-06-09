@@ -12,7 +12,7 @@ import { tierColor } from "../config";
 
 // ─── Constants ───
 const STATUS_COLORS = {
-  draft: { bg: "rgba(90,107,133,0.15)", fg: "#5A6B85" },
+  draft: { bg: "rgba(90,107,133,0.15)", fg: "#61728C" },
   processing: { bg: "rgba(59,130,246,0.15)", fg: "#3B82F6" },
   review: { bg: "rgba(251,191,36,0.15)", fg: "#F59E0B" },
   approved: { bg: "rgba(34,197,94,0.15)", fg: "#22C55E" },
@@ -1120,7 +1120,7 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                             );
                           })}
                           <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-light)", textAlign: "center", verticalAlign: "top" }}>
-                            <button onClick={e => { e.stopPropagation(); if (!window.confirm(`Delete "${row.videoName || "this video"}"?`)) return; const updated = p.scriptTable.filter((_, i) => i !== rowIdx); fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, updated); fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString()); setRewriteCell(null); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 14, padding: "2px 6px" }} title="Delete video">x</button>
+                            <button onClick={e => { e.stopPropagation(); if (!window.confirm(`Delete "${row.videoName || "this video"}"?`)) return; const updated = p.scriptTable.filter((_, i) => i !== rowIdx); fbSet(`/preproduction/metaAds/${p.id}/scriptTable`, updated); fbSet(`/preproduction/metaAds/${p.id}/updatedAt`, new Date().toISOString()); setRewriteCell(null); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 14, padding: "2px 6px" }} title="Delete video">x</button>
                           </td>
                         </tr>
                       );
@@ -1339,9 +1339,9 @@ ${p.motivators ? `<div class="section-title">Motivators</div>
                       fbSet(`/preproduction/metaAds/${p.id}`, null);
                     }}
                     title="Delete project"
-                    style={{ position: "absolute", top: 8, right: 8, background: "none", border: "none", cursor: "pointer", color: "#5A6B85", fontSize: 16, padding: "2px 8px", lineHeight: 1, borderRadius: 4 }}
+                    style={{ position: "absolute", top: 8, right: 8, background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, padding: "2px 8px", lineHeight: 1, borderRadius: 4 }}
                     onMouseEnter={e => { e.currentTarget.style.color = "#EF4444"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = "#5A6B85"; e.currentTarget.style.background = "none"; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)"; e.currentTarget.style.background = "none"; }}
                   >×</button>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, paddingRight: 24 }}>
                     {(()=>{const s=getAccountLogo(p);const bg=logoBg(getAccountLogoBg(p));return s?<img key={s+bg} src={s} alt="" onError={e => { e.target.style.display = "none"; }} style={{ height: 24, borderRadius: 4, objectFit: "contain", background: bg, padding: 2 }} />:null;})()}
