@@ -200,7 +200,7 @@ export function QuoteCalc({quote,onUpdate,onBack,rateCards}){
           <td style={{padding:"5px 8px"}}><input type="number" value={it.hours||""} onChange={e=>!locked&&updateCustom(it.id,{hours:parseFloat(e.target.value)||0})} disabled={locked} min={0} placeholder="0" style={{...inputStyle,width:50}}/></td>
           <td style={{padding:"5px 8px"}}><input type="number" value={Math.round((it.margin||0)*100)||""} onChange={e=>!locked&&updateCustom(it.id,{margin:(parseFloat(e.target.value)||0)/100})} disabled={locked} min={0} placeholder="0" style={{...inputStyle,width:50}} title="Margin % on this item"/></td>
           <td style={{padding:"5px 12px",textAlign:"right",fontFamily:"'JetBrains Mono',monospace",fontWeight:600,color:sc>0?"#10B981":"var(--muted)"}}>{sc>0?fmtCur(sc):"-"}</td>
-          <td style={{padding:"5px 8px"}}>{!locked&&<button onClick={()=>rmCustom(it.id)} style={{background:"none",border:"none",color:"#5A6B85",cursor:"pointer",fontSize:14}}>x</button>}</td>
+          <td style={{padding:"5px 8px"}}>{!locked&&<button onClick={()=>rmCustom(it.id)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:14}}>x</button>}</td>
         </tr>);})}</tbody>
       </table>
     </div>)}

@@ -40,11 +40,11 @@ async function readJsonResponse(r) {
 
 // ─── Constants ───
 const STATUS_COLORS = {
-  draft:        { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85" },
+  draft:        { bg: "rgba(90,107,133,0.15)",  fg: "#61728C" },
   scraping:     { bg: "rgba(59,130,246,0.15)",  fg: "#3B82F6" },
   classifying:  { bg: "rgba(139,92,246,0.15)",  fg: "#8B5CF6" },
   review:       { bg: "rgba(34,197,94,0.15)",   fg: "#22C55E" },
-  archived:     { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85" },
+  archived:     { bg: "rgba(90,107,133,0.15)",  fg: "#61728C" },
 };
 const STATUS_LABELS = {
   draft: "Draft", scraping: "Scraping", classifying: "Classifying",
@@ -3961,7 +3961,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
                 : "rgba(90,107,133,0.15)",
               color: handleSuggestion.confidence === "high" ? "#22C55E"
                 : handleSuggestion.confidence === "medium" ? "#F59E0B"
-                : "#5A6B85",
+                : "var(--muted)",
               fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em",
             }}>{handleSuggestion.confidence || "low"} confidence</span>
             {handleSuggestion.reason}
@@ -4172,7 +4172,7 @@ function StageCard({ stageLabel, title, hint, done, doneText, error, children })
 function ScrapeStatusPill({ scrape, label, projectId }) {
   const status = scrape?.status || "queued";
   const colour = {
-    queued:  { bg: "rgba(90,107,133,0.15)",  fg: "#5A6B85", text: "Queued" },
+    queued:  { bg: "rgba(90,107,133,0.15)",  fg: "#61728C", text: "Queued" },
     running: { bg: "rgba(59,130,246,0.15)",  fg: "#3B82F6", text: "Scraping…" },
     done:    { bg: "rgba(34,197,94,0.15)",   fg: "#22C55E", text: "Complete" },
     error:   { bg: "rgba(239,68,68,0.15)",   fg: "#EF4444", text: scrape?.error || "Error" },
@@ -4759,7 +4759,7 @@ function ScriptToolbar({ project, onRegenerate, onPatch }) {
         {pushed && (
           <div style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "6px 12px", background: "rgba(34,197,94,0.12)", color: "#22C55E", borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
             <span>✓ Pushed {new Date((runsheetHandoff || legacyDelivery).pushedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}</span>
-            <span style={{ color: "#5A6B85", fontSize: 10, fontWeight: 500 }}>
+            <span style={{ color: "var(--muted)", fontSize: 10, fontWeight: 500 }}>
               Find it in <span style={{ color: "#22C55E", fontWeight: 700 }}>Pre-Prod → Runsheets</span>
             </span>
           </div>

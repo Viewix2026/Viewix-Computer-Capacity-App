@@ -63,7 +63,7 @@ export function VideoEmbed({ url, aspectRatio }) {
       <a href={url} target="_blank" rel="noopener noreferrer" style={{
         display: "flex", alignItems: "center", justifyContent: "center",
         aspectRatio: aspectRatio || "16 / 9",
-        background: "#1E2A3A", color: "var(--accent)",
+        background: "var(--border)", color: "var(--accent)",
         textDecoration: "none", borderRadius: 8, fontSize: 14, fontWeight: 600,
         padding: 20, textAlign: "center", gap: 8,
       }}>

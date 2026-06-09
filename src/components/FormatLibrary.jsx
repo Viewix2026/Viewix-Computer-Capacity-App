@@ -280,7 +280,7 @@ const FormatCard = memo(function FormatCard({ format, onClick }) {
         {firstExample ? (
           <ReelPreview url={firstExample.url} thumbnail={firstExample.thumbnail} aspectRatio="9 / 16" />
         ) : (
-          <div style={{ aspectRatio: "9 / 16", background: "#1E2A3A", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 32 }}>📼</div>
+          <div style={{ aspectRatio: "9 / 16", background: "var(--border)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 32 }}>📼</div>
         )}
         {topTag && (
           <div style={{ position: "absolute", top: 6, left: 6, padding: "3px 8px", background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
