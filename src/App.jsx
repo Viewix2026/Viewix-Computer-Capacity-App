@@ -26,6 +26,7 @@ import { UserBadge } from "./components/UserBadge";
 import { Analytics } from "./components/Analytics";
 import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
+import { useProposalJobsSync } from "./sync/useProposalJobsSync";
 import { useSalesSync } from "./sync/useSalesSync";
 import { useProjectsSync } from "./sync/useProjectsSync";
 import { useCalendarSyncQueue } from "./sync/useCalendarSyncQueue";
@@ -34,6 +35,7 @@ import { isAdminRole, isFounderRole, normalizeRole } from "./lib/roles";
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
 const Sale                     = lazy(() => import("./components/Sale").then(m => ({ default: m.Sale })));
+const Proposals                = lazy(() => import("./components/Proposals").then(m => ({ default: m.Proposals })));
 const SalePublicView           = lazy(() => import("./components/SalePublicView").then(m => ({ default: m.SalePublicView })));
 const EditorDashboard          = lazy(() => import("./components/EditorDashboard").then(m => ({ default: m.EditorDashboard })));
 const AccountsDashboard        = lazy(() => import("./components/AccountsDashboard").then(m => ({ default: m.AccountsDashboard })));
@@ -257,6 +259,11 @@ export default function App(){
   // listener (avoids permission-denied log spam). Threaded into
   // Projects + TeamBoard so shoot rows can render sync-status pills.
   const{calendarSyncQueue}=useCalendarSyncQueue({enabled:isFounder||isLead});
+
+  // Enterprise proposal job queue — /proposalJobs. Gated to founders/closer
+  // (the only roles the rules let read it); dashboard writes queued jobs, the
+  // Mac mini worker renders + writes back pdfUrl. docs/plans/enterprise-proposal-generator.md.
+  const{proposalJobs,setProposalJobs}=useProposalJobsSync({enabled:isFounder||role==="closer"});
 
   // Firebase data listeners — gated on auth being ready so the root listener
   // doesn't attach before the auth token is available (prevents listener lockout
@@ -580,6 +587,7 @@ export default function App(){
       {isFounders&&<SideIcon name="founders" icon="🏛" label="Founders" active={tool==="founders"} onClick={()=>setTool("founders")}/>}
       {isFounder&&<SideIcon name="capacity" icon="📊" label="Capacity" active={tool==="capacity"} onClick={()=>setTool("capacity")}/>}
       {(isFounder||role==="closer")&&<SideIcon name="sale" icon="💰" label="Sale" active={tool==="sale"||tool==="quoting"} onClick={()=>setTool("sale")}/>}
+      {(isFounder||role==="closer")&&<SideIcon name="proposals" icon="📋" label="Proposals" active={tool==="proposals"} onClick={()=>setTool("proposals")}/>}
       {isFounder&&<SideIcon name="accounts" icon="👥" label="Accounts" active={tool==="accounts"} onClick={()=>setTool("accounts")}/>}
       {(isFounder||isLead)&&<SideIcon name="projects" icon="📦" label="Projects" active={tool==="projects"||tool==="deliveries"} onClick={()=>{
         // Clear any leftover #projects/teamBoard or #projects/deliveries
@@ -665,6 +673,14 @@ export default function App(){
         rcShowArchive={rcShowArchive} setRcShowArchive={setRcShowArchive}
         createQuote={createQuote} duplicateQuote={duplicateQuote}
         updateQuote={updateQuote} deleteQuote={deleteQuote}
+      />
+    )}
+
+    {/* ═══ ENTERPRISE PROPOSALS (job queue → Mac mini renderer) ═══ */}
+    {tool==="proposals"&&(isFounder||role==="closer")&&(
+      <Proposals
+        proposalJobs={proposalJobs} setProposalJobs={setProposalJobs}
+        isFounder={isFounder} isFounders={isFounders} role={role}
       />
     )}
 
