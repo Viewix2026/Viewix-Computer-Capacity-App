@@ -149,6 +149,11 @@
       ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
     },
 
+    "foundersGoals": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"
+    },
+
     "laborCosts": {
       ".read": "auth != null && auth.token.role == 'founders'",
       ".write": "auth != null && auth.token.role == 'founders' && root.child('users').child(auth.uid).child('active').val() === true"

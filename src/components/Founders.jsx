@@ -615,6 +615,7 @@ function MonthlyRevenueChart({ chronological, monthlyByKey, now, maxRev, monthly
 
 export function Founders({
   foundersData, setFoundersData,
+  foundersGoals, setFoundersGoals,
   foundersMetrics, setFoundersMetrics,
   foundersTab, setFoundersTab,
   attioDeals, setAttioDeals,
@@ -674,8 +675,11 @@ export function Founders({
             avgRetainerValue:  m.avgRetainerValue  || p.avgRetainerValue,
             leadPipelineValue: m.leadPipelineValue || p.leadPipelineValue,
             closingRate:       m.closingRate       || p.closingRate,
+            // Fold YTD revenue into the same merge. The old code called an
+            // undefined updateRevenue() here, which threw and was swallowed
+            // by .catch — so manual Sync silently failed to persist currentRevenue.
+            currentRevenue:    m.ytdRevenue > 0 ? m.ytdRevenue : p.currentRevenue,
           }));
-          if (m.ytdRevenue > 0) updateRevenue(m.ytdRevenue);
         }
         setAttioLoading(false);
       })
@@ -933,7 +937,7 @@ export function Founders({
           <FoundersTrendGrid metrics={foundersMetrics} />
         </>)}
 
-        {foundersTab === "goals" && <FoundersGoals foundersData={foundersData} setFoundersData={setFoundersData} />}
+        {foundersTab === "goals" && <FoundersGoals foundersGoals={foundersGoals} setFoundersGoals={setFoundersGoals} foundersData={foundersData} />}
         {foundersTab === "advisor" && <FoundersAdvisor foundersData={foundersData} foundersMetrics={foundersMetrics} attioDeals={attioDeals} />}
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
