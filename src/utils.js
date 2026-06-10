@@ -613,3 +613,18 @@ export function resolveAccountForProject(project, accounts) {
   }
   return null;
 }
+
+// Resolve a person from the Team Roster (/editors) by matching their
+// sign-in email — the lookup the header UserBadge uses, extracted so
+// comment/reaction attributions show the exact same name as the badge
+// (roster name first, e.g. "Jeremy", not the Google account's full
+// display name). The name resolver returns "" when there's no roster
+// match so callers can chain their own fallbacks.
+export function rosterEntryForEmail(editors, email) {
+  const lcEmail = (email || "").trim().toLowerCase();
+  if (!Array.isArray(editors) || !lcEmail) return null;
+  return editors.find(e => e && (e.email || "").trim().toLowerCase() === lcEmail) || null;
+}
+export function rosterNameForEmail(editors, email) {
+  return (rosterEntryForEmail(editors, email)?.name || "").trim();
+}
