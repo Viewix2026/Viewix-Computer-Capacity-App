@@ -83,7 +83,12 @@ function editorHasShootOn(editorId, dateISO, allProjects, ignoreShootId) {
     for (const st of subs) {
       if (!isShootSubtask(st)) continue;
       if (ignoreShootId && st.id === ignoreShootId) continue;
-      if (st.startDate !== dateISO) continue;
+      if (!st.startDate) continue;
+      // Multi-day shoots occupy every day in the startDate..endDate span,
+      // not just day 1 — matching startDate alone treated a lead on day 2+
+      // of another shoot as available for Selects.
+      const endDay = st.endDate || st.startDate;
+      if (dateISO < st.startDate || dateISO > endDay) continue;
       if (getAssigneeIds(st).includes(editorId)) return true;
     }
   }

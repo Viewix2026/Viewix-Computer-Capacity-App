@@ -495,7 +495,7 @@ function isFrameioLink(s) {
 //  - everything else (treated as edit): Frame.io link input + Watch
 //    gate + radio between internal / client review. Submit propagates
 //    appropriately.
-function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmitted }) {
+function FinishModal({ task, editorName, projects, setProjects, deliveries, setDeliveries, onClose, onSubmitted }) {
   const isShoot = task.stage === "shoot";
   const isSelectsTimeline = task.stage === "selectsTimeline";
   // Both branches skip the Frame.io link entirely — they're producer
@@ -536,6 +536,18 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
     setError(null);
     try {
       const now = new Date().toISOString();
+      // Optimistic /projects patch — the own-write echo is suppressed by
+      // useProjectsSync, so without this the finished task kept its stale
+      // status (and a live Finish button) in the Today list.
+      const patchSubtaskLocal = (fields) => {
+        if (typeof setProjects !== "function") return;
+        setProjects(prev => prev.map(p => {
+          if (!p || p.id !== task.projectId) return p;
+          const subs = { ...(p.subtasks || {}) };
+          subs[task.id] = { ...(subs[task.id] || {}), ...fields };
+          return { ...p, subtasks: subs, updatedAt: now };
+        }));
+      };
       if (isNoLinkBranch) {
         // Shoot + Selects Timeline share the same write path: flip the
         // subtask to done, optionally stamp the producer notes, fire the
@@ -543,6 +555,7 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
         // notes-stamp label ("shoot wrap" vs "selects wrap") and
         // whether we POST notify-finish (we do, but only for
         // selectsTimeline — shoot has no Slack ping today).
+        patchSubtaskLocal({ status: "done", updatedAt: now });
         await fbUpdate(`/projects/${task.projectId}/subtasks/${task.id}`, {
           status: "done",
           updatedAt: now,
@@ -558,6 +571,11 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
           const label = isSelectsTimeline ? "selects wrap" : "shoot wrap";
           const stamped = `[${today} · ${editorName || "Editor"} · ${label}]\n${trimmedNotes}`;
           const next = existing ? `${existing}\n\n${stamped}` : stamped;
+          // Patch locally too — a second same-project wrap would otherwise
+          // build its append on the stale notes and drop this stamp.
+          if (typeof setProjects === "function") {
+            setProjects(prev => prev.map(p => p && p.id === task.projectId ? { ...p, producerNotes: next } : p));
+          }
           await fbSet(`/projects/${task.projectId}/producerNotes`, next);
         }
         fireSmallBurst();
@@ -597,6 +615,7 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
         }
       } else {
         const linkOut = link.trim();
+        patchSubtaskLocal({ frameioLink: linkOut, status: "done", updatedAt: now });
         await fbUpdate(`/projects/${task.projectId}/subtasks/${task.id}`, {
           frameioLink: linkOut,
           status: "done",
@@ -616,7 +635,18 @@ function FinishModal({ task, editorName, projects, deliveries, onClose, onSubmit
             const patch = {};
             if (linkOut) patch.link = linkOut;
             if (reviewType === "client") patch.viewixStatus = "Ready for Review";
-            if (Object.keys(patch).length) await fbUpdate(`/deliveries/${delId}/videos/${idx}`, patch);
+            if (Object.keys(patch).length) {
+              // Optimistic /deliveries patch — same echo-suppression
+              // reasoning as patchSubtaskLocal above.
+              if (typeof setDeliveries === "function") {
+                setDeliveries(prev => prev.map(d => {
+                  if (!d || d.id !== delId) return d;
+                  const videos = Array.isArray(d.videos) ? d.videos : [];
+                  return { ...d, videos: videos.map(v => v && v.videoId === task.videoId ? { ...v, ...patch } : v) };
+                }));
+              }
+              await fbUpdate(`/deliveries/${delId}/videos/${idx}`, patch);
+            }
           }
         }
         if (reviewType === "client") fireFireworks();
@@ -1253,7 +1283,7 @@ function TaskDetailsPanel({ task, onOpenProject }) {
 // here rather than letting them navigate away (and rather than
 // embedding the full editable ProjectDetail, which they shouldn't be
 // editing from this surface).
-function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClose }) {
+function ProjectDetailsModal({ projectId, projects, setProjects, deliveries, setDeliveries, accounts, onClose }) {
   // ESC closes — same affordance as the FinishModal.
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -1419,8 +1449,20 @@ function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClos
                     deliveries={deliveries}
                     onSave={(next) => {
                       const trimmed = (next || "").trim();
+                      const ts = new Date().toISOString();
+                      // Optimistic patches first — both prefixes are
+                      // echo-suppressed, so without them the field
+                      // visibly reverts to the stale value on blur.
+                      if (typeof setProjects === "function") {
+                        setProjects(prev => prev.map(p => {
+                          if (!p || p.id !== project.id) return p;
+                          const subs = { ...(p.subtasks || {}) };
+                          subs[st.id] = { ...(subs[st.id] || {}), frameioLink: trimmed, updatedAt: ts };
+                          return { ...p, subtasks: subs, updatedAt: ts };
+                        }));
+                      }
                       fbSet(`/projects/${project.id}/subtasks/${st.id}/frameioLink`, trimmed);
-                      fbSet(`/projects/${project.id}/subtasks/${st.id}/updatedAt`, new Date().toISOString());
+                      fbSet(`/projects/${project.id}/subtasks/${st.id}/updatedAt`, ts);
                       if (st.videoId) {
                         const delId = (project.links || {}).deliveryId;
                         const delivery = delId && Array.isArray(deliveries)
@@ -1429,6 +1471,13 @@ function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClos
                         if (delivery && Array.isArray(delivery.videos)) {
                           const idx = delivery.videos.findIndex(v => v && v.videoId === st.videoId);
                           if (idx >= 0) {
+                            if (typeof setDeliveries === "function") {
+                              setDeliveries(prev => prev.map(d => {
+                                if (!d || d.id !== delId) return d;
+                                const videos = Array.isArray(d.videos) ? d.videos : [];
+                                return { ...d, videos: videos.map(v => v && v.videoId === st.videoId ? { ...v, link: trimmed } : v) };
+                              }));
+                            }
                             fbSet(`/deliveries/${delId}/videos/${idx}/link`, trimmed);
                           }
                         }
@@ -1462,7 +1511,7 @@ function ProjectDetailsModal({ projectId, projects, deliveries, accounts, onClos
 }
 
 // ─── Main component ───────────────────────────────────────────────
-export function EditorDashboardViewix({ projects = [], editors = [], clients = [], deliveries = [], accounts = {}, viewerRole = null, currentUserEmail = null, currentUserName = null }) {
+export function EditorDashboardViewix({ projects = [], setProjects = null, editors = [], clients = [], deliveries = [], setDeliveries = null, accounts = {}, viewerRole = null, currentUserEmail = null, currentUserName = null }) {
   const [editorId, setEditorId] = useState(null);
   const [timers, setTimers] = useState({});
   const [timeLogs, setTimeLogs] = useState({});
@@ -1508,6 +1557,22 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
     [isSelfScoped, editors, currentUserEmail, currentUserName]
   );
   const activeEditorId = isSelfScoped ? matchedEditor?.id : editorId;
+
+  // Timer state is scoped to ONE editor. Clearing it on profile switch
+  // stops a founder/lead carrying editor A's running timer into editor
+  // B's view — stopTimer there persisted A's elapsed session under B's
+  // /timeLogs path and left A's _running record orphaned. The per-editor
+  // listener below repopulates timers from the new editor's _running.
+  const prevEditorRef = useRef(activeEditorId);
+  useEffect(() => {
+    if (prevEditorRef.current === activeEditorId) return;
+    prevEditorRef.current = activeEditorId;
+    setTimers({});
+    setTimerWarning(null);
+    setLogError(null);
+    justStoppedRef.current = {};
+    pendingLogsRef.current = {};
+  }, [activeEditorId]);
 
   // Auto-link the logged-in person to their roster profile by email.
   // Pre-SSO every editor shared one password and manually picked their
@@ -1996,7 +2061,9 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
         <ProjectDetailsModal
           projectId={openProjectId}
           projects={projects}
+          setProjects={setProjects}
           deliveries={deliveries}
+          setDeliveries={setDeliveries}
           accounts={accounts}
           onClose={() => setOpenProjectId(null)}
         />
@@ -2034,7 +2101,9 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
             task={ft}
             editorName={editor?.name || ""}
             projects={projects}
+            setProjects={setProjects}
             deliveries={deliveries}
+            setDeliveries={setDeliveries}
             onClose={() => setFinishingTaskId(null)}
           />
         );

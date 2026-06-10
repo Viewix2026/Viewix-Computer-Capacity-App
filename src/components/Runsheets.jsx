@@ -115,9 +115,17 @@ export function Runsheets({ accounts, projects, creating: creatingProp, onCreati
   // Deep-link from a Projects-tab Runsheet pill (#preproduction/runsheets/{id}).
   // Once the runsheet listener has loaded the matching record, jump
   // straight into its detail view.
+  // One-shot per distinct deep link: the hash (and thus the id) persists
+  // while the tab is open, and /runsheets has no own-write echo
+  // suppression — without the consumed guard every keystroke re-ran
+  // this and snapped the producer back to day 1 / back into the detail
+  // view after pressing Back.
+  const consumedDeepLinkRef = useRef(null);
   useEffect(() => {
-    if (!deepLinkRunsheetId) return;
+    if (!deepLinkRunsheetId) { consumedDeepLinkRef.current = null; return; }
+    if (consumedDeepLinkRef.current === deepLinkRunsheetId) return;
     if (runsheets[deepLinkRunsheetId]) {
+      consumedDeepLinkRef.current = deepLinkRunsheetId;
       setActiveId(deepLinkRunsheetId);
       setActiveDayIdx(0);
     }

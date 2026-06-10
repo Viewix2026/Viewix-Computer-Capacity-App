@@ -453,11 +453,14 @@ function ResearchStep({ project, onPatch }) {
   // Default date range: last 90 days. Producers almost always want
   // "recent" ads — a ~3 month window gives enough creative variety
   // without drowning the library in stale stuff.
+  // Local-date ISO — toISOString() is UTC, which rolls both defaults
+  // back a day before ~10-11am Sydney and excludes today's ads.
+  const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const defaultFrom = (() => {
     const d = new Date(); d.setDate(d.getDate() - 90);
-    return d.toISOString().slice(0, 10);
+    return localISO(d);
   })();
-  const defaultTo = new Date().toISOString().slice(0, 10);
+  const defaultTo = localISO(new Date());
   const [dateFrom, setDateFrom] = useState(inputs.dateRange?.from || defaultFrom);
   const [dateTo, setDateTo] = useState(inputs.dateRange?.to || defaultTo);
   const [manualUrl, setManualUrl] = useState("");
@@ -1000,7 +1003,7 @@ function VideoReviewStep({ project, onPatch }) {
         <div style={{ fontSize: 12, color: "var(--muted)" }}>
           {isApproved
             ? "Video Review approved. Move to Shortlist next."
-            : `${ticked.size} ticked · ${crossed.size} crossed · ${adList.length - ticked.size - crossed.size} unreviewed.`}
+            : `${ticked.size} ticked · ${crossed.size} crossed · ${adList.filter(a => !ticked.has(a.id) && !crossed.has(a.id)).length} unreviewed.`}
         </div>
         <button onClick={approve}
           style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: isApproved ? "#22C55E" : "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>

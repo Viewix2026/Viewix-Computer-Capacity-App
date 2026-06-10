@@ -675,7 +675,10 @@ export function Founders({
             leadPipelineValue: m.leadPipelineValue || p.leadPipelineValue,
             closingRate:       m.closingRate       || p.closingRate,
           }));
-          if (m.ytdRevenue > 0) updateRevenue(m.ytdRevenue);
+          // updateRevenue was deleted in d766eb9 but this call site was
+          // missed — the ReferenceError was swallowed by the .catch below,
+          // so Sync from Attio never updated the YTD headline.
+          if (m.ytdRevenue > 0) updateMetric("currentRevenue", m.ytdRevenue);
         }
         setAttioLoading(false);
       })

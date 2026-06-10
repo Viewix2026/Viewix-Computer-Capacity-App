@@ -88,10 +88,17 @@ export async function applyPlanCore({ shortId, approveDespiteViolations = false,
   const ref = db.ref(`/scheduling/proposedPlans/${shortId}`);
 
   // P1 #1 — pending→claimed. The updater returns `undefined` (a true
-  // abort) unless the claim is allowed; returning the unchanged record
-  // would *commit* the transaction and strand proposal === null.
+  // abort) unless the claim is allowed; returning an unchanged REAL
+  // record would *commit* the transaction and strand proposal === null.
+  // Exception: the SDK's first run is against the local cache, which is
+  // always null in a fresh lambda — pass null through (commit-unchanged)
+  // so the SDK fetches the server value and re-runs us with real data.
+  // Aborting on that first null run rejects every approve with "missing"
+  // (the sync-shoot-calendar go-live bug). A genuinely-missing record
+  // commits null harmlessly and is caught by the !proposal guard below.
   let proposal = null;
   const tx = await ref.transaction(curr => {
+    if (curr === null) return curr;
     const d = decideClaimOutcome(curr, Date.now());
     if (!d.ok) return undefined;
     proposal = curr;

@@ -1229,7 +1229,11 @@ async function handleReviewAttend({ payload, botToken }) {
     const who = i.slackId ? `<@${i.slackId}>` : `*${i.name}*`;
     return `• ${who} — ${mark}`;
   });
-  const allResponded = invitees.length > 0 && invitees.every(i => i.slackId && !!attendance[i.slackId]);
+  // Only invitees with a Slack ID can ever click a response — counting
+  // the ID-less ones deadlocked auto-booking behind a vote that could
+  // never arrive.
+  const respondable = invitees.filter(i => i.slackId);
+  const allResponded = respondable.length > 0 && respondable.every(i => !!attendance[i.slackId]);
   const headline = allResponded
     ? "All invitees have responded — booking the review…"
     : "Attendance so far:";

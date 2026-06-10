@@ -19,6 +19,18 @@
 // (typical pattern: `newVal || existingVal` to avoid zeroing-out a real
 // figure when a sync returns no deals).
 
+// Formatted currency strings ("3,695.00", "A$3,695.00") parse as 3 / 0
+// with naive parseFloat — strip everything non-numeric first. Mirrors
+// toMoney in shared/attio-extract.js.
+function toMoney(n) {
+  if (typeof n === "number") return Number.isFinite(n) ? n : 0;
+  if (typeof n === "string") {
+    const f = parseFloat(n.replace(/[^0-9.\-]/g, ""));
+    return Number.isFinite(f) ? f : 0;
+  }
+  return 0;
+}
+
 // Field extractors — Attio's schema nests values in arrays of objects
 // with either `value` or `currency_value`, and different orgs label
 // fields differently, so we fall back through a candidate list.
@@ -28,7 +40,7 @@ export function extractVal(d) {
   for (const c of candidates) {
     if (c?.[0] != null) {
       const n = c[0].currency_value ?? c[0].value;
-      if (n != null) return typeof n === "number" ? n : parseFloat(n) || 0;
+      if (n != null) return toMoney(n);
     }
   }
   return 0;

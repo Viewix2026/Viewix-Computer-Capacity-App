@@ -34,8 +34,11 @@ function shouldRunNow(query, isCron) {
   if (!isCron) return true; // manual run via authenticated POST: always proceed
   if (query?.skipGate === "1") return true;
   const sydney = nowInSydney();
-  // 8:50 AM Mon–Fri (weekday 1=Mon..5=Fri).
-  return sydney.hour === 8 && sydney.minute === 50 && sydney.weekday >= 1 && sydney.weekday <= 5;
+  // 8:50 AM Mon–Fri (weekday 1=Mon..5=Fri). Gate on the minute WINDOW,
+  // not the exact minute — a cold start past :50 used to 204 the digest
+  // for the whole day. Each UTC cron entry fires once and the twin entry
+  // lands in a different Sydney hour, so >= keeps within-day dedup.
+  return sydney.hour === 8 && sydney.minute >= 50 && sydney.weekday >= 1 && sydney.weekday <= 5;
 }
 
 export default async function handler(req, res) {

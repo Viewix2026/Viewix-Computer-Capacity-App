@@ -186,6 +186,25 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
 
   // Failure paths: flip the scrape bundle to "error" so the UI surfaces it.
   if (status !== "SUCCEEDED") {
+    if (purpose === "verifyCompetitors") {
+      // A failed verification run must NOT clobber competitorScrape —
+      // that's the posts scrape's status. Resolve still-pending AI chips
+      // (verified === null renders as "⋯" forever) to the established
+      // verifier_unavailable fallback, then drop the sidecar.
+      const project = await fbGet(`/preproduction/socialOrganic/${projectId}`);
+      const competitors = Array.isArray(project?.research?.competitors)
+        ? project.research.competitors : [];
+      if (competitors.some(c => c?.source === "ai" && c.verified == null)) {
+        const updated = competitors.map(c =>
+          c?.source === "ai" && c.verified == null
+            ? { ...c, verified: false, verifyMeta: { reason: "verifier_unavailable" } }
+            : c
+        );
+        await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, updated);
+      }
+      await fbSet(`/preproduction/socialOrganic/_apifyRuns/${runId}`, null);
+      return { outcome: "verify_failed", status };
+    }
     const errField = purpose.startsWith("client") && purpose !== "competitorPosts" ? "clientScrape" : "competitorScrape";
     await fbPatch(`/preproduction/socialOrganic/${projectId}/${errField}`, {
       status: "error",

@@ -138,8 +138,14 @@ export default async function handler(req, res) {
         headers,
         body: JSON.stringify({ limit, offset, sorts: [{ attribute: "created_at", direction: "desc" }] }),
       });
-      const d = await r.json();
-      if (d?.data && d.data.length > 0) {
+      const d = await r.json().catch(() => null);
+      // A failed page (429/5xx) must abort the whole run — falling
+      // through would fbSet a truncated/empty deal list over /attioCache,
+      // which profitability-rollup and Founders/Nurture read that night.
+      if (!r.ok || !Array.isArray(d?.data)) {
+        throw new Error(`Attio deals query failed at offset ${offset}: HTTP ${r.status}`);
+      }
+      if (d.data.length > 0) {
         allDeals = allDeals.concat(d.data);
         offset += d.data.length;
         hasMore = d.data.length === limit;

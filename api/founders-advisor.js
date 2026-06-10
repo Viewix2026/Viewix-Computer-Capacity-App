@@ -330,7 +330,9 @@ async function postBriefingToSlack(briefingId) {
   // to the whole content if we can't find the section header — avoids
   // posting an empty message.
   const content = briefing.content || "";
-  const execMatch = content.match(/##\s*1\.\s*Executive summary[\s\S]*?(?=^##\s|\Z)/m);
+  // NB: JS regex has no \Z anchor — a literal "\Z" matches a capital Z,
+  // which truncated the summary at the first Z ("Zernio…").
+  const execMatch = content.match(/##\s*1\.\s*Executive summary[\s\S]*?(?=\n##\s|$)/);
   const exec = execMatch ? execMatch[0].replace(/^##\s*1\.\s*Executive summary\s*/m, "").trim() : content.slice(0, 1200);
 
   const titleMatch = content.match(/^#\s+([^\n]+)/m);

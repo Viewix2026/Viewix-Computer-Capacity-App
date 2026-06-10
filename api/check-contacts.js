@@ -82,8 +82,11 @@ export default async function handler(req, res) {
         updatedLevels[id] = { level: "amber", notifiedAt: new Date().toISOString() };
       }
 
-      // Amber to red transition
-      if (currentLevel === "red" && previousLevel === "amber") {
+      // Amber to red transition — also catches a direct green→red jump
+      // (cron outage gap, cleared/unparseable lastContact, or an account
+      // first tracked when already overdue), which previously matched
+      // neither branch and stayed recorded green forever.
+      if (currentLevel === "red" && (previousLevel === "amber" || previousLevel === "green")) {
         redAlerts.push({
           client: acct.companyName,
           manager: acct.accountManager || "Unassigned",
@@ -98,19 +101,24 @@ export default async function handler(req, res) {
       }
     }
 
-    // Save updated levels back to Firebase
-    if (!adminErr) {
-      await adminSet("/contactNotifications", updatedLevels);
-    } else {
-      await fetch(`${FB_URL}/contactNotifications.json`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updatedLevels),
-      });
-    }
+    // Persisting updatedLevels marks alerts as "already notified" — so it
+    // must only happen AFTER Slack accepts the message, or a failed post
+    // permanently swallows the alerts.
+    const persistLevels = async () => {
+      if (!adminErr) {
+        await adminSet("/contactNotifications", updatedLevels);
+      } else {
+        await fetch(`${FB_URL}/contactNotifications.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updatedLevels),
+        });
+      }
+    };
 
-    // Build Slack message if there are alerts
+    // No alerts: safe to persist immediately (only green resets recorded)
     if (amberAlerts.length === 0 && redAlerts.length === 0) {
+      await persistLevels();
       return res.status(200).json({ message: "No new alerts" });
     }
 
@@ -155,8 +163,12 @@ export default async function handler(req, res) {
 
     if (!slackRes.ok) {
       const err = await slackRes.text();
+      // Deliberately NOT persisting updatedLevels — the alerts re-send
+      // on the next run instead of being lost.
       return res.status(500).json({ error: "Slack post failed", detail: err });
     }
+
+    await persistLevels();
 
     return res.status(200).json({
       message: "Notifications sent",

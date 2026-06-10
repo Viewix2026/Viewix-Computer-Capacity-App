@@ -11,7 +11,7 @@
 // writable only by that user — see firebase-rules.json.)
 import { useEffect, useState } from "react";
 import {
-  fbListenSafe, fbSet,
+  fbListen, onFB, fbSet,
   getCurrentUserUid, getCurrentUserName, getCurrentUserEmail,
 } from "../../firebase";
 
@@ -39,8 +39,18 @@ export function VotwReactions({ videoUrl }) {
   useEffect(() => {
     setReactions({});
     if (!videoUrl) return;
-    const off = fbListenSafe(`/votwReactions/${videoKey}`, d => setReactions(d || {}), () => {});
-    return off;
+    // Plain fbListen, auth-gated via onFB — NOT fbListenSafe. An empty
+    // node is a meaningful state here: when another user removes the
+    // last reaction the node goes null, and the safe wrapper swallows
+    // that fire, leaving the removed chips rendered on every other
+    // open client until an unrelated write.
+    let off = () => {};
+    let cancelled = false;
+    onFB(() => {
+      if (cancelled) return;
+      off = fbListen(`/votwReactions/${videoKey}`, d => setReactions(d || {}), () => {});
+    });
+    return () => { cancelled = true; try { off(); } catch {} };
   }, [videoKey, videoUrl]);
 
   if (!videoUrl) return null;
