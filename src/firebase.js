@@ -357,6 +357,18 @@ export async function signInWithGoogle() {
 
 export async function signInAnonymouslyForPublic() {
   await new Promise(res => onFB(res));
+  // Wait for the persisted-session restore to settle before deciding.
+  // auth.currentUser stays null until the async IndexedDB restore lands,
+  // so checking it straight after SDK load races the restore — and
+  // signInAnonymously() REPLACES whatever user the restore brings in
+  // (Firebase holds exactly one user per origin). The clobber signed
+  // staff out of every open dashboard tab whenever they opened a public
+  // share link (/d/, /p/, /s/, /r/) in a fresh tab: their Google session
+  // became an anonymous one, the header badge fell back to "Account",
+  // and role-gated writes (time logs) were silently denied.
+  await new Promise(res => {
+    const unsub = auth.onAuthStateChanged(() => { unsub(); res(); });
+  });
   if (auth.currentUser) return auth.currentUser;
   return auth.signInAnonymously();
 }

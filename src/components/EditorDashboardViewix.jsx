@@ -1696,7 +1696,7 @@ export function EditorDashboardViewix({ projects = [], editors = [], clients = [
         setLogError({
           taskId,
           msg: isPermissionDenied(e)
-            ? "Your time did NOT save — Firebase denied the write. Your account is likely inactive in /users (the rule needs active === true). The number on screen is not logged — flag this to Jeremy."
+            ? "Your time did NOT save — Firebase denied the write. Most likely you've been signed out (the top-right badge shows plain \"Account\") — sign back in, then re-add the time with ± Time. If you ARE signed in, your account may be inactive in /users — flag this to Jeremy."
             : `Your time did NOT save — ${e?.message || "the write failed"}. The number on screen is not logged.`,
         });
       });

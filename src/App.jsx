@@ -23,6 +23,7 @@ import { QuoteCalc, newQuote } from "./components/QuoteCalc";
 import { Home } from "./components/Home";
 import { Login } from "./components/Login";
 import { UserBadge } from "./components/UserBadge";
+import { SessionExpiredOverlay } from "./components/SessionExpiredOverlay";
 import { Analytics } from "./components/Analytics";
 import { useAccountsSync } from "./sync/useAccountsSync";
 import { useDeliveriesSync } from "./sync/useDeliveriesSync";
@@ -64,6 +65,7 @@ const ClientPortal             = lazy(() => import("./components/portal/ClientPo
 export default function App(){
   const[role,setRole]=useState(null); // "founders" | "manager" | "closer" | ...
   const[authUser,setAuthUser]=useState(null); // reactive Firebase user — keeps the header badge from falling back to "Account"
+  const[authSettled,setAuthSettled]=useState(false); // first auth-state fire seen — distinguishes "restore pending" from "genuinely signed out"
   const[loading,setLoading]=useState(true);
   const[tool,setTool]=useState("home");
   const[capTab,setCapTab]=useState("dashboard");
@@ -246,7 +248,9 @@ export default function App(){
     // Firebase user instead of a one-shot snapshot read during render. The
     // non-reactive getters returned null on any render that landed before
     // auth.currentUser was populated, making the badge stick on "Account".
-    return onClientAuthChanged(setAuthUser);
+    // Also feeds the SessionExpiredOverlay gate: `authSettled` marks the
+    // first fire so the overlay can't flash during the initial restore.
+    return onClientAuthChanged(u=>{setAuthUser(u);setAuthSettled(true);});
   },[]);
 
   const normalizedRole=normalizeRole(role);
@@ -256,6 +260,15 @@ export default function App(){
   const isFounders=isFounderRole(normalizedRole);
   const isFounder=isAdminRole(normalizedRole);
   const isLead=normalizedRole==="lead";
+
+  // Mid-session auth-loss gate. `role` is React state set once at login /
+  // restore, so it stays truthy even after the underlying Firebase session
+  // dies or gets replaced (e.g. by an anonymous user) — the dashboard kept
+  // rendering while every role-gated write was denied. Staff sessions are
+  // Google-only, so anything else live (null, anonymous, email-link) while
+  // a role is set means the session this UI was authorized under is gone.
+  const liveStaffSession=!!authUser&&!authUser.isAnonymous&&(authUser.providerData||[]).some(p=>p&&p.providerId==="google.com");
+  const sessionExpired=!!role&&authSettled&&!liveStaffSession;
 
   // Calendar sync queue listener — gated by role (E6). The
   // /calendarSyncQueue rule only grants founder/manager/lead read
@@ -434,6 +447,10 @@ export default function App(){
       const del = delById.get(delId);
       if (!del || !Array.isArray(del.videos)) return;
       const subtasks = Object.values(p.subtasks || {}).filter(Boolean);
+      // Each subtask can only be claimed once per run — two same-named
+      // videos otherwise both match the same subtask and the second
+      // stamp overwrites the first.
+      const claimed = new Set();
       del.videos.forEach((vid, idx) => {
         if (!vid) return;
         let videoId = vid.videoId;
@@ -446,11 +463,12 @@ export default function App(){
         // Name matching is the legacy linkage we're upgrading away
         // from — it's only relied on once, here, during backfill.
         const target = subtasks.find(st =>
-          !st.videoId &&
+          !st.videoId && !claimed.has(st.id) &&
           (st.source === "video" || st.source === "revision") &&
           (st.name || "").trim().toLowerCase() === (vid.name || "").trim().toLowerCase()
         );
         if (target) {
+          claimed.add(target.id);
           fbSet(`/projects/${p.id}/subtasks/${target.id}/videoId`, videoId);
         }
       });
@@ -506,7 +524,10 @@ export default function App(){
 
 
   const login=resolvedRole=>{if(resolvedRole)setRole(resolvedRole);};
-  const logout=async()=>{try{await signOutUser();}catch{}setRole(null);};
+  // setRole(null) BEFORE the await — signOut fires onAuthStateChanged
+  // first, and a still-set role + null authUser reads as an expired
+  // session, flashing the SessionExpiredOverlay during a normal logout.
+  const logout=async()=>{setRole(null);try{await signOutUser();}catch{}};
 
   // Quote helpers
   const createQuote=(name)=>{const q=newQuote(name);setQuotes(p=>[...p,q]);setActiveQuoteId(q.id);};
@@ -585,6 +606,8 @@ export default function App(){
   if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
 
   return(<div style={{fontFamily:"'DM Sans',-apple-system,sans-serif",background:"var(--bg)",color:"var(--fg)",minHeight:"100vh",display:"flex"}}><style>{CSS}</style>
+
+    {sessionExpired&&<SessionExpiredOverlay onLogout={logout}/>}
 
     {/* Sidebar — Pop rail: every tab carries a signature hue (see NAV_META
         in UIComponents). The `icon` emoji is retained so the emoji-in-Pop
