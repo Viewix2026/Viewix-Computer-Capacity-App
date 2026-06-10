@@ -390,8 +390,13 @@ export function computeStripeSurcharge(amount) {
 //     "paid_in_full"          — single slice, charged at checkout. No
 //                               card saving needed.
 //
-//   pcts must sum to 100. The last slice absorbs rounding so slice
-//   amounts * 100 / grandTotal is exact.
+//   pcts must sum to 100. For deposit_plus_manual / paid_in_full the
+//   last slice absorbs rounding so Σ slices === grandTotal exactly.
+//   EXCEPTION — subscription_monthly: Stripe bills ONE flat recurring
+//   price every cycle, so all slices must be identical and nothing can
+//   absorb rounding. Amounts come from subscriptionSliceAmount() (equal
+//   thirds), not from pct (pct stays as display metadata), and
+//   Σ projectAmount may drift from grandTotal by a cent or two.
 export const SALE_SCHEDULES = {
   metaAds: {
     kind: "deposit_plus_manual",
@@ -434,6 +439,15 @@ export const SALE_SCHEDULES = {
     slices: [],
   },
 };
+
+// Flat instalment amount for subscription_monthly schedules. One
+// recurring Stripe price bills the SAME amount every cycle, so the
+// slices cannot vary — every slice gets this amount and the checkout
+// charges exactly what the rows say.
+export function subscriptionSliceAmount(grandTotal, sliceCount) {
+  if (!sliceCount || sliceCount <= 0) return 0;
+  return Math.round((Number(grandTotal) / sliceCount) * 100) / 100;
+}
 
 // Helper: look up the schedule config for a videoType key. Returns the
 // explicit `custom` entry when asked; otherwise falls back to _default

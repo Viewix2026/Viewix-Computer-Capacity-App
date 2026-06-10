@@ -3,8 +3,8 @@
 // Creates/updates account, auto-calcs milestones, creates delivery + sherpas entry
 // Writes to Firebase via admin SDK (falls back to REST if service account not configured)
 
-import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
-import { parseVideoCount } from "../shared/attio-extract.js";
+import { adminGet, adminSet, adminPatch, getAdmin, runRtdbTransaction } from "./_fb-admin.js";
+import { parseVideoCount, normaliseCloseDate, dealDedupKey, findRecentDuplicateProject } from "../shared/attio-extract.js";
 import { identifyDeal, productLineLabel, videoTypeToPartnership } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 import { send as sendEmail } from "./_email/send.js";
@@ -100,6 +100,12 @@ async function fbPatch(path, data) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
+  // Hoisted above the try so the catch can release the dedup claim —
+  // declared inside, the catch couldn't see them and a crashed run
+  // would block legitimate retries for the 10-min staleness window.
+  let dealLockHeld = false;
+  let dealLockKey = null;
+
   try {
     const body = req.body || {};
 
@@ -147,7 +153,64 @@ export default async function handler(req, res) {
     if (!companyName) return res.status(400).json({ error: "companyName is required" });
 
     const now = new Date().toISOString().split("T")[0];
-    const signingDate = closeDate || now;
+    const signingDate = normaliseCloseDate(closeDate, now);
+
+    // --- 0. DUPLICATE-DELIVERY GUARD ---
+    // Zapier re-sends won deals (timeout replays — this handler runs
+    // 10-40s — and double-fired zaps), and there's no event id in the
+    // payload. Two layers:
+    //   a) name+window dedup against /projects (catches sequential
+    //      replays once the project exists);
+    //   b) a claim lock that closes the window BETWEEN this check and
+    //      the project write — Attio re-pagination and the email leg
+    //      sit in that gap, so without the lock a retry 30s later
+    //      passes (a) and duplicates everything anyway.
+    const dupKey = dealDedupKey(companyName, dealName);
+    const existingProjects = (await fbGet("/projects")) || {};
+    const dup = findRecentDuplicateProject(existingProjects, { companyName, dealName, nowMs: Date.now() });
+    if (dup) {
+      // Replays sometimes carry corrected data (a fixed Zapier
+      // mapping). Heal ONLY values the first pass left empty — anything
+      // richer is founder-edit territory.
+      const heal = {};
+      if ((dup.dealValue == null || Number(dup.dealValue) === 0) && dealValue != null && Number(dealValue) > 0) {
+        heal.dealValue = Number(dealValue);
+      }
+      // Same resolver as the create path's `clientEmail` (line above) —
+      // the primary Zapier shape is body["Client Email"].
+      const incomingEmail = String(clientEmail || "").trim();
+      if (!(dup.clientContact && dup.clientContact.email) && incomingEmail) {
+        heal.clientContact = { ...(dup.clientContact || {}), email: incomingEmail };
+      }
+      if (Object.keys(heal).length) {
+        await fbPatch(`/projects/${dup.id}`, heal);
+        console.log(`deal-won dedup: healed ${Object.keys(heal).join(", ")} on ${dup.id}`);
+      }
+      return res.status(200).json({ ok: true, deduped: true, projectId: dup.id, healed: Object.keys(heal) });
+    }
+    dealLockKey = dupKey;
+    try {
+      const nowMs = Date.now();
+      const lockTx = await runRtdbTransaction(`/dealLocks/${dupKey}`, (cur) => {
+        // Live lock (any state) younger than 10 min → a twin delivery is
+        // mid-flight or just finished — lose the claim. Older → stale
+        // (crashed winner) and may be taken over. Writing on cur===null
+        // is the CLAIM and is cold-cache-safe: a hash mismatch against a
+        // real server value forces a refetch + re-run.
+        if (cur && cur.ts && nowMs - cur.ts < 10 * 60 * 1000) return undefined;
+        return { status: "processing", ts: nowMs };
+      });
+      dealLockHeld = lockTx.committed;
+      if (!lockTx.committed) {
+        return res.status(200).json({ ok: true, deduped: true, reason: "concurrent duplicate suppressed (lock held)" });
+      }
+    } catch (lockErr) {
+      // Lock infra failure (e.g. admin SDK unavailable) must never drop
+      // a real won deal — proceed unlocked, which is just pre-fix
+      // behaviour for this one request.
+      console.warn("deal-won lock unavailable, proceeding unlocked:", lockErr.message);
+    }
+
     const results = { account: null, delivery: null, sherpas: null };
     // Capture the IDs of each linked record as we create them — gets
     // denormalised onto the /projects/{id} record at the end so the
@@ -418,7 +481,10 @@ export default async function handler(req, res) {
       destinations,                   // array, split from Attio comma-separated "Destination"
       targetAudience,                 // Attio "Target Audience" — future field, empty for now
       dueDate,                        // Attio "Due Date" — future field, null for now
-      closeDate: closeDate || null,
+      // Store the NORMALISED date (date-only ISO) — the raw payload can
+      // be an AU slash-string, and downstream readers (Projects detail
+      // edits this with a type="date" input) expect YYYY-MM-DD.
+      closeDate: closeDate ? signingDate.split("T")[0] : null,
       clientContact: { firstName, email: clientEmail },
       attioCompanyId: companyId || null,
       attioDealId: null,              // Attio webhook doesn't expose the deal's own record_id yet
@@ -528,8 +594,14 @@ export default async function handler(req, res) {
             headers: attioHeaders,
             body: JSON.stringify({ limit: 100, offset, sorts: [{ attribute: "created_at", direction: "desc" }] }),
           });
-          const d = await r.json();
-          if (d?.data && d.data.length > 0) {
+          const d = await r.json().catch(() => null);
+          // Abort the refresh on any failed page — writing a truncated
+          // list would clobber /attioCache until the nightly sync. The
+          // catch below records it in results.attioCache.
+          if (!r.ok || !Array.isArray(d?.data)) {
+            throw new Error(`Attio deals query failed at offset ${offset}: HTTP ${r.status}`);
+          }
+          if (d.data.length > 0) {
             allDeals = allDeals.concat(d.data);
             offset += d.data.length;
             hasMore = d.data.length === 100;
@@ -581,6 +653,14 @@ export default async function handler(req, res) {
       results.attioCache = `failed: ${cacheErr.message}`;
     }
 
+    // Mark the dedup lock done (it stays as a record of the processed
+    // deal; the 10-min staleness rule means it never blocks a genuine
+    // future re-won deal, and the name-window dedup above handles the
+    // 48h suppression).
+    if (dealLockHeld) {
+      try { await fbSet(`/dealLocks/${dupKey}`, { status: "done", projectId, ts: Date.now() }); } catch {}
+    }
+
     return res.status(200).json({
       success: true,
       companyName,
@@ -589,6 +669,10 @@ export default async function handler(req, res) {
     });
   } catch (e) {
     console.error("Webhook error:", e);
+    // Release the claim so a legitimate Zapier retry can re-process.
+    if (dealLockHeld && dealLockKey) {
+      try { await fbSet(`/dealLocks/${dealLockKey}`, null); } catch {}
+    }
     return res.status(500).json({ error: e.message });
   }
 }

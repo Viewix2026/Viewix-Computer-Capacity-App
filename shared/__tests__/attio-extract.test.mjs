@@ -4,6 +4,9 @@
 
 import assert from "node:assert/strict";
 import {
+  normaliseCloseDate,
+  dealDedupKey,
+  findRecentDuplicateProject,
   extractVal,
   extractStage,
   extractDealName,
@@ -419,5 +422,83 @@ test("resolveDeal: tie => ambiguous, no entry; mismatch/none => null", () => {
   // no candidate => null
   assert.equal(resolveDeal({ projectName: "Nope" }, CARRY_IDX), null);
 });
+
+// ─── normaliseCloseDate (webhook-deal-won's milestone anchor) ──────
+// Regression: an unparseable closeDate ("13/05/2026") used to throw
+// RangeError in the webhook's addDays and 500 the request; a naive
+// fallback-to-today silently corrupted milestones for AU slash dates.
+{
+  const TODAY = "2026-06-10";
+  test("normaliseCloseDate: ISO date + datetime pass through untouched", () => {
+    assert.equal(normaliseCloseDate("2026-05-13", TODAY), "2026-05-13");
+    assert.equal(normaliseCloseDate("2026-05-13T10:00:00Z", TODAY), "2026-05-13T10:00:00Z");
+  });
+  test("normaliseCloseDate: AU slash date day > 12 parses as DD/MM (used to crash)", () => {
+    assert.equal(normaliseCloseDate("13/05/2026", TODAY), "2026-05-13");
+  });
+  test("normaliseCloseDate: AU slash date day <= 12 parses as DD/MM, not US month", () => {
+    assert.equal(normaliseCloseDate("05/06/2026", TODAY), "2026-06-05");
+    assert.equal(normaliseCloseDate("5/6/2026", TODAY), "2026-06-05");
+  });
+  test("normaliseCloseDate: impossible / garbage / missing fall back to today", () => {
+    assert.equal(normaliseCloseDate("32/13/2026", TODAY), TODAY);
+    assert.equal(normaliseCloseDate("not a date", TODAY), TODAY);
+    assert.equal(normaliseCloseDate("", TODAY), TODAY);
+    assert.equal(normaliseCloseDate(null, TODAY), TODAY);
+  });
+  test("normaliseCloseDate: overflow dates rejected, not normalised (Apr 31 != May 1)", () => {
+    // new Date("2026-04-31") silently normalises to May 1 — the helper
+    // must round-trip the components and fall back to today instead.
+    assert.equal(normaliseCloseDate("31/04/2026", TODAY), TODAY);
+    assert.equal(normaliseCloseDate("29/02/2025", TODAY), TODAY); // not a leap year
+    assert.equal(normaliseCloseDate("29/02/2024", TODAY), "2024-02-29"); // leap year, valid
+  });
+}
+
+// ─── Won-deal webhook dedup (dealDedupKey + findRecentDuplicateProject) ──
+{
+  const NOW = Date.parse("2026-06-10T01:00:00.000Z");
+  const HOUR = 60 * 60 * 1000;
+  const proj = (over = {}) => ({
+    id: `proj-${NOW - 2 * HOUR}-abc`,
+    clientName: "Acme Corp",
+    projectName: "Brand Video",
+    status: "active",
+    ...over,
+  });
+
+  test("dealDedupKey: normalises case/whitespace and strips RTDB path chars", () => {
+    assert.equal(dealDedupKey("  Acme   Corp ", "Brand Video"), dealDedupKey("acme corp", "brand video"));
+    const k = dealDedupKey("A/B #1 [x]", "Deal.Name$");
+    assert.ok(!/[.#$\[\]\/]/.test(k), `path-unsafe chars survived: ${k}`);
+    assert.equal(dealDedupKey("Acme", ""), dealDedupKey("Acme", "Untitled project"));
+  });
+
+  test("findRecentDuplicateProject: hit within window via id-embedded timestamp", () => {
+    const hit = findRecentDuplicateProject({ a: proj() }, { companyName: "ACME CORP", dealName: "brand video", nowMs: NOW });
+    assert.ok(hit && hit.id.startsWith("proj-"));
+  });
+
+  test("findRecentDuplicateProject: createdAt preferred when present", () => {
+    const p1 = proj({ id: "proj-banana-x", createdAt: new Date(NOW - HOUR).toISOString() });
+    assert.ok(findRecentDuplicateProject({ a: p1 }, { companyName: "Acme Corp", dealName: "Brand Video", nowMs: NOW }));
+  });
+
+  test("findRecentDuplicateProject: outside 48h window → miss", () => {
+    const old = proj({ id: `proj-${NOW - 50 * HOUR}-abc` });
+    assert.equal(findRecentDuplicateProject({ a: old }, { companyName: "Acme Corp", dealName: "Brand Video", nowMs: NOW }), null);
+  });
+
+  test("findRecentDuplicateProject: archived and different-name projects ignored", () => {
+    const archived = proj({ status: "archived" });
+    const otherDeal = proj({ projectName: "Other Video" });
+    assert.equal(findRecentDuplicateProject({ a: archived, b: otherDeal }, { companyName: "Acme Corp", dealName: "Brand Video", nowMs: NOW }), null);
+  });
+
+  test("findRecentDuplicateProject: unparseable id + no createdAt → never matches", () => {
+    const weird = proj({ id: "legacy-record", createdAt: undefined });
+    assert.equal(findRecentDuplicateProject({ a: weird }, { companyName: "Acme Corp", dealName: "Brand Video", nowMs: NOW }), null);
+  });
+}
 
 console.log(`\n${passed} passed`);

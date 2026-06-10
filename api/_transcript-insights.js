@@ -205,7 +205,15 @@ export async function extractAndMergeInsights({
 
   const bump = async (itemId, incomingSeverity, quote) => {
     const res = await runRtdbTransaction(`/transcriptInsights/items/${itemId}`, (cur) => {
-      if (!cur || cur.status !== "active") return undefined;
+      // Null = the SDK's cold-cache first run; pass it through so the
+      // SDK refetches and re-runs with the real record. Aborting here
+      // made every weight bump count as skipped in a fresh lambda.
+      if (cur === null) return cur;
+      if (cur.status !== "active") return undefined;
+      // Source-level idempotency: a partial earlier run can bump items
+      // and die before the run-level insightsExtracted marker is
+      // written — the same feedbackId must never count twice.
+      if (Array.isArray(cur.sources) && cur.sources.some(s => s && s.feedbackId === feedbackId)) return undefined;
       return {
         ...cur,
         weight: (cur.weight || 0) + 1,
@@ -214,7 +222,7 @@ export async function extractAndMergeInsights({
         sources: [mkSource(quote), ...(Array.isArray(cur.sources) ? cur.sources : [])].slice(0, 20),
       };
     });
-    if (res.committed) {
+    if (res.committed && res.snapshot) {
       applied.push({ itemId, type: "increment", delta: 1 });
       incremented++;
       if (res.snapshot) activeById.set(itemId, res.snapshot);

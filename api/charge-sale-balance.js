@@ -11,7 +11,7 @@
 // The client sends a Firebase ID token and the server verifies the role.
 
 import Stripe from "stripe";
-import { adminGet, adminPatch } from "./_fb-admin.js";
+import { adminGet, adminPatch, mutateRecord } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 
 export default async function handler(req, res) {
@@ -148,7 +148,13 @@ export default async function handler(req, res) {
           sliceId: slice.sliceId || "",
         },
       }, {
-        idempotencyKey: `charge-balance:${sale.id}:${slice.sliceId || idx}:${amountCents}`,
+        // lastDeclineAt is part of the key: Stripe caches the first
+        // result under an idempotency key for ~24h INCLUDING card
+        // errors, so a constant key replayed the original decline on
+        // every founder retry without re-attempting the charge. The
+        // stamp changes exactly once per recorded decline — a deliberate
+        // retry mints a fresh key, a double-click still dedupes.
+        idempotencyKey: `charge-balance:${sale.id}:${slice.sliceId || idx}:${amountCents}:${slice.lastDeclineAt || "first"}`,
       });
     } catch (stripeErr) {
       // Stripe threw synchronously — record the decline directly so the
@@ -158,19 +164,22 @@ export default async function handler(req, res) {
       // are surfaced as exceptions from create(), not as separate
       // payment_intent.payment_failed events.
       try {
-        const fresh = await adminGet(`/sales/${saleId}`);
-        const sched = Array.isArray(fresh?.schedule) ? [...fresh.schedule] : [];
-        if (sched[idx] && sched[idx].status !== "paid") {
+        // Transactional — a concurrent webhook flipping a SIBLING slice
+        // would otherwise be clobbered by this whole-schedule write.
+        const declinedAt = new Date().toISOString();
+        await mutateRecord(`/sales/${saleId}`, (fresh) => {
+          const sched = Array.isArray(fresh.schedule) ? [...fresh.schedule] : [];
+          if (!sched[idx] || sched[idx].status === "paid") return null;
           sched[idx] = {
             ...sched[idx],
             status: "declined",
-            lastDeclineAt: new Date().toISOString(),
+            lastDeclineAt: declinedAt,
             lastDeclineMessage: stripeErr?.message || String(stripeErr),
             stripePaymentIntentId: stripeErr?.raw?.payment_intent?.id || stripeErr?.payment_intent?.id || sched[idx].stripePaymentIntentId || null,
             autoAttemptKey: null,
           };
-          await adminPatch(`/sales/${saleId}`, { schedule: sched });
-        }
+          return { ...fresh, schedule: sched };
+        });
       } catch (writeErr) {
         console.error("charge-sale-balance: failed to record decline:", writeErr.message);
       }

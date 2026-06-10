@@ -78,3 +78,24 @@ export async function runRtdbTransaction(path, updaterFn) {
     snapshot: result.snapshot ? result.snapshot.val() : null,
   };
 }
+
+// Transactional read-modify-write of a whole record, with the contract
+// every mutation path in this repo needs baked in:
+//   · the SDK's cold-cache null first run → return cur unchanged
+//     (commit-unchanged forces a server fetch + re-run with real data;
+//     returning undefined there aborts before the server is consulted —
+//     the sync-shoot-calendar go-live bug)
+//   · mutator returns null/undefined → true abort, nothing written
+//   · otherwise the mutator's return value is committed
+// Returns { committed, snapshot } (snapshot = post-transaction value).
+// CALLER RULES: the mutator may run several times — keep it pure and
+// reset any closure captures at the top of each invocation; gate every
+// post-transaction side effect on `snapshot != null` (a record deleted
+// mid-flight commits null harmlessly and leaves captures stale).
+export async function mutateRecord(path, mutator) {
+  return runRtdbTransaction(path, (cur) => {
+    if (cur === null) return cur;
+    const next = mutator(cur);
+    return next == null ? undefined : next;
+  });
+}

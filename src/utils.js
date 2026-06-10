@@ -1,4 +1,4 @@
-import { GST_RATE, scheduleForVideoType, computeStripeSurcharge } from "../api/_tiers.js";
+import { GST_RATE, scheduleForVideoType, computeStripeSurcharge, subscriptionSliceAmount } from "../api/_tiers.js";
 import {
   newSliceId,
   seedCustomSlices,
@@ -388,9 +388,18 @@ export function buildSchedule(videoType, totalExGst, depositDate) {
 
   // Compute all slice amounts, then adjust the last one to absorb any
   // rounding drift so Σ slices === grandTotal (in cents).
-  const rawAmounts = cfg.slices.map(s => round2(grandTotal * s.pct / 100));
+  //
+  // subscription_monthly is the exception: Stripe bills ONE flat
+  // recurring price every cycle, so every slice must be identical —
+  // the pct split and the last-slice absorber don't apply (the old
+  // 33.34/33.33 split meant invoices 2-3 silently charged slice 0's
+  // amount and overcollected). Σ may drift ≤2c from grandTotal; the
+  // rows are the truth about what Stripe charges.
+  const isFlatSubscription = cfg.kind === "subscription_monthly";
+  const flat = isFlatSubscription ? subscriptionSliceAmount(grandTotal, cfg.slices.length) : null;
+  const rawAmounts = cfg.slices.map(s => isFlatSubscription ? flat : round2(grandTotal * s.pct / 100));
   const sumFirstN  = round2(rawAmounts.slice(0, -1).reduce((a, b) => a + b, 0));
-  const lastAmount = round2(grandTotal - sumFirstN);
+  const lastAmount = isFlatSubscription ? flat : round2(grandTotal - sumFirstN);
   const amounts    = [...rawAmounts.slice(0, -1), lastAmount];
 
   return cfg.slices.map((s, idx) => {

@@ -34,8 +34,8 @@
 // read the stream ourselves.
 
 import Stripe from "stripe";
-import { adminGet, adminPatch } from "./_fb-admin.js";
-import { buildCustomSchedule } from "./_sale-schedules.js";
+import { adminGet, adminPatch, mutateRecord } from "./_fb-admin.js";
+import { applySlicePaid } from "./_sale-schedules.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -54,98 +54,48 @@ async function readRawBody(req) {
 // For Custom slice 0 (deposit), also re-anchor the rest of the
 // schedule to the actual paid timestamp so future dueAt values reflect
 // when the deposit truly cleared (clients sometimes pay days late).
-async function markSlicePaid(saleId, { sliceId, sliceIdx, paidAmountCents } = {}, patch = {}) {
-  const sale = await adminGet(`/sales/${saleId}`);
-  if (!sale) {
+async function markSlicePaid(saleId, { sliceId, sliceIdx, paidAmountCents, healAmountToPaid } = {}, patch = {}) {
+  // Stable across transaction re-runs.
+  const now = new Date().toISOString();
+  // Re-assigned on EVERY updater invocation; only the FINAL run's value
+  // is read below, and only after the snapshot null-gate (a sale deleted
+  // mid-transaction commits null and leaves this capture stale).
+  let result = null;
+  const tx = await mutateRecord(`/sales/${saleId}`, (sale) => {
+    result = applySlicePaid(sale, { sliceId, sliceIdx, paidAmountCents, now, patch, healAmountToPaid });
+    return result.action === "paid" ? result.nextSale : null;
+  });
+
+  if (tx.snapshot == null) {
     console.warn("markSlicePaid: sale not found:", saleId);
     return;
   }
-  const schedule = Array.isArray(sale.schedule) ? [...sale.schedule] : [];
-
-  // Resolve target row: sliceId is stable identity; sliceIdx is fallback.
-  let targetIdx = -1;
-  if (sliceId) {
-    targetIdx = schedule.findIndex(s => s && s.sliceId === sliceId);
+  if (result?.action === "already_paid") {
+    // Idempotency — Stripe retries webhook deliveries; never double-count.
+    return result.info;
   }
-  if (targetIdx === -1 && sliceIdx !== undefined && sliceIdx !== null) {
-    const n = Number(sliceIdx);
-    if (Number.isInteger(n) && n >= 0 && schedule[n]) targetIdx = n;
-  }
-  if (targetIdx === -1) {
+  if (result?.action === "no_match") {
     console.warn(`markSlicePaid: no matching slice on sale ${saleId} (sliceId=${sliceId}, sliceIdx=${sliceIdx})`);
     return;
   }
-
-  // Idempotency — Stripe retries webhook deliveries; never double-count.
-  if (schedule[targetIdx].status === "paid") {
-    return { allPaid: schedule.every(s => s.status === "paid"), slice: schedule[targetIdx] };
-  }
-
-  // Amount sanity-check. The charge must match what the CURRENT schedule
-  // says this slice costs. The dangerous case: a customer pays a stale
-  // checkout link (the old open session only ever charges the old first
-  // slice) after the schedule was edited — e.g. a deposit+balance plan
-  // collapsed to a single pay-in-full slice. Marking that slice paid
-  // would flag the whole sale PAID for the wrong (lower) figure. Instead
-  // flag it for human review and bail without marking paid.
-  const expectedCents = Math.round(Number(schedule[targetIdx].amount || 0) * 100);
-  if (Number.isFinite(paidAmountCents) && paidAmountCents > 0 && expectedCents > 0 && paidAmountCents !== expectedCents) {
-    console.warn(`markSlicePaid: amount mismatch on sale ${saleId} slice ${targetIdx} — paid ${paidAmountCents}c, expected ${expectedCents}c. Flagging for review.`);
+  if (result?.action === "mismatch") {
+    // Stale-checkout-link guard: the charge doesn't match what the
+    // CURRENT schedule says this slice costs (e.g. a deposit+balance
+    // plan collapsed to pay-in-full after the link was sent). Flag for
+    // human review and bail without marking paid.
+    const { expectedCents, paidAmountCents: paidC, slice } = result.info;
+    console.warn(`markSlicePaid: amount mismatch on sale ${saleId} — paid ${paidC}c, expected ${expectedCents}c. Flagging for review.`);
     await adminPatch(`/sales/${saleId}`, {
       paymentReviewRequired: true,
-      paymentReviewNote: `Charge of $${(paidAmountCents / 100).toFixed(2)} doesn't match slice "${schedule[targetIdx].label}" (expects $${(expectedCents / 100).toFixed(2)}). Likely a stale payment link paid after the schedule changed. Reconcile in Stripe.`,
+      paymentReviewNote: `Charge of $${(paidC / 100).toFixed(2)} doesn't match slice "${slice.label}" (expects $${(expectedCents / 100).toFixed(2)}). Likely a stale payment link paid after the schedule changed. Reconcile in Stripe.`,
     });
-    return { mismatch: true, expectedCents, paidAmountCents, slice: schedule[targetIdx] };
+    return { mismatch: true, expectedCents, paidAmountCents: paidC, slice };
   }
-
-  schedule[targetIdx] = {
-    ...schedule[targetIdx],
-    status: "paid",
-    paidAt: new Date().toISOString(),
-    ...patch,
-  };
-
-  // Custom: when the deposit (idx 0) clears, re-anchor the rest of the
-  // schedule to depositPaidAt. mergeScheduleState() inside buildCustomSchedule
-  // preserves the just-paid deposit row verbatim, so we never lose
-  // receiptUrl or stripePaymentIntentId.
-  const isCustom = sale.videoType === "custom";
-  const isDeposit = targetIdx === 0;
-  let nextSchedule = schedule;
-  let extraPatch = {};
-  if (isCustom && isDeposit) {
-    const depositPaidAt = schedule[0].paidAt;
-    extraPatch.depositPaidAt = depositPaidAt;
-    try {
-      nextSchedule = buildCustomSchedule(sale.customSlices || [], {
-        depositAnchorDate: depositPaidAt,
-        existingSchedule: schedule,
-      });
-    } catch (e) {
-      console.error("Custom re-anchor failed:", e.message);
-      // Keep the original schedule with the just-paid deposit; don't fail the webhook.
-      nextSchedule = schedule;
-    }
-    // Defensive: a rebuild from empty/malformed customSlices yields []
-    // and `[].every()` is vacuously true — which would silently mark the
-    // sale fully paid with NO schedule. Never let the rebuild drop rows;
-    // fall back to the schedule we already had the just-paid row in.
-    if (!Array.isArray(nextSchedule) || nextSchedule.length === 0) {
-      nextSchedule = schedule;
-    }
+  if (tx.committed && result?.action === "paid") {
+    return result.info; // { allPaid, slice }
   }
-
-  // `length > 0` guard so an empty schedule can never flip paid:true.
-  const allPaid = nextSchedule.length > 0 && nextSchedule.every(s => s.status === "paid");
-  await adminPatch(`/sales/${saleId}`, {
-    schedule: nextSchedule,
-    paid: allPaid,
-    ...(allPaid ? { paidAt: new Date().toISOString() } : {}),
-    ...extraPatch,
-  });
-  // Return the slice from the schedule we actually wrote back.
-  const writtenSlice = nextSchedule.find(s => s.sliceId === schedule[targetIdx].sliceId) || schedule[targetIdx];
-  return { allPaid, slice: writtenSlice };
+  console.warn(`markSlicePaid: transaction not committed for sale ${saleId} (action=${result?.action || "none"})`);
+  return;
 }
 
 async function slackNotify(text) {
@@ -342,7 +292,9 @@ export default async function handler(req, res) {
     // 4th cycle.
     if (event.type === "invoice.paid") {
       const invoice = event.data.object;
-      const subId = invoice.subscription;
+      // Stripe API "Basil" (2025-03-31+) moved the field to
+      // invoice.parent.subscription_details — read both shapes.
+      const subId = invoice.subscription || invoice.parent?.subscription_details?.subscription;
       if (!subId) {
         // Non-subscription invoice — skip.
         return res.status(200).json({ received: true, ignored: "no subscription id" });
@@ -389,7 +341,15 @@ export default async function handler(req, res) {
       // Prefer invoice_pdf so Download Receipt opens straight to the
       // PDF; fall back to hosted_invoice_url for older invoices where
       // the PDF isn't ready yet.
-      const result = await markSlicePaid(saleId, { sliceIdx }, {
+      // healAmountToPaid: the subscription bills ONE flat recurring
+      // price — a legacy (pre-flat-fix) schedule's rows can disagree
+      // with the actual charge, so heal the row to reality instead of
+      // mismatch-flagging (legacy mid-plan sales reconcile themselves).
+      const result = await markSlicePaid(saleId, {
+        sliceIdx,
+        paidAmountCents: invoice.amount_paid,
+        healAmountToPaid: true,
+      }, {
         stripeInvoiceId: invoice.id,
         amountPaid: invoice.amount_paid / 100,
         receiptUrl: invoice.invoice_pdf || invoice.hosted_invoice_url || null,
@@ -434,34 +394,31 @@ export default async function handler(req, res) {
       const sub = event.data.object;
       const saleId = sub.metadata?.saleId;
       if (saleId) {
-        const existing = await adminGet(`/sales/${saleId}`);
-        if (existing) {
+        const now = new Date().toISOString();
+        let cancelledCount = 0;
+        const tx = await mutateRecord(`/sales/${saleId}`, (existing) => {
+          cancelledCount = 0; // reset per updater run
           const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
-          let cancelledCount = 0;
           const updatedSchedule = schedule.map(s => {
             if (s.status === "pending") {
               cancelledCount++;
-              return { ...s, status: "cancelled", cancelledAt: new Date().toISOString() };
+              return { ...s, status: "cancelled", cancelledAt: now };
             }
             return s;
           });
-          // allDone now means every slice is either paid OR cancelled
-          // (i.e. the schedule has reached a terminal state). The
-          // length>0 guard stops an empty schedule from reading as
-          // vacuously "all paid/cancelled".
-          const allDone = updatedSchedule.length > 0 && updatedSchedule.every(s => s.status === "paid" || s.status === "cancelled");
-          await adminPatch(`/sales/${saleId}`, {
+          return {
+            ...existing,
             schedule: updatedSchedule,
             stripeSubscriptionActive: false,
             // Only set top-level paid=true if every slice paid (no
             // cancellations). A partial-paid + cancelled sale stays
             // paid: false so it shows up in "AWAITING" filters. An empty
             // schedule can never flip paid:true (length>0 guard).
-            ...(updatedSchedule.length > 0 && updatedSchedule.every(s => s.status === "paid") ? { paid: true, paidAt: new Date().toISOString() } : {}),
-          });
-          if (cancelledCount > 0) {
-            await slackNotify(`:warning: *Subscription ended early* — ${sub.metadata?.clientName || saleId} · ${cancelledCount} unpaid instalment(s) marked cancelled. Subscription died mid-plan (manual cancel, dunning failure, or expired card). Reconcile in Stripe Dashboard.`);
-          }
+            ...(updatedSchedule.length > 0 && updatedSchedule.every(s => s.status === "paid") ? { paid: true, paidAt: now } : {}),
+          };
+        });
+        if (tx.committed && tx.snapshot != null && cancelledCount > 0) {
+          await slackNotify(`:warning: *Subscription ended early* — ${sub.metadata?.clientName || saleId} · ${cancelledCount} unpaid instalment(s) marked cancelled. Subscription died mid-plan (manual cancel, dunning failure, or expired card). Reconcile in Stripe Dashboard.`);
         }
       }
     }
@@ -496,39 +453,51 @@ export default async function handler(req, res) {
       if (!resolvedSaleId || (resolvedSliceIdx === undefined && !resolvedSliceId)) {
         return res.status(200).json({ received: true, ignored: "no saleId/sliceIdx on refund" });
       }
-      const existing = await adminGet(`/sales/${resolvedSaleId}`);
-      if (!existing) {
+      const now = new Date().toISOString();
+      let refundOutcome = null;
+      let refundedLabel = null;
+      const tx = await mutateRecord(`/sales/${resolvedSaleId}`, (existing) => {
+        refundOutcome = null; refundedLabel = null; // reset per updater run
+        const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
+        let idx = -1;
+        if (resolvedSliceId) idx = schedule.findIndex(s => s && s.sliceId === resolvedSliceId);
+        if (idx === -1 && resolvedSliceIdx !== undefined) {
+          const n = Number(resolvedSliceIdx);
+          if (Number.isInteger(n) && n >= 0 && schedule[n]) idx = n;
+        }
+        if (idx === -1) { refundOutcome = "no_match"; return null; }
+        // Idempotent — if already marked refunded, skip.
+        if (schedule[idx].status === "refunded") { refundOutcome = "already"; return null; }
+        schedule[idx] = {
+          ...schedule[idx],
+          status: "refunded",
+          refundedAt: now,
+          refundedAmount: (charge.amount_refunded || 0) / 100,
+        };
+        refundOutcome = "refunded";
+        refundedLabel = schedule[idx].label || `slice ${idx}`;
+        return {
+          ...existing,
+          schedule,
+          // Top-level paid is no longer true if any slice is non-paid.
+          paid: false,
+          paidAt: null,
+        };
+      });
+      if (tx.snapshot == null) {
         return res.status(200).json({ received: true, ignored: "sale deleted" });
       }
-      const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
-      let idx = -1;
-      if (resolvedSliceId) idx = schedule.findIndex(s => s && s.sliceId === resolvedSliceId);
-      if (idx === -1 && resolvedSliceIdx !== undefined) {
-        const n = Number(resolvedSliceIdx);
-        if (Number.isInteger(n) && n >= 0 && schedule[n]) idx = n;
-      }
-      if (idx === -1) {
+      if (refundOutcome === "no_match") {
         return res.status(200).json({ received: true, ignored: "no slice match" });
       }
-      // Idempotent — if already marked refunded, skip.
-      if (schedule[idx].status === "refunded") {
+      if (refundOutcome === "already") {
         return res.status(200).json({ received: true, ignored: "already refunded" });
       }
-      schedule[idx] = {
-        ...schedule[idx],
-        status: "refunded",
-        refundedAt: new Date().toISOString(),
-        refundedAmount: (charge.amount_refunded || 0) / 100,
-      };
-      await adminPatch(`/sales/${resolvedSaleId}`, {
-        schedule,
-        // Top-level paid is no longer true if any slice is non-paid.
-        paid: false,
-        paidAt: null,
-      });
-      const amount = ((charge.amount_refunded || 0) / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
-      const clientName = existing.clientName || "a customer";
-      await slackNotify(`:rewind: *Refund issued* — ${clientName} · ${amount} for ${schedule[idx].label || `slice ${idx}`}. Sale row updated.`);
+      if (tx.committed && refundOutcome === "refunded") {
+        const amount = ((charge.amount_refunded || 0) / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+        const clientName = tx.snapshot.clientName || "a customer";
+        await slackNotify(`:rewind: *Refund issued* — ${clientName} · ${amount} for ${refundedLabel}. Sale row updated.`);
+      }
     }
 
     // ─── payment_intent.payment_failed ─────────────────────────────
@@ -544,8 +513,10 @@ export default async function handler(req, res) {
       const sliceId = intent.metadata?.sliceId;
       const sliceIdx = intent.metadata?.sliceIdx;
       if (saleId && (sliceId || sliceIdx !== undefined)) {
-        const existing = await adminGet(`/sales/${saleId}`);
-        if (existing) {
+        const now = new Date().toISOString();
+        let declinedLabel = null;
+        const tx = await mutateRecord(`/sales/${saleId}`, (existing) => {
+          declinedLabel = null; // reset per updater run
           const schedule = Array.isArray(existing.schedule) ? [...existing.schedule] : [];
           let idx = -1;
           if (sliceId) idx = schedule.findIndex(s => s && s.sliceId === sliceId);
@@ -553,22 +524,23 @@ export default async function handler(req, res) {
             const n = Number(sliceIdx);
             if (Number.isInteger(n) && n >= 0 && schedule[n]) idx = n;
           }
-          if (idx !== -1 && schedule[idx].status !== "paid" && schedule[idx].status !== "refunded") {
-            schedule[idx] = {
-              ...schedule[idx],
-              status: "declined",
-              lastDeclineAt: new Date().toISOString(),
-              lastDeclineMessage: intent.last_payment_error?.message || "Payment failed",
-              stripePaymentIntentId: intent.id,
-              // Clear the in-flight attempt key so retries are clean.
-              autoAttemptKey: null,
-            };
-            await adminPatch(`/sales/${saleId}`, { schedule });
-            const amount = ((intent.amount || 0) / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
-            const clientName = existing.clientName || "a customer";
-            const label = schedule[idx].label || `slice ${idx}`;
-            await slackNotify(`:no_entry: *Off-session charge failed* — ${clientName} · ${label} ${amount}. Card declined or auth required. Use 'Charge' / 'Retry' in the Sales tab once it's resolved.`);
-          }
+          if (idx === -1 || schedule[idx].status === "paid" || schedule[idx].status === "refunded") return null;
+          schedule[idx] = {
+            ...schedule[idx],
+            status: "declined",
+            lastDeclineAt: now,
+            lastDeclineMessage: intent.last_payment_error?.message || "Payment failed",
+            stripePaymentIntentId: intent.id,
+            // Clear the in-flight attempt key so retries are clean.
+            autoAttemptKey: null,
+          };
+          declinedLabel = schedule[idx].label || `slice ${idx}`;
+          return { ...existing, schedule };
+        });
+        if (tx.committed && tx.snapshot != null && declinedLabel) {
+          const amount = ((intent.amount || 0) / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+          const clientName = tx.snapshot.clientName || "a customer";
+          await slackNotify(`:no_entry: *Off-session charge failed* — ${clientName} · ${declinedLabel} ${amount}. Card declined or auth required. Use 'Charge' / 'Retry' in the Sales tab once it's resolved.`);
         }
       }
     }
@@ -578,7 +550,9 @@ export default async function handler(req, res) {
     // ping Slack here so the team knows to chase the customer.
     if (event.type === "invoice.payment_failed") {
       const invoice = event.data.object;
-      const subId = invoice.subscription;
+      // Stripe API "Basil" (2025-03-31+) moved the field to
+      // invoice.parent.subscription_details — read both shapes.
+      const subId = invoice.subscription || invoice.parent?.subscription_details?.subscription;
       let clientName = "a customer";
       if (subId) {
         try {

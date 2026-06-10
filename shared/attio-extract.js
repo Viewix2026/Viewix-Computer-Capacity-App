@@ -401,3 +401,58 @@ export function resolveDealClaims(project, dealIndex) {
   if (!cands || !cands.length) return [];
   return cands.map((c) => c.recordId).filter(Boolean);
 }
+
+// Normalise a Zapier/Attio closeDate before it anchors a milestone
+// chain (consumed by api/webhook-deal-won.js). Attio's API emits ISO
+// 8601 (passes straight through), but a zap formatter can emit
+// AU-style DD/MM/YYYY — new Date() then either yields Invalid Date
+// (day > 12, which used to throw RangeError in the webhook's addDays
+// and 500 the request before any record was written) or silently
+// parses as the US month (day <= 12, wrong milestones with no error).
+// Slash-dates are parsed explicitly as DD/MM; anything unparseable
+// falls back to `today`.
+export function normaliseCloseDate(raw, today) {
+  if (!raw) return today;
+  const slash = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(raw).trim());
+  if (slash) {
+    const [, d, m, y] = slash;
+    const day = Number(d), month = Number(m), year = Number(y);
+    // Round-trip component check — new Date("2026-04-31") OVERFLOW-
+    // normalises to May 1 instead of going Invalid, so a NaN check
+    // alone lets impossible calendar dates through as wrong dates.
+    const dt = new Date(Date.UTC(year, month - 1, day));
+    if (dt.getUTCFullYear() !== year || dt.getUTCMonth() !== month - 1 || dt.getUTCDate() !== day) return today;
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  return Number.isNaN(new Date(raw).getTime()) ? today : raw;
+}
+
+// ─── Won-deal webhook dedup helpers ────────────────────────────────
+// api/webhook-deal-won.js has no Zapier event id to dedupe on, so
+// identity is normalised clientName+projectName. The key doubles as an
+// RTDB path segment under /dealLocks — strip the characters RTDB
+// forbids in keys (. # $ [ ] /) after normName (which deliberately
+// keeps punctuation for name fidelity).
+export function dealDedupKey(companyName, dealName) {
+  const part = (s, fallback) =>
+    normName(s || fallback).replace(/[.#$\[\]\/]/g, "_");
+  return `${part(companyName, "unknown")}::${part(dealName, "Untitled project")}`;
+}
+
+// Find a recent (default 48h) non-archived project that the same
+// won-deal webhook already created — Zapier timeout-replays and
+// double-fired zaps re-send the same deal. createdAt is preferred;
+// older records carry their creation time embedded in the
+// `proj-<ms>-<rand>` id. A genuine same-name re-purchase months later
+// is outside the window and goes through.
+export function findRecentDuplicateProject(projects, { companyName, dealName, nowMs, windowMs = 48 * 60 * 60 * 1000 } = {}) {
+  const key = dealDedupKey(companyName, dealName);
+  for (const p of Object.values(projects || {})) {
+    if (!p || !p.id || p.status === "archived") continue;
+    if (dealDedupKey(p.clientName, p.projectName) !== key) continue;
+    const fromId = Number((String(p.id).match(/^proj-(\d+)-/) || [])[1]) || 0;
+    const created = Date.parse(p.createdAt || "") || fromId;
+    if (created && nowMs - created <= windowMs) return p;
+  }
+  return null;
+}

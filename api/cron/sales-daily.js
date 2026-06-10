@@ -147,6 +147,13 @@ export default async function handler(req, res) {
       let txAbortReason = null;
       try {
         const result = await runRtdbTransaction(`/sales/${saleId}/schedule`, (current) => {
+          // The SDK runs the updater first against the local cache —
+          // always null in a fresh lambda. Returning the null unchanged
+          // commits a no-op against the server hash, which fails, forces
+          // a server fetch, and re-runs us with the real schedule.
+          // Returning undefined here would abort before any server read
+          // and skip every due slice (the sync-shoot-calendar go-live bug).
+          if (current === null) return current;
           if (!Array.isArray(current)) { txAbortReason = "schedule-missing"; return undefined; }
           const idx = sliceId
             ? current.findIndex(s => s && s.sliceId === sliceId)
@@ -264,6 +271,9 @@ export default async function handler(req, res) {
   async function revertClaim(saleId, sliceId, fallbackIdx, expectedAttemptKey, message, piId) {
     try {
       await runRtdbTransaction(`/sales/${saleId}/schedule`, (current) => {
+        // Null = cold local cache; pass through so the SDK refetches
+        // and re-runs with the real value (see claim updater above).
+        if (current === null) return current;
         if (!Array.isArray(current)) return undefined;
         const idx = sliceId
           ? current.findIndex(s => s && s.sliceId === sliceId)

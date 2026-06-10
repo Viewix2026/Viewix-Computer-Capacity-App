@@ -500,7 +500,11 @@ export function Sale({
           {/* Live breakdown: GST + surcharges + grand total + instalment schedule */}
           {form.totalExGst>0&&(()=>{
             const totalSurcharge = (form.schedule||[]).reduce((sum,s)=>sum+(Number(s.surcharge)||0),0);
-            const customerPays = (Number(form.grandTotal)||0) + totalSurcharge;
+            // Customer-pays = Σ row amounts when a schedule exists — the rows
+            // are what Stripe actually charges (flat subscription instalments
+            // can drift a cent or two from grandTotal + surcharge).
+            const rowSum = (form.schedule||[]).reduce((sum,s)=>sum+(Number(s.amount)||0),0);
+            const customerPays = rowSum > 0 ? Math.round(rowSum*100)/100 : (Number(form.grandTotal)||0) + totalSurcharge;
             const sliceCount = (form.schedule||[]).length;
             return (
             <div style={{display:"grid",gridTemplateColumns:"1fr 1.4fr",gap:16,paddingTop:12,borderTop:"1px dashed var(--border)"}}>

@@ -128,7 +128,10 @@ export function SalePricingEditor({ salePricing, setSalePricing, canEdit = true 
                       </div>
                       {schedule.length > 0 && (() => {
                         const totalSurcharge = schedule.reduce((sum, s) => sum + (Number(s.surcharge) || 0), 0);
-                        const customerPays = grandTotal + totalSurcharge;
+                        // Σ row amounts — the rows are what Stripe charges
+                        // (flat subscription instalments can drift ≤2c).
+                        const rowSum = schedule.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+                        const customerPays = rowSum > 0 ? Math.round(rowSum * 100) / 100 : grandTotal + totalSurcharge;
                         return (
                           <>
                             <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
