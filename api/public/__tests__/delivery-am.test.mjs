@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import handler, {
   DELIVERY_ID_RE, findOwningProject, buildAmEnvelope, buildClientLogo,
-} from "./delivery-am.js";
+} from "../delivery-am.js";
 
 // ── Fixtures ──
 const account = {
