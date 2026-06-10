@@ -47,6 +47,7 @@
 // one client's inbox". Rate limited per-IP for the same reason as
 // notify-revision.js.
 
+import { waitUntil } from "@vercel/functions";
 import { adminGet } from "./_fb-admin.js";
 import { requireRole, sendAuthError } from "./_requireAuth.js";
 // Note: send/buildDeliveryUrl no longer imported — this endpoint
@@ -273,12 +274,17 @@ export default async function handler(req, res) {
     // editor's Finish response.
     if (reviewType === "client" && projectId) {
       // Dynamic import keeps the cold-path light when reviewType=internal.
-      import("./notify-client-ready.js")
-        .then(({ fireClientReadyIfAllVideosReady }) =>
-          fireClientReadyIfAllVideosReady({ projectId, justSetVideoId: videoId || null })
-        )
-        .then(r => { if (r && !r.ok && r.error) console.warn("client-ready gate:", r.error); })
-        .catch(e => console.warn("client-ready gate fan-out failed:", e.message));
+      // waitUntil keeps the lambda alive past the response — a bare
+      // fire-and-forget promise is frozen (and usually dropped) the
+      // moment res.status() returns, silently eating the AM alert.
+      waitUntil(
+        import("./notify-client-ready.js")
+          .then(({ fireClientReadyIfAllVideosReady }) =>
+            fireClientReadyIfAllVideosReady({ projectId, justSetVideoId: videoId || null })
+          )
+          .then(r => { if (r && !r.ok && r.error) console.warn("client-ready gate:", r.error); })
+          .catch(e => console.warn("client-ready gate fan-out failed:", e.message))
+      );
     }
     void subtaskId; void payloadDeliveryId;
 

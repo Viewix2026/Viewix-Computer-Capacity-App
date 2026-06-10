@@ -111,14 +111,20 @@ function formatDate(d) {
   return new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 }
 
+// Local-date ISO — toISOString() is UTC, which rolls the date back a
+// day before ~10-11am Sydney (same fix as TeamBoard's toISO).
+function localISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // Default ISO date range from today - days → today
 function defaultRange(days = DEFAULTS.dateRangeDays) {
   const to = new Date();
   const from = new Date();
   from.setDate(from.getDate() - days);
   return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
+    from: localISO(from),
+    to: localISO(to),
   };
 }
 
@@ -1784,7 +1790,7 @@ function VideoReviewStep({ project, onPatch }) {
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: "var(--muted)" }}>
-            ✓ {ticked.size} · ✗ {crossed.size} · {topPosts.length + extraLinks.length - ticked.size - crossed.size} unreviewed
+            ✓ {ticked.size} · ✗ {crossed.size} · {cappedPosts.filter(p => !ticked.has(p.id) && !crossed.has(p.id)).length + extraLinks.length} unreviewed
           </span>
           {/* Append-mode actions — extend the candidate pool without
               restarting. + Add competitor scrapes one or more new handles;
@@ -1947,7 +1953,7 @@ function VideoReviewStep({ project, onPatch }) {
           {hasMore && filter === "all" && (
             <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
               <button onClick={() => setVisibleCount(v => v + 25)} style={btnSecondary}>
-                View more ({sortedPosts.length - visibleCount} remaining)
+                View more ({cappedPosts.length - visibleCount} remaining)
               </button>
             </div>
           )}

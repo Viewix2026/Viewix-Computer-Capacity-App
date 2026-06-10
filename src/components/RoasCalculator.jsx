@@ -375,9 +375,11 @@ const inputBase = {
 };
 
 export function RoasCalculator({ embedded = false }) {
-  // Try to restore state from URL hash on first load
+  // Try to restore state from URL hash on first load. Embedded (dashboard)
+  // instances must not touch the hash at all — there it belongs to the
+  // app router (#tool/subTab/recordId), not to us.
   const initial = useMemo(() => {
-    const decoded = typeof window !== "undefined" ? decodeState(window.location.hash) : null;
+    const decoded = !embedded && typeof window !== "undefined" ? decodeState(window.location.hash) : null;
     if (decoded) return decoded;
     return { funnel: "meta1", inputs: { ...FUNNELS.meta1.defaults } };
   }, []);
@@ -395,13 +397,16 @@ export function RoasCalculator({ embedded = false }) {
   const setInputs = patch => setAllInputs(prev => ({ ...prev, [funnel]: { ...prev[funnel], ...patch } }));
   const resetDefaults = () => setAllInputs(prev => ({ ...prev, [funnel]: { ...FUNNELS[funnel].defaults } }));
 
-  // Sync state → URL hash (so share links preserve the scenario)
+  // Sync state → URL hash (so share links preserve the scenario).
+  // Skipped when embedded: rewriting the hash destroyed the dashboard's
+  // route (deep links died on open; reload landed on a blank panel).
   useEffect(() => {
+    if (embedded) return;
     const hash = "#" + encodeState({ funnel, inputs });
     if (typeof window !== "undefined" && window.location.hash !== hash) {
       history.replaceState(null, "", window.location.pathname + window.location.search + hash);
     }
-  }, [funnel, inputs]);
+  }, [embedded, funnel, inputs]);
 
   const { stages, summary } = computeResult(funnel, inputs);
 

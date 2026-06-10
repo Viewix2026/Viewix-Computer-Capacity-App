@@ -174,12 +174,15 @@ export function FoundersProfitability() {
   const [expandedId, setExpandedId] = useState(null);
   const [showRates, setShowRates] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
-  const loaded = useRef(false);
+  // State, not a ref — the first-run effect below must re-run when the
+  // initial snapshot lands (a ref flip leaves it unreachable when the
+  // snapshot is empty, because baseRows.length stays 0 === 0).
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     const obj = (d) => (d && typeof d === "object" ? d : {});
     const unsubs = [
-      fbListenSafe("/profitability", (d) => { setProfitability(obj(d)); loaded.current = true; }),
+      fbListenSafe("/profitability", (d) => { setProfitability(obj(d)); setLoaded(true); }),
       fbListenSafe("/editors", (d) => setEditors(Array.isArray(d) ? d : DEF_EDS)),
       fbListenSafe("/laborCosts", (d) => setLaborCosts(obj(d))),
       fbListenSafe("/commissionPlans", (d) => setCommissionPlans(obj(d))),
@@ -267,12 +270,12 @@ export function FoundersProfitability() {
   // is actionable. One-shot (ref-guarded) so a manual collapse sticks.
   const setupOpened = useRef(false);
   useEffect(() => {
-    if (loaded.current && baseRows.length === 0 && !setupOpened.current) {
+    if (loaded && baseRows.length === 0 && !setupOpened.current) {
       setupOpened.current = true;
       setShowRates(true);
       setShowPlans(true);
     }
-  }, [baseRows.length]);
+  }, [loaded, baseRows.length]);
 
   // ── writers (optimistic draft + persist) ──────────────────────────
   const saveRate = (id, patch) => {
@@ -301,7 +304,7 @@ export function FoundersProfitability() {
     setShowPlans(true);
   };
 
-  if (!loaded.current) {
+  if (!loaded) {
     return <div style={{ color: C.muted, fontSize: 13, padding: "20px 4px" }}>Loading profitability…</div>;
   }
 

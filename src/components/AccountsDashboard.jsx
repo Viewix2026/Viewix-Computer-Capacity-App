@@ -311,10 +311,11 @@ export function AccountsDashboard({ accounts, setAccounts, deleteAccount, projec
   const addClient = () => {
     if (!newName.trim()) return;
     const id = "acct-" + Date.now();
-    setAccounts(prev => ({
-      ...prev,
-      [id]: { id, companyName: newName.trim(), attioId: "", accountManager: "", projectLead: "", partnershipType: "", lastContact: "", milestones: {}, logoUrl: "" }
-    }));
+    const created = { id, companyName: newName.trim(), attioId: "", accountManager: "", projectLead: "", partnershipType: "", lastContact: "", milestones: {}, logoUrl: "" };
+    setAccounts(prev => ({ ...prev, [id]: created }));
+    // /accounts is not covered by App.jsx's bulk-write loop — persist the
+    // new record directly (same as doSync) or it vanishes on reload.
+    fbSet(`/accounts/${id}`, created);
     setNewName("");
     setAdding(false);
   };

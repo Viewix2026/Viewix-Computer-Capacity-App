@@ -223,6 +223,7 @@ export function SocialOrganicSelect({ project, onPatch }) {
       thumbnail: f.examples?.[0]?.thumbnail || null,
       exampleUrl: f.examples?.[0]?.url || null,
       isSuggested: suggestedIdSet.has(f.id),
+      usageCount: f.usageCount || 0,
     }))
     // Suggested formats float to the top, then by usage, then name.
     .sort((a, b) => {

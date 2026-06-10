@@ -3,7 +3,7 @@
 // generates shareable client review links. Records are spawned by the
 // Attio deal-won webhook or created blank from this list.
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { BTN, TH, NB, VIEWIX_STATUSES, VIEWIX_STATUS_COLORS, CLIENT_REVISION_OPTIONS, CLIENT_REVISION_COLORS } from "../config";
 import { newDelivery, newVideo, logoBg, deliveryShareUrl } from "../utils";
 import { findProjectForDelivery } from "../../api/_findOwningProject.js";
@@ -103,9 +103,16 @@ export function Deliveries({ deliveries, setDeliveries, accounts, projects, deep
   // Auto-opens that delivery once the listener has loaded it. Re-fires
   // when deepLinkDeliveryId changes so producers can pinball between
   // pills without an intermediate Back-to-list.
+  // One-shot per distinct deep link (resets when the id clears, so
+  // pinballing between pills still works) — without the consumed guard
+  // any remote /deliveries write yanked a producer who'd pressed Back
+  // straight back into the deep-linked delivery.
+  const consumedDeepLinkRef = useRef(null);
   useEffect(() => {
-    if (!deepLinkDeliveryId) return;
+    if (!deepLinkDeliveryId) { consumedDeepLinkRef.current = null; return; }
+    if (consumedDeepLinkRef.current === deepLinkDeliveryId) return;
     if (deliveries.find(d => d.id === deepLinkDeliveryId)) {
+      consumedDeepLinkRef.current = deepLinkDeliveryId;
       setActiveDeliveryId(deepLinkDeliveryId);
     }
   }, [deepLinkDeliveryId, deliveries]);

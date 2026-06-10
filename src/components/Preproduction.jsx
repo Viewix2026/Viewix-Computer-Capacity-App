@@ -453,7 +453,14 @@ export function Preproduction({ role, isFounder, dealProjects, route } = {}) {
   function renderSectionModal() {
     if (!sectionEdit) return null;
     const p = activeProject;
-    const clientFb = p?.clientFeedback?.[sectionEdit.path.replace(/\//g, "_")];
+    // Section feedback is stored under the PUBLIC view's key scheme —
+    // `${sectionKey}_section`, where Brand Personality's section key
+    // drops the `/summary` suffix. The bare path lookup never matched,
+    // so the in-modal feedback banner never showed.
+    const sectionFbKey = sectionEdit.path
+      .replace(/^brandAnalysis\/brandPersonality\/summary$/, "brandAnalysis/brandPersonality")
+      .replace(/\//g, "_") + "_section";
+    const clientFb = p?.clientFeedback?.[sectionFbKey] || p?.clientFeedback?.[sectionEdit.path.replace(/\//g, "_")];
     const isMotivator = sectionEdit.path.startsWith("motivators/");
     return (
       <EditModal title={`Edit: ${sectionEdit.label}`} onClose={() => setSectionEdit(null)}>

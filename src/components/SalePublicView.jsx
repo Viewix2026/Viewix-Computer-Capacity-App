@@ -568,12 +568,18 @@ function StudioThankYou({ sale, thankYou, justPaid }) {
     return `VWX-${suffix}-${initials}`;
   })();
 
-  // Paid-at formatting — "21 April 2026 · 5:02pm AEST"
+  // Paid-at formatting — "21 April 2026 · 5:02pm AEST". Pinned to
+  // Sydney: this renders on the CUSTOMER's machine, so the bare locale
+  // default showed their local time labelled "AEST" (and even Sydney
+  // viewers got "AEST" mislabelled during daylight saving).
   const paidAtIso = sale.paidAt || new Date().toISOString();
   const paidAtDate = new Date(paidAtIso);
-  const paidAtDateStr = paidAtDate.toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" });
-  const paidAtTimeStr = paidAtDate.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit", hour12: true }).toLowerCase().replace(/\s/g, "");
-  const paidAtStr = `${paidAtDateStr} · ${paidAtTimeStr} AEST`;
+  const SYD_TZ = "Australia/Sydney";
+  const paidAtDateStr = paidAtDate.toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric", timeZone: SYD_TZ });
+  const paidAtTimeStr = paidAtDate.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: SYD_TZ }).toLowerCase().replace(/\s/g, "");
+  const paidAtZone = new Intl.DateTimeFormat("en-AU", { timeZone: SYD_TZ, timeZoneName: "short" })
+    .formatToParts(paidAtDate).find(p => p.type === "timeZoneName")?.value || "AEST";
+  const paidAtStr = `${paidAtDateStr} · ${paidAtTimeStr} ${paidAtZone}`;
 
   // First-name in the headline. "Smith & Co." → falls through to
   // full clientName; "Jeremy Farrugia" → "Jeremy".

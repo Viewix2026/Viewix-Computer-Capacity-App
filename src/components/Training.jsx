@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import { BTN, NB } from "../config";
+import { getCurrentUserName } from "../firebase";
 import { MeetingFeedback } from "./MeetingFeedback";
 import { TranscriptInsightsLab } from "./TranscriptInsightsLab";
 
@@ -24,7 +25,9 @@ export function Training({
   trainingSubTab, setTrainingSubTab,
 }) {
   const isAdmin = isFounder;
-  const userName = role === "founders" ? "Jeremy" : isAdmin ? "Manager" : role === "closer" ? "Team" : "Editor";
+  // Per-user SSO names — the old role-based labels recorded every
+  // founder comment as "Jeremy" regardless of who posted it.
+  const userName = getCurrentUserName() || (role === "founders" ? "Jeremy" : isAdmin ? "Manager" : role === "closer" ? "Team" : "Editor");
 
   // ─── Local UI state ───
   const [trainingEditMode, setTrainingEditMode] = useState(false);
@@ -277,9 +280,9 @@ export function Training({
           )}
 
           {/* Categories + modules */}
-          {visibleTraining.sort((a, b) => (a.order || 0) - (b.order || 0)).map(cat => {
+          {[...visibleTraining].sort((a, b) => (a.order || 0) - (b.order || 0)).map(cat => {
             const isCollapsed = collapsedCats[cat.id] !== false;
-            const sortedMods = (cat.modules || []).sort((a, b) => (a.order || 0) - (b.order || 0));
+            const sortedMods = [...(cat.modules || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
             return (
               <div key={cat.id} style={{ marginBottom: 20 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", background: "var(--card)", border: "1px solid var(--border)", borderRadius: isCollapsed ? 10 : "10px 10px 0 0", cursor: "pointer" }} onClick={() => toggleCat(cat.id)}>

@@ -180,7 +180,7 @@ export function Grid({wk,weekData,onUpdate,masterEds,inputs,projects,onUpdateSui
           style={{...TD,textAlign:"center",cursor:"pointer",userSelect:"none",transition:"all 0.15s",position:"relative",...cs,fontWeight:700}}
           title={title}>
           <div style={{fontSize:eff==="in+shoot"?9:undefined,letterSpacing:eff==="in+shoot"?0.3:undefined}}>{cellLabel(eff)}</div>
-          {hasNote&&<div style={{fontSize:8,color:eff==="shoot"||eff==="in+shoot"?"#F87700":"var(--accent)",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:80,margin:"0 auto"}}>📝 {hasNote}</div>}
+          {hasNote&&<div style={{fontSize:8,color:eff==="shoot"||eff==="in+shoot"?"#F87700":"var(--accent)",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:80,margin:"0 auto"}}>📝 {ed.notes[day]}</div>}
         </td>);})}
       <td style={{...TD,textAlign:"center",fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{dn}</td>
       <td style={{...TD,textAlign:"center"}}><button onClick={()=>rmEd(ed.id)} style={{background:"none",border:"none",cursor:"pointer",color:"var(--muted)",fontSize:16,padding:"2px 6px",borderRadius:4}}>x</button></td>

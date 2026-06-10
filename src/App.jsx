@@ -237,6 +237,12 @@ export default function App(){
 
   const skipWrite=useRef(true);
   const skipRead=useRef(false);
+  // Paths whose initial listener snapshot has been delivered this
+  // session. The bulk-write loop only writes a path once it's in here —
+  // skipWrite alone unlocks 500ms after the FIRST path's fire (or the
+  // 3s fallback), so a late-arriving path could get its server data
+  // clobbered with in-memory defaults by an earlier path's echo.
+  const loadedPaths=useRef(new Set());
 
   // Session restore: if Firebase auth has a persisted user, restore the role immediately.
   useEffect(()=>{
@@ -290,6 +296,11 @@ export default function App(){
   // defer the attach until the user is actually signed in with a role.
   useEffect(()=>{
     if(!role)return;
+    // Re-arm the write lock + per-path gates on every (re)attach —
+    // logout→login previously left skipWrite unlocked from the prior
+    // session, widening the clobber window during re-auth.
+    skipWrite.current=true;
+    loadedPaths.current=new Set();
     initFB();
     const fallback=setTimeout(()=>{setLoading(false);skipWrite.current=false;},3000);
     const unsubs=[];
@@ -311,7 +322,7 @@ export default function App(){
       // re-deliver missed initials, so once dropped, the state stays
       // empty until something else writes. Always letting the first
       // fire through closes that gap; later fires keep the echo guard.
-      const firstFireSeen=new Set();
+      const firstFireSeen=loadedPaths.current;
       // Per-path "recently wrote locally" guard, layered on top of the
       // bulk-write skipRead. firebase.js stamps every fbSet/fbUpdate's
       // top-level path prefix; this listener checks recentlyWroteTo
@@ -396,7 +407,11 @@ export default function App(){
    avgEditHoursPerProject) plus _computed metadata. A bulk-write of
    the whole inputs object would race the cron and clobber its
    writes — the same clobber pattern documented for /accounts and
-   /deliveries below. */fbSet("/editors",editors);fbSet("/weekData",weekData);const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
+   /deliveries below. *//* Per-path gate: only write a path whose initial snapshot has been
+   delivered this session. skipWrite unlocks 500ms after the FIRST
+   path's fire (or the 3s fallback) — without this gate, any state
+   change in that window bulk-wrote in-memory DEFAULTS over paths
+   whose server data hadn't arrived yet, destroying it. */const ready=p=>loadedPaths.current.has(p);if(ready("/editors"))fbSet("/editors",editors);if(ready("/weekData"))fbSet("/weekData",weekData);if(ready("/quotes")){const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);}if(ready("/clientRateCards")){const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);}if(ready("/clients"))clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
    Same reasoning as /accounts and /sales above: Deliveries.jsx writes
    leaf paths directly per edit (videos[i].link, status, revision1,
    etc.), and server endpoints write leaves too (notify-revision).
@@ -404,7 +419,7 @@ export default function App(){
    any of those writes and clobber the fresh data. Symptom we hit:
    pasting a link on one video reverted the previous video's link;
    flipping Viewix status quickly across rows occasionally reverted
-   one of them. */fbSet("/training",trainingData);fbSet("/trainingSuggestions",trainingSuggestions);const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);fbSet("/foundersMetrics",foundersMetrics);if(teamLunch)fbSet("/teamLunch",teamLunch);if(isFounder)fbSet("/teamHome",teamHome);if(isFounders)fbSet("/foundersData",foundersData);fbSet("/buyerJourney",buyerJourney);fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
+   one of them. */if(ready("/training"))fbSet("/training",trainingData);if(ready("/trainingSuggestions"))fbSet("/trainingSuggestions",trainingSuggestions);if(ready("/todos")){const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);}if(ready("/foundersMetrics"))fbSet("/foundersMetrics",foundersMetrics);if(teamLunch&&ready("/teamLunch"))fbSet("/teamLunch",teamLunch);if(isFounder&&ready("/teamHome"))fbSet("/teamHome",teamHome);if(isFounders&&ready("/foundersData"))fbSet("/foundersData",foundersData);if(ready("/buyerJourney"))fbSet("/buyerJourney",buyerJourney);if(ready("/turnaround"))fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
    Reason: AccountsDashboard's updateAccount / updateMilestone /
    setSigningDate already fbSet directly at click time, AND
    accounts are written by server endpoints too (webhook-deal-won
@@ -422,7 +437,7 @@ export default function App(){
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing)fbSet("/salePricing",salePricing);if(saleThankYou)fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing&&ready("/salePricing"))fbSet("/salePricing",salePricing);if(saleThankYou&&ready("/saleThankYou"))fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,salePricing,saleThankYou]);
 
   // shortId backfill moved into useDeliveriesSync — same logic, same trigger.
 
@@ -888,7 +903,7 @@ export default function App(){
     </>)}
 
     {/* ═══ EDITOR DASHBOARD ═══ */}
-    {tool==="editors"&&(isFounder||isLead||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} editors={editors} clients={clients} deliveries={deliveries} accounts={accounts} viewerRole={normalizedRole} currentUserEmail={getCurrentUserEmail()} currentUserName={getCurrentUserName()}/>)}
+    {tool==="editors"&&(isFounder||isLead||role==="editor"||role==="trial")&&(<EditorDashboard embedded projects={projects} setProjects={setProjects} editors={editors} clients={clients} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} viewerRole={normalizedRole} currentUserEmail={getCurrentUserEmail()} currentUserName={getCurrentUserName()}/>)}
 
     {/* ═══ ACCOUNTS (clients-only; Turnaround + Buyer Journey relocated to Founders) ═══ */}
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} projects={projects} setProjects={setProjects} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}

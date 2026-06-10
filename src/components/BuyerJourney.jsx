@@ -952,9 +952,10 @@ export function BuyerJourney({ data, onChange, turnaround, setTurnaround, accoun
           </div>
           <div style={{ display: "grid", gap: 6 }}>
             {MILESTONE_DEFS.map(m => {
-              const metaMatches = metaStages.filter(s => s.type === "stage" && deriveMilestoneKey(s) === m.key);
-              const socialMatches = socialStages.filter(s => s.type === "stage" && deriveMilestoneKey(s) === m.key);
-              const uniqueTitles = Array.from(new Set([...metaMatches, ...socialMatches].map(s => s.title)));
+              // Unified journey — the old per-offer metaStages/socialStages
+              // lists no longer exist (ReferenceError when this view opened).
+              const matches = stages.filter(s => (s.type === "stage" || s.type === "offerBranch") && deriveMilestoneKey(s) === m.key);
+              const uniqueTitles = Array.from(new Set(matches.map(s => s.title || s.metaAds?.title || s.socialRetainer?.title).filter(Boolean)));
               const hasAny = uniqueTitles.length > 0;
               return (
                 <div key={m.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", background: "var(--bg)", borderRadius: 6 }}>

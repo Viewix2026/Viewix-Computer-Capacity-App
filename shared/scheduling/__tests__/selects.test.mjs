@@ -117,6 +117,20 @@ test("lead has another shoot that day → needsPicker", () => {
   assert.equal(r.reason, "lead_has_shoot");
 });
 
+test("lead mid-way through another MULTI-DAY shoot that day → needsPicker", () => {
+  // Other shoot spans Mon 2026-05-25 .. Thu 2026-05-28. Selects day is
+  // Tue 2026-05-26 — day 2 of the span, not its startDate. (Regression:
+  // only startDate was compared, so day 2+ counted as available.)
+  const otherProject = {
+    id: "p2",
+    subtasks: { x: { id: "x", stage: "shoot", startDate: "2026-05-25", endDate: "2026-05-28", assigneeIds: ["ed-lead"] } },
+  };
+  const r = computeSelectsTimelineWrites(projectWith("2026-05-25"), { editors, weekData: {}, leadId: "ed-lead", allProjects: [otherProject] });
+  assert.equal(r.needsPicker, true);
+  assert.equal(r.reason, "lead_has_shoot");
+  assert.ok(!r.candidates.includes("ed-lead"), "lead (on day 2 of a shoot) should not be a candidate");
+});
+
 test("override assignee (picker choice) → writes to that person", () => {
   const r = computeSelectsTimelineWrites(projectWith("2026-05-25"), { editors, weekData: {}, leadId: "ed-lead", overrideAssigneeId: "ed-other", allProjects: [] });
   assert.ok(r.writes, "expected writes");

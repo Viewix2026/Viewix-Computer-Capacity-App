@@ -1751,6 +1751,10 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
             project={project}
             deliveries={deliveries}
             onSave={(next) => {
+              // View-only roles: persist() below no-ops its half, so bail
+              // before the delivery-side write too — otherwise the two
+              // stores this comment says must stay in sync diverge.
+              if (viewOnly) return;
               const trimmed = (next || "").trim();
               persist("frameioLink", trimmed);
               if (subtask.videoId && project) {
@@ -1761,6 +1765,17 @@ function SubtaskRow({ projectId, subtask, project, editors, deliveries, onDelete
                 if (delivery && Array.isArray(delivery.videos)) {
                   const idx = delivery.videos.findIndex(v => v && v.videoId === subtask.videoId);
                   if (idx >= 0) {
+                    // Optimistic deliveries patch (same shape as the
+                    // video-name path in persist) — without it the
+                    // stale delivery link wins in `resolved` and the
+                    // field snaps back to the old URL on blur.
+                    if (typeof setDeliveries === "function") {
+                      setDeliveries(prev => prev.map(d => {
+                        if (!d || d.id !== delId) return d;
+                        const videos = Array.isArray(d.videos) ? d.videos : [];
+                        return { ...d, videos: videos.map(v => v && v.videoId === subtask.videoId ? { ...v, link: trimmed } : v) };
+                      }));
+                    }
                     fbSet(`/deliveries/${delId}/videos/${idx}/link`, trimmed);
                   }
                 }
@@ -2724,6 +2739,10 @@ function ProjectDetail({ project, onBack, onDelete, editors, clients, deliveries
   // Status normalised once on mount — legacy "active" / "onHold" records
   // map to the 7-status taxonomy via normaliseStatus().
   const [status, setStatus] = useState(normaliseStatus(project.status));
+  // Re-sync when the record changes underneath: subtask rollups flip
+  // project.status while the detail is open, and the deep-link effect
+  // can swap `project` entirely without remounting this instance.
+  useEffect(() => { setStatus(normaliseStatus(project.status)); }, [project.id, project.status]);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved
   // Phase 2 (#3): picker modal state when the Selects-timeline auto-sync
   // can't safely place the task on the Project Lead (lead off / has
@@ -3480,6 +3499,10 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   }, [projects, filter, search, sortBy]);
 
   const deleteProject = async (id) => {
+    // Optimistic patch first — the echo guard swallows the listener fire
+    // for our own /projects writes, so without it the deleted project
+    // stays visible until an unrelated write or reload.
+    setProjects(prev => prev.filter(p => !p || p.id !== id));
     await fbSet(`/projects/${id}`, null);
     setActiveProjectId(null);
   };
@@ -3488,11 +3511,14 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   // Applied to every project in selectedIds. All writes are leaf-path
   // fbSet so concurrent webhook patches don't get clobbered. Done
   // sequentially in a Promise.all so the listener flushes once at the
-  // end rather than rerendering on every individual write.
+  // end rather than rerendering on every individual write. Optimistic
+  // setProjects patches mirror every other write path in this file —
+  // the own-write echo is suppressed, so local state must lead.
   const bulkSetStatus = async (status) => {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     const ts = new Date().toISOString();
+    setProjects(prev => prev.map(p => p && ids.includes(p.id) ? { ...p, status, updatedAt: ts } : p));
     await Promise.all(ids.flatMap(id => [
       fbSet(`/projects/${id}/status`, status),
       fbSet(`/projects/${id}/updatedAt`, ts),
@@ -3503,6 +3529,7 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     if (!window.confirm(`Delete ${ids.length} project${ids.length === 1 ? "" : "s"}? Linked records (delivery / preprod / sherpa / account) are kept.`)) return;
+    setProjects(prev => prev.filter(p => !p || !ids.includes(p.id)));
     await Promise.all(ids.map(id => fbSet(`/projects/${id}`, null)));
     clearSelection();
   };
