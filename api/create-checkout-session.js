@@ -118,6 +118,27 @@ export default async function handler(req, res) {
     // one. Customers refresh, close, come back; a fresh session each
     // time clutters the dashboard and burns quota.
     const stripe = new Stripe(secret);
+    const cfg = scheduleForVideoType(sale.videoType);
+
+    // Flat-instalment guard — MUST run before the session-reuse branch
+    // below, or an old open session resurrects the uneven plan. Pre-fix
+    // subscription schedules had uneven slice amounts (33.34/33.33/33.33
+    // + per-slice surcharge) but Stripe bills one flat recurring price,
+    // so invoices 2-3 overcharged. Refuse loudly; the founder
+    // regenerates the schedule from the Sale form.
+    if (cfg.kind === "subscription_monthly") {
+      const amountCentsList = schedule.map(s => Math.round(Number(s?.amount || 0) * 100));
+      if (amountCentsList.some(a => a !== amountCentsList[0])) {
+        if (sale.stripeCheckoutSessionId) {
+          // Best-effort: kill the stale open session so nothing can pay it.
+          try { await stripe.checkout.sessions.expire(sale.stripeCheckoutSessionId); } catch {}
+        }
+        return res.status(400).json({
+          error: "This sale's payment plan predates the flat-instalment fix. Open the sale and regenerate the payment link.",
+        });
+      }
+    }
+
     if (sale.stripeCheckoutSessionId) {
       try {
         const existing = await stripe.checkout.sessions.retrieve(sale.stripeCheckoutSessionId);
@@ -130,7 +151,6 @@ export default async function handler(req, res) {
     }
 
     const customer = await getOrCreateCustomer(stripe, sale);
-    const cfg = scheduleForVideoType(sale.videoType);
 
     // No return_url — Stripe rejects it with
     // redirect_on_completion: 'never' (mutually exclusive).

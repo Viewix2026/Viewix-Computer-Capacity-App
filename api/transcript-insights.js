@@ -39,16 +39,22 @@ export default async function handler(req, res) {
       // Archive the loser first and capture its committed snapshot so we
       // fold in exactly the weight/sources it had at archive time.
       const loserRes = await runRtdbTransaction(`/transcriptInsights/items/${loserId}`, (cur) => {
-        if (!cur || cur.status !== "active") return undefined;
+        // Null = the SDK's cold-cache first run; pass it through so the
+        // SDK refetches and re-runs with the real record. Aborting here
+        // 409s every merge from a fresh lambda. A genuinely-missing item
+        // commits null and is caught by the !snapshot check below.
+        if (cur === null) return cur;
+        if (cur.status !== "active") return undefined;
         return { ...cur, status: "archived", mergedInto: survivorId, archivedAt: now, archivedBy: actor };
       });
-      if (!loserRes.committed) {
+      if (!loserRes.committed || !loserRes.snapshot) {
         return res.status(409).json({ error: "loser not found or not active" });
       }
       const loser = loserRes.snapshot || {};
 
       const survRes = await runRtdbTransaction(`/transcriptInsights/items/${survivorId}`, (cur) => {
-        if (!cur || cur.status !== "active") return undefined;
+        if (cur === null) return cur; // cold-cache first run — see loser tx
+        if (cur.status !== "active") return undefined;
         const sources = [...(loser.sources || []), ...(cur.sources || [])]
           .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))
           .slice(0, 20);
@@ -61,10 +67,10 @@ export default async function handler(req, res) {
           lastSeenAt: now,
         };
       });
-      if (!survRes.committed) {
+      if (!survRes.committed || !survRes.snapshot) {
         // Best-effort rollback so the loser isn't orphaned-archived.
         await runRtdbTransaction(`/transcriptInsights/items/${loserId}`, (cur) =>
-          cur ? { ...cur, status: "active", mergedInto: null, archivedAt: null, archivedBy: null } : undefined
+          cur === null ? cur : { ...cur, status: "active", mergedInto: null, archivedAt: null, archivedBy: null }
         ).catch(() => {});
         return res.status(409).json({ error: "survivor not found or not active (loser restored)" });
       }
@@ -77,13 +83,14 @@ export default async function handler(req, res) {
       const target = action === "archive" ? "active" : "archived";
       const nextStatus = action === "archive" ? "archived" : "active";
       const r = await runRtdbTransaction(`/transcriptInsights/items/${id}`, (cur) => {
-        if (!cur || cur.status !== target) return undefined;
+        if (cur === null) return cur; // cold-cache first run — see merge tx
+        if (cur.status !== target) return undefined;
         if (action === "archive") {
           return { ...cur, status: "archived", archivedAt: now, archivedBy: actor };
         }
         return { ...cur, status: "active", archivedAt: null, archivedBy: null };
       });
-      if (!r.committed) {
+      if (!r.committed || !r.snapshot) {
         return res.status(409).json({ error: `item not found or not ${target}` });
       }
       return res.status(200).json({ ok: true, status: nextStatus, item: r.snapshot });

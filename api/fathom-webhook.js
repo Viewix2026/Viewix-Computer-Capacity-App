@@ -18,8 +18,9 @@
 //
 // Response: { success: true, feedbackId, meetingType, analyseQueued: true }
 
-import { adminSet, getAdmin } from "./_fb-admin.js";
+import { adminSet, getAdmin, runRtdbTransaction } from "./_fb-admin.js";
 import { runMeetingFeedbackAnalysis } from "./meeting-feedback.js";
+import { deriveFeedbackId } from "./_fathom-dedup.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = process.env.FATHOM_WEBHOOK_SECRET;
@@ -156,7 +157,10 @@ export default async function handler(req, res) {
     }
     if (!clientName) clientName = deriveClientName(meetingName, invitees);
 
-    const feedbackId = `mf-${Date.now()}`;
+    // Payload-derived id — identical across sender timeout-retries, so
+    // a retry lands on the SAME record instead of duplicating it (and
+    // paying for a second ~45s analysis).
+    const feedbackId = deriveFeedbackId({ recordingUrl, meetingName, transcript });
     const entry = {
       id: feedbackId,
       clientName,
@@ -171,7 +175,29 @@ export default async function handler(req, res) {
       status: "analysing",
     };
 
-    await fbSet(`/meetingFeedback/${feedbackId}`, entry);
+    // Claim the record via transaction — a plain get-then-set leaves a
+    // window where two near-simultaneous retries both miss and both run
+    // the analysis. Writing on cur===null IS the claim (hash-checked, so
+    // the SDK's cold-cache first run is safe); an existing record loses
+    // the claim unless its analysis previously errored, in which case
+    // the retry takes over and heals it under the same id.
+    try {
+      const claim = await runRtdbTransaction(`/meetingFeedback/${feedbackId}`, (cur) => {
+        if (cur === null) return entry;
+        // Takeover keeps the ORIGINAL creation time — the retry entry
+        // would otherwise clobber it and corrupt audit/sort order.
+        if (cur.status === "error") return { ...cur, ...entry, createdAt: cur.createdAt || entry.createdAt, status: "analysing" };
+        return undefined; // analysing or done — duplicate delivery
+      });
+      if (!claim.committed) {
+        return res.status(200).json({ success: true, deduped: true, feedbackId });
+      }
+    } catch (claimErr) {
+      // Admin SDK unavailable (local/dev REST-fallback mode) — degrade
+      // to the old non-atomic write rather than dropping the meeting.
+      console.warn("fathom-webhook: claim transaction unavailable, falling back:", claimErr.message);
+      await fbSet(`/meetingFeedback/${feedbackId}`, entry);
+    }
 
     // Run the analysis inline and await. Vercel freezes serverless functions
     // the moment they respond, so any fire-and-forget fetch would die mid-

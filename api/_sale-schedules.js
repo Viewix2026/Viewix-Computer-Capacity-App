@@ -346,3 +346,85 @@ export function displayOffsetValue(row) {
   // multiple-of-7 auto-detect above.
   return Math.max(1, Math.round(days / 7));
 }
+
+// ─── Slice-paid decision core ──────────────────────────────────────
+// Pure: decides what marking a slice paid does to a sale record.
+// Shared by stripe-webhook's markSlicePaid and reconcile-sale-payments
+// (both run it inside a mutateRecord transaction) so the bookkeeping
+// rules can't drift between the webhook and the founder escape hatch.
+//
+// Returns { action, nextSale?, info? }:
+//   "paid"         — nextSale is the full updated sale to commit
+//   "already_paid" — idempotent no-op (Stripe redelivers events)
+//   "no_match"     — no slice matches sliceId/sliceIdx
+//   "mismatch"     — paid amount ≠ row amount and healing is off (the
+//                    stale-checkout-link guard); info has the cents
+//
+// healAmountToPaid: subscription invoices bill ONE flat recurring
+// price; a legacy (pre-flat-fix) schedule's rows can disagree with the
+// actual charge. With the flag on, the row is marked paid at the
+// ACTUAL amount with amountDriftFrom + a sale-level scheduleDriftNote,
+// so legacy mid-plan sales reconcile themselves as Stripe bills them.
+export function applySlicePaid(sale, { sliceId, sliceIdx, paidAmountCents, now, patch = {}, healAmountToPaid = false } = {}) {
+  const schedule = Array.isArray(sale.schedule) ? [...sale.schedule] : [];
+
+  let targetIdx = -1;
+  if (sliceId) targetIdx = schedule.findIndex(s => s && s.sliceId === sliceId);
+  if (targetIdx === -1 && sliceIdx !== undefined && sliceIdx !== null) {
+    const n = Number(sliceIdx);
+    if (Number.isInteger(n) && n >= 0 && schedule[n]) targetIdx = n;
+  }
+  if (targetIdx === -1) return { action: "no_match" };
+
+  if (schedule[targetIdx].status === "paid") {
+    return { action: "already_paid", info: { allPaid: schedule.every(s => s.status === "paid"), slice: schedule[targetIdx] } };
+  }
+
+  const expectedCents = Math.round(Number(schedule[targetIdx].amount || 0) * 100);
+  const drift = Number.isFinite(paidAmountCents) && paidAmountCents > 0 && expectedCents > 0 && paidAmountCents !== expectedCents;
+  if (drift && !healAmountToPaid) {
+    return { action: "mismatch", info: { expectedCents, paidAmountCents, slice: schedule[targetIdx] } };
+  }
+
+  const ts = now || new Date().toISOString();
+  const targetLabel = schedule[targetIdx].label || `slice ${targetIdx}`;
+  schedule[targetIdx] = {
+    ...schedule[targetIdx],
+    status: "paid",
+    paidAt: ts,
+    ...(drift && healAmountToPaid ? { amount: paidAmountCents / 100, amountDriftFrom: expectedCents / 100 } : {}),
+    ...patch,
+  };
+
+  // Custom: when the deposit (idx 0) clears, re-anchor the rest of the
+  // schedule to the actual paid timestamp. Never let a failed/empty
+  // rebuild drop rows — fall back to the schedule with the paid row.
+  let nextSchedule = schedule;
+  const extra = {};
+  if (sale.videoType === "custom" && targetIdx === 0) {
+    extra.depositPaidAt = ts;
+    try {
+      nextSchedule = buildCustomSchedule(sale.customSlices || [], {
+        depositAnchorDate: ts,
+        existingSchedule: schedule,
+      });
+    } catch {
+      nextSchedule = schedule;
+    }
+    if (!Array.isArray(nextSchedule) || nextSchedule.length === 0) nextSchedule = schedule;
+  }
+
+  const allPaid = nextSchedule.length > 0 && nextSchedule.every(s => s.status === "paid");
+  const nextSale = {
+    ...sale,
+    schedule: nextSchedule,
+    paid: allPaid,
+    ...(allPaid ? { paidAt: ts } : {}),
+    ...extra,
+    ...(drift && healAmountToPaid
+      ? { scheduleDriftNote: `"${targetLabel}" charged $${(paidAmountCents / 100).toFixed(2)} vs scheduled $${(expectedCents / 100).toFixed(2)} — legacy uneven plan healed ${ts.slice(0, 10)}` }
+      : {}),
+  };
+  const writtenSlice = nextSchedule.find(s => s.sliceId && s.sliceId === schedule[targetIdx].sliceId) || schedule[targetIdx];
+  return { action: "paid", nextSale, info: { allPaid, slice: writtenSlice } };
+}

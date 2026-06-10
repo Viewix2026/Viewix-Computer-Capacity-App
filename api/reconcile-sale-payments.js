@@ -18,47 +18,41 @@
 //     webhook was rejected.
 
 import Stripe from "stripe";
-import { adminGet, adminPatch } from "./_fb-admin.js";
+import { adminGet, mutateRecord } from "./_fb-admin.js";
+import { applySlicePaid } from "./_sale-schedules.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 
-// Mark a single slice paid. Mirrors stripe-webhook.js#markSlicePaid
-// but kept inline so reconcile is a self-contained admin path that
-// can't be regressed by a webhook refactor.
+// Mark a single slice paid. Shares the applySlicePaid decision core
+// with stripe-webhook.js (so the bookkeeping rules can't drift) and
+// runs it inside a whole-sale transaction — the old read-then-patch
+// here could clobber a webhook flipping a sibling slice mid-reconcile.
 //
-// Resolves the target row by sliceId first (Custom-sale stable id) and
-// falls back to sliceIdx for legacy preset sales whose Stripe metadata
-// predates sliceId. After any custom row insert/remove/reorder, idx
-// alone would attach money to the wrong slice — sliceId is identity.
-async function markSlicePaid(saleId, { sliceId, sliceIdx }, patch = {}) {
-  const sale = await adminGet(`/sales/${saleId}`);
-  if (!sale) return { skipped: "sale gone" };
-  const schedule = Array.isArray(sale.schedule) ? [...sale.schedule] : [];
-
-  let idx = -1;
-  if (sliceId) idx = schedule.findIndex(s => s && s.sliceId === sliceId);
-  if (idx === -1 && sliceIdx !== undefined && sliceIdx !== null) {
-    const n = Number(sliceIdx);
-    if (Number.isInteger(n) && n >= 0 && schedule[n]) idx = n;
-  }
-  if (idx === -1) {
+// healAmountToPaid: reconcile pulls TRUTH from Stripe, so when the
+// actual charge disagrees with the stored row (legacy uneven
+// subscription plans), the row heals to reality instead of bailing.
+async function markSlicePaid(saleId, { sliceId, sliceIdx, paidAmountCents }, patch = {}) {
+  const now = new Date().toISOString();
+  let result = null; // re-assigned every updater run; read only after the null-gate
+  const tx = await mutateRecord(`/sales/${saleId}`, (sale) => {
+    result = applySlicePaid(sale, {
+      sliceId, sliceIdx, paidAmountCents, now,
+      healAmountToPaid: true,
+      patch: {
+        ...patch,
+        reconciledAt: now, // audit marker: this slice needed reconcile
+      },
+    });
+    return result.action === "paid" ? result.nextSale : null;
+  });
+  if (tx.snapshot == null) return { skipped: "sale gone" };
+  if (result?.action === "already_paid") return { skipped: "already paid" };
+  if (result?.action === "no_match") {
     return { skipped: `no matching slice (sliceId=${sliceId || "n/a"}, sliceIdx=${sliceIdx})` };
   }
-  if (schedule[idx].status === "paid") return { skipped: "already paid" };
-
-  schedule[idx] = {
-    ...schedule[idx],
-    status: "paid",
-    paidAt: schedule[idx].paidAt || new Date().toISOString(),
-    reconciledAt: new Date().toISOString(),  // Marker so we can audit which slices needed reconcile
-    ...patch,
-  };
-  const allPaid = schedule.every(s => s.status === "paid");
-  await adminPatch(`/sales/${saleId}`, {
-    schedule,
-    paid: allPaid,
-    ...(allPaid ? { paidAt: new Date().toISOString() } : {}),
-  });
-  return { marked: idx, sliceId: schedule[idx].sliceId || null, allPaid };
+  if (tx.committed && result?.action === "paid") {
+    return { marked: true, sliceId: result.info.slice?.sliceId || null, allPaid: result.info.allPaid };
+  }
+  return { skipped: "transaction not committed" };
 }
 
 export default async function handler(req, res) {
@@ -109,7 +103,7 @@ export default async function handler(req, res) {
         const inv = paidInvoices[i];
         // Subscription invoices are 1:1 with sliceIdx (preset-only path),
         // no sliceId yet — pass sliceIdx as the legacy resolver.
-        const result = await markSlicePaid(saleId, { sliceIdx: i }, {
+        const result = await markSlicePaid(saleId, { sliceIdx: i, paidAmountCents: inv.amount_paid || 0 }, {
           stripeInvoiceId: inv.id,
           amountPaid: (inv.amount_paid || 0) / 100,
           // Receipt URL on the invoice's hosted page
@@ -148,7 +142,7 @@ export default async function handler(req, res) {
         // sliceId is identity for Custom sales; sliceIdx is the legacy
         // resolver for preset PaymentIntents. Post-edit row insert/
         // remove can leave sliceIdx stale, so try sliceId first.
-        const result = await markSlicePaid(saleId, { sliceId, sliceIdx }, {
+        const result = await markSlicePaid(saleId, { sliceId, sliceIdx, paidAmountCents: pi.amount_received || 0 }, {
           stripePaymentIntentId: pi.id,
           amountPaid: (pi.amount_received || 0) / 100,
           receiptUrl,
