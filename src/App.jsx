@@ -14,6 +14,7 @@ import {
   newDelivery, newVideo, newVideoId, logoBg, makeShortId, deliveryShareUrl
 } from "./utils";
 import { Logo } from "./components/Logo";
+import { ViewixLoader } from "./components/shared/ViewixLoader";
 import { Badge, Metric, NumIn, UBar, FChart, StatusSelect, SideIcon } from "./components/UIComponents";
 import { Grid } from "./components/Grid";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -557,15 +558,12 @@ export default function App(){
   const prettyDelivery=pathname.match(/^\/d\/([a-z0-9]{4,12})(?:\/|$)/i);
   const deliveryParam=new URLSearchParams(window.location.search).get("d");
   // Suspense fallback shared across the lazy-loaded public views + main
-  // content area. Shows the Viewix logo over a "Loading…" caption while
-  // the next chunk fetches — typically <300ms on a warm cache.
+  // content area. Shows the spinning Viewix V loader while the next
+  // chunk fetches — typically <300ms on a warm cache.
   const lazyFallback = (
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}>
       <style>{CSS}</style>
-      <div style={{textAlign:"center"}}>
-        <Logo h={36}/>
-        <div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading…</div>
-      </div>
+      <ViewixLoader caption="Loading…"/>
     </div>
   );
 
@@ -609,16 +607,13 @@ export default function App(){
   if(prettyPortal||portalParam)return(
     <Suspense fallback={
       <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#FFFFFF"}}>
-        <div style={{textAlign:"center"}}>
-          <Logo h={34}/>
-          <div style={{marginTop:16,color:"#6B7280",fontSize:14,fontFamily:"'Montserrat',sans-serif"}}>Loading your dashboard…</div>
-        </div>
+        <ViewixLoader caption="Loading your dashboard…" captionStyle={{color:"#6B7280",fontFamily:"'Montserrat',sans-serif"}}/>
       </div>
     }><AnalyticsClientPortal/></Suspense>
   );
 
   if(!role)return(<><style>{CSS}</style><Login onLogin={login}/></>);
-  if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><div style={{textAlign:"center"}}><Logo h={36}/><div style={{marginTop:16,color:"#5A6B85",fontSize:14}}>Loading...</div></div></div>);
+  if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0F1A"}}><style>{CSS}</style><ViewixLoader caption="Loading..."/></div>);
 
   return(<div style={{fontFamily:"'DM Sans',-apple-system,sans-serif",background:"var(--bg)",color:"var(--fg)",minHeight:"100vh",display:"flex"}}><style>{CSS}</style>
 
@@ -680,7 +675,7 @@ export default function App(){
         first. The root boundary in main.jsx still catches anything
         thrown outside the tab area (sidebar, top-level Firebase setup). */}
     <ErrorBoundary key={tool} label={`the ${tool} tab`}>
-    <Suspense fallback={<div style={{padding:40,color:"var(--muted)",fontSize:13}}>Loading…</div>}>
+    <Suspense fallback={<div style={{minHeight:"60vh",display:"flex",alignItems:"center",justifyContent:"center"}}><ViewixLoader size={48} caption="Loading…" captionStyle={{color:"var(--muted)",fontSize:13}}/></div>}>
 
     {/* ═══ CAPACITY PLANNER ═══ */}
     {tool==="capacity"&&isFounder&&(

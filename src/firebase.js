@@ -19,16 +19,18 @@ const authCbs = [];
 
 export function initFB() {
   if (fbReady || document.getElementById("fb-s")) return;
-  const s1 = document.createElement("script");
-  s1.id = "fb-s";
-  s1.src = "https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js";
-  s1.onload = () => {
-    const s2 = document.createElement("script");
-    s2.src = "https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js";
-    s2.onload = () => {
-      const s3 = document.createElement("script");
-      s3.src = "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js";
-      s3.onload = () => {
+  // All three SDK scripts are appended at once with async=false: the
+  // browser downloads them in parallel but executes them in insertion
+  // order, so app-compat still runs before database/auth-compat. The
+  // old onload-chained version serialised the downloads — three full
+  // network round-trips back to back, the longest part of a cold boot.
+  const SDK_FILES = [
+    "firebase-app-compat.js",
+    "firebase-database-compat.js",
+    "firebase-auth-compat.js",
+  ];
+  let remaining = SDK_FILES.length;
+  const onAllLoaded = () => {
         window.firebase.initializeApp(FB_CFG);
         db = window.firebase.database();
         auth = window.firebase.auth();
@@ -75,12 +77,15 @@ export function initFB() {
           authCbs.length = 0;
           cbs.forEach(c => c(currentRole));
         });
-      };
-      document.head.appendChild(s3);
-    };
-    document.head.appendChild(s2);
   };
-  document.head.appendChild(s1);
+  SDK_FILES.forEach((file, i) => {
+    const s = document.createElement("script");
+    if (i === 0) s.id = "fb-s"; // re-entry guard checks this id
+    s.src = `https://www.gstatic.com/firebasejs/10.12.2/${file}`;
+    s.async = false; // parallel download, in-order execution
+    s.onload = () => { if (--remaining === 0) onAllLoaded(); };
+    document.head.appendChild(s);
+  });
 }
 
 export function onFB(cb) {
