@@ -3,16 +3,27 @@
 // unique-conflict detector — all reachable without network/Firebase, because
 // the handler returns before any Attio/Firebase call on these paths.
 //
-// Run: node --test api/ghl-lead-webhook.test.mjs
+// Run: node --test api/__tests__/ghl-lead-webhook.test.mjs
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+// ── Hermetic guard ──────────────────────────────────────────────────────────────────────
+// This suite must NEVER touch prod, whatever environment it runs in. The
+// 2026-06-10 reject storm was this exact file deployed as a live Vercel
+// function (everything under api/ without a leading underscore becomes an
+// endpoint) — importing it ran the suite with real env vars on every HTTP
+// hit. Tests now live in __tests__/ (excluded from functions); the scrub is
+// defense in depth for any shell/CI that loads real secrets.
+delete process.env.FIREBASE_SERVICE_ACCOUNT;
+delete process.env.SLACK_SCHEDULE_BOT_TOKEN;
+delete process.env.SLACK_SCHEDULE_CHANNEL_ID;
 
 // Env must be set BEFORE importing the handler (module reads process.env at load).
 process.env.GHL_WEBHOOK_SECRET = "test-secret";
 process.env.ATTIO_API_KEY = "test-attio-key";
 
-const mod = await import("./ghl-lead-webhook.js");
+const mod = await import("../ghl-lead-webhook.js");
 const handler = mod.default;
 const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName, buildDealInfo, redactSecrets } = mod;
 
