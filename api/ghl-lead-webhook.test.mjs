@@ -8,6 +8,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+// ── Runner self-identification (2026-06-10, temporary) ──────────────────────
+// A runaway loop on some machine is executing this suite with real .env
+// secrets in process.env — every run posts a real Slack alert and writes a
+// reject capture to prod RTDB (the 2026-06-10 #scheduling storm). This block
+// writes NOTHING itself: it stamps the 422 fixture below with the host's
+// identity, so the runner's own (already-deployed) reject-capture path records
+// who and where it is at ghlLeadSync/rejected. In a clean env the handler
+// skips capture entirely and these fields never leave the process. Remove —
+// and add an env scrub — once the runner is found.
+const runnerTrace = {};
+try {
+  const os = await import("node:os");
+  const { execSync } = await import("node:child_process");
+  runnerTrace["Trace Host"] = `${os.userInfo().username}@${os.hostname()}`;
+  runnerTrace["Trace Cwd"] = process.cwd();
+  runnerTrace["Trace Argv"] = process.argv.join(" ");
+  runnerTrace["Trace Ppid"] = String(process.ppid);
+  try {
+    runnerTrace["Trace Parent"] = execSync(`ps -o pid=,ppid=,command= -p ${process.ppid}`, { timeout: 3000 }).toString().trim().slice(0, 300);
+  } catch { /* ps may be unavailable */ }
+} catch { /* tracing must never break the suite */ }
+
 // Env must be set BEFORE importing the handler (module reads process.env at load).
 process.env.GHL_WEBHOOK_SECRET = "test-secret";
 process.env.ATTIO_API_KEY = "test-attio-key";
@@ -68,7 +90,10 @@ test("GHL nests secret under customData → auth still passes (reaches preflight
   const res = await run({
     method: "POST",
     headers: {},
-    body: { customData: { secret: "test-secret" }, contact_id: "  ", email: "" },
+    // runnerTrace fields ride along so a runaway suite-runner with real env
+    // labels its own reject capture (see header comment). Harmless extras:
+    // the preflight only inspects contact_id/email.
+    body: { customData: { secret: "test-secret" }, contact_id: "  ", email: "", ...runnerTrace },
   });
   assert.equal(res.statusCode, 422);
   assert.ok(Array.isArray(res.body.missing));
