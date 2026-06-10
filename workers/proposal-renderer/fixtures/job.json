@@ -1,0 +1,12 @@
+{
+  "id": "pj-fixture-dryrun",
+  "status": "queued",
+  "companyName": "Transgrid",
+  "contactEmail": "nicolas@example.com",
+  "companyId": "",
+  "dealId": "",
+  "stage": "Quoted",
+  "lookVariant": "strip",
+  "requestedBy": { "uid": "fixture", "name": "Dry Run" },
+  "createdAt": "2026-06-10T00:00:00.000Z"
+}

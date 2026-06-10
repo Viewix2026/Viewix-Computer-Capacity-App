@@ -1,0 +1,22 @@
+{
+  "_comment": "Curated past-work references for proposal Content Concepts. The worker's Claude prompt may ONLY pick concept refs from this list (never invent). label = the exact 'Comparable work' text rendered in the deck. Refresh after major portfolio updates (manual — no automation). Source: viewix.com.au/portfolio.",
+  "lastReviewed": "2026-06-10",
+  "references": [
+    { "id": "clayton-utz-qa",      "client": "Clayton Utz",            "industry": "Legal & Professional Services",  "conceptType": "Q&A / knowledge series",      "label": "Clayton Utz · Q&A" },
+    { "id": "sig-brand-film",      "client": "SIG",                    "industry": "Finance / Trading",              "conceptType": "Hero / brand film",           "label": "SIG · Brand Film" },
+    { "id": "aage-brand",          "client": "AAGE",                   "industry": "Graduate Recruitment",           "conceptType": "Hero / brand film",           "label": "AAGE · Brand Movie" },
+    { "id": "prosple-profiles",    "client": "Prosple",                "industry": "Careers / Early Talent",         "conceptType": "People profiles / journey",   "label": "Prosple · Profiles" },
+    { "id": "transgrid-site",      "client": "Transgrid",              "industry": "Energy & Infrastructure",        "conceptType": "Site / technical",            "label": "Transgrid · Wallgrove" },
+    { "id": "wsa-corporate",       "client": "Western Sydney Airport", "industry": "Aviation & Infrastructure",      "conceptType": "Corporate / animation",       "label": "Western Sydney Airport · Corporate" },
+    { "id": "snowy-hydro-event",   "client": "Snowy Hydro",            "industry": "Energy",                         "conceptType": "Event / education",           "label": "Snowy Hydro · Event" },
+    { "id": "bmd-aerowest-doc",    "client": "BMD Aerowest",           "industry": "Aerospace / Engineering",        "conceptType": "Documentary / deep-dive",     "label": "BMD · Aerowest" },
+    { "id": "austmine-brand",      "client": "Austmine",               "industry": "Mining & METS",                  "conceptType": "Hero / brand film",           "label": "Austmine · Brand Movie" },
+    { "id": "imarc-event",         "client": "IMARC",                  "industry": "Mining / Conference",            "conceptType": "Event / conference",          "label": "IMARC · Event" },
+    { "id": "sydney-zoo-brand",    "client": "Sydney Zoo",             "industry": "Tourism & Attractions",          "conceptType": "Brand / testimonial",         "label": "Sydney Zoo · Brand" },
+    { "id": "thnsw-doc",           "client": "Transport Heritage NSW", "industry": "Heritage / Rail",                "conceptType": "Documentary / deep-dive",     "label": "Transport Heritage NSW · Documentary" },
+    { "id": "bmf-wealth-brand",    "client": "BMF Wealth",             "industry": "Financial Services",             "conceptType": "Hero / brand film",           "label": "BMF Wealth · Brand Movie" },
+    { "id": "delonghi-tvc",        "client": "Delonghi",               "industry": "Consumer Appliances",            "conceptType": "TVC / premium spot",          "label": "Delonghi · TVC" },
+    { "id": "vivid-sydney-event",  "client": "Vivid Sydney",           "industry": "Arts & Festivals",               "conceptType": "Event / social",              "label": "Vivid Sydney · Event" },
+    { "id": "gecko-tvc",           "client": "Go With the Gecko",      "industry": "Transport / Logistics",          "conceptType": "TVC / premium spot",          "label": "Go With the Gecko · TVC" }
+  ]
+}

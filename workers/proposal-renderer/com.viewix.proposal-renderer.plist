@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the Viewix proposal worker (Mac mini).
+  Install (as the logged-in user — NOT a LaunchDaemon; headless Chrome needs a user session):
+    1. Edit the THREE absolute paths below if the repo lives elsewhere.
+    2. cp com.viewix.proposal-renderer.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.viewix.proposal-renderer.plist
+  Logs: /tmp/viewix-proposal-worker.{out,err}.log (see README for rotation).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.viewix.proposal-renderer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/viewix/Viewix-Dashboard/workers/proposal-renderer/worker.mjs</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/viewix/Viewix-Dashboard</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>/tmp/viewix-proposal-worker.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/viewix-proposal-worker.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Secrets live in workers/proposal-renderer/.env (loaded by the worker itself), NOT here. -->
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

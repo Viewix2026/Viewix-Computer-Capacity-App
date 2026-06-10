@@ -139,6 +139,14 @@ export function fbUpdate(p, v) {
   if (db) db.ref(p).update(v).catch(e => console.error("Firebase update failed", p, e));
 }
 
+// Awaitable patch — use when the caller must react to a rejected write
+// (e.g. the Proposals review panel surfacing a rules denial on Approve).
+export function fbUpdateAsync(p, v) {
+  stampWrite(p);
+  if (!db) return Promise.reject(new Error("Firebase not initialised"));
+  return db.ref(p).update(v);
+}
+
 // One-shot read of the *current* server value at a path (null if absent).
 // Use when a write must be computed from live server state rather than a
 // possibly-stale React snapshot — e.g. merging two account records, where
