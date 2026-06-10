@@ -1,0 +1,33 @@
+{
+  "client": { "name": "ACCIONA" },
+  "project": { "name": "Graduate Program", "titleHtml": "Graduate<br>Program" },
+  "proposal": { "date": "June 2026" },
+  "lookVariant": "wall",
+  "nextSteps": { "tagline": "From recruitment drive to cultural asset" },
+  "cover": {
+    "promise": "A year-round video content system that builds the graduate program into one of the strongest in the country, and keeps it there."
+  },
+  "approach": {
+    "intro": "Together they shift the graduate program from a single moment a year to a continuous narrative, the gold standard for graduate programs in Australia and clear proof that ACCIONA invests in the people who will build the future."
+  },
+  "brief": {
+    "para1": "ACCIONA takes on 100+ graduates a year across engineering, construction, sustainability, corporate and comms. Today, only one moment a year gets captured.",
+    "para2": "They want that captured year-round: evergreen content across careers pages, conferences and internal communications that makes the program the national benchmark and reinforces ACCIONA's reputation as an employer investing in the people who will build the future.",
+    "success": [
+      { "title": "Evergreen, not one-off", "desc": "Content built year-round, not a single yearly snapshot." },
+      { "title": "Used across every channel", "desc": "Careers pages, conferences and internal comms, on tap." },
+      { "title": "From strong to exceptional", "desc": "The gold standard for graduate programs in Australia." }
+    ]
+  },
+  "concepts": [
+    { "lbl": "Hero film", "title": "Hero Film", "channel": "Careers page · Brand hub", "desc": "The essence of the program in one evergreen story, for the individual, the business and the industry.", "ref": "SIG · Brand Film" },
+    { "lbl": "Journey", "title": "The Graduate Journey", "channel": "Recruitment · Social", "desc": "Follow real graduates as they grow, diarised over time with mentors and projects.", "ref": "Prosple · Profiles" },
+    { "lbl": "Q&A series", "title": "Q&A Knowledge Series", "channel": "Conferences · Careers emails", "desc": "A versatile FAQ series for conferences, recruitment emails and careers pages, updated each year.", "ref": "Clayton Utz · Q&A" },
+    { "lbl": "Deep dive", "title": "Technical Deep-Dives", "channel": "Thought leadership · LinkedIn", "desc": "The nuts and bolts, design, sustainability and next-gen methods that build reputation.", "ref": "BMD · Aerowest" }
+  ],
+  "tier": {
+    "1": { "name": "Standard", "price": "$22,000", "bestFor": "A focused first campaign." },
+    "2": { "name": "Signature", "price": "$38,000", "bestFor": "The full brief, with measurable ROI." },
+    "3": { "name": "Flagship", "price": "$55,000", "bestFor": "An always-on content programme." }
+  }
+}

@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Viewix · Enterprise Video Proposal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,500;0,600;0,700;0,800;1,500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --blue:#0082FA;
+    --orange:#F87700;
+    --navy:#004F99;
+    --navy-deep:#003366;
+    --light:#F4F5F9;
+    --mid:#CBCCD1;
+    --ink:#1A1A2E;
+    --white:#FFFFFF;
+    --ink-60:rgba(26,26,46,.62);
+    --ink-45:rgba(26,26,46,.45);
+
+    /* type scale */
+    --kicker:18px;
+    --h1:104px;
+    --h2:60px;
+    --h3:30px;
+    --lead:30px;
+    --body:24px;
+    --cap:17px;
+
+    /* grid */
+    --mx:96px;
+    --my:80px;
+    --gut:32px;
+    --radius:18px;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:#0b1220;}
+  deck-stage:not(:defined){visibility:hidden;}
+  deck-stage{font-family:'Montserrat',sans-serif;}
+
+  section{
+    background:var(--white);
+    color:var(--ink);
+    font-family:'Montserrat',sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+
+  /* ---------- shared chrome ---------- */
+  .accent{position:absolute;top:0;left:0;right:0;height:3px;background:var(--mid);z-index:5;}
+  .accent::after{content:'';position:absolute;left:0;top:0;height:3px;width:148px;background:var(--orange);}
+  .on-dark .accent{background:rgba(255,255,255,.14);}
+  .pad{position:absolute;inset:0;padding:var(--my) var(--mx);}
+  .topbar{position:absolute;top:46px;left:var(--mx);right:var(--mx);display:flex;align-items:center;justify-content:space-between;z-index:4;}
+  .seclabel{font-size:var(--kicker);font-weight:600;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-45);}
+  .seclabel .num{color:var(--blue);}
+  .on-dark .seclabel{color:rgba(255,255,255,.6);}
+  .on-dark .seclabel .num{color:var(--orange);}
+
+  /* logo wordmark (placeholder until real PNG supplied) */
+  .logo{display:inline-block;width:128px;height:34px;background:url('viewix-logo.png') no-repeat left center;background-size:contain;user-select:none;}
+  .on-dark .logo{background-image:url('viewix-logo-white.png');}
+
+  /* kicker / headings */
+  .kicker{display:inline-flex;align-items:center;gap:14px;font-size:var(--kicker);font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--blue);margin:0 0 24px;}
+  .kicker::before{content:'';width:30px;height:2px;background:var(--orange);flex:none;}
+  .kicker.nodash::before{display:none;}
+  .on-dark .kicker{color:var(--orange);}
+  .kicker.orange{color:var(--orange);}
+  h1.h1{font-size:var(--h1);font-weight:800;line-height:.98;letter-spacing:-.02em;margin:0;color:var(--ink);}
+  h2.h2{font-size:var(--h2);font-weight:700;line-height:1.02;letter-spacing:-.025em;margin:0;color:var(--ink);}
+  .on-dark h1.h1,.on-dark h2.h2{color:var(--white);}
+  .h2 .blue{color:var(--blue);}
+  .on-dark .h2 .blue{color:var(--orange);}
+  .lead{font-size:var(--lead);font-weight:500;line-height:1.42;color:var(--ink);max-width:24ch;}
+  .body{font-size:var(--body);font-weight:400;line-height:1.5;color:var(--ink-60);}
+  .cap{font-size:var(--cap);font-weight:600;letter-spacing:.04em;color:var(--ink-45);}
+
+  /* underline-rule under section titles */
+  .rule{width:54px;height:4px;background:var(--orange);border-radius:2px;margin:26px 0 0;}
+
+  /* variable client field marker */
+  .fld{border-bottom:2px dotted rgba(0,130,250,.45);padding-bottom:1px;}
+  .on-dark .fld{border-bottom-color:rgba(248,119,0,.6);}
+  /* export mode: strip variable-field markers for the client-facing render */
+  body.export .fld{border-bottom:none !important;padding-bottom:0 !important;}
+  @media print{.fld{border-bottom:none !important;padding-bottom:0 !important;}}
+
+  /* image placeholder zones */
+  .imgph{position:relative;background:var(--light);border:1px solid var(--mid);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--ink-45);overflow:hidden;}
+  .on-dark .imgph{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.28);color:rgba(255,255,255,.6);}
+  .imgph .ico{width:46px;height:46px;opacity:.8;}
+  .imgph .lbl{font-size:15px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;text-align:center;line-height:1.4;padding:0 16px;}
+  .imgph .ratio{position:absolute;top:12px;right:14px;font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--ink-45);}
+  .on-dark .imgph .ratio{color:rgba(255,255,255,.5);}
+
+  /* ---------- creative direction: moodboard + look switcher ---------- */
+  .creative{--mood:#F87700;}
+  .creative[data-look="sober"]{--mood:#004F99;}
+  .creative[data-look="energetic"]{--mood:#F87700;}
+  .creative[data-look="bold"]{--mood:#0082FA;}
+  .creative .rule{background:var(--mood);}
+  .look-row{display:flex;gap:10px;margin:26px 0 22px;flex-wrap:wrap;}
+  .look-pill{display:inline-flex;align-items:center;gap:9px;border:1.5px solid var(--mid);border-radius:999px;padding:11px 19px;font-size:16px;font-weight:600;color:var(--ink);cursor:pointer;background:#fff;font-family:'Montserrat',sans-serif;}
+  .look-pill .pdot{width:9px;height:9px;border-radius:50%;background:var(--mid);}
+  .look-pill[aria-selected="true"]{background:var(--mood);color:#fff;border-color:transparent;}
+  .look-pill[aria-selected="true"] .pdot{background:#fff;}
+  .mood-desc{font-size:20px;line-height:1.45;color:var(--ink-60);max-width:34ch;min-height:84px;}
+  .mood-desc b{color:var(--ink);font-weight:700;}
+  .vk-item{display:flex;gap:16px;align-items:flex-start;padding:13px 0;border-bottom:1.5px solid var(--mid);}
+  .vk-item:last-child{border-bottom:none;}
+  .vk-num{font-weight:800;font-size:18px;color:var(--mood);min-width:26px;}
+  .vk-t{font-size:19px;font-weight:700;line-height:1.2;}
+  .vk-d{font-size:16px;color:var(--ink-60);line-height:1.35;margin-top:3px;}
+  .ref-cap{display:flex;align-items:center;gap:14px;background:var(--light);border-radius:14px;padding:16px 20px;margin-top:18px;}
+  .ref-play{width:40px;height:40px;border-radius:9px;background:var(--mood);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  /* moodboard wall */
+  .mood-wall{display:grid;grid-template-columns:repeat(6,1fr);grid-template-rows:repeat(3,1fr);gap:14px;height:620px;}
+  .mtile{position:relative;border-radius:12px;background:var(--light);border:1px solid var(--mid);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--ink-45);overflow:hidden;}
+  .mtile .ico{width:38px;height:38px;opacity:.7;}
+  .mtile .lbl{font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;text-align:center;line-height:1.35;}
+  .mtile .ratio{position:absolute;top:9px;right:11px;font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink-45);}
+  .mtile.chip{border:1.5px solid var(--mid);background:#fff;}
+  /* type chip */
+  .type-chip .aa{font-size:54px;font-weight:800;line-height:1;color:var(--mood);}
+  .type-chip .nm{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-45);margin-top:6px;}
+  /* palette chip */
+  .pal{flex-direction:row;gap:0;padding:0;}
+  .pal .sw{flex:1;align-self:stretch;display:flex;align-items:flex-end;justify-content:center;padding-bottom:10px;font-size:10px;font-weight:700;letter-spacing:.03em;position:relative;}
+  .pal .sw[data-c="orange"]{background:#F87700;color:#fff;}
+  .pal .sw[data-c="blue"]{background:#0082FA;color:#fff;}
+  .pal .sw[data-c="navy"]{background:#004F99;color:#fff;}
+  .pal .sw[data-c="ink"]{background:#1A1A2E;color:#fff;}
+  .pal .sw[data-c="light"]{background:#F4F5F9;color:var(--ink-45);}
+  .creative[data-look="sober"] .pal .sw[data-c="navy"],
+  .creative[data-look="energetic"] .pal .sw[data-c="orange"],
+  .creative[data-look="bold"] .pal .sw[data-c="blue"]{box-shadow:inset 0 0 0 3px #fff;}
+  .creative[data-look="sober"] .pal .sw[data-c="navy"]::after,
+  .creative[data-look="energetic"] .pal .sw[data-c="orange"]::after,
+  .creative[data-look="bold"] .pal .sw[data-c="blue"]::after{content:"ACCENT";position:absolute;top:8px;left:0;right:0;text-align:center;font-size:9px;letter-spacing:.1em;color:#fff;}
+
+  /* ===== moodboard variant system ===== */
+  .md-switch{position:absolute;top:150px;right:96px;z-index:9;display:flex;flex-direction:row;align-items:center;gap:9px;background:rgba(255,255,255,.86);backdrop-filter:blur(6px);padding:8px 8px 8px 16px;border-radius:999px;box-shadow:0 10px 30px -12px rgba(0,51,102,.3);}
+  .md-switch .swl{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-45);margin-right:4px;white-space:nowrap;}
+  .md-pill{font-family:'Montserrat',sans-serif;font-size:13.5px;font-weight:600;color:var(--ink-60);background:#fff;border:1.5px solid var(--mid);border-radius:999px;padding:7px 15px;cursor:pointer;white-space:nowrap;transition:none;}
+  .md-pill[aria-selected="true"]{background:var(--navy);color:#fff;border-color:transparent;}
+  @media print{.md-switch{display:none!important;}}
+
+  .md-variant{position:absolute;inset:0;padding:118px 96px 104px;display:none;flex-direction:column;}
+  .md-variant[data-active]{display:flex;}
+  .md-head{display:flex;flex-direction:column;align-items:flex-start;}
+  .md-head .kicker{margin-bottom:18px;}
+  .md-head h2{display:block;white-space:nowrap;font-size:52px;font-weight:700;letter-spacing:-.02em;line-height:1;margin:0;color:var(--ink);}
+  .md-head h2 .blue{color:var(--blue);}
+
+  /* shared frame placeholder */
+  .frm{position:relative;background:linear-gradient(160deg,#eef2f8,#dde5f0);border-radius:12px;display:flex;align-items:flex-end;justify-content:flex-start;padding:18px 20px;color:var(--ink-45);overflow:hidden;font-size:13px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;line-height:1.25;}
+  .frm::after{content:attr(data-r);position:absolute;top:13px;right:15px;font-size:11px;letter-spacing:.05em;font-weight:700;opacity:.75;}
+  .frm.dk{background:linear-gradient(160deg,#123a63,#08203b);color:rgba(255,255,255,.6);}
+
+  /* palette block */
+  .palrow{display:flex;border-radius:12px;overflow:hidden;}
+  .palrow .sw{flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:16px 16px;min-height:0;}
+  .palrow .sw .hex{font-size:14px;font-weight:800;letter-spacing:.02em;}
+  .palrow .sw .role{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;opacity:.85;margin-top:3px;}
+  .sw-orange{background:#F87700;color:#fff;} .sw-blue{background:#0082FA;color:#fff;}
+  .sw-navy{background:#004F99;color:#fff;} .sw-ink{background:#1A1A2E;color:#fff;}
+  .sw-light{background:#F4F5F9;color:var(--ink-60);}
+
+  /* type specimen */
+  .typespec{background:#fff;border:1.5px solid var(--mid);border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:24px 28px;}
+  .typespec .big{font-size:60px;font-weight:800;color:var(--ink);line-height:.85;letter-spacing:-.02em;}
+  .typespec .fam{font-size:14px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-45);margin-top:14px;}
+  .typespec .wts{font-size:14px;color:var(--ink-60);margin-top:6px;font-weight:500;}
+
+  /* reference film pill */
+  .refpill{display:flex;align-items:center;gap:14px;background:var(--light);border-radius:12px;padding:15px 20px;}
+  .refpill .rp{width:38px;height:38px;border-radius:9px;background:var(--orange);display:flex;align-items:center;justify-content:center;flex:none;}
+
+  /* visual key inline chips */
+  .vkchips{display:flex;flex-wrap:wrap;gap:10px;}
+  .vkchip{font-size:15px;font-weight:600;color:var(--ink-60);background:var(--light);border-radius:999px;padding:9px 18px;}
+  .vkchip b{color:var(--ink);font-weight:700;}
+
+  /* generic cards */
+  .card{background:var(--white);border:1.5px solid var(--mid);border-radius:var(--radius);}
+  .card.soft{background:var(--light);border-color:transparent;}
+
+  /* pills */
+  .pill{display:inline-flex;align-items:center;gap:10px;background:var(--light);border-radius:999px;padding:12px 22px;font-size:18px;font-weight:600;color:var(--ink);}
+  .pill .dot{width:10px;height:10px;border-radius:50%;background:var(--orange);}
+
+  /* numbered index chip */
+  .chip{display:inline-flex;align-items:center;justify-content:center;font-weight:800;color:var(--blue);}
+
+  /* footer micro */
+  .foot{position:absolute;bottom:42px;left:var(--mx);right:var(--mx);display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;letter-spacing:.06em;color:var(--ink-45);text-transform:uppercase;z-index:4;}
+  .on-dark .foot{color:rgba(255,255,255,.45);}
+
+  /* dark slide base */
+  .dark{background:var(--navy);}
+  .dark.deep{background:linear-gradient(155deg,var(--navy) 0%,var(--navy-deep) 100%);}
+
+  /* entrance — opacity always 1 so a frozen timeline never hides content; only a gentle rise */
+  .anim,.anim2,.anim3{opacity:1;}
+  @media (prefers-reduced-motion:no-preference){
+    [data-deck-active] .anim{animation:fadeup .55s ease-out;}
+    [data-deck-active] .anim2{animation:fadeup .55s ease-out .08s;}
+    [data-deck-active] .anim3{animation:fadeup .55s ease-out .16s;}
+    @keyframes fadeup{from{transform:translateY(14px);}to{transform:none;}}
+  }
+</style>
+</head>
+<body>
+<deck-stage width="1920" height="1080">
+
+  <!-- ============ 1 · COVER ============ -->
+  <section class="dark on-dark" data-screen-label="Cover" style="background:linear-gradient(155deg,#013b73 0%,#012038 100%);">
+    <div style="position:absolute;top:0;left:0;bottom:0;width:6px;background:var(--orange);z-index:6;"></div>
+    <div class="topbar" style="left:120px;">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel">Video Content Proposal</span>
+    </div>
+    <div class="pad" style="padding-left:120px;display:flex;flex-direction:column;justify-content:center;">
+      <div class="anim" style="display:flex;align-items:center;gap:18px;margin-bottom:32px;">
+        <span style="width:46px;height:3px;background:var(--orange);"></span>
+        <span class="kicker nodash" style="margin:0;color:var(--orange);">Prepared for <span class="fld" data-field="client.name">ACCIONA</span></span>
+      </div>
+      <h1 class="h1 anim2" style="font-weight:700;font-size:134px;max-width:14ch;">
+        <span class="fld" data-field-html="project.titleHtml">Graduate<br>Program</span>
+      </h1>
+      <p class="lead anim3" data-field="cover.promise" style="color:rgba(255,255,255,.82);max-width:36ch;margin-top:40px;font-size:32px;font-weight:400;">
+        A year-round video content system that builds the graduate program into one of the strongest in the country, and keeps it there.
+      </p>
+    </div>
+    <div class="anim3" style="position:absolute;left:120px;right:96px;bottom:84px;z-index:4;">
+      <div style="height:1px;background:rgba(255,255,255,.18);margin-bottom:30px;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;">
+        <div style="display:flex;gap:56px;">
+          <div><div style="font-size:50px;font-weight:800;color:var(--white);line-height:1;">1,642<span style="color:var(--orange);">+</span></div><div class="cap" style="color:rgba(255,255,255,.6);margin-top:10px;">Videos produced</div></div>
+          <div><div style="font-size:50px;font-weight:800;color:var(--white);line-height:1;">18.7M<span style="color:var(--orange);">+</span></div><div class="cap" style="color:rgba(255,255,255,.6);margin-top:10px;">Views delivered</div></div>
+          <div><div style="font-size:50px;font-weight:800;color:var(--white);line-height:1;">24<span style="color:var(--orange);">+</span></div><div class="cap" style="color:rgba(255,255,255,.6);margin-top:10px;">Industries trusted</div></div>
+        </div>
+        <span style="font-size:16px;font-weight:600;letter-spacing:.04em;color:rgba(255,255,255,.6);">Prepared <span class="fld" data-field="proposal.date" style="color:rgba(255,255,255,.7);">June 2026</span> &nbsp;·&nbsp; hello@viewix.com.au</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2 · THE BRIEF ============ -->
+  <section data-screen-label="The Brief">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">01</span> &nbsp;/&nbsp; The Brief</span>
+    </div>
+    <div class="pad" style="display:grid;grid-template-columns:1.15fr 1fr;gap:90px;align-items:center;">
+      <div class="anim">
+        <div class="kicker">Overview</div>
+        <h2 class="h2" style="max-width:14ch;">The opportunity for <span class="fld blue" data-field="client.name">ACCIONA</span>.</h2>
+        <div class="rule"></div>
+        <p class="body" style="margin-top:38px;font-size:26px;max-width:40ch;">
+          <span class="fld" data-field="brief.para1">ACCIONA takes on 100+ graduates a year across engineering, construction, sustainability, corporate and comms. Today, only one moment a year gets captured.</span>
+        </p>
+        <p class="body" style="margin-top:22px;font-size:26px;max-width:40ch;">
+          <span class="fld" data-field="brief.para2">They want that captured year-round: evergreen content across careers pages, conferences and internal communications that makes the program the national benchmark and reinforces ACCIONA's reputation as an employer investing in the people who will build the future.</span>
+        </p>
+      </div>
+      <div class="anim2" style="display:flex;flex-direction:column;justify-content:center;">
+        <div class="cap" style="color:var(--blue);margin-bottom:14px;letter-spacing:.16em;text-transform:uppercase;">What success looks like</div>
+        <div style="display:flex;gap:26px;align-items:flex-start;padding:24px 0;border-bottom:1.5px solid var(--mid);">
+          <div style="font-size:22px;font-weight:800;color:var(--orange);min-width:38px;">01</div>
+          <div><div style="font-size:25px;font-weight:700;color:var(--ink);" data-field="brief.success.0.title">Evergreen, not one-off</div><div class="body" style="font-size:20px;margin-top:6px;" data-field="brief.success.0.desc">Content built year-round, not a single yearly snapshot.</div></div>
+        </div>
+        <div style="display:flex;gap:26px;align-items:flex-start;padding:24px 0;border-bottom:1.5px solid var(--mid);">
+          <div style="font-size:22px;font-weight:800;color:var(--orange);min-width:38px;">02</div>
+          <div><div style="font-size:25px;font-weight:700;color:var(--ink);" data-field="brief.success.1.title">Used across every channel</div><div class="body" style="font-size:20px;margin-top:6px;" data-field="brief.success.1.desc">Careers pages, conferences and internal comms, on tap.</div></div>
+        </div>
+        <div style="display:flex;gap:26px;align-items:flex-start;padding:24px 0;">
+          <div style="font-size:22px;font-weight:800;color:var(--orange);min-width:38px;">03</div>
+          <div><div style="font-size:25px;font-weight:700;color:var(--ink);" data-field="brief.success.2.title">From strong to exceptional</div><div class="body" style="font-size:20px;margin-top:6px;" data-field="brief.success.2.desc">The gold standard for graduate programs in Australia.</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span><span class="fld" data-field="client.name">ACCIONA</span> · <span data-field="project.name">Graduate Program</span></span></div>
+  </section>
+
+  <!-- ============ 3 · OUR APPROACH ============ -->
+  <section data-screen-label="Our Approach">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">02</span> &nbsp;/&nbsp; Our Approach</span>
+    </div>
+    <div class="pad" style="display:flex;flex-direction:column;">
+      <div class="anim" style="margin-bottom:30px;">
+        <div class="kicker">Our Approach</div>
+        <h2 class="h2" style="max-width:20ch;">Four pillars, one <span class="blue">always-on content engine</span>.</h2>
+        <p class="body" data-field="approach.intro" style="font-size:22px;margin-top:20px;max-width:90ch;">Together they shift the graduate program from a single moment a year to a continuous narrative, the gold standard for graduate programs in Australia and clear proof that <span class="fld" data-field="client.name">ACCIONA</span> invests in the people who will build the future.</p>
+      </div>
+      <div class="anim2" style="display:grid;grid-template-columns:repeat(4,1fr);margin-top:6px;flex:1;">
+        <div style="padding:0 40px 0 0;display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--blue);margin-bottom:28px;"></div>
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+          <div class="cap" style="color:var(--blue);margin-top:26px;">Pillar 01</div>
+          <div style="font-size:27px;font-weight:700;margin:10px 0 14px;">Visual identity</div>
+          <div class="body" style="font-size:20px;">A distinct visual identity that sits within the <span class="fld" data-field="client.name">ACCIONA</span> brand and sets the graduate program apart from other content.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--blue);">Unmistakably on-brand.</div>
+        </div>
+        <div style="padding:0 40px;border-left:1.5px solid var(--mid);display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--blue);margin-bottom:28px;"></div>
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>
+          <div class="cap" style="color:var(--blue);margin-top:26px;">Pillar 02</div>
+          <div style="font-size:27px;font-weight:700;margin:10px 0 14px;">Content calendar</div>
+          <div class="body" style="font-size:20px;">A content calendar that showcases the program's benefits and celebrates its success across the year.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--blue);">A year, mapped in advance.</div>
+        </div>
+        <div style="padding:0 40px;border-left:1.5px solid var(--mid);display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--blue);margin-bottom:28px;"></div>
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          <div class="cap" style="color:var(--blue);margin-top:26px;">Pillar 03</div>
+          <div style="font-size:27px;font-weight:700;margin:10px 0 14px;">Production model</div>
+          <div class="body" style="font-size:20px;">A production model that captures content efficiently and consistently at <span class="fld" data-field="client.name">ACCIONA</span> sites across Australia.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--blue);">One model, every state.</div>
+        </div>
+        <div style="padding:0 0 0 40px;border-left:1.5px solid var(--mid);display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--orange);margin-bottom:28px;"></div>
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--orange)" stroke-width="1.7"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <div class="cap" style="color:var(--orange);margin-top:26px;">Pillar 04 · Our edge</div>
+          <div style="font-size:27px;font-weight:700;margin:10px 0 14px;">Managed media library</div>
+          <div class="body" style="font-size:20px;">A central library so <span class="fld" data-field="client.name">ACCIONA</span> teams access, reuse and build on assets at any time.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--orange);">Reused, never rebuilt.</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span><span class="fld" data-field="client.name">ACCIONA</span> · <span data-field="project.name">Graduate Program</span></span></div>
+  </section>
+
+  <!-- ============ 4 · CREATIVE DIRECTION (moodboard variants) ============ -->
+  <section class="creative" data-screen-label="Creative Direction">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">03</span> &nbsp;/&nbsp; Creative Direction</span>
+    </div>
+
+    <!-- style picker (template build tool — hidden in print/export) -->
+    <div class="md-switch" role="tablist" aria-label="Moodboard style">
+      <div class="swl">Moodboard style</div>
+      <button class="md-pill" role="tab" data-v="wall">Wall</button>
+      <button class="md-pill" role="tab" data-v="strip">Filmstrip</button>
+      <button class="md-pill" role="tab" data-v="hero">Split hero</button>
+      <button class="md-pill" role="tab" data-v="colour">Colour story</button>
+      <button class="md-pill" role="tab" data-v="desk">Designer's desk</button>
+    </div>
+
+    <!-- ===== V1 · WALL ===== -->
+    <div class="md-variant" data-v="wall">
+      <div class="md-head"><div class="kicker">Creative Direction</div><h2>The look, <span class="blue">frame by frame</span>.</h2></div>
+      <div style="display:grid;grid-template-columns:1fr 1.2fr;gap:54px;flex:1;margin-top:34px;min-height:0;">
+        <div style="display:flex;flex-direction:column;">
+          <div style="display:flex;flex-direction:column;gap:0;flex:1;">
+            <div class="vk-item"><div class="vk-num" style="color:var(--orange);">01</div><div><div class="vk-t">Interview framing</div><div class="vk-d">Subjects in the left or right third, deep depth of field, context softly behind them.</div></div></div>
+            <div class="vk-item"><div class="vk-num" style="color:var(--orange);">02</div><div><div class="vk-t">Team interactions</div><div class="vk-d">Graduates with mentors and the wider team, selective framing, deliberate focus.</div></div></div>
+            <div class="vk-item"><div class="vk-num" style="color:var(--orange);">03</div><div><div class="vk-t">Site footage</div><div class="vk-d">Drone and ground footage showing the scale of the work and where it happens.</div></div></div>
+            <div class="vk-item"><div class="vk-num" style="color:var(--orange);">04</div><div><div class="vk-t">Text graphics + split frames</div><div class="vk-d">Bold white titles and split-frames to showcase multiple moments at once.</div></div></div>
+          </div>
+          <div class="refpill" style="margin-top:20px;"><div class="rp"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div><div><div class="cap" style="color:var(--ink-45);">Reference film</div><div style="font-size:17px;font-weight:700;margin-top:2px;"><span class="fld">[Closest Viewix past work]</span></div></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);grid-template-rows:repeat(3,1fr);gap:14px;min-height:0;">
+          <div class="frm" data-r="4:5" style="grid-column:1/4;grid-row:1/3;">Interview portrait</div>
+          <div class="frm" data-r="16:9" style="grid-column:4/7;grid-row:1/2;">Site / drone</div>
+          <div class="frm" data-r="1:1" style="grid-column:4/6;grid-row:2/3;">Team candid</div>
+          <div class="typespec" style="grid-column:6/7;grid-row:2/3;padding:14px 16px;"><div class="big" style="font-size:38px;">Aa</div><div class="fam" style="font-size:11px;margin-top:8px;">Montserrat</div></div>
+          <div class="palrow" style="grid-column:1/4;grid-row:3/4;">
+            <div class="sw sw-orange"><span class="hex">F87700</span></div>
+            <div class="sw sw-blue"><span class="hex">0082FA</span></div>
+            <div class="sw sw-navy"><span class="hex">004F99</span></div>
+            <div class="sw sw-ink"><span class="hex">1A1A2E</span></div>
+            <div class="sw sw-light"><span class="hex">F4F5F9</span></div>
+          </div>
+          <div class="frm" data-r="9:16" style="grid-column:4/5;grid-row:3/4;">Detail</div>
+          <div class="frm" data-r="SPLIT" style="grid-column:5/7;grid-row:3/4;">Split frame</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== V2 · FILMSTRIP ===== -->
+    <div class="md-variant" data-v="strip">
+      <div class="md-head"><div class="kicker">Creative Direction</div><h2>An <span class="blue">upbeat, scroll-stopping</span> edit.</h2></div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:38px;min-height:0;">
+        <div style="background:#0e1116;border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;">
+          <div style="height:9px;border-radius:3px;background:repeating-linear-gradient(90deg,#2c323c 0 16px,transparent 16px 30px);"></div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;height:300px;">
+            <div class="frm dk" data-r="16:9">Hero film still</div>
+            <div class="frm dk" data-r="16:9">Interview</div>
+            <div class="frm dk" data-r="16:9">Site / drone</div>
+            <div class="frm dk" data-r="16:9">Team candid</div>
+            <div class="frm dk" data-r="16:9">Split frame</div>
+          </div>
+          <div style="height:9px;border-radius:3px;background:repeating-linear-gradient(90deg,#2c323c 0 16px,transparent 16px 30px);"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:24px;height:150px;">
+          <div class="palrow">
+            <div class="sw sw-orange"><span class="hex">F87700</span><span class="role">Accent</span></div>
+            <div class="sw sw-blue"><span class="hex">0082FA</span><span class="role">Primary</span></div>
+            <div class="sw sw-navy"><span class="hex">004F99</span><span class="role">Deep</span></div>
+            <div class="sw sw-ink"><span class="hex">1A1A2E</span><span class="role">Ink</span></div>
+            <div class="sw sw-light"><span class="hex">F4F5F9</span><span class="role">Light</span></div>
+          </div>
+          <div class="typespec"><div class="big">Aa</div><div class="fam">Montserrat</div><div class="wts">Bold · Semibold · Regular</div></div>
+          <div class="refpill" style="border:1.5px solid var(--mid);background:#fff;"><div class="rp"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div><div><div class="cap" style="color:var(--ink-45);">Reference film</div><div style="font-size:16px;font-weight:700;margin-top:2px;"><span class="fld">[Past work]</span></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== V3 · SPLIT HERO ===== -->
+    <div class="md-variant" data-v="hero">
+      <div class="md-head"><div class="kicker">Creative Direction</div><h2>One <span class="blue">hero frame</span>, supported.</h2></div>
+      <div style="display:grid;grid-template-columns:1.05fr 1fr;gap:24px;flex:1;margin-top:34px;min-height:0;">
+        <div class="frm" data-r="4:5" style="font-size:15px;">Hero interview portrait</div>
+        <div style="display:grid;grid-template-rows:1fr auto;gap:24px;min-height:0;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:16px;min-height:0;">
+            <div class="frm" data-r="16:9">Site / drone</div>
+            <div class="frm" data-r="1:1">Team candid</div>
+            <div class="frm" data-r="9:16">Detail</div>
+            <div class="frm" data-r="SPLIT">Split frame</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:16px;height:120px;">
+            <div class="palrow">
+              <div class="sw sw-orange"><span class="hex">F87700</span></div>
+              <div class="sw sw-blue"><span class="hex">0082FA</span></div>
+              <div class="sw sw-navy"><span class="hex">004F99</span></div>
+              <div class="sw sw-ink"><span class="hex">1A1A2E</span></div>
+              <div class="sw sw-light"><span class="hex">F4F5F9</span></div>
+            </div>
+            <div class="typespec" style="padding:16px 20px;"><div class="big" style="font-size:44px;">Aa</div><div class="fam" style="margin-top:8px;">Montserrat</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== V4 · COLOUR STORY ===== -->
+    <div class="md-variant" data-v="colour">
+      <div class="md-head"><div class="kicker">Creative Direction</div><h2>Led by a <span class="blue">disciplined palette</span>.</h2></div>
+      <div style="display:flex;flex-direction:column;gap:24px;flex:1;margin-top:34px;min-height:0;">
+        <div class="palrow" style="flex:1.3;min-height:0;">
+          <div class="sw sw-orange" style="padding:26px 24px;"><span class="hex" style="font-size:18px;">#F87700</span><span class="role" style="font-size:12px;">Accent · energy</span></div>
+          <div class="sw sw-blue" style="padding:26px 24px;"><span class="hex" style="font-size:18px;">#0082FA</span><span class="role" style="font-size:12px;">Primary · brand</span></div>
+          <div class="sw sw-navy" style="padding:26px 24px;"><span class="hex" style="font-size:18px;">#004F99</span><span class="role" style="font-size:12px;">Deep · structure</span></div>
+          <div class="sw sw-ink" style="padding:26px 24px;"><span class="hex" style="font-size:18px;">#1A1A2E</span><span class="role" style="font-size:12px;">Ink · text</span></div>
+          <div class="sw sw-light" style="padding:26px 24px;"><span class="hex" style="font-size:18px;">#F4F5F9</span><span class="role" style="font-size:12px;">Light · canvas</span></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1.1fr;gap:18px;flex:1;min-height:0;">
+          <div class="frm" data-r="16:9">Interview</div>
+          <div class="frm" data-r="16:9">Site / drone</div>
+          <div class="frm" data-r="16:9">Team candid</div>
+          <div class="typespec"><div class="big">Aa</div><div class="fam">Montserrat</div><div class="wts">Bold · Semibold · Regular</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== V5 · DESIGNER'S DESK ===== -->
+    <div class="md-variant" data-v="desk">
+      <div class="md-head"><div class="kicker">Creative Direction</div><h2>A <span class="blue">curated</span> moodboard.</h2></div>
+      <div style="position:relative;flex:1;margin-top:18px;min-height:0;">
+        <div style="position:absolute;left:2%;top:8%;width:30%;height:62%;transform:rotate(-4deg);background:#fff;padding:12px 12px 40px;box-shadow:0 22px 46px -20px rgba(20,30,50,.4);border-radius:3px;"><div class="frm" data-r="4:5" style="height:100%;border-radius:2px;">Interview portrait</div></div>
+        <div style="position:absolute;left:30%;top:30%;width:32%;height:46%;transform:rotate(2.5deg);background:#fff;padding:12px 12px 38px;box-shadow:0 22px 46px -20px rgba(20,30,50,.4);border-radius:3px;z-index:2;"><div class="frm" data-r="16:9" style="height:100%;border-radius:2px;">Site / drone</div></div>
+        <div style="position:absolute;left:60%;top:6%;width:26%;height:40%;transform:rotate(-2deg);background:#fff;padding:12px 12px 36px;box-shadow:0 22px 46px -20px rgba(20,30,50,.4);border-radius:3px;"><div class="frm" data-r="1:1" style="height:100%;border-radius:2px;">Team candid</div></div>
+        <div class="typespec" style="position:absolute;right:1%;top:50%;width:24%;height:34%;transform:rotate(3deg);box-shadow:0 22px 46px -20px rgba(20,30,50,.4);"><div class="big" style="font-size:50px;">Aa</div><div class="fam">Montserrat</div><div class="wts">Bold · Regular</div></div>
+        <div class="palrow" style="position:absolute;left:8%;bottom:1%;width:40%;height:18%;transform:rotate(-1.5deg);box-shadow:0 18px 40px -20px rgba(20,30,50,.4);">
+          <div class="sw sw-orange"><span class="hex">F87700</span></div>
+          <div class="sw sw-blue"><span class="hex">0082FA</span></div>
+          <div class="sw sw-navy"><span class="hex">004F99</span></div>
+          <div class="sw sw-ink"><span class="hex">1A1A2E</span></div>
+          <div class="sw sw-light"><span class="hex">F4F5F9</span></div>
+        </div>
+        <div class="refpill" style="position:absolute;right:6%;bottom:4%;width:26%;transform:rotate(-2deg);border:1.5px solid var(--mid);background:#fff;box-shadow:0 18px 40px -20px rgba(20,30,50,.4);"><div class="rp"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div><div><div class="cap" style="color:var(--ink-45);">Reference</div><div style="font-size:15px;font-weight:700;margin-top:2px;"><span class="fld">[Past work]</span></div></div></div>
+      </div>
+    </div>
+
+    <div class="foot"><span>Viewix · Content Proposal</span><span><span class="fld" data-field="client.name">ACCIONA</span> · <span data-field="project.name">Graduate Program</span></span></div>
+  </section>
+
+  <!-- ============ 5 · CONTENT CONCEPTS ============ -->
+  <section data-screen-label="Content Concepts">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">04</span> &nbsp;/&nbsp; Content Concepts</span>
+    </div>
+    <div class="pad" style="display:flex;flex-direction:column;">
+      <div class="anim" style="margin-bottom:34px;">
+        <div class="kicker">Content Concepts</div>
+        <h2 class="h2" style="max-width:22ch;">Flagship concepts, <span class="blue">already proven</span>.</h2>
+      </div>
+      <div class="anim2" data-repeat="concepts" data-repeat-cols style="display:grid;grid-template-columns:repeat(4,1fr);gap:34px;">
+        <!-- concept card template (cloned per concept) -->
+        <div style="display:flex;flex-direction:column;">
+          <div class="imgph" style="height:356px;border-radius:12px;background:linear-gradient(160deg,#edf1f7,#e2e8f1);"><span class="ratio">16:9</span><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="10 8 16 12 10 16 10 8"/><rect x="2" y="3" width="20" height="18" rx="2"/></svg><span class="lbl" data-field="lbl">Hero film</span></div>
+          <div style="margin-top:22px;display:flex;flex-direction:column;">
+            <div style="font-size:24px;font-weight:700;" data-field="title">Hero Film</div>
+            <div class="cap" style="color:var(--blue);margin-top:8px;letter-spacing:.1em;text-transform:uppercase;font-size:13px;" data-field="channel">Careers page · Brand hub</div>
+            <div class="body" style="font-size:18px;margin-top:12px;min-height:84px;" data-field="desc">The essence of the program in one evergreen story, for the individual, the business and the industry.</div>
+            <div style="margin-top:20px;border-left:3px solid var(--orange);padding:3px 0 3px 14px;">
+              <div style="font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-45);">Comparable work</div>
+              <div style="font-size:17px;font-weight:700;color:var(--ink);margin-top:3px;"><span class="fld" data-field="ref">SIG · Brand Film</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span><span class="fld" data-field="client.name">ACCIONA</span> · <span data-field="project.name">Graduate Program</span></span></div>
+  </section>
+
+  <!-- ============ 6 · PRODUCTION PLAN ============ -->
+  <section data-screen-label="Production Plan">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">05</span> &nbsp;/&nbsp; Production Plan</span>
+    </div>
+    <div class="pad" style="display:flex;flex-direction:column;justify-content:center;">
+      <div class="anim" style="margin-bottom:46px;">
+        <div class="kicker">Production Plan</div>
+        <h2 class="h2" style="max-width:22ch;">A proactive model, planned in advance.</h2>
+      </div>
+      <div class="anim2" style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;position:relative;">
+        <!-- connecting line -->
+        <div style="position:absolute;top:34px;left:8%;right:8%;height:3px;background:var(--mid);z-index:0;"></div>
+        <div style="position:relative;z-index:1;padding-right:30px;">
+          <div style="width:68px;height:68px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;">1</div>
+          <div style="font-size:24px;font-weight:700;margin:26px 0 12px;">Creative development</div>
+          <div class="body" style="font-size:20px;">We define a visual identity that aligns to your brand and develop the content calendar and concepts with you.</div>
+        </div>
+        <div style="position:relative;z-index:1;padding-right:30px;">
+          <div style="width:68px;height:68px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;">2</div>
+          <div style="font-size:24px;font-weight:700;margin:26px 0 12px;">Content days</div>
+          <div class="body" style="font-size:20px;">Half or full-day shoots planned ahead, a mix of interviews and b-roll, at locations across Australia.</div>
+        </div>
+        <div style="position:relative;z-index:1;padding-right:30px;">
+          <div style="width:68px;height:68px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;">3</div>
+          <div style="font-size:24px;font-weight:700;margin:26px 0 12px;">Managed media library</div>
+          <div class="body" style="font-size:20px;">Footage is colour graded, vision switched and audio synced, then tagged and stored to remain fully searchable.</div>
+        </div>
+        <div style="position:relative;z-index:1;">
+          <div style="width:68px;height:68px;border-radius:50%;background:var(--orange);color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;">4</div>
+          <div style="font-size:24px;font-weight:700;margin:26px 0 12px;">Outputs</div>
+          <div class="body" style="font-size:20px;">Monthly campaigns or priority deliverables, guided by your content calendar.</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span>Standard production model</span></div>
+  </section>
+
+  <!-- ============ 7 · MEDIA LIBRARY ============ -->
+  <section data-screen-label="Media Library">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">06</span> &nbsp;/&nbsp; Media Library</span>
+    </div>
+    <div class="pad" style="display:grid;grid-template-columns:0.85fr 1.15fr;gap:80px;align-items:center;">
+      <div class="anim">
+        <div class="kicker">Media Library</div>
+        <h2 class="h2" style="max-width:16ch;">A library that compounds with every shoot.</h2>
+        <div class="rule"></div>
+        <p class="body" style="font-size:24px;margin-top:34px;max-width:34ch;">Every production adds to a growing library held in a single media portal. Teams across regions access consistent, on-brand content whenever it is required, organised into folders and custom-tagged for fast retrieval.</p>
+      </div>
+      <div class="anim2" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+        <div class="card soft" style="padding:34px 36px;">
+          <div class="cap" style="color:var(--blue);">01</div>
+          <div style="font-size:25px;font-weight:700;margin:6px 0 12px;">Masters</div>
+          <div class="body" style="font-size:19px;">Final edited videos, by project, ready to download and reference time and again.</div>
+        </div>
+        <div class="card soft" style="padding:34px 36px;">
+          <div class="cap" style="color:var(--blue);">02</div>
+          <div style="font-size:25px;font-weight:700;margin:6px 0 12px;">Selects</div>
+          <div class="body" style="font-size:19px;">The clips chosen for the edit, by interview and b-roll, with every angle to swap between.</div>
+        </div>
+        <div class="card soft" style="padding:34px 36px;">
+          <div class="cap" style="color:var(--blue);">03</div>
+          <div style="font-size:25px;font-weight:700;margin:6px 0 12px;">String-Outs</div>
+          <div class="body" style="font-size:19px;">Full raw interviews and b-roll, tidied to the best takes so you see every variation.</div>
+        </div>
+        <div class="card soft" style="padding:34px 36px;">
+          <div class="cap" style="color:var(--blue);">04</div>
+          <div style="font-size:25px;font-weight:700;margin:6px 0 12px;">Transcriptions</div>
+          <div class="body" style="font-size:19px;">Transcripts beside every interview, searchable by keyword to find specific moments fast.</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span>Managed media portal</span></div>
+  </section>
+
+  <!-- ============ 8 · INVESTMENT ============ -->
+  <section data-screen-label="Investment">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">07</span> &nbsp;/&nbsp; Investment</span>
+    </div>
+    <div class="pad" style="display:flex;flex-direction:column;">
+      <div class="anim" style="margin-bottom:30px;display:flex;justify-content:space-between;align-items:flex-end;">
+        <div>
+          <div class="kicker">Investment</div>
+          <h2 class="h2" style="max-width:24ch;">Three pathways to <span class="blue">maximise your investment</span>.</h2>
+          <p class="body" style="font-size:21px;margin-top:18px;max-width:62ch;">Each pathway delivers the full approach, scaled to your priorities and budget.</p>
+        </div>
+        <div style="font-size:15px;font-weight:600;color:var(--ink-45);letter-spacing:.04em;white-space:nowrap;">All prices ex GST</div>
+      </div>
+      <div class="anim2" style="display:grid;grid-template-columns:repeat(3,1fr);gap:28px;flex:1;align-items:stretch;">
+        <!-- Standard -->
+        <div style="display:flex;flex-direction:column;border-radius:18px;overflow:hidden;box-shadow:0 26px 60px -34px rgba(0,51,102,.55);background:#fff;">
+          <div style="background:linear-gradient(155deg,#013b73,#012038);padding:42px 40px 38px;">
+            <div style="font-size:34px;font-weight:800;color:#fff;letter-spacing:.005em;line-height:1;"><span class="fld" data-field="tier.1.name" style="border-bottom-color:rgba(255,255,255,.4);">Standard</span></div>
+            <div style="width:40px;height:3px;background:var(--orange);margin:22px 0 26px;"></div>
+            <div style="display:flex;align-items:baseline;gap:10px;">
+              <div style="font-size:54px;font-weight:800;color:#fff;letter-spacing:-.02em;line-height:1;"><span class="fld" data-field="tier.1.price" style="border-bottom-color:rgba(255,255,255,.45);">$00,000</span></div>
+              <span style="font-size:15px;font-weight:600;color:rgba(255,255,255,.6);">ex GST</span>
+            </div>
+          </div>
+          <ul style="list-style:none;padding:36px 40px;margin:0;display:flex;flex-direction:column;gap:18px;flex:1;">
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>1 day creative</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>1.5 days pre-production</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>2 full days filming</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>2 crew members</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>5 days post production</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>Admin &amp; media management</li>
+          </ul>
+          <div style="padding:0 40px 36px;"><div style="height:1.5px;background:var(--mid);margin-bottom:18px;"></div><div class="cap" style="color:var(--blue);">Best for</div><div style="font-size:18px;font-weight:700;color:var(--ink);margin-top:5px;" data-field="tier.1.bestFor">A focused first campaign.</div></div>
+        </div>
+        <!-- Signature -->
+        <div style="display:flex;flex-direction:column;border-radius:18px;overflow:hidden;box-shadow:0 26px 60px -34px rgba(0,51,102,.55);background:#fff;">
+          <div style="background:linear-gradient(155deg,#013b73,#012038);padding:42px 40px 38px;">
+            <div style="font-size:34px;font-weight:800;color:#fff;letter-spacing:.005em;line-height:1;"><span class="fld" data-field="tier.2.name" style="border-bottom-color:rgba(255,255,255,.4);">Signature</span></div>
+            <div style="width:40px;height:3px;background:var(--orange);margin:22px 0 26px;"></div>
+            <div style="display:flex;align-items:baseline;gap:10px;">
+              <div style="font-size:54px;font-weight:800;color:#fff;letter-spacing:-.02em;line-height:1;"><span class="fld" data-field="tier.2.price" style="border-bottom-color:rgba(255,255,255,.45);">$00,000</span></div>
+              <span style="font-size:15px;font-weight:600;color:rgba(255,255,255,.6);">ex GST</span>
+            </div>
+          </div>
+          <ul style="list-style:none;padding:36px 40px;margin:0;display:flex;flex-direction:column;gap:18px;flex:1;">
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>2 days creative</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>2 days pre-production</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>4 full days filming</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>2 crew members</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>8 days post production</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>Admin &amp; media management</li>
+          </ul>
+          <div style="padding:0 40px 36px;"><div style="height:1.5px;background:var(--mid);margin-bottom:18px;"></div><div class="cap" style="color:var(--blue);">Best for</div><div style="font-size:18px;font-weight:700;color:var(--ink);margin-top:5px;" data-field="tier.2.bestFor">The full brief, with measurable ROI.</div></div>
+        </div>
+        <!-- Flagship -->
+        <div style="display:flex;flex-direction:column;border-radius:18px;overflow:hidden;box-shadow:0 26px 60px -34px rgba(0,51,102,.55);background:#fff;">
+          <div style="background:linear-gradient(155deg,#013b73,#012038);padding:42px 40px 38px;position:relative;">
+            <div style="position:absolute;top:0;left:0;right:0;height:4px;background:var(--orange);"></div>
+            <div style="font-size:34px;font-weight:800;color:#fff;letter-spacing:.005em;line-height:1;"><span class="fld" data-field="tier.3.name" style="border-bottom-color:rgba(255,255,255,.4);">Flagship</span></div>
+            <div style="width:40px;height:3px;background:var(--orange);margin:22px 0 26px;"></div>
+            <div style="display:flex;align-items:baseline;gap:10px;">
+              <div style="font-size:54px;font-weight:800;color:#fff;letter-spacing:-.02em;line-height:1;"><span class="fld" data-field="tier.3.price" style="border-bottom-color:rgba(255,255,255,.45);">$00,000</span></div>
+              <span style="font-size:15px;font-weight:600;color:rgba(255,255,255,.6);">ex GST</span>
+            </div>
+          </div>
+          <ul style="list-style:none;padding:36px 40px;margin:0;display:flex;flex-direction:column;gap:18px;flex:1;">
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>2 days creative</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>3 days pre-production</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>6 full days filming</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>2 crew members</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>12 days post production</li>
+            <li style="display:flex;align-items:center;gap:14px;font-size:19px;color:var(--ink-60);"><span style="width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none;"></span>Admin &amp; media management</li>
+          </ul>
+          <div style="padding:0 40px 36px;"><div style="height:1.5px;background:var(--mid);margin-bottom:18px;"></div><div class="cap" style="color:var(--blue);">Best for</div><div style="font-size:18px;font-weight:700;color:var(--ink);margin-top:5px;" data-field="tier.3.bestFor">An always-on content programme.</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span>All prices ex GST</span></div>
+  </section>
+
+  <!-- ============ 9 · PROOF ============ -->
+  <section class="dark deep on-dark" data-screen-label="Proof">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">08</span> &nbsp;/&nbsp; Proof</span>
+    </div>
+    <div class="pad" style="display:flex;flex-direction:column;">
+      <div class="anim" style="margin-bottom:44px;">
+        <div class="kicker" style="color:var(--orange);">Proven Results</div>
+        <h2 class="h2" style="color:#fff;max-width:18ch;">Built to drive <span style="color:var(--orange);">commercial results</span>.</h2>
+      </div>
+      <div class="anim2" style="display:grid;grid-template-columns:0.92fr 1.08fr;flex:1;">
+        <div style="display:flex;flex-direction:column;justify-content:center;border-right:1px solid rgba(255,255,255,.18);padding-right:64px;">
+          <div style="font-size:150px;font-weight:800;color:#fff;line-height:.86;letter-spacing:-.03em;">$300k</div>
+          <div style="width:54px;height:4px;background:var(--orange);margin:30px 0;"></div>
+          <div style="font-size:27px;font-weight:700;color:#fff;">In 24 hours, from one video</div>
+          <div class="body" style="font-size:20px;color:rgba(255,255,255,.7);margin-top:12px;max-width:28ch;">Struggling ticket volume to a sell-out, off a single piece of content.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:center;padding-left:64px;">
+          <div style="display:flex;gap:34px;align-items:baseline;padding:26px 0;border-bottom:1px solid rgba(255,255,255,.16);">
+            <div style="font-size:78px;font-weight:800;color:#fff;line-height:1;min-width:210px;letter-spacing:-.02em;">75<span style="color:var(--orange);">%</span></div>
+            <div><div style="font-size:23px;font-weight:700;color:#fff;">Lift in form submissions</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);margin-top:6px;">Plus 40k–80k organic views from a reset content engine.</div></div>
+          </div>
+          <div style="display:flex;gap:34px;align-items:baseline;padding:26px 0;border-bottom:1px solid rgba(255,255,255,.16);">
+            <div style="font-size:78px;font-weight:800;color:#fff;line-height:1;min-width:210px;letter-spacing:-.02em;">300<span style="color:var(--orange);">%</span></div>
+            <div><div style="font-size:23px;font-weight:700;color:#fff;">Engagement from one shoot day</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);margin-top:6px;">Three months of content, 20× engagement per follower.</div></div>
+          </div>
+          <div style="display:flex;gap:34px;align-items:baseline;padding:26px 0;">
+            <div style="font-size:78px;font-weight:800;color:#fff;line-height:1;min-width:210px;letter-spacing:-.02em;">61<span style="color:var(--orange);">★</span></div>
+            <div><div style="font-size:23px;font-weight:700;color:#fff;">Five-star Google reviews</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);margin-top:6px;">From clients like Hola Health, 84+ videos and counting.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span>18.7M+ views · 1,642+ videos</span></div>
+  </section>
+
+  <!-- ============ 10 · SYSTEM EDGES ============ -->
+  <section data-screen-label="System Edges">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">09</span> &nbsp;/&nbsp; Why Viewix</span>
+    </div>
+    <div class="pad" style="display:flex;flex-direction:column;">
+      <div class="anim" style="margin-bottom:40px;">
+        <div class="kicker">Why Viewix</div>
+        <h2 class="h2" style="max-width:22ch;">Built for <span class="fld" data-field="client.name">ACCIONA</span>, not a single shoot.</h2>
+      </div>
+      <div class="anim2" style="display:grid;grid-template-columns:repeat(4,1fr);margin-top:6px;flex:1;">
+        <div style="padding:0 40px 0 0;display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--blue);margin-bottom:26px;"></div>
+          <div style="font-size:44px;font-weight:800;color:var(--blue);line-height:1;">200<span style="color:var(--orange);">+</span></div>
+          <div style="font-size:23px;font-weight:700;margin:24px 0 12px;">Research before we shoot</div>
+          <div class="body" style="font-size:19px;">We review more than 200 high-performing reels in your sector to identify the hooks, formats and pacing that perform.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--blue);">12+ winning hook patterns.</div>
+        </div>
+        <div style="padding:0 40px;border-left:1.5px solid var(--mid);display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--blue);margin-bottom:26px;"></div>
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          <div style="font-size:23px;font-weight:700;margin:24px 0 12px;">Comments to leads</div>
+          <div class="body" style="font-size:19px;">Automated replies capture every commenter and book qualified leads directly from the content.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--blue);">Qualified leads, booked 24/7.</div>
+        </div>
+        <div style="padding:0 40px;border-left:1.5px solid var(--mid);display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--blue);margin-bottom:26px;"></div>
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <div style="font-size:23px;font-weight:700;margin:24px 0 12px;">Monthly boosting</div>
+          <div class="body" style="font-size:19px;">Paid support behind your best-performing organic content each month, optimised for the lowest cost per click.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--blue);">Lowest CPC, compounding reach.</div>
+        </div>
+        <div style="padding:0 0 0 40px;border-left:1.5px solid var(--mid);display:flex;flex-direction:column;justify-content:center;">
+          <div style="width:44px;height:3px;background:var(--orange);margin-bottom:26px;"></div>
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--orange)" stroke-width="1.7"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+          <div style="font-size:23px;font-weight:700;margin:24px 0 12px;">AI-enhanced quality</div>
+          <div class="body" style="font-size:19px;">Noise removal, dialogue enhancement and clean backgrounds on every cut, at scale.</div>
+          <div style="margin-top:30px;padding-top:22px;border-top:1.5px solid var(--mid);font-size:19px;font-weight:800;color:var(--orange);">Crystal-clear sound, every cut.</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot"><span>Viewix · Content Proposal</span><span>The Viewix difference</span></div>
+  </section>
+
+  <!-- ============ 11 · NEXT STEPS / CLOSE ============ -->
+  <section class="dark deep on-dark" data-screen-label="Next Steps">
+    <div class="accent"></div>
+    <div class="topbar">
+      <span class="logo" role="img" aria-label="Viewix"></span>
+      <span class="seclabel"><span class="num">10</span> &nbsp;/&nbsp; Next Steps</span>
+    </div>
+    <div class="pad" style="display:flex;flex-direction:column;justify-content:space-between;padding:140px 96px 90px;">
+      <div class="anim">
+        <div class="kicker" style="color:var(--orange);">Next Steps</div>
+        <h2 class="h2" style="color:#fff;max-width:22ch;">Five steps from approval to <span style="color:var(--orange);">delivery</span>.</h2>
+      </div>
+      <div class="anim2" style="display:grid;grid-template-columns:repeat(5,1fr);gap:20px;margin:0;position:relative;">
+        <div style="position:absolute;top:32px;left:9%;right:9%;height:3px;background:rgba(255,255,255,.2);"></div>
+        <div style="position:relative;"><div style="width:66px;height:66px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;">01</div><div style="font-size:22px;font-weight:700;color:#fff;margin:22px 0 8px;">Deposit</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);">Confirm your tier and we secure the production dates.</div></div>
+        <div style="position:relative;"><div style="width:66px;height:66px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;">02</div><div style="font-size:22px;font-weight:700;color:#fff;margin:22px 0 8px;">Pre-production</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);">Script, story, shot list and run sheet.</div></div>
+        <div style="position:relative;"><div style="width:66px;height:66px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;">03</div><div style="font-size:22px;font-weight:700;color:#fff;margin:22px 0 8px;">Film</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);">We capture your people on camera.</div></div>
+        <div style="position:relative;"><div style="width:66px;height:66px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;">04</div><div style="font-size:22px;font-weight:700;color:#fff;margin:22px 0 8px;">Edit</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);">Review, refine and polish to final.</div></div>
+        <div style="position:relative;"><div style="width:66px;height:66px;border-radius:50%;background:var(--orange);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;">05</div><div style="font-size:22px;font-weight:700;color:#fff;margin:22px 0 8px;">Delivery</div><div class="body" style="font-size:18px;color:rgba(255,255,255,.65);">Tagged, stored and ready to launch.</div></div>
+      </div>
+      <div class="anim3" style="display:flex;justify-content:space-between;align-items:flex-end;border-top:1.5px solid rgba(255,255,255,.18);padding-top:40px;">
+        <div>
+          <div style="font-size:18px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--orange);margin-bottom:16px;" data-field="nextSteps.tagline">From recruitment drive to cultural asset</div>
+          <div style="font-size:38px;font-weight:800;color:#fff;max-width:20ch;line-height:1.1;">Your dedicated production partner.</div>
+        </div>
+        <div style="text-align:right;">
+          <span class="logo" style="width:196px;height:52px;" role="img" aria-label="Viewix"></span>
+          <div class="body" style="font-size:21px;color:rgba(255,255,255,.8);margin-top:14px;">hello@viewix.com.au</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</deck-stage>
+<script src="deck-stage.js"></script>
+<script>
+(function(){
+  var VARIANTS = ['wall','strip','hero','colour','desk'];
+  function apply(v){
+    var sec = document.querySelector('.creative');
+    if(!sec) return;
+    sec.querySelectorAll('.md-variant').forEach(function(el){
+      if(el.getAttribute('data-v') === v) el.setAttribute('data-active','');
+      else el.removeAttribute('data-active');
+    });
+    sec.querySelectorAll('.md-pill').forEach(function(p){
+      p.setAttribute('aria-selected', p.getAttribute('data-v') === v ? 'true' : 'false');
+    });
+    try{ localStorage.setItem('viewix-moodboard', v); }catch(e){}
+  }
+  function init(){
+    if(document.body.classList.contains('export')) return; // export render locks the look in fill.js
+    var sec = document.querySelector('.creative');
+    if(!sec) return;
+    sec.querySelectorAll('.md-pill').forEach(function(p){
+      p.addEventListener('click', function(){ apply(p.getAttribute('data-v')); });
+    });
+    var saved;
+    try{ saved = localStorage.getItem('viewix-moodboard'); }catch(e){}
+    apply(VARIANTS.indexOf(saved) >= 0 ? saved : 'wall');
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+</script>
+</body>
+</html>
