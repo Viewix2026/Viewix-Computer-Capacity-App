@@ -19,6 +19,7 @@
 // legacy data still see their headline + video while the App's
 // migration effect copies it across to /teamHome.
 
+import { useEffect, useRef } from "react";
 import { Icon } from "./Icon";
 import { VideoEmbed } from "./shared/VideoEmbed";
 import { VotwReactions } from "./shared/VotwReactions";
@@ -80,6 +81,16 @@ export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, tea
 
   const today = new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" });
 
+  // Auto-grow the founder quote textarea to fit the text — a fixed rows
+  // count clips anything longer than two lines.
+  const quoteRef = useRef(null);
+  useEffect(() => {
+    const el = quoteRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [teamQuote, isFounder]);
+
   return (
     <>
       {/* Header — title + date eyebrow, per the design shell */}
@@ -102,10 +113,10 @@ export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, tea
             textTransform: "uppercase", color: "var(--accent-bright)", marginBottom: 12 }}>Team Quote</div>
           {isFounder ? (
             <div style={{ position: "relative" }}>
-              <textarea value={teamQuote} onChange={e => updateTeamQuote(e.target.value)}
-                placeholder="Add an inspiring quote or message for the team..." rows={2}
+              <textarea ref={quoteRef} value={teamQuote} onChange={e => updateTeamQuote(e.target.value)}
+                placeholder="Add an inspiring quote or message for the team..." rows={1}
                 style={{ width: "100%", fontFamily: SANS, fontSize: 21, fontWeight: 600, fontStyle: "italic",
-                  color: "var(--fg)", background: "transparent", border: "none",
+                  color: "var(--fg)", background: "transparent", border: "none", overflow: "hidden",
                   borderBottom: "1px dashed var(--faint)", outline: "none", resize: "none", lineHeight: 1.45 }} />
               <div style={{ fontFamily: SANS, fontSize: 10, color: "var(--muted)", marginTop: 8 }}>Only founders can edit this</div>
             </div>
