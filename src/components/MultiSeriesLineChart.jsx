@@ -38,7 +38,10 @@ function niceAxis(dataMax) {
   return { ticks, max, step };
 }
 
-export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yLabel = "avg edit h / video" }) {
+// partialWeekKey: the Monday key of the in-progress week (weekStartKey(todayKey())).
+// When it matches the final plotted week, that point renders hollow with a dashed
+// lead-in segment — a half-finished week must not read as a real trend move.
+export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yLabel = "median edit h / video", partialWeekKey = null }) {
   const [hover, setHover] = useState(null); // hovered week index
   const [hidden, setHidden] = useState(() => new Set()); // categories toggled off via legend
   const toggle = (cat) => setHidden((prev) => {
@@ -87,6 +90,22 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
     return d;
   };
 
+  const lastIdx = weeks.length - 1;
+  const lastIsPartial = !!partialWeekKey && weeks[lastIdx] === partialWeekKey;
+  // When the final week is partial its lead-in segment renders dashed: the
+  // solid path stops one point early and the last span is drawn separately.
+  const solidPtsFor = (pts) => (lastIsPartial ? pts.filter((p) => p.x < lastIdx) : pts);
+  const partialSegFor = (pts) => {
+    if (!lastIsPartial) return null;
+    const last = pts[lastIdx];
+    const prev = pts[lastIdx - 1];
+    if (!last || last.y == null || !prev || prev.y == null) return null; // gap or lone dot — no segment
+    return { x1: xAt(prev.x), y1: yAt(prev.y), x2: xAt(last.x), y2: yAt(last.y) };
+  };
+  // Honesty cue: thin samples (n<3) and the in-progress week render hollow.
+  const isHollow = (p) => p.n < 3 || (lastIsPartial && p.x === lastIdx);
+  const anyHollowN = visible.some((s) => s.points.some((p) => p.y != null && p.n < 3));
+
   const onMove = (e) => {
     // Map client X → viewBox X off the whole SVG (it's width:100% with
     // preserveAspectRatio="none", so 0..W maps linearly to its client width).
@@ -127,6 +146,13 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
             reset
           </button>
         )}
+        {(anyHollowN || lastIsPartial) && (
+          <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: "auto" }}>
+            {anyHollowN && "○ fewer than 3 videos"}
+            {anyHollowN && lastIsPartial && " · "}
+            {lastIsPartial && "dashed = week in progress"}
+          </span>
+        )}
       </div>
 
       <div style={{ position: "relative" }}>
@@ -148,7 +174,7 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
             return (
               <g key={`x${i}`}>
                 <line x1={xAt(i)} y1={PAD.t} x2={xAt(i)} y2={PAD.t + innerH} stroke="var(--border)" strokeWidth={1} strokeOpacity={0.22} />
-                {showLabel && <text x={xAt(i)} y={PAD.t + innerH + 14} textAnchor={i === 0 ? "start" : i === weeks.length - 1 ? "end" : "middle"} fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">{fmtWeek(wk)}</text>}
+                {showLabel && <text x={xAt(i)} y={PAD.t + innerH + 14} textAnchor={i === 0 ? "start" : i === weeks.length - 1 ? "end" : "middle"} fontSize={9} fontFamily="'JetBrains Mono',monospace" fill="var(--muted)">{fmtWeek(wk)}{lastIsPartial && i === lastIdx ? " (partial)" : ""}</text>}
               </g>
             );
           })}
@@ -159,14 +185,24 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
           )}
 
           {/* series (only the toggled-on ones) */}
-          {visible.map((s) => (
-            <g key={s.category}>
-              <path d={pathFor(s.points)} fill="none" stroke={colorFor(s.category)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-              {s.points.map((p) => p.y == null ? null : (
-                <circle key={p.x} cx={xAt(p.x)} cy={yAt(p.y)} r={hover === p.x ? 4 : 2.5} fill={colorFor(s.category)} />
-              ))}
-            </g>
-          ))}
+          {visible.map((s) => {
+            const seg = partialSegFor(s.points);
+            return (
+              <g key={s.category}>
+                <path d={pathFor(solidPtsFor(s.points))} fill="none" stroke={colorFor(s.category)} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+                {seg && (
+                  <line x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2} stroke={colorFor(s.category)} strokeWidth={2} strokeDasharray="4 4" strokeLinecap="round" />
+                )}
+                {s.points.map((p) => p.y == null ? null : (
+                  isHollow(p) ? (
+                    <circle key={p.x} cx={xAt(p.x)} cy={yAt(p.y)} r={hover === p.x ? 4 : 2.5} fill="var(--card)" stroke={colorFor(s.category)} strokeWidth={1.5} />
+                  ) : (
+                    <circle key={p.x} cx={xAt(p.x)} cy={yAt(p.y)} r={hover === p.x ? 4 : 2.5} fill={colorFor(s.category)} />
+                  )
+                ))}
+              </g>
+            );
+          })}
           {visible.length === 0 && (
             <text x={PAD.l + innerW / 2} y={PAD.t + innerH / 2} textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="var(--muted)">All lines hidden — click a category above to show it</text>
           )}
@@ -181,7 +217,7 @@ export function MultiSeriesLineChart({ weeks, series, colorFor, height = 240, yL
         {/* tooltip (suppressed when no lines are visible) */}
         {hover != null && visible.length > 0 && (
           <div style={{ position: "absolute", top: 0, left: `${(xAt(hover) / W) * 100}%`, transform: xAt(hover) > W / 2 ? "translateX(-105%)" : "translateX(5%)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 11, pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", minWidth: 130, zIndex: 5 }}>
-            <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Week of {fmtWeek(weeks[hover])}</div>
+            <div style={{ fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Week of {fmtWeek(weeks[hover])}{lastIsPartial && hover === lastIdx ? " (partial)" : ""}</div>
             {visible.map((s) => {
               const p = s.points[hover];
               return (

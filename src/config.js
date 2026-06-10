@@ -1,6 +1,6 @@
 // ─── Content Categories ───
 export const CONTENT_CATEGORIES = ["Meta Ad", "Social Media", "Corporate Video", "Other"];
-export const CAT_COLORS = { "Meta Ad": "#8B5CF6", "Social Media": "#0082FA", "Corporate Video": "#F87700", "Other": "#5A6B85" };
+export const CAT_COLORS = { "Meta Ad": "#8B5CF6", "Social Media": "#0082FA", "Corporate Video": "#F87700", "Other": "#5A6B85", "Uncategorized": "#94A3B8" };
 
 // ─── Deliveries ───
 // Canonical strings live in api/_constants.js so the Vercel
