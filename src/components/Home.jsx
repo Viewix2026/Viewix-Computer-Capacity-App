@@ -63,7 +63,7 @@ function QuickLink({ icon, label, host, url }) {
   );
 }
 
-export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, teamLunch, isFounder, isFounders }) {
+export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, teamLunch, isFounder, isFounders, editors }) {
   const th = teamHome || {};
   const fd = foundersData || {};
   const teamQuote = th.teamQuote || fd.teamQuote || "";
@@ -185,8 +185,8 @@ export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, tea
                   — {votw.creator}
                 </div>
               )}
-              <VotwReactions videoUrl={votw.videoUrl} />
-              <VotwComments videoUrl={votw.videoUrl} />
+              <VotwReactions videoUrl={votw.videoUrl} editors={editors} />
+              <VotwComments videoUrl={votw.videoUrl} editors={editors} />
             </div>
           ) : (
             <div style={{ padding: "30px 20px", textAlign: "center", color: "var(--muted)", background: "var(--inset)", borderRadius: "var(--r3)", border: "1px dashed var(--border)" }}>

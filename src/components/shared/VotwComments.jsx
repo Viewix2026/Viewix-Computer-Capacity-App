@@ -18,6 +18,7 @@ import {
 } from "../../firebase";
 import { Icon } from "../Icon";
 import { videoKeyFromUrl } from "./VotwReactions";
+import { rosterNameForEmail } from "../../utils";
 
 const SANS = "'DM Sans', system-ui, sans-serif";
 const MONO = "'JetBrains Mono', ui-monospace, monospace";
@@ -39,14 +40,17 @@ function relTime(ts) {
   return new Date(ts).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 }
 
-export function VotwComments({ videoUrl }) {
+export function VotwComments({ videoUrl, editors }) {
   const videoKey = videoKeyFromUrl(videoUrl);
   // Shape: { id: { uid, name, text, ts }, ... }
   const [comments, setComments] = useState({});
   const [draft, setDraft] = useState("");
   const [hoverId, setHoverId] = useState(null);
   const uid = getCurrentUserUid();
-  const myName = getCurrentUserName() || getCurrentUserEmail() || "Someone";
+  // Same name resolution as the header UserBadge: Team Roster name first
+  // ("Jeremy"), then the Google display name, then the email.
+  const myName = rosterNameForEmail(editors, getCurrentUserEmail())
+    || getCurrentUserName() || getCurrentUserEmail() || "Someone";
 
   useEffect(() => {
     setComments({});

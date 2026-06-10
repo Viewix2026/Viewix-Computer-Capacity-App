@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { normaliseImageUrl } from "../utils";
+import { normaliseImageUrl, rosterEntryForEmail } from "../utils";
 
 // "Who's logged in" chip. Shows the signed-in user's name and avatar,
 // sourced from the Team Roster (/editors) by matching the Google account
@@ -14,9 +14,7 @@ export function UserBadge({ editors, email, name, photoURL }) {
   const [imgFailed, setImgFailed] = useState(false);
 
   const lcEmail = (email || "").trim().toLowerCase();
-  const roster = Array.isArray(editors) && lcEmail
-    ? editors.find(e => e && (e.email || "").trim().toLowerCase() === lcEmail)
-    : null;
+  const roster = rosterEntryForEmail(editors, email);
 
   // Name: prefer the roster name, then the Google display name, then the
   // email local-part, then a neutral label.

@@ -923,7 +923,7 @@ export default function App(){
 
 
     {/* ═══ HOME ═══ */}
-    {tool==="home"&&(<Home teamHome={teamHome} setTeamHome={setTeamHome} foundersData={foundersData} setFoundersData={setFoundersData} teamLunch={teamLunch} isFounder={isFounder} isFounders={isFounders}/>)}
+    {tool==="home"&&(<Home teamHome={teamHome} setTeamHome={setTeamHome} foundersData={foundersData} setFoundersData={setFoundersData} teamLunch={teamLunch} isFounder={isFounder} isFounders={isFounders} editors={editors}/>)}
 
     {/* ═══ FOUNDERS ═══ */}
     {tool==="founders"&&isFounders&&(

@@ -14,6 +14,7 @@ import {
   fbListen, onFB, fbSet,
   getCurrentUserUid, getCurrentUserName, getCurrentUserEmail,
 } from "../../firebase";
+import { rosterNameForEmail } from "../../utils";
 
 // Quick palette in the "+" picker. The bar itself only shows emojis that
 // have at least one reaction, so it stays compact until people engage.
@@ -30,13 +31,16 @@ export function videoKeyFromUrl(url) {
   return "v" + h.toString(36);
 }
 
-export function VotwReactions({ videoUrl }) {
+export function VotwReactions({ videoUrl, editors }) {
   const videoKey = videoKeyFromUrl(videoUrl);
   // Shape: { "🎉": { uid: "Display Name", ... }, ... }
   const [reactions, setReactions] = useState({});
   const [pickerOpen, setPickerOpen] = useState(false);
   const uid = getCurrentUserUid();
-  const myName = getCurrentUserName() || getCurrentUserEmail() || "Someone";
+  // Same name resolution as the header UserBadge: Team Roster name first
+  // ("Jeremy"), then the Google display name, then the email.
+  const myName = rosterNameForEmail(editors, getCurrentUserEmail())
+    || getCurrentUserName() || getCurrentUserEmail() || "Someone";
 
   useEffect(() => {
     setReactions({});
