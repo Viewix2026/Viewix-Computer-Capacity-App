@@ -101,6 +101,14 @@ export default function App(){
     window.addEventListener("hashchange",apply);
     return()=>window.removeEventListener("hashchange",apply);
   },[]);
+  // Drop a consumed deep-link: strip the hash from the URL (replaceState
+  // fires no hashchange, so reset route state too). Same pattern the
+  // sidebar Projects icon uses; tab components call this when the user
+  // manually navigates away so the stale route can't replay later.
+  const resetHashRoute=()=>{
+    if(window.location.hash)history.replaceState(null,"",window.location.pathname+window.location.search);
+    setRoute({tool:null,subTab:null,recordId:null});
+  };
 
   // Side-effect: when the hash points to a Sherpa or Account row, scroll
   // the matching DOM node into view shortly after the tab paints. The
@@ -904,10 +912,10 @@ export default function App(){
     {tool==="accounts"&&isFounder&&(<AccountsDashboard accounts={accounts} setAccounts={setAccounts} deleteAccount={deleteAccount} projects={projects} setProjects={setProjects} turnaround={turnaround} editors={editors} clients={clients} setClients={setClients} highlightId={route.tool==="accounts"?route.subTab:null} onSyncAttio={async()=>{const r=await authFetch("/api/attio",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"currentCustomers"})});const d=await r.json();return d.companies||[];}}/>)}
 
     {/* ═══ PROJECTS (wraps Deliveries as a sub-tab) ═══ */}
-    {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null}/>)}
+    {tool==="projects"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null} onResetRoute={resetHashRoute}/>)}
 
     {/* Legacy direct-to-Deliveries route (kept so old bookmarks still resolve). */}
-    {tool==="deliveries"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null}/>)}
+    {tool==="deliveries"&&(isFounder||isLead)&&(<Projects role={role} projects={projects} setProjects={setProjects} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} editors={editors} setEditors={setEditors} weekData={weekData} clients={clients} setClients={setClients} calendarSyncQueue={calendarSyncQueue} route={route.tool==="projects"?route:null} onResetRoute={resetHashRoute}/>)}
 
 
     {/* ═══ TRAINING ═══ */}

@@ -503,6 +503,24 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
   });
   // The bar node is both the move draggable and the reorder drop target.
   const setBarRef = (node) => { setNodeRef(node); reorderTarget.setNodeRef(node); };
+  // Suppress click-after-drag: the bar follows the pointer during a
+  // move drag (transform above), so pointerdown and pointerup land on
+  // the SAME element and the browser fires a click after EVERY drop.
+  // By then dnd-kit has already flipped isDragging back to false, so
+  // an `if (!isDragging)` guard in onClick can't catch it and every
+  // drop also opened the project quick-view. Same wasDraggingRef +
+  // 200ms swallow window ProjectRow uses for drag-to-commission.
+  const wasDraggingRef = useRef(false);
+  useEffect(() => {
+    if (isDragging) {
+      wasDraggingRef.current = true;
+      return;
+    }
+    if (wasDraggingRef.current) {
+      const t = setTimeout(() => { wasDraggingRef.current = false; }, 200);
+      return () => clearTimeout(t);
+    }
+  }, [isDragging]);
 
   const colour = colourFor(subtask);
   // Phase 3 (#5): overdue (dated past the project's due date) → yellow/
@@ -562,7 +580,9 @@ function GanttBar({ subtask, sourceAssigneeId, onClick, reorderable = false, day
       onClick={(e) => {
         // PointerSensor's 6px activation distance means a real click
         // (no drag) lands here unmolested. Open the parent project.
-        if (!isDragging) onClick?.();
+        // wasDraggingRef swallows the click the browser fires right
+        // after a drop (see the ref's comment above).
+        if (!isDragging && !wasDraggingRef.current) onClick?.();
       }}
       title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\n${subtask.startDate} → ${subtask.endDate}\nStage: ${stageOf(subtask)}`}
       {...listeners}
@@ -2270,6 +2290,20 @@ function PoolCard({ subtask, editors, onClick }) {
     id: `bar:${subtask.id}:pool`,
     data: { mode: "move", subtask, sourceAssigneeId: null },
   });
+  // Same click-after-drag swallow as GanttBar — the card follows the
+  // pointer (transform below), so every drop fires a click on it after
+  // isDragging has already flipped back to false.
+  const wasDraggingRef = useRef(false);
+  useEffect(() => {
+    if (isDragging) {
+      wasDraggingRef.current = true;
+      return;
+    }
+    if (wasDraggingRef.current) {
+      const t = setTimeout(() => { wasDraggingRef.current = false; }, 200);
+      return () => clearTimeout(t);
+    }
+  }, [isDragging]);
   const colour = colourFor(subtask);
   const editorById = useMemo(() =>
     new Map((editors || []).map(e => [e.id, e.name || ""])),
@@ -2287,7 +2321,7 @@ function PoolCard({ subtask, editors, onClick }) {
   return (
     <div
       ref={setNodeRef}
-      onClick={() => { if (!isDragging) onClick?.(); }}
+      onClick={() => { if (!isDragging && !wasDraggingRef.current) onClick?.(); }}
       title={`${subtask.clientName} · ${subtask.projectName}\n${subtask.name}\n${assigneeLabel} · Stage: ${stageOf(subtask)}`}
       {...listeners}
       {...attributes}

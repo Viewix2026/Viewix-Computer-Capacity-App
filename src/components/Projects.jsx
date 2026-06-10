@@ -3286,7 +3286,7 @@ function ProjectQuickView({ project, onClose, onDelete, editors, clients, delive
   );
 }
 
-export function Projects({ role, projects, setProjects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route, calendarSyncQueue }) {
+export function Projects({ role, projects, setProjects, deliveries, setDeliveries, accounts, editors, setEditors, weekData, clients, route, calendarSyncQueue, onResetRoute }) {
   // Lead role gets read-only access to the Projects tab — they can
   // see every record (rows, subtasks, project detail panel) but
   // can't edit, delete, archive, drag, or add. ONE carve-out:
@@ -3301,6 +3301,17 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   const canEditProducerNotes = role === "lead" || role === "manager" || role === "founder" || role === "founders";
   const [subTab, setSubTab] = useState("projects"); // "projects" | "teamBoard" | "deliveries"
   const [activeProjectId, setActiveProjectId] = useState(null);
+  // Manual sub-tab click — clear any deep-link hash/route FIRST (same
+  // pattern as the sidebar Projects icon in App.jsx). Without this the
+  // hash from a previously-opened delivery (#projects/deliveries/del-x)
+  // stays live after the producer moves to another sub-tab, and the
+  // deep-link receiver below replays it. It also makes re-clicking the
+  // same Delivery pill work: the hash actually changes, so App.jsx
+  // gets a fresh hashchange instead of a same-value no-op.
+  const switchSubTab = (tab) => {
+    onResetRoute?.();
+    setSubTab(tab);
+  };
 
   // One-time backfill: existing projects whose shoot was dated BEFORE the
   // Selects auto-schedule shipped never fired the sync (it's event-driven
@@ -3439,24 +3450,38 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
   // was getting stomped milliseconds later. Clearing the ref when the
   // route loses its recordId lets a producer paste a fresh deep-link
   // and have it apply correctly.
+  //
+  // appliedSubTabRef applies the same once-per-route rule to the
+  // setSubTab call itself. It was previously unguarded, so a stale
+  // #projects/deliveries/<id> hash (left behind after opening a
+  // delivery) replayed on EVERY /projects echo — and a Team Board
+  // drag writes to /projects, so every drop yanked the producer to
+  // the Deliveries sub-tab (Mon's 2026-06-10 report).
   const appliedRouteRef = useRef(null);
+  const appliedSubTabRef = useRef(null);
   useEffect(() => {
     if (!route || !route.subTab) {
       appliedRouteRef.current = null;
+      appliedSubTabRef.current = null;
       return;
     }
-    if (route.subTab !== subTab) setSubTab(route.subTab);
+    const sig = `${route.subTab}:${route.recordId || ""}`;
+    if (appliedSubTabRef.current !== sig) {
+      appliedSubTabRef.current = sig;
+      if (route.subTab !== subTab) setSubTab(route.subTab);
+      if (route.subTab !== "projects" || !route.recordId) {
+        // Navigating to a non-projects sub-tab (e.g. a delivery deep-link) must
+        // drop any open project, otherwise the stale `active` hides the sub-tab nav.
+        appliedRouteRef.current = null;
+        setActiveProjectId(null);
+      }
+    }
     if (route.subTab === "projects" && route.recordId) {
       const key = `${route.subTab}:${route.recordId}`;
       if (appliedRouteRef.current !== key && projects.find(p => p.id === route.recordId)) {
         appliedRouteRef.current = key;
         setActiveProjectId(route.recordId);
       }
-    } else {
-      // Navigating to a non-projects sub-tab (e.g. a delivery deep-link) must
-      // drop any open project, otherwise the stale `active` hides the sub-tab nav.
-      appliedRouteRef.current = null;
-      setActiveProjectId(null);
     }
   }, [route?.subTab, route?.recordId, projects]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3574,9 +3599,9 @@ export function Projects({ role, projects, setProjects, deliveries, setDeliverie
           )}
           {!(subTab === "projects" && active) && (
             <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3, marginLeft: 12 }}>
-              <button onClick={() => setSubTab("projects")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "projects" ? "var(--card)" : "transparent", color: subTab === "projects" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Projects</button>
-              <button onClick={() => setSubTab("teamBoard")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "teamBoard" ? "var(--card)" : "transparent", color: subTab === "teamBoard" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Team Board</button>
-              <button onClick={() => setSubTab("deliveries")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "deliveries" ? "var(--card)" : "transparent", color: subTab === "deliveries" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Deliveries</button>
+              <button onClick={() => switchSubTab("projects")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "projects" ? "var(--card)" : "transparent", color: subTab === "projects" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Projects</button>
+              <button onClick={() => switchSubTab("teamBoard")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "teamBoard" ? "var(--card)" : "transparent", color: subTab === "teamBoard" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Team Board</button>
+              <button onClick={() => switchSubTab("deliveries")} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: subTab === "deliveries" ? "var(--card)" : "transparent", color: subTab === "deliveries" ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Deliveries</button>
             </div>
           )}
         </div>
