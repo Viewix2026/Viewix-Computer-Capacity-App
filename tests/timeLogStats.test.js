@@ -288,8 +288,11 @@ test("computeDailyAllocations splits the day's unlogged paid gap evenly across t
       },
       "2026-05-06": {
         t1: { secs: SECS(2), stage: "edit" },
-        t4: { secs: SECS(2), stage: "shoot" },     // total 4h ALL stages, gap 4h, 2 tasks → 2h each
+        t4: { secs: SECS(2), stage: "shoot" },     // total 4h ALL stages, gap 4h, 2 tasks → 2h each, but only the EDIT task keeps its share
         _running: { taskId: "t1", startedAt: 1 },  // ignored
+      },
+      "2026-05-07": {
+        t5: { secs: SECS(6), stage: "Revisions" }, // revision-only day: 2h gap is DROPPED, not booked as edit
       },
     },
   };
@@ -297,14 +300,34 @@ test("computeDailyAllocations splits the day's unlogged paid gap evenly across t
   assert.equal(a.get("t1"), SECS(0.5) + SECS(2)); // share from day1 + day3
   assert.equal(a.get("t2"), SECS(0.5));
   assert.equal(a.get("t3") || 0, 0);              // no gap on a full 8h day
-  assert.equal(a.get("t4"), SECS(2));             // a shoot task gets a share too (gap is all-stages)
+  assert.equal(a.get("t4") || 0, 0);              // shoot task dilutes the split but keeps no share
+  assert.equal(a.get("t5") || 0, 0);              // revision-day gap never becomes edit time
 });
 
-test("buildVideoFacts attaches allocatedSecs from the allocation map (0 when absent)", () => {
+test("buildVideoFacts attaches allocatedEditSecs from the allocation map (0 when absent)", () => {
   const idx = new Map([["v1", { status: "done", videoType: "Live Action", parentName: "A: 1" }]]);
   const logs = { ed1: { "2026-05-04": { v1: { secs: SECS(2), stage: "edit" } } } };
-  assert.equal(buildVideoFacts(logs, idx, new Map([["v1", SECS(1)]]))[0].allocatedSecs, SECS(1));
-  assert.equal(buildVideoFacts(logs, idx)[0].allocatedSecs, 0);
+  assert.equal(buildVideoFacts(logs, idx, new Map([["v1", SECS(1)]]))[0].allocatedEditSecs, SECS(1));
+  assert.equal(buildVideoFacts(logs, idx)[0].allocatedEditSecs, 0);
+});
+
+test("end-to-end: a later revision day's gap never inflates adjusted edit, and the chart point stays frozen", () => {
+  const idx = new Map([["v1", { status: "done", videoType: "Live Action", parentName: "Acme: Film", name: "Hero cut" }]]);
+  const logs = {
+    ed1: {
+      "2026-05-04": { v1: { secs: SECS(6), stage: "edit" } },       // edit day: gap 2h → +2h edit allocation
+      "2026-06-01": { v1: { secs: SECS(1), stage: "revisions" } },  // revision day weeks later: 7h gap DROPPED
+    },
+  };
+  const facts = buildVideoFacts(logs, idx, computeDailyAllocations(logs));
+  const f = facts[0];
+  assert.equal(f.allocatedEditSecs, SECS(2));       // only the edit-day share
+  assert.equal(f.editLastDate, "2026-05-04");       // anchor unchanged by the revision
+  const adj = summariseOverall(facts, true);
+  assert.equal(adj.medianEditH, 8);                 // 6h logged + 2h edit-day share, NOT +7h more
+  // drill-down plumbing rides on the same facts
+  assert.equal(f.parentName, "Acme: Film");
+  assert.equal(f.videoName, "Hero cut");
 });
 
 test("adjusted mode adds allocated hours to edit metrics; revision burden stays logged", () => {

@@ -1,9 +1,10 @@
 // src/components/TimeLogAnalytics.jsx
 //
-// "Analytics" sub-view of the Time Logs tab. A current-state SNAPSHOT of
-// how long each kind of video takes to edit and how much revisions add —
-// NOT an over-time trend (native tracking is only ~5 weeks old; the trend
-// view is deferred to v2, see docs/plans/time-log-analytics.md).
+// "Time Log Analytics" sub-view (Founders tab): a weekly over-time trend of
+// median edit hours per video by category, plus a period-scoped snapshot of
+// how long each kind of video takes to edit and how much revisions add.
+// Burden rows expand to the underlying videos so the category flag resolves
+// to a named client/job. See docs/plans/time-log-analytics.md.
 //
 // All maths lives in the pure, tested src/timeLogStats.js. This component
 // only shapes and renders precomputed truth.
@@ -21,6 +22,7 @@ import {
   filterFactsByDays,
   buildWeeklySeries,
   computeDailyAllocations,
+  weekStartKey,
 } from "../timeLogStats";
 
 const PERIODS = [{ k: 0, label: "All" }, { k: 30, label: "Last 30d" }, { k: 90, label: "Last 90d" }];
@@ -36,8 +38,14 @@ const sectionSub = { fontSize: 11, color: "var(--muted)", margin: "0 0 14px" };
 export function TimeLogAnalytics({ allTimeLogs, projects }) {
   const [days, setDays] = useState(0);
   const [adjusted, setAdjusted] = useState(true); // default to the paid-hours-adjusted view
+  const [expandedCats, setExpandedCats] = useState(() => new Set()); // burden rows expanded to their videos
+  const toggleCat = (cat) => setExpandedCats((prev) => {
+    const next = new Set(prev);
+    next.has(cat) ? next.delete(cat) : next.add(cat);
+    return next;
+  });
 
-  const { cats, overall, weekly } = useMemo(() => {
+  const { cats, overall, weekly, facts } = useMemo(() => {
     const idx = buildProjectIndex(projects);
     const allocations = computeDailyAllocations(allTimeLogs || {});
     const all = buildVideoFacts(allTimeLogs || {}, idx, allocations);
@@ -48,8 +56,21 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
       cats: summariseByCategory(f, adjusted),
       overall: summariseOverall(f, adjusted),
       weekly: buildWeeklySeries(all, adjusted),
+      facts: f,
     };
   }, [allTimeLogs, projects, days, adjusted]);
+
+  // Top revised videos per category (period-scoped) for the burden drill-down.
+  const revisedByCat = useMemo(() => {
+    const by = new Map();
+    for (const f of facts) {
+      if (!f.hasRevision) continue;
+      if (!by.has(f.category)) by.set(f.category, []);
+      by.get(f.category).push(f);
+    }
+    for (const arr of by.values()) arr.sort((a, b) => b.revisionSecs - a.revisionSecs);
+    return by;
+  }, [facts]);
 
   const editVideoN = weekly.series.reduce((s, x) => s + x.n, 0);
   const chartLabel = weekly.weeks.length
@@ -109,7 +130,7 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
           Weekly median, one line per category — each video plotted in the week its edit finished (median so outlier days don't drag the line). {chartLabel}.
           {adjusted && " Adjusted = logged edit time + each task's share of unlogged paid hours (8h/day)."}
         </p>
-        <MultiSeriesLineChart weeks={weekly.weeks} series={weekly.series} colorFor={colorFor} yLabel={editLabel} />
+        <MultiSeriesLineChart weeks={weekly.weeks} series={weekly.series} colorFor={colorFor} yLabel={editLabel} partialWeekKey={weekStartKey(todayKey())} />
       </div>
 
       {overall.n === 0 ? (
@@ -123,7 +144,7 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
         <Metric label="Completed Videos" value={overall.n} sub="edit/revision tracked" />
         <Metric label={`Median ${adjusted ? "Adj. " : ""}Edit / Video`} value={fmtH(overall.medianEditH)} sub={`mean ${fmtH(overall.meanEditH)}`} />
         <Metric label="Revision Rate" value={fmtPct(overall.revisionRate)} sub="videos needing revisions" />
-        <Metric label="Revision Burden" value={fmtPct(overall.revisionBurden)} sub="revision ÷ edit hours" accent="#F87700" />
+        <Metric label="Revision Burden" value={fmtPct(overall.revisionBurden)} sub="revision ÷ logged edit hours" accent="#F87700" />
       </div>
 
       {/* Edit time by category */}
@@ -160,18 +181,52 @@ export function TimeLogAnalytics({ allTimeLogs, projects }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {burdenRows.map((c) => {
             const isWorst = worstBurden && c.category === worstBurden.category;
+            const open = expandedCats.has(c.category);
+            const revised = revisedByCat.get(c.category) || [];
             return (
-              <div key={c.category} style={{ display: "grid", gridTemplateColumns: "150px 1fr 230px", alignItems: "center", gap: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>
-                  {isWorst && <span title="heaviest revision burden">🚩 </span>}{c.category}
+              <div key={c.category}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={open}
+                  onClick={() => toggleCat(c.category)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCat(c.category); } }}
+                  title={open ? "Hide videos" : "Show this category's most-revised videos"}
+                  style={{ display: "grid", gridTemplateColumns: "150px 1fr 230px", alignItems: "center", gap: 12, cursor: "pointer" }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>
+                    <span style={{ color: "var(--muted)", display: "inline-block", width: 12 }}>{open ? "▾" : "▸"}</span>
+                    {isWorst && <span title="heaviest revision burden">🚩 </span>}{c.category}
+                  </div>
+                  <div style={{ background: "var(--bar-bg)", borderRadius: 6, height: 18, overflow: "hidden" }}>
+                    <div style={{ width: `${((c.revisionBurden || 0) / maxBurden) * 100}%`, height: "100%", background: isWorst ? "#F87700" : "#F8770088", borderRadius: 6, minWidth: c.revisionBurden ? 2 : 0, transition: "width 0.3s" }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right", ...mono }}>
+                    <strong style={{ color: "var(--fg)" }}>{fmtPct(c.revisionBurden)}</strong>
+                    {" · "}edit {fmtH(c.editHPerVideoLogged)} · rev {fmtH(c.revisionHPerVideo)} · {fmtPct(c.revisionRate)} revised
+                  </div>
                 </div>
-                <div style={{ background: "var(--bar-bg)", borderRadius: 6, height: 18, overflow: "hidden" }}>
-                  <div style={{ width: `${((c.revisionBurden || 0) / maxBurden) * 100}%`, height: "100%", background: isWorst ? "#F87700" : "#F8770088", borderRadius: 6, minWidth: c.revisionBurden ? 2 : 0, transition: "width 0.3s" }} />
-                </div>
-                <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right", ...mono }}>
-                  <strong style={{ color: "var(--fg)" }}>{fmtPct(c.revisionBurden)}</strong>
-                  {" · "}edit {fmtH(c.editHPerVideoLogged)} · rev {fmtH(c.revisionHPerVideo)} · {fmtPct(c.revisionRate)} revised
-                </div>
+                {open && (
+                  <div style={{ margin: "8px 0 4px 12px", padding: "10px 14px", borderLeft: `2px solid ${colorFor(c.category)}`, background: "var(--bg)", borderRadius: "0 8px 8px 0", display: "flex", flexDirection: "column", gap: 6 }}>
+                    {revised.length === 0 ? (
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>No revised videos in this category for the selected period.</div>
+                    ) : (
+                      revised.slice(0, 8).map((v) => (
+                        <div key={v.taskId} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+                          <div style={{ fontSize: 12, color: "var(--fg)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {v.videoName || v.taskId} <span style={{ color: "var(--muted)" }}>— {v.parentName}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", ...mono }}>
+                            rev <strong style={{ color: "var(--fg)" }}>{fmtH(v.revisionSecs / 3600)}</strong> · edit {fmtH(v.editSecs / 3600)} · {fmtDate(v.lastLogDate)}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    {revised.length > 8 && (
+                      <div style={{ fontSize: 10, color: "var(--muted)" }}>+ {revised.length - 8} more revised videos in this period</div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

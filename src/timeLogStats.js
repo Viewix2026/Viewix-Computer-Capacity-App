@@ -1,10 +1,11 @@
 // src/timeLogStats.js
 //
-// Pure data layer for the Time Log Analytics sub-tab (v1 snapshot).
+// Pure data layer for the Time Log Analytics sub-tab: the weekly over-time
+// trend (buildWeeklySeries) plus the snapshot aggregates (summarise*), with
+// the paid-hours allocation model (computeDailyAllocations).
 // No React, no Firebase — takes the raw /timeLogs tree + /projects and
 // returns plain aggregates. Kept pure so it's unit-testable with
-// node:test (tests/timeLogStats.test.js) and reusable by the deferred
-// v2 over-time trend.
+// node:test (tests/timeLogStats.test.js).
 //
 // Design facts proven by scripts/timelog-coverage-audit.mjs against real
 // data (2026-06-07):
@@ -23,13 +24,22 @@ const SECS_PER_H = 3600;
 const EDIT_STAGES = new Set(["edit", "revisions"]);
 export const PAID_DAY_SECS = 8 * SECS_PER_H; // editors are paid 8h/day
 
-// Per-task "allocated" seconds: the unlogged-but-paid time redistributed onto
-// the tasks an editor actually worked. Editors underreport, so for each
+// Per-task allocated EDIT seconds: the unlogged-but-paid time redistributed
+// onto the tasks an editor actually worked. Editors underreport, so for each
 // (editor, day) we take gap = max(0, 8h − total logged that day) — across ALL
 // stages, so a shoot-heavy day doesn't create a fake editing gap — and split
-// it EVENLY across the distinct tasks worked that day (gap ÷ tasks). A task
-// accrues these daily shares across every day it was touched. Total allocated
-// never exceeds the 8h paid. Returns Map(taskId -> allocatedSecs).
+// it EVENLY across the distinct tasks worked that day (gap ÷ tasks).
+//
+// Stage attribution: a share only COUNTS when that day's log for the task was
+// an edit-stage log. Revision/shoot/preprod-day shares are dropped, not
+// re-booked — adjusted "edit" hours must never absorb a revision day's gap
+// (it would inflate edit medians and retroactively move historical chart
+// points, since the weekly line anchors on the last EDIT day). Revision
+// metrics stay deliberately logged-based. Non-edit tasks still dilute the
+// denominator: the editor's gap genuinely spread across everything worked.
+//
+// A task accrues edit-day shares across every day it was touched. Total
+// allocated never exceeds the 8h paid. Returns Map(taskId -> allocatedEditSecs).
 export function computeDailyAllocations(allTimeLogs) {
   const alloc = new Map();
   for (const dates of Object.values(allTimeLogs || {})) {
@@ -44,21 +54,24 @@ export function computeDailyAllocations(allTimeLogs) {
         const secs = Number(typeof val === "number" ? val : val?.secs);
         if (!Number.isFinite(secs) || secs <= 0) continue;
         totalLogged += secs;
-        tasks.push(taskId); // dayData keys are unique → distinct tasks
+        const stage = normStage(typeof val === "object" ? val?.stage : "");
+        tasks.push({ taskId, isEdit: stage === "edit" }); // dayData keys are unique → distinct tasks
       }
       const gap = Math.max(0, PAID_DAY_SECS - totalLogged);
       if (!tasks.length || gap <= 0) continue;
       const share = gap / tasks.length;
-      for (const taskId of tasks) alloc.set(taskId, (alloc.get(taskId) || 0) + share);
+      for (const t of tasks) {
+        if (t.isEdit) alloc.set(t.taskId, (alloc.get(t.taskId) || 0) + share);
+      }
     }
   }
   return alloc;
 }
 
 // Edit seconds for a video under the chosen mode: logged edit time, plus its
-// allocated share of unlogged paid hours when adjusted.
+// edit-day share of unlogged paid hours when adjusted.
 function editSecsOf(v, adjusted) {
-  return v.editSecs + (adjusted ? (v.allocatedSecs || 0) : 0);
+  return v.editSecs + (adjusted ? (v.allocatedEditSecs || 0) : 0);
 }
 
 // "Edit" / "Pre Production" / "revisions" → "edit" / "preproduction" / "revisions"
@@ -88,7 +101,7 @@ export function utcDay(dateKey) {
   return Math.floor(ms / 86400000);
 }
 
-// projects (array or keyed object) -> Map(subtaskId -> {status, videoType, parentName})
+// projects (array or keyed object) -> Map(subtaskId -> {status, videoType, parentName, name})
 export function buildProjectIndex(projects) {
   const list = Array.isArray(projects) ? projects : Object.values(projects || {});
   const index = new Map();
@@ -99,7 +112,7 @@ export function buildProjectIndex(projects) {
     const subs = p.subtasks ? Object.values(p.subtasks) : [];
     for (const st of subs) {
       if (!st || !st.id) continue;
-      const next = { status: st.status || "unknown", videoType, parentName };
+      const next = { status: st.status || "unknown", videoType, parentName, name: st.name || "" };
       const existing = index.get(st.id);
       // Subtask ids are globally unique (st-<ts>-<rand>), so a collision is
       // near-impossible — but if one ever happens, prefer the "done" entry so
@@ -137,6 +150,8 @@ export function buildVideoFacts(allTimeLogs, index, allocations) {
           f = {
             taskId,
             category: categoryOf(meta.parentName, meta.videoType),
+            parentName: meta.parentName,
+            videoName: meta.name || "",
             editSecs: 0,
             revisionSecs: 0,
             editDays: new Set(),
@@ -162,12 +177,14 @@ export function buildVideoFacts(allTimeLogs, index, allocations) {
     facts.push({
       taskId: f.taskId,
       category: f.category,
+      parentName: f.parentName,
+      videoName: f.videoName,
       editSecs: f.editSecs,
       revisionSecs: f.revisionSecs,
       hasEdit: f.editSecs > 0,
       hasRevision: f.revisionSecs > 0,
-      // Unlogged paid time redistributed onto this task (0 if not supplied).
-      allocatedSecs: allocations ? (allocations.get(f.taskId) || 0) : 0,
+      // Edit-day share of unlogged paid time for this task (0 if not supplied).
+      allocatedEditSecs: allocations ? (allocations.get(f.taskId) || 0) : 0,
       editSpanDays: idx.length ? idx[idx.length - 1] - idx[0] : 0,
       // edit-completion anchor: the latest day this video had an edit log.
       editLastDate: editDates.length ? editDates[editDates.length - 1] : null,

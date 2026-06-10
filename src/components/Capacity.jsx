@@ -16,6 +16,7 @@ import {
 } from "../utils";
 import { Badge, Metric, NumIn, UBar, FChart } from "./UIComponents";
 import { Grid } from "./Grid";
+import { buildProjectIndex, categoryOf } from "../timeLogStats";
 import { VideoEmbed } from "./shared/VideoEmbed";
 
 // Relative-time string for the "Auto · updated Xh ago" caption.
@@ -528,7 +529,7 @@ export function Capacity({
           </div>
         </>)}
 
-        {capTab === "timelogs" && <TimeLogsView allTimeLogs={allTimeLogs} editors={editors} timeLogDate={timeLogDate} setTimeLogDate={setTimeLogDate} timeLogLoading={timeLogLoading} />}
+        {capTab === "timelogs" && <TimeLogsView allTimeLogs={allTimeLogs} editors={editors} projects={projects} timeLogDate={timeLogDate} setTimeLogDate={setTimeLogDate} timeLogLoading={timeLogLoading} />}
 
         {capTab === "lunch" && (
           <div style={{ maxWidth: 700, margin: "0 auto" }}>
@@ -640,7 +641,20 @@ export function Capacity({
 
 // ─── Time logs sub-view ───
 // Self-contained so the data transforms only run when this tab is mounted.
-function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeLogLoading }) {
+function TimeLogsView({ allTimeLogs, editors, projects, timeLogDate, setTimeLogDate, timeLogLoading }) {
+  // Categorise via the project's videoType (same join the Founders analytics
+  // uses) — native logs store no category, so without the join everything
+  // collapses to "Other" and this view contradicts Time Log Analytics on the
+  // same video. Legacy numeric-id logs never join; they keep their stored
+  // category via the fallback below.
+  const projIdx = useMemo(() => buildProjectIndex(projects || []), [projects]);
+  const categoryForLog = (taskId, val, parentName) => {
+    const meta = projIdx.get(taskId);
+    if (meta) return categoryOf(meta.parentName, meta.videoType);
+    return typeof val === "object"
+      ? (val?.category || categorizeContent(parentName, val?.type))
+      : categorizeContent(parentName, "");
+  };
   const fmtHM = (secs) => {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
@@ -667,7 +681,7 @@ function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeL
       const name = typeof val === "object" ? (val?.name || taskId) : taskId;
       const parentName = typeof val === "object" ? (val?.parentName || "") : "";
       const stage = typeof val === "object" ? (val?.stage || "") : "";
-      const category = typeof val === "object" ? (val?.category || categorizeContent(parentName, val?.type)) : categorizeContent(parentName, "");
+      const category = categoryForLog(taskId, val, parentName);
       if (secs > 0) {
         tasks.push({ taskId, secs, name, parentName, stage, category });
         edTotal += secs;
@@ -680,19 +694,23 @@ function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeL
   const dateNext = () => { const d = new Date(timeLogDate + "T00:00:00"); d.setDate(d.getDate() + 1); setTimeLogDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`); };
   const dateLabel = new Date(timeLogDate + "T00:00:00").toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
-  // Category averages (all time)
+  // Category averages (all time) — same project-videoType join as the badge
+  // above and the Founders analytics, so all three surfaces agree. The join
+  // also surfaces "Uncategorized" (blank videoType), so include it.
+  const TIMELOG_CATEGORIES = [...CONTENT_CATEGORIES, "Uncategorized"];
   const catStats = {};
-  CONTENT_CATEGORIES.forEach(cat => { catStats[cat] = {}; });
+  TIMELOG_CATEGORIES.forEach(cat => { catStats[cat] = {}; });
   Object.entries(allTimeLogs).forEach(([edId, dates]) => {
     if (!dates || typeof dates !== "object") return;
     Object.entries(dates).forEach(([date, tasks2]) => {
       if (!tasks2 || typeof tasks2 !== "object") return;
       const parentTotals = {};
       Object.entries(tasks2).forEach(([tid, val]) => {
+        if (tid.startsWith("_")) return; // _running etc.
         const secs = typeof val === "number" ? val : (val?.secs || 0);
         if (secs <= 0) return;
-        const cat = typeof val === "object" ? (val?.category || "Other") : "Other";
         const pName = typeof val === "object" ? (val?.parentName || tid) : tid;
+        const cat = categoryForLog(tid, val, typeof val === "object" ? (val?.parentName || "") : "");
         const key = `${cat}|||${pName}|||${date}`;
         if (!parentTotals[key]) parentTotals[key] = { cat, secs: 0 };
         parentTotals[key].secs += secs;
@@ -705,7 +723,11 @@ function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeL
       });
     });
   });
-  const hasCatData = CONTENT_CATEGORIES.some(cat => Object.keys(catStats[cat]).length > 0);
+  // Render the known categories plus any extra ones found in the data (e.g. a
+  // legacy log's stored category string) — an unknown category must show up,
+  // not silently vanish from the section.
+  const renderCategories = [...TIMELOG_CATEGORIES, ...Object.keys(catStats).filter(c => !TIMELOG_CATEGORIES.includes(c))];
+  const hasCatData = renderCategories.some(cat => Object.keys(catStats[cat]).length > 0);
 
   return (
     <div>
@@ -775,7 +797,7 @@ function TimeLogsView({ allTimeLogs, editors, timeLogDate, setTimeLogDate, timeL
         <div style={{ marginTop: 32 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: "var(--fg)", marginBottom: 16 }}>Average Time by Content Type</div>
           <div style={{ display: "grid", gap: 16 }}>
-            {CONTENT_CATEGORIES.map(cat => {
+            {renderCategories.map(cat => {
               const editors2 = catStats[cat];
               const edEntries = Object.entries(editors2).filter(([_, v]) => v.count > 0);
               if (edEntries.length === 0) return null;
