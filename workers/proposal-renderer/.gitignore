@@ -1,0 +1,3 @@
+# Worker secrets + local artifacts
+.env
+out/

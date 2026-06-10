@@ -1,0 +1,13 @@
+{
+  "_comment": "Approved stats for proposals. The worker's Claude prompt may ONLY use these claims (never invent numbers) and must respect context so a stat never lands as proof for an unrelated promise. The Proof slide itself is fixed in the template; these are for cover stats and brief copy.",
+  "lastReviewed": "2026-06-10",
+  "claims": [
+    { "id": "videos-1642",    "claim": "1,642+ videos produced",                  "source": "internal production count",        "context": "general capability" },
+    { "id": "views-18m",      "claim": "18.7M+ views delivered",                  "source": "aggregate client analytics",       "context": "general reach" },
+    { "id": "industries-24",  "claim": "24+ industries trusted",                  "source": "client roster",                    "context": "general breadth" },
+    { "id": "reviews-61",     "claim": "61 five-star Google reviews",             "source": "Google Business profile",          "context": "trust / service quality" },
+    { "id": "ticketing-300k", "claim": "$300k in 24 hours from one video",        "source": "ticketing client case study",      "context": "conversion-led campaigns only" },
+    { "id": "form-lift-75",   "claim": "75% lift in website form submissions",    "source": "client case study",                "context": "lead-gen content engines" },
+    { "id": "engagement-300", "claim": "300% engagement lift from one shoot day", "source": "social retainer case study",       "context": "organic social programs" }
+  ]
+}
