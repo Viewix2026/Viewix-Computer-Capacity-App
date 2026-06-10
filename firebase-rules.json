@@ -192,6 +192,16 @@
       }
     },
 
+    "votwComments": {
+      ".read": "auth != null && auth.token.role != null",
+      "$videoKey": {
+        "$commentId": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && (data.exists() ? data.child('uid').val() === auth.uid : true)",
+          ".validate": "newData.hasChildren(['uid','name','text','ts']) && newData.child('uid').val() === auth.uid && newData.child('name').isString() && newData.child('text').isString() && newData.child('text').val().length >= 1 && newData.child('text').val().length <= 2000 && newData.child('ts').isNumber()"
+        }
+      }
+    },
+
     "socialSchedule": { ".read": false, ".write": false },
     "zernio":         { ".read": false, ".write": false },
     "socialAssets":   { ".read": false, ".write": false }

@@ -21,7 +21,9 @@ const PALETTE = ["🎉", "😍", "🔥", "❤️", "👏", "👍", "🙌", "💯
 
 // Deterministic, RTDB-key-safe id from the video URL (djb2 → base36).
 // Emojis are valid RTDB keys; URLs are not (they contain . / # $ [ ]).
-function videoKeyFromUrl(url) {
+// Exported — VotwComments keys its threads off the same hash so comments
+// and reactions roll over together when a new video is posted.
+export function videoKeyFromUrl(url) {
   const s = String(url || "");
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
