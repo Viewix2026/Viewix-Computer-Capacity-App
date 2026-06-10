@@ -1,0 +1,32 @@
+{
+  "client": { "name": "Transgrid" },
+  "project": { "name": "Apprentice Program", "titleHtml": "Apprentice<br>Program" },
+  "proposal": { "date": "June 2026" },
+  "lookVariant": "strip",
+  "nextSteps": { "tagline": "From best-kept secret to industry magnet" },
+  "cover": {
+    "promise": "A year-round content engine that makes the apprentice program the clearest reason skilled trades choose Transgrid."
+  },
+  "approach": {
+    "intro": "Together they shift the apprentice program from an untold story to a continuous narrative, the program the best apprentices in the country want to join, and clear proof that Transgrid invests in the people who keep the lights on."
+  },
+  "brief": {
+    "para1": "Transgrid runs an apprentice and trainee intake across its network sites, but the work rarely gets captured. Today the program is one of the best-kept secrets in the industry.",
+    "para2": "They want year-round content that shows the scale of the network and the people behind it, used across recruitment, careers pages and community engagement, so the program becomes the obvious choice for skilled trades.",
+    "success": [
+      { "title": "Captured all year", "desc": "A steady stream of content, not a single annual shoot." },
+      { "title": "Recruitment-ready", "desc": "Built for careers pages, job ads and site visits." },
+      { "title": "Industry standout", "desc": "The program the best apprentices want to join." }
+    ]
+  },
+  "concepts": [
+    { "lbl": "Hero film", "title": "Hero Film", "channel": "Careers page · Recruitment", "desc": "One flagship story of what the apprentice program is and why it matters.", "ref": "BMD · Aerowest" },
+    { "lbl": "Journey", "title": "The Apprentice Journey", "channel": "Social · Recruitment", "desc": "Follow apprentices across the program, on real network sites with real mentors.", "ref": "Prosple · Profiles" },
+    { "lbl": "On the tools", "title": "On the Tools", "channel": "Site · Community", "desc": "Show the scale of the network and the hands-on work that keeps the lights on.", "ref": "Transgrid · Wallgrove" }
+  ],
+  "tier": {
+    "1": { "name": "Standard", "price": "$24,000", "bestFor": "A focused first campaign." },
+    "2": { "name": "Signature", "price": "$39,000", "bestFor": "The full brief, recruitment-ready." },
+    "3": { "name": "Flagship", "price": "$58,000", "bestFor": "An always-on content programme." }
+  }
+}

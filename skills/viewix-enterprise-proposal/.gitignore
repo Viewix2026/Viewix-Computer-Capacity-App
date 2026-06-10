@@ -1,0 +1,5 @@
+# Generated render artifacts — never commit client PDFs or QA screenshots
+out/
+# Transient render/preview files produced by generate.mjs --keep or previews
+template/.render.tmp.html
+template/preview-*.html
