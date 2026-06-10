@@ -421,6 +421,84 @@ export function isUniqueConflict(e) {
     || m.includes("not unique") || m.includes("value_already_exists");
 }
 
+// ─── Rejected-payload capture + alert throttle ──────────────────────────────
+// A reject with no contact_id never reaches the attempts log (it's keyed by
+// contact id), which left us blind during the 2026-06-10 reject storm: ~70
+// authenticated payloads with no contact fields, zero captures, and a Slack
+// ping per request. Capture every reject — secret redacted — under its own
+// node with enough request metadata (UA, forwarded IP) to tell a GHL workflow
+// from a replayed leaked secret, and gate the alert to one per window.
+const REJECT_CAPTURE_PATH = "/ghlLeadSync/rejected";
+const REJECT_ALERT_GATE_PATH = "/ghlLeadSync/rejectAlertGate";
+const REJECT_ALERT_WINDOW_MS = 15 * 60 * 1000;
+
+// Deep-copy with every key containing "secret" masked, so a captured payload
+// can never re-leak the webhook secret into RTDB.
+export function redactSecrets(value, depth = 0) {
+  if (value == null || typeof value !== "object") return value;
+  if (depth >= 4) return "[truncated]";
+  if (Array.isArray(value)) return value.map(v => redactSecrets(v, depth + 1));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = /secret/i.test(k) ? "[redacted]" : redactSecrets(v, depth + 1);
+  }
+  return out;
+}
+
+// Best-effort: the 422 response must never block on (or fail because of) the
+// capture. Payload is stored as a JSON string — GHL keys survey answers by
+// free-text question label, which can contain RTDB-illegal key characters.
+async function captureRejectedPayload(req, missing) {
+  const { err } = getAdmin();
+  if (err) return null;
+  const key = `${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+  const h = req.headers || {};
+  try {
+    await adminSet(`${REJECT_CAPTURE_PATH}/${key}`, {
+      receivedAt: new Date().toISOString(),
+      missing,
+      payloadJson: JSON.stringify(redactSecrets(req.body)).slice(0, 50000),
+      meta: {
+        userAgent: h["user-agent"] || null,
+        contentType: h["content-type"] || null,
+        forwardedFor: h["x-forwarded-for"] || null,
+        realIp: h["x-real-ip"] || null,
+        country: h["x-vercel-ip-country"] || null,
+        city: h["x-vercel-ip-city"] || null,
+      },
+    });
+    return key;
+  } catch (e) {
+    console.error("ghl-lead-webhook: reject capture failed:", e.message);
+    return null;
+  }
+}
+
+// One Slack ping per window; rejects inside the window are counted and rolled
+// into the next alert. Fail-open — if the gate infra is down we'd rather
+// double-ping than go silent on real rejects. The updater never returns
+// undefined, so the SDK's cold-cache null first run just re-runs with server
+// data (the sync-shoot-calendar go-live caveat doesn't bite here).
+async function rejectAlertGate() {
+  const { err } = getAdmin();
+  if (err) return { send: true, rolledUp: 0 };
+  try {
+    const tx = await runRtdbTransaction(REJECT_ALERT_GATE_PATH, (cur) => {
+      const now = Date.now();
+      if (cur && cur.ts && now - cur.ts < REJECT_ALERT_WINDOW_MS) {
+        return { ...cur, suppressed: (cur.suppressed || 0) + 1 };
+      }
+      return { ts: now, suppressed: 0, lastWindowSuppressed: (cur && cur.suppressed) || 0 };
+    });
+    if (!tx.committed || !tx.snapshot) return { send: true, rolledUp: 0 };
+    if (tx.snapshot.suppressed > 0) return { send: false, rolledUp: tx.snapshot.suppressed };
+    return { send: true, rolledUp: tx.snapshot.lastWindowSuppressed || 0 };
+  } catch (e) {
+    console.error("ghl-lead-webhook: reject alert gate failed:", e.message);
+    return { send: true, rolledUp: 0 };
+  }
+}
+
 // ─── Slack alerts ────────────────────────────────────────────────────────────
 async function slackAlert(text) {
   if (!SLACK_CHANNEL || !SLACK_TOKEN) return;
@@ -498,11 +576,21 @@ export default async function handler(req, res) {
   if (!contactId) missing.push("contact_id");
   if (!email) missing.push("email");
   if (missing.length) {
-    await slackAlert(
-      `🚨 GHL→Attio lead rejected — missing required field(s): *${missing.join(", ")}*\n`
-      + `Email: ${email || "—"} · Contact ID: ${contactId || "—"}\n`
-      + `_Check the GHL workflow webhook (secret/contact mapping)._`,
-    );
+    // Capture FIRST so the evidence exists even if Slack is down; then let the
+    // gate decide whether this reject gets a ping or rolls into the next one.
+    const captureKey = await captureRejectedPayload(req, missing);
+    const gate = await rejectAlertGate();
+    if (gate.send) {
+      const ua = req.headers?.["user-agent"] || "unknown UA";
+      const ip = req.headers?.["x-forwarded-for"] || req.headers?.["x-real-ip"] || "unknown IP";
+      await slackAlert(
+        `🚨 GHL→Attio lead rejected — missing required field(s): *${missing.join(", ")}*\n`
+        + `Email: ${email || "—"} · Contact ID: ${contactId || "—"} · From: ${ip} · ${ua}\n`
+        + `Payload: \`ghlLeadSync/rejected/${captureKey || "(capture failed)"}\``
+        + (gate.rolledUp ? ` · ${gate.rolledUp} more reject(s) in the last 15 min` : "") + `\n`
+        + `_Check the GHL workflow webhook (secret/contact mapping). Alerts throttled to 1 per 15 min._`,
+      );
+    }
     if (contactId) await writeLog(contactId, {
       contactId, status: "rejected", reason: `missing: ${missing.join(",")}`,
       payload: req.body, updatedAt: new Date().toISOString(),

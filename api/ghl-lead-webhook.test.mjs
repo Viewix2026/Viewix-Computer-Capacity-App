@@ -14,7 +14,7 @@ process.env.ATTIO_API_KEY = "test-attio-key";
 
 const mod = await import("./ghl-lead-webhook.js");
 const handler = mod.default;
-const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName, buildDealInfo } = mod;
+const { isUniqueConflict, validStage, isForwardStage, flattenGhlBody, splitName, buildDealInfo, redactSecrets } = mod;
 
 function mockRes() {
   return {
@@ -190,4 +190,30 @@ test("STEP 1 refire (no/Lead stage) never advances an existing deal", () => {
   assert.equal(isForwardStage("Lead", validStage(undefined)), false); // null requested
   assert.equal(isForwardStage("Lead", "Lead"), false);
   assert.equal(isForwardStage("Meeting Booked", "Lead"), false);
+});
+
+test("redactSecrets: masks secret keys at top level and nested, preserves everything else", () => {
+  const out = redactSecrets({
+    contact_id: "c1",
+    email: "a@b.com",
+    secret: "topsecret",
+    customData: { secret: "nested", stage: "Lead" },
+    "x-ghl-secret": "headerish",
+    answers: ["keep", { Secret: "cased" }],
+  });
+  assert.equal(out.secret, "[redacted]");
+  assert.equal(out.customData.secret, "[redacted]");
+  assert.equal(out["x-ghl-secret"], "[redacted]");
+  assert.equal(out.answers[1].Secret, "[redacted]");
+  assert.equal(out.contact_id, "c1");
+  assert.equal(out.customData.stage, "Lead");
+  assert.equal(out.answers[0], "keep");
+});
+
+test("redactSecrets: non-objects pass through, deep nesting truncates instead of recursing forever", () => {
+  assert.equal(redactSecrets(null), null);
+  assert.equal(redactSecrets("str"), "str");
+  assert.equal(redactSecrets(42), 42);
+  const deep = { a: { b: { c: { d: { e: { f: 1 } } } } } };
+  assert.equal(redactSecrets(deep).a.b.c.d, "[truncated]");
 });
