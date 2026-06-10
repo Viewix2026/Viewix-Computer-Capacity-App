@@ -43,10 +43,16 @@ function detectEmbed(url) {
     };
   }
 
-  // Frame.io — share URLs (app.frame.io/presentations/... or f.io/... or custom subdomain)
+  // Frame.io — share URLs (app.frame.io/presentations/..., next.frame.io,
+  // f.io short links, or custom subdomains). Match on the parsed hostname:
+  // the old regex required a dot (or start-of-string) before "f.io/", which
+  // never matches "https://f.io/..." — the char before the host is "/" —
+  // so every short link fell through to the plain-link card.
   // Frame.io serves X-Frame-Options that sometimes block iframe, but in practice
   // share-view URLs embed fine. Try it; fall back to a link if the iframe errors.
-  if (/(^|\.)frame\.io\//.test(u) || /(^|\.)f\.io\//.test(u)) {
+  let host = "";
+  try { host = new URL(/^https?:\/\//.test(u) ? u : `https://${u}`).hostname; } catch { /* not a URL */ }
+  if (/(^|\.)frame\.io$/.test(host) || host === "f.io") {
     return { kind: "frameio", embedUrl: u, aspect: "16 / 9" };
   }
 
