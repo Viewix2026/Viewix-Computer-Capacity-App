@@ -33,6 +33,7 @@ import { useSalesSync } from "./sync/useSalesSync";
 import { useProjectsSync } from "./sync/useProjectsSync";
 import { useCalendarSyncQueue } from "./sync/useCalendarSyncQueue";
 import { isAdminRole, isFounderRole, normalizeRole } from "./lib/roles";
+import { useStaleBundleReload } from "./lib/useStaleBundleReload";
 
 // Lazy imports — heavy tab components only mount when their tool is
 // active. Cuts the initial JS payload roughly in half.
@@ -74,6 +75,12 @@ export default function App(){
   const[allTimeLogs,setAllTimeLogs]=useState({});
   const[resourceTab,setResourceTab]=useState("roas");
   const[saleTab,setSaleTab]=useState("payment");
+
+  // Stale-bundle detector — reloads weeks-old tabs onto the current
+  // deploy at safe moments (hidden tab, return-to-tab, tool change).
+  // Runs above the public-view early returns on purpose: share pages
+  // (/d/, /p/, /s/, /r/, /clients/) get the same freshness guarantee.
+  useStaleBundleReload(tool);
 
   // ─── Hash-based deep-linking ───────────────────────────────────────
   // Format: #<tool>[/<subTab>][/<recordId>]
