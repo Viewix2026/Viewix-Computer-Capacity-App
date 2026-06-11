@@ -78,7 +78,11 @@ async function fbPatch(path, data) {
 }
 
 // ─── Claude helper (copy from api/preproduction.js) ───
-async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessage, maxTokens = 8000, apiKey }) {
+// withMeta: true returns { text, stopReason } instead of the bare string.
+// stopReason === "max_tokens" means the response was cut off mid-output —
+// callers that parse JSON out of the text need to know that BEFORE
+// JSON.parse fails with a useless "Unterminated string" error.
+async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessage, maxTokens = 8000, apiKey, withMeta = false }) {
   const resp = await fetch(ANTHROPIC_API, {
     method: "POST",
     headers: {
@@ -98,7 +102,9 @@ async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessa
     throw new Error(`Anthropic API error ${resp.status}: ${err}`);
   }
   const data = await resp.json();
-  return data.content?.[0]?.text || "";
+  const text = data.content?.[0]?.text || "";
+  if (withMeta) return { text, stopReason: data.stop_reason || null };
+  return text;
 }
 
 function parseJSON(raw) {
@@ -1426,19 +1432,21 @@ async function handleGenerateScript(req, res) {
   // Opus is slower than Sonnet, so batch size is small to keep any
   // single Claude call under Vercel's 300s function ceiling. Multiple
   // batches run as parallel calls so total wall-clock stays bounded
-  // by the SLOWEST batch (not their sum). 24 ticked ideas → 4 batches
-  // in parallel ≈ same wall-clock as 6 ideas alone, just burns more
-  // concurrent tokens.
+  // by the SLOWEST batch (not their sum), just burns more concurrent
+  // tokens.
   //
-  // BATCH_SIZE = 6 and SCRIPT_MAX_TOKENS = 12000 give every row room
-  // to breathe (~2000 tokens per row). Earlier 8/6000 cut a script
-  // off mid-scriptNotes string when a particularly rich row used
-  // >700 tokens; the JSON parse then failed for the whole batch. Per-
-  // cell polish (rewriteScriptSection / Row) keeps its own model
-  // setting downstream.
+  // BATCH_SIZE = 4 against SCRIPT_MAX_TOKENS = 12000 leaves ~50%
+  // output headroom at the observed ~2000 tokens per row. History:
+  // 8/6000 truncated rich rows, then 6/12000 truncated again on the
+  // Rivkin brief (6 × 2000 = the cap exactly — zero headroom). Raising
+  // the cap alone keeps losing this race, and a non-streaming call
+  // can't go much past ~16k anyway, so generateBatchRows below also
+  // detects truncation via stop_reason and splits-and-retries the
+  // affected batch. Per-cell polish (rewriteScriptSection / Row)
+  // keeps its own model setting downstream.
   const SCRIPT_MODEL = "claude-opus-4-6";
   const SCRIPT_MAX_TOKENS = 12000;
-  const BATCH_SIZE = 6;
+  const BATCH_SIZE = 4;
 
   const batches = chunkSelectedFormatsForScripting(selectedFormatObjects, BATCH_SIZE);
 
@@ -1460,35 +1468,59 @@ async function handleGenerateScript(req, res) {
     });
   }
 
-  let allRows;
-  try {
-    const responses = await Promise.all(batches.map(batch => {
-      const userMessage = buildScriptUserMessage({ project, selectedFormatObjects: batch, fantasticExample, sherpaBlock });
-      return callClaude({
-        model: SCRIPT_MODEL,
-        systemPrompt,
-        userMessage,
-        maxTokens: SCRIPT_MAX_TOKENS,
-        apiKey: ANTHROPIC_KEY,
-      });
-    }));
+  // Rows a batch will generate — ticked ideas when present, legacy
+  // _videoCount otherwise. Drives the split-and-retry maths below.
+  const batchRowCount = (batch) => batch.reduce((n, f) =>
+    n + (Array.isArray(f._tickedIdeas) ? f._tickedIdeas.length : Math.max(1, f._videoCount || 1)), 0);
 
-    allRows = [];
-    for (let i = 0; i < responses.length; i++) {
-      let parsed;
+  // Generate one batch's rows. If Claude's response hits the output
+  // ceiling (stop_reason === "max_tokens") or arrives as unparseable
+  // JSON — the visible symptom of the same truncation — split the
+  // batch in half and retry both halves in parallel. Halving the batch
+  // halves the output size, so one split normally clears it; recursion
+  // bottoms out at single-row batches (and at legacy whole-format
+  // entries the chunker can't split, where re-chunking returns one
+  // batch and we fall through to the throw).
+  const generateBatchRows = async (batch, depth = 0) => {
+    const userMessage = buildScriptUserMessage({ project, selectedFormatObjects: batch, fantasticExample, sherpaBlock });
+    const { text, stopReason } = await callClaude({
+      model: SCRIPT_MODEL,
+      systemPrompt,
+      userMessage,
+      maxTokens: SCRIPT_MAX_TOKENS,
+      apiKey: ANTHROPIC_KEY,
+      withMeta: true,
+    });
+
+    const truncated = stopReason === "max_tokens";
+    let parseErr = null;
+    if (!truncated) {
       try {
-        parsed = parseJSON(responses[i]);
+        const parsed = parseJSON(text);
+        return Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [];
       } catch (e) {
-        return res.status(422).json({
-          error: `Claude returned invalid JSON for batch ${i + 1} of ${batches.length}`,
-          detail: e.message,
-          rawPreview: responses[i].slice(0, 500),
-        });
-      }
-      if (Array.isArray(parsed.scriptTable)) {
-        allRows.push(...parsed.scriptTable);
+        parseErr = e;
       }
     }
+
+    const rowCount = batchRowCount(batch);
+    const subBatches = (rowCount > 1 && depth < 3)
+      ? chunkSelectedFormatsForScripting(batch, Math.ceil(rowCount / 2))
+      : [];
+    if (subBatches.length > 1) {
+      console.warn(`[generateScript] ${rowCount}-row batch ${truncated ? "hit the output-token ceiling" : `returned invalid JSON (${parseErr?.message})`} — splitting into ${subBatches.length} and retrying`);
+      const sub = await Promise.all(subBatches.map(b => generateBatchRows(b, depth + 1)));
+      return sub.flat();
+    }
+    throw new Error(truncated
+      ? `a ${rowCount}-row batch overran the ${SCRIPT_MAX_TOKENS}-token output ceiling even after splitting — untick an idea or two and regenerate`
+      : `Claude returned invalid JSON for a ${rowCount}-row batch — ${parseErr?.message}`);
+  };
+
+  let allRows;
+  try {
+    const rowsPerBatch = await Promise.all(batches.map(b => generateBatchRows(b)));
+    allRows = rowsPerBatch.flat();
     // Renumber video rows sequentially across batches — each batch
     // numbers its own scriptTable starting from 1, so without this
     // a 24-idea generation would produce 1,2,...,12,1,2,...,12.
@@ -1503,7 +1535,7 @@ async function handleGenerateScript(req, res) {
       if (!row.reviewId) row.reviewId = `rv_${crypto.randomBytes(6).toString("hex")}`;
     });
   } catch (e) {
-    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+    return res.status(502).json({ error: "Brief generation failed", detail: e.message });
   }
   const parsed = { scriptTable: allRows };
 
