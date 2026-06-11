@@ -37,7 +37,6 @@ import {
   createShootEvent,
   updateShootEvent,
   deleteShootEvent,
-  getEventById,
 } from "./_google-calendar.js";
 
 export const config = { maxDuration: 60 };
@@ -289,15 +288,24 @@ async function processQueueEntry(entry) {
   } catch (e) {
     const status = e?.code || e?.response?.status;
     if (status === 409) {
-      const ev = await getEventById({ eventId: desiredEventId });
+      // The deterministic id already exists. Two ways to get here: a
+      // previous partial run inserted the event (replay), or the event
+      // was deleted and Google kept it as a "cancelled" TOMBSTONE —
+      // insert with the same id 409s forever after that. Adopting the
+      // event as-is (the old behaviour) silently adopted the
+      // tombstone: the dashboard stamped success while the calendar
+      // showed nothing (gemIQ / Picup Media, 2026-06-10). Patch the
+      // full payload instead — it carries status:"confirmed", which
+      // revives a tombstone and is a no-op on a live event.
+      const result = await updateShootEvent({ eventId: desiredEventId, project, subtask, attendees });
       await adminPatch(subtaskPath, {
-        calendarEventId: ev.id,
-        calendarEventHtmlLink: ev.htmlLink,
+        calendarEventId: result.id,
+        calendarEventHtmlLink: result.htmlLink,
         calendarSyncError: null,
         calendarSyncErrorCount: 0,
         lastCalendarSyncedAt: new Date().toISOString(),
       });
-      return "created-idempotent";
+      return "revived-idempotent";
     }
     throw e;
   }
