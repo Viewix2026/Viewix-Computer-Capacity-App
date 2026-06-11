@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -18,6 +19,12 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 700,
     rollupOptions: {
+      // Multi-page build: the dashboard SPA plus the standalone
+      // viewixreviews.com.au page (host-routed in vercel.json).
+      input: {
+        index: fileURLToPath(new URL('./index.html', import.meta.url)),
+        reviews: fileURLToPath(new URL('./reviews.html', import.meta.url)),
+      },
       output: {
         manualChunks(id) {
           if (id.includes("node_modules")) {
