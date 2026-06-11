@@ -80,6 +80,14 @@ export function buildEventPayload({ project, subtask, attendees, eventId }) {
     start: { dateTime: start, timeZone: "Australia/Sydney" },
     end: { dateTime: end, timeZone: "Australia/Sydney" },
     attendees,
+    // Google soft-deletes events into "cancelled" tombstones, and a
+    // patch does NOT resurrect one unless the body explicitly flips
+    // status back. Without this line, re-syncing a shoot whose event
+    // had been deleted/unscheduled "succeeded" (200) while the event
+    // stayed invisible — the gemIQ/Picup Media bug (2026-06-10): the
+    // dashboard stamped lastCalendarSyncedAt, the pill said "On
+    // calendar", and the calendar showed nothing.
+    status: "confirmed",
     reminders: { useDefault: true },
     // Attendees can SEE each other (client + crew) — Jeremy's call
     // 2026-05-27: crew addresses are work emails from the team
