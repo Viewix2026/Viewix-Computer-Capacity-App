@@ -21,6 +21,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { processApifyRun } from "./_apifyProcess.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { parseIgHandle, igHandleProblemText, splitCompetitorsByValidity, describeBadHandles } from "../shared/igHandle.js";
 import { loadSherpaContext, buildSherpaPromptBlock } from "./_sherpa.js";
 import crypto from "crypto";
 
@@ -272,10 +273,21 @@ function computeHandleStatsAndScore(posts) {
 // keep them in sync if the rule changes.
 const MIN_FOLLOWERS_FOR_VERIFIED = 200;
 async function apifyVerifyHandlesSync({ handles, token }) {
-  const usernames = (handles || [])
-    .map(h => String(h || "").replace(/^@/, "").trim().toLowerCase())
-    .filter(Boolean);
-  if (usernames.length === 0) return [];
+  // Inputs that aren't Instagram profiles at all (reel permalinks,
+  // TikTok links, free text) fail verification immediately — no point
+  // asking Apify about a username that doesn't exist in the input. The
+  // original string is preserved as the record's handle so callers can
+  // still match results 1:1 against what they sent.
+  const usernames = [];
+  const unparseable = [];
+  for (const h of handles || []) {
+    const parsed = parseIgHandle(h);
+    if (parsed.handle) usernames.push(parsed.handle.slice(1));
+    else if (String(h || "").trim()) {
+      unparseable.push({ handle: String(h).trim(), verified: false, verifyMeta: { reason: parsed.reason } });
+    }
+  }
+  if (usernames.length === 0) return unparseable;
   const url = `https://api.apify.com/v2/acts/${APIFY_IG_PROFILE_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`;
   let items = [];
   try {
@@ -289,13 +301,13 @@ async function apifyVerifyHandlesSync({ handles, token }) {
       // Return empty so the caller can degrade gracefully (e.g. flag
       // every handle as unverified rather than block the whole flow).
       console.warn(`[apifyVerifyHandlesSync] Apify ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
-      return usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } }));
+      return [...usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } })), ...unparseable];
     }
     const json = await resp.json();
     items = Array.isArray(json) ? json : [];
   } catch (e) {
     console.warn(`[apifyVerifyHandlesSync] fetch failed:`, e.message);
-    return usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } }));
+    return [...usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } })), ...unparseable];
   }
   const profileByUsername = new Map();
   for (const item of items) {
@@ -308,7 +320,7 @@ async function apifyVerifyHandlesSync({ handles, token }) {
       fullName: item.fullName || "",
     });
   }
-  return usernames.map(u => {
+  return [...unparseable, ...usernames.map(u => {
     const profile = profileByUsername.get(u);
     if (!profile) return { handle: `@${u}`, verified: false, verifyMeta: { reason: "profile_not_found" } };
     const passes = profile.followers >= MIN_FOLLOWERS_FOR_VERIFIED
@@ -329,13 +341,20 @@ async function apifyVerifyHandlesSync({ handles, token }) {
         reason,
       },
     };
-  });
+  })];
 }
 
 // Call Apify synchronously (up to 5 min) and return the dataset items directly.
 // Docs: POST /v2/acts/:actorId/run-sync-get-dataset-items?token=...
 async function apifyScrape({ handles, postsPerHandle, from, to, token }) {
-  const directUrls = handles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  // Refuse to build a directUrl from anything that isn't a profile —
+  // a pasted reel link / TikTok URL would otherwise become
+  // https://www.instagram.com/https:…/ and fail Apify's input regex.
+  const directUrls = handles.map(h => {
+    const parsed = parseIgHandle(h);
+    if (!parsed.handle) throw new Error(`"${h}" isn't an Instagram profile — ${igHandleProblemText(parsed.reason)}`);
+    return `https://www.instagram.com/${parsed.handle.slice(1)}/`;
+  });
   const input = {
     directUrls,
     resultsType: "posts",
@@ -2128,8 +2147,14 @@ async function handleStartClientScrape(req, res) {
   const { projectId, handle } = req.body || {};
   if (!projectId || !handle) return res.status(400).json({ error: "Missing projectId or handle" });
 
-  const cleanHandle = handle.replace(/^@+/, "").trim();
-  if (!cleanHandle) return res.status(400).json({ error: "Invalid handle" });
+  // Accepts @name, bare name, or a pasted profile URL — anything else
+  // (reel links, TikTok, free text) is rejected here with a usable
+  // message instead of becoming a garbage Apify directUrl.
+  const parsedHandle = parseIgHandle(handle);
+  if (!parsedHandle.handle) {
+    return res.status(400).json({ error: `Invalid handle: ${igHandleProblemText(parsedHandle.reason)}` });
+  }
+  const cleanHandle = parsedHandle.handle.slice(1);
 
   // Mark the bundle as running immediately so the UI can render spinners
   // without waiting for Apify's first webhook.
@@ -2204,12 +2229,30 @@ async function handleStartCompetitorScrape(req, res) {
 
   const research = project.research || {};
   const competitors = Array.isArray(research.competitors) ? research.competitors : [];
-  const handles = competitors.map(c => c.handle).filter(Boolean);
-  if (handles.length === 0) {
+
+  // Chips can hold anything a producer pasted (profile URLs, reel
+  // permalinks, TikTok links). Salvage what contains a real username,
+  // reject the rest BEFORE touching Apify — its directUrls regex would
+  // bounce the whole run with an unreadable 400 otherwise.
+  const { cleaned, bad } = splitCompetitorsByValidity(competitors);
+  if (bad.length > 0) {
+    return res.status(400).json({
+      error: `${bad.length} competitor ${bad.length === 1 ? "entry isn't an Instagram profile" : "entries aren't Instagram profiles"} — remove or re-add ${bad.length === 1 ? "it" : "them"} as @handles`,
+      detail: describeBadHandles(bad),
+    });
+  }
+  if (cleaned.length === 0) {
     return res.status(400).json({ error: "No competitor handles to scrape" });
   }
 
-  const directUrls = handles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  // Persist the normalised chips (pasted profile URLs → @handles) so
+  // the UI reflects exactly what's being scraped.
+  if (JSON.stringify(cleaned) !== JSON.stringify(competitors)) {
+    await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, cleaned);
+  }
+
+  const handles = cleaned.map(c => c.handle);
+  const directUrls = handles.map(h => `https://www.instagram.com/${h.slice(1)}/`);
   // ~120 videos across N handles → 120 / N rounded. Cap at 50 per handle
   // (apify-side ceiling) and at least 10.
   const perHandle = Math.min(50, Math.max(10, Math.round(120 / handles.length)));
@@ -2287,14 +2330,24 @@ async function handleAppendCompetitorScrape(req, res) {
   // to all existing handles — that's the "↻ Refresh widens" path.
   let scrapeHandles;
   if (Array.isArray(bodyHandles) && bodyHandles.length > 0) {
-    const cleaned = bodyHandles.map(h => (h || "").toString().trim().replace(/^@/, "")).filter(Boolean);
+    // Normalise whatever the producer typed/pasted (bare names, @names,
+    // profile URLs). Anything with no Instagram username in it (reel
+    // permalinks, TikTok links) rejects the whole request with a
+    // per-entry explanation.
+    const { cleaned, bad } = splitCompetitorsByValidity(bodyHandles.map(h => ({ handle: h })));
+    if (bad.length > 0) {
+      return res.status(400).json({
+        error: `${bad.length} of the handles ${bad.length === 1 ? "isn't an Instagram profile" : "aren't Instagram profiles"}`,
+        detail: describeBadHandles(bad),
+      });
+    }
+    if (cleaned.length === 0) return res.status(400).json({ error: "No handles to scrape" });
     const safeTag = tag === "inspiration" ? "inspiration" : "direct";
     const nextCompetitors = [...existingCompetitors];
-    for (const h of cleaned) {
-      const handleKey = `@${h.toLowerCase()}`;
-      if (!nextCompetitors.some(c => (c.handle || "").toLowerCase() === handleKey)) {
+    for (const { handle } of cleaned) {
+      if (!nextCompetitors.some(c => (c.handle || "").toLowerCase() === handle)) {
         nextCompetitors.push({
-          handle: `@${h}`,
+          handle,
           tag: safeTag,
           source: "manual",
           verified: null,
@@ -2304,16 +2357,25 @@ async function handleAppendCompetitorScrape(req, res) {
     if (nextCompetitors.length !== existingCompetitors.length) {
       await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, nextCompetitors);
     }
-    scrapeHandles = cleaned.map(h => `@${h}`);
+    scrapeHandles = cleaned.map(c => c.handle);
   } else {
-    scrapeHandles = existingCompetitors.map(c => c.handle).filter(Boolean);
+    // Refresh path re-scrapes the stored chips — they must all be
+    // valid profiles too (older projects can hold pasted-URL chips).
+    const { cleaned, bad } = splitCompetitorsByValidity(existingCompetitors);
+    if (bad.length > 0) {
+      return res.status(400).json({
+        error: `${bad.length} competitor ${bad.length === 1 ? "entry isn't an Instagram profile" : "entries aren't Instagram profiles"} — remove or re-add ${bad.length === 1 ? "it" : "them"} as @handles`,
+        detail: describeBadHandles(bad),
+      });
+    }
+    scrapeHandles = cleaned.map(c => c.handle);
   }
 
   if (scrapeHandles.length === 0) {
     return res.status(400).json({ error: "No handles to scrape" });
   }
 
-  const directUrls = scrapeHandles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  const directUrls = scrapeHandles.map(h => `https://www.instagram.com/${h.slice(1)}/`);
   const perHandle = Math.min(80, Math.max(20, resultsLimit || 60));
 
   // Mark the bundle running again. lastRefreshAt persists from the previous
@@ -2699,12 +2761,18 @@ Suggest competitor handles and keywords now.`;
   // or causes the chip to be dropped entirely.
   const claudeCompetitors = (parsed.competitors || [])
     .map(c => {
-      if (typeof c === "string") return { handle: c.startsWith("@") ? c : `@${c.replace(/^@+/, "")}`, tag: "direct", reason: "", source: "ai", verified: null };
-      const h = (c.handle || c.username || "").trim();
-      if (!h) return null;
+      // parseIgHandle also canonicalises URLs Claude occasionally emits
+      // ("https://www.instagram.com/x/" → "@x") and drops anything with
+      // no Instagram username in it (reel links, free text).
+      if (typeof c === "string") {
+        const p = parseIgHandle(c);
+        return p.handle ? { handle: p.handle, tag: "direct", reason: "", source: "ai", verified: null } : null;
+      }
+      const p = parseIgHandle(c.handle || c.username || "");
+      if (!p.handle) return null;
       const tag = c.tag === "inspiration" ? "inspiration" : "direct";
       return {
-        handle: h.startsWith("@") ? h : `@${h.replace(/^@+/, "")}`,
+        handle: p.handle,
         tag,
         reason: c.reason || "",
         source: "ai",
