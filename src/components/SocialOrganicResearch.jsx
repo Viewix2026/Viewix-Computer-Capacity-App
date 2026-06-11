@@ -17,6 +17,7 @@ import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewrite
 import { DescriptionField } from "./shared/DescriptionField";
 import { ReelPreview } from "./shared/ReelPreview";
 import { SherpaStatusRow } from "./shared/SherpaStatusRow";
+import { parseIgHandle, igHandleProblemText, splitCompetitorsByValidity, describeBadHandles } from "../../shared/igHandle.js";
 
 // Read a fetch Response as JSON, but fall back gracefully when the
 // body isn't actually JSON. Vercel timeout pages, gateway 502/504
@@ -96,15 +97,12 @@ function Badge({ text, colors }) {
   );
 }
 
-// Normalise whatever the user typed into a clean @handle
+// Normalise whatever the user typed into a clean @handle, or "" when the
+// input has no Instagram username in it (reel/post permalinks, TikTok
+// links, free text). Thin wrapper over the shared strict parser — the
+// old regex here turned instagram.com/reels/<code> into "@reels".
 function normaliseHandle(raw) {
-  if (!raw) return "";
-  let s = raw.trim();
-  // Strip full URLs
-  const urlMatch = s.match(/instagram\.com\/([^/?#]+)/i);
-  if (urlMatch) s = urlMatch[1];
-  s = s.replace(/^@+/, "").replace(/\/$/, "");
-  return s ? `@${s.toLowerCase()}` : "";
+  return parseIgHandle(raw).handle || "";
 }
 
 function formatDate(d) {
@@ -1313,9 +1311,11 @@ function TranscriptSection({ project, addCompetitor, addKeyword }) {
   };
 
   const acceptCompetitor = (s, idx) => {
-    const handle = s.handle || normaliseHandle(s.displayName);
+    // Transcript extraction can surface pasted links instead of handles —
+    // normalise both candidates so a reel/TikTok URL can't become a chip.
+    const handle = normaliseHandle(s.handle) || normaliseHandle(s.displayName);
     if (!handle) {
-      alert(`No handle for "${s.displayName}". Add it manually above.`);
+      alert(`No usable Instagram handle for "${s.displayName}". Add it manually above as @name or a profile URL.`);
       return;
     }
     addCompetitor(handle, "transcript", s.displayName);
@@ -1693,11 +1693,13 @@ function VideoReviewStep({ project, onPatch }) {
 
   const submitAddCompetitor = async () => {
     setAppendError(null);
-    const handles = addCompetitorHandles
-      .split(/[,\n]/)
-      .map(h => h.trim().replace(/^@/, ""))
-      .filter(Boolean);
-    if (handles.length === 0) { setAppendError("Add at least one handle."); return; }
+    const rawEntries = addCompetitorHandles.split(/[,\n]/).map(h => h.trim()).filter(Boolean);
+    if (rawEntries.length === 0) { setAppendError("Add at least one handle."); return; }
+    // Normalise pasted profile URLs to @handles; reject anything with no
+    // Instagram username in it before the API (and Apify) see it.
+    const { cleaned, bad } = splitCompetitorsByValidity(rawEntries.map(h => ({ handle: h })));
+    if (bad.length > 0) { setAppendError(describeBadHandles(bad)); return; }
+    const handles = cleaned.map(c => c.handle);
     setAppendBusy(true);
     try {
       const r = await authFetch("/api/social-organic", {
@@ -3797,11 +3799,22 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
   // typing the handle. Defaults to direct because that's the more common
   // case (producer adds someone they know is a competitor).
   const [newTag, setNewTag] = useState("direct");
+  // Inline error under the add-handle input — set when the pasted text
+  // has no Instagram username in it (reel/post link, TikTok, free text).
+  const [addHandleErr, setAddHandleErr] = useState(null);
 
   const addCompetitor = (handle, opts = {}) => {
-    const norm = handle.trim().startsWith("@") ? handle.trim() : `@${handle.trim().replace(/^@+/, "")}`;
-    if (!norm || norm === "@") return;
-    if (competitors.some(c => c.handle.toLowerCase() === norm.toLowerCase())) return;
+    // Accepts @name, bare name, or a pasted profile URL. Reel/post
+    // permalinks and TikTok links carry no username — rejecting them
+    // here is what keeps the Apify scrape input clean later.
+    const parsed = parseIgHandle(handle);
+    if (!parsed.handle) {
+      if (parsed.reason !== "empty") setAddHandleErr(igHandleProblemText(parsed.reason));
+      return false;   // keep the input so the producer sees what was rejected
+    }
+    setAddHandleErr(null);
+    const norm = parsed.handle;
+    if (competitors.some(c => c.handle.toLowerCase() === norm.toLowerCase())) return true;
     const entry = {
       handle: norm,
       source: opts.source || "manual",
@@ -3811,6 +3824,7 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
     const next = [...competitors, entry];
     setCompetitors(next);
     fbSet(`/preproduction/socialOrganic/${project.id}/research/competitors`, next);
+    return true;
   };
   const removeCompetitor = (handle) => {
     const next = competitors.filter(c => c.handle !== handle);
@@ -3867,6 +3881,14 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
 
   const approveStageB = async () => {
     if (competitors.length === 0) { setErr(e => ({ ...e, b: "Add at least one competitor" })); return; }
+    // Pre-flight: chips saved before this validation existed can hold
+    // pasted reel/TikTok links. Name them here instead of letting the
+    // API (or worse, Apify) bounce the run with a cryptic 400.
+    const { bad } = splitCompetitorsByValidity(competitors);
+    if (bad.length > 0) {
+      setErr(e => ({ ...e, b: `${bad.length} chip${bad.length === 1 ? " isn't" : "s aren't"} an Instagram profile — remove ${bad.length === 1 ? "it" : "them"} (×) or re-add as @handles: ${describeBadHandles(bad)}` }));
+      return;
+    }
     setStarting(s => ({ ...s, b: true }));
     setErr(e => ({ ...e, b: null }));
     try {
@@ -4096,12 +4118,17 @@ function ResearchStep({ project, linkedAccount, onPatch }) {
                   Inspiration
                 </button>
               </div>
-              <input type="text" value={newHandle} onChange={e => setNewHandle(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCompetitor(newHandle, { tag: newTag }); setNewHandle(""); } }}
-                placeholder="@handle — press Enter"
-                style={{ ...inputSt, fontSize: 12, flex: 1 }} />
-              <button onClick={() => { addCompetitor(newHandle, { tag: newTag }); setNewHandle(""); }} disabled={!newHandle.trim()}
+              <input type="text" value={newHandle} onChange={e => { setNewHandle(e.target.value); setAddHandleErr(null); }}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (addCompetitor(newHandle, { tag: newTag })) setNewHandle(""); } }}
+                placeholder="@handle or profile URL — press Enter"
+                style={{ ...inputSt, fontSize: 12, flex: 1, ...(addHandleErr ? { borderColor: "#EF4444" } : {}) }} />
+              <button onClick={() => { if (addCompetitor(newHandle, { tag: newTag })) setNewHandle(""); }} disabled={!newHandle.trim()}
                 style={{ ...btnSecondary, padding: "6px 14px", opacity: newHandle.trim() ? 1 : 0.5 }}>Add</button>
+            </div>
+          )}
+          {!stageBDone && addHandleErr && (
+            <div style={{ fontSize: 11, color: "#EF4444", marginTop: -8, marginBottom: 14 }}>
+              {addHandleErr}
             </div>
           )}
 

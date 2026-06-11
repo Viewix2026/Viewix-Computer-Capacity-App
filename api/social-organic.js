@@ -21,6 +21,7 @@
 import { adminGet, adminSet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { processApifyRun } from "./_apifyProcess.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
+import { parseIgHandle, igHandleProblemText, splitCompetitorsByValidity, describeBadHandles } from "../shared/igHandle.js";
 import { loadSherpaContext, buildSherpaPromptBlock } from "./_sherpa.js";
 import crypto from "crypto";
 
@@ -77,7 +78,11 @@ async function fbPatch(path, data) {
 }
 
 // ─── Claude helper (copy from api/preproduction.js) ───
-async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessage, maxTokens = 8000, apiKey }) {
+// withMeta: true returns { text, stopReason } instead of the bare string.
+// stopReason === "max_tokens" means the response was cut off mid-output —
+// callers that parse JSON out of the text need to know that BEFORE
+// JSON.parse fails with a useless "Unterminated string" error.
+async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessage, maxTokens = 8000, apiKey, withMeta = false }) {
   const resp = await fetch(ANTHROPIC_API, {
     method: "POST",
     headers: {
@@ -97,7 +102,9 @@ async function callClaude({ model = "claude-sonnet-4-6", systemPrompt, userMessa
     throw new Error(`Anthropic API error ${resp.status}: ${err}`);
   }
   const data = await resp.json();
-  return data.content?.[0]?.text || "";
+  const text = data.content?.[0]?.text || "";
+  if (withMeta) return { text, stopReason: data.stop_reason || null };
+  return text;
 }
 
 function parseJSON(raw) {
@@ -272,10 +279,21 @@ function computeHandleStatsAndScore(posts) {
 // keep them in sync if the rule changes.
 const MIN_FOLLOWERS_FOR_VERIFIED = 200;
 async function apifyVerifyHandlesSync({ handles, token }) {
-  const usernames = (handles || [])
-    .map(h => String(h || "").replace(/^@/, "").trim().toLowerCase())
-    .filter(Boolean);
-  if (usernames.length === 0) return [];
+  // Inputs that aren't Instagram profiles at all (reel permalinks,
+  // TikTok links, free text) fail verification immediately — no point
+  // asking Apify about a username that doesn't exist in the input. The
+  // original string is preserved as the record's handle so callers can
+  // still match results 1:1 against what they sent.
+  const usernames = [];
+  const unparseable = [];
+  for (const h of handles || []) {
+    const parsed = parseIgHandle(h);
+    if (parsed.handle) usernames.push(parsed.handle.slice(1));
+    else if (String(h || "").trim()) {
+      unparseable.push({ handle: String(h).trim(), verified: false, verifyMeta: { reason: parsed.reason } });
+    }
+  }
+  if (usernames.length === 0) return unparseable;
   const url = `https://api.apify.com/v2/acts/${APIFY_IG_PROFILE_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`;
   let items = [];
   try {
@@ -289,13 +307,13 @@ async function apifyVerifyHandlesSync({ handles, token }) {
       // Return empty so the caller can degrade gracefully (e.g. flag
       // every handle as unverified rather than block the whole flow).
       console.warn(`[apifyVerifyHandlesSync] Apify ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
-      return usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } }));
+      return [...usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } })), ...unparseable];
     }
     const json = await resp.json();
     items = Array.isArray(json) ? json : [];
   } catch (e) {
     console.warn(`[apifyVerifyHandlesSync] fetch failed:`, e.message);
-    return usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } }));
+    return [...usernames.map(u => ({ handle: `@${u}`, verified: false, verifyMeta: { reason: "verifier_unavailable" } })), ...unparseable];
   }
   const profileByUsername = new Map();
   for (const item of items) {
@@ -308,7 +326,7 @@ async function apifyVerifyHandlesSync({ handles, token }) {
       fullName: item.fullName || "",
     });
   }
-  return usernames.map(u => {
+  return [...unparseable, ...usernames.map(u => {
     const profile = profileByUsername.get(u);
     if (!profile) return { handle: `@${u}`, verified: false, verifyMeta: { reason: "profile_not_found" } };
     const passes = profile.followers >= MIN_FOLLOWERS_FOR_VERIFIED
@@ -329,13 +347,20 @@ async function apifyVerifyHandlesSync({ handles, token }) {
         reason,
       },
     };
-  });
+  })];
 }
 
 // Call Apify synchronously (up to 5 min) and return the dataset items directly.
 // Docs: POST /v2/acts/:actorId/run-sync-get-dataset-items?token=...
 async function apifyScrape({ handles, postsPerHandle, from, to, token }) {
-  const directUrls = handles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  // Refuse to build a directUrl from anything that isn't a profile —
+  // a pasted reel link / TikTok URL would otherwise become
+  // https://www.instagram.com/https:…/ and fail Apify's input regex.
+  const directUrls = handles.map(h => {
+    const parsed = parseIgHandle(h);
+    if (!parsed.handle) throw new Error(`"${h}" isn't an Instagram profile — ${igHandleProblemText(parsed.reason)}`);
+    return `https://www.instagram.com/${parsed.handle.slice(1)}/`;
+  });
   const input = {
     directUrls,
     resultsType: "posts",
@@ -1407,19 +1432,21 @@ async function handleGenerateScript(req, res) {
   // Opus is slower than Sonnet, so batch size is small to keep any
   // single Claude call under Vercel's 300s function ceiling. Multiple
   // batches run as parallel calls so total wall-clock stays bounded
-  // by the SLOWEST batch (not their sum). 24 ticked ideas → 4 batches
-  // in parallel ≈ same wall-clock as 6 ideas alone, just burns more
-  // concurrent tokens.
+  // by the SLOWEST batch (not their sum), just burns more concurrent
+  // tokens.
   //
-  // BATCH_SIZE = 6 and SCRIPT_MAX_TOKENS = 12000 give every row room
-  // to breathe (~2000 tokens per row). Earlier 8/6000 cut a script
-  // off mid-scriptNotes string when a particularly rich row used
-  // >700 tokens; the JSON parse then failed for the whole batch. Per-
-  // cell polish (rewriteScriptSection / Row) keeps its own model
-  // setting downstream.
+  // BATCH_SIZE = 4 against SCRIPT_MAX_TOKENS = 12000 leaves ~50%
+  // output headroom at the observed ~2000 tokens per row. History:
+  // 8/6000 truncated rich rows, then 6/12000 truncated again on the
+  // Rivkin brief (6 × 2000 = the cap exactly — zero headroom). Raising
+  // the cap alone keeps losing this race, and a non-streaming call
+  // can't go much past ~16k anyway, so generateBatchRows below also
+  // detects truncation via stop_reason and splits-and-retries the
+  // affected batch. Per-cell polish (rewriteScriptSection / Row)
+  // keeps its own model setting downstream.
   const SCRIPT_MODEL = "claude-opus-4-6";
   const SCRIPT_MAX_TOKENS = 12000;
-  const BATCH_SIZE = 6;
+  const BATCH_SIZE = 4;
 
   const batches = chunkSelectedFormatsForScripting(selectedFormatObjects, BATCH_SIZE);
 
@@ -1441,35 +1468,59 @@ async function handleGenerateScript(req, res) {
     });
   }
 
-  let allRows;
-  try {
-    const responses = await Promise.all(batches.map(batch => {
-      const userMessage = buildScriptUserMessage({ project, selectedFormatObjects: batch, fantasticExample, sherpaBlock });
-      return callClaude({
-        model: SCRIPT_MODEL,
-        systemPrompt,
-        userMessage,
-        maxTokens: SCRIPT_MAX_TOKENS,
-        apiKey: ANTHROPIC_KEY,
-      });
-    }));
+  // Rows a batch will generate — ticked ideas when present, legacy
+  // _videoCount otherwise. Drives the split-and-retry maths below.
+  const batchRowCount = (batch) => batch.reduce((n, f) =>
+    n + (Array.isArray(f._tickedIdeas) ? f._tickedIdeas.length : Math.max(1, f._videoCount || 1)), 0);
 
-    allRows = [];
-    for (let i = 0; i < responses.length; i++) {
-      let parsed;
+  // Generate one batch's rows. If Claude's response hits the output
+  // ceiling (stop_reason === "max_tokens") or arrives as unparseable
+  // JSON — the visible symptom of the same truncation — split the
+  // batch in half and retry both halves in parallel. Halving the batch
+  // halves the output size, so one split normally clears it; recursion
+  // bottoms out at single-row batches (and at legacy whole-format
+  // entries the chunker can't split, where re-chunking returns one
+  // batch and we fall through to the throw).
+  const generateBatchRows = async (batch, depth = 0) => {
+    const userMessage = buildScriptUserMessage({ project, selectedFormatObjects: batch, fantasticExample, sherpaBlock });
+    const { text, stopReason } = await callClaude({
+      model: SCRIPT_MODEL,
+      systemPrompt,
+      userMessage,
+      maxTokens: SCRIPT_MAX_TOKENS,
+      apiKey: ANTHROPIC_KEY,
+      withMeta: true,
+    });
+
+    const truncated = stopReason === "max_tokens";
+    let parseErr = null;
+    if (!truncated) {
       try {
-        parsed = parseJSON(responses[i]);
+        const parsed = parseJSON(text);
+        return Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [];
       } catch (e) {
-        return res.status(422).json({
-          error: `Claude returned invalid JSON for batch ${i + 1} of ${batches.length}`,
-          detail: e.message,
-          rawPreview: responses[i].slice(0, 500),
-        });
-      }
-      if (Array.isArray(parsed.scriptTable)) {
-        allRows.push(...parsed.scriptTable);
+        parseErr = e;
       }
     }
+
+    const rowCount = batchRowCount(batch);
+    const subBatches = (rowCount > 1 && depth < 3)
+      ? chunkSelectedFormatsForScripting(batch, Math.ceil(rowCount / 2))
+      : [];
+    if (subBatches.length > 1) {
+      console.warn(`[generateScript] ${rowCount}-row batch ${truncated ? "hit the output-token ceiling" : `returned invalid JSON (${parseErr?.message})`} — splitting into ${subBatches.length} and retrying`);
+      const sub = await Promise.all(subBatches.map(b => generateBatchRows(b, depth + 1)));
+      return sub.flat();
+    }
+    throw new Error(truncated
+      ? `a ${rowCount}-row batch overran the ${SCRIPT_MAX_TOKENS}-token output ceiling even after splitting — untick an idea or two and regenerate`
+      : `Claude returned invalid JSON for a ${rowCount}-row batch — ${parseErr?.message}`);
+  };
+
+  let allRows;
+  try {
+    const rowsPerBatch = await Promise.all(batches.map(b => generateBatchRows(b)));
+    allRows = rowsPerBatch.flat();
     // Renumber video rows sequentially across batches — each batch
     // numbers its own scriptTable starting from 1, so without this
     // a 24-idea generation would produce 1,2,...,12,1,2,...,12.
@@ -1484,7 +1535,7 @@ async function handleGenerateScript(req, res) {
       if (!row.reviewId) row.reviewId = `rv_${crypto.randomBytes(6).toString("hex")}`;
     });
   } catch (e) {
-    return res.status(502).json({ error: "Claude call failed", detail: e.message });
+    return res.status(502).json({ error: "Brief generation failed", detail: e.message });
   }
   const parsed = { scriptTable: allRows };
 
@@ -2128,8 +2179,14 @@ async function handleStartClientScrape(req, res) {
   const { projectId, handle } = req.body || {};
   if (!projectId || !handle) return res.status(400).json({ error: "Missing projectId or handle" });
 
-  const cleanHandle = handle.replace(/^@+/, "").trim();
-  if (!cleanHandle) return res.status(400).json({ error: "Invalid handle" });
+  // Accepts @name, bare name, or a pasted profile URL — anything else
+  // (reel links, TikTok, free text) is rejected here with a usable
+  // message instead of becoming a garbage Apify directUrl.
+  const parsedHandle = parseIgHandle(handle);
+  if (!parsedHandle.handle) {
+    return res.status(400).json({ error: `Invalid handle: ${igHandleProblemText(parsedHandle.reason)}` });
+  }
+  const cleanHandle = parsedHandle.handle.slice(1);
 
   // Mark the bundle as running immediately so the UI can render spinners
   // without waiting for Apify's first webhook.
@@ -2204,12 +2261,30 @@ async function handleStartCompetitorScrape(req, res) {
 
   const research = project.research || {};
   const competitors = Array.isArray(research.competitors) ? research.competitors : [];
-  const handles = competitors.map(c => c.handle).filter(Boolean);
-  if (handles.length === 0) {
+
+  // Chips can hold anything a producer pasted (profile URLs, reel
+  // permalinks, TikTok links). Salvage what contains a real username,
+  // reject the rest BEFORE touching Apify — its directUrls regex would
+  // bounce the whole run with an unreadable 400 otherwise.
+  const { cleaned, bad } = splitCompetitorsByValidity(competitors);
+  if (bad.length > 0) {
+    return res.status(400).json({
+      error: `${bad.length} competitor ${bad.length === 1 ? "entry isn't an Instagram profile" : "entries aren't Instagram profiles"} — remove or re-add ${bad.length === 1 ? "it" : "them"} as @handles`,
+      detail: describeBadHandles(bad),
+    });
+  }
+  if (cleaned.length === 0) {
     return res.status(400).json({ error: "No competitor handles to scrape" });
   }
 
-  const directUrls = handles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  // Persist the normalised chips (pasted profile URLs → @handles) so
+  // the UI reflects exactly what's being scraped.
+  if (JSON.stringify(cleaned) !== JSON.stringify(competitors)) {
+    await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, cleaned);
+  }
+
+  const handles = cleaned.map(c => c.handle);
+  const directUrls = handles.map(h => `https://www.instagram.com/${h.slice(1)}/`);
   // ~120 videos across N handles → 120 / N rounded. Cap at 50 per handle
   // (apify-side ceiling) and at least 10.
   const perHandle = Math.min(50, Math.max(10, Math.round(120 / handles.length)));
@@ -2287,14 +2362,24 @@ async function handleAppendCompetitorScrape(req, res) {
   // to all existing handles — that's the "↻ Refresh widens" path.
   let scrapeHandles;
   if (Array.isArray(bodyHandles) && bodyHandles.length > 0) {
-    const cleaned = bodyHandles.map(h => (h || "").toString().trim().replace(/^@/, "")).filter(Boolean);
+    // Normalise whatever the producer typed/pasted (bare names, @names,
+    // profile URLs). Anything with no Instagram username in it (reel
+    // permalinks, TikTok links) rejects the whole request with a
+    // per-entry explanation.
+    const { cleaned, bad } = splitCompetitorsByValidity(bodyHandles.map(h => ({ handle: h })));
+    if (bad.length > 0) {
+      return res.status(400).json({
+        error: `${bad.length} of the handles ${bad.length === 1 ? "isn't an Instagram profile" : "aren't Instagram profiles"}`,
+        detail: describeBadHandles(bad),
+      });
+    }
+    if (cleaned.length === 0) return res.status(400).json({ error: "No handles to scrape" });
     const safeTag = tag === "inspiration" ? "inspiration" : "direct";
     const nextCompetitors = [...existingCompetitors];
-    for (const h of cleaned) {
-      const handleKey = `@${h.toLowerCase()}`;
-      if (!nextCompetitors.some(c => (c.handle || "").toLowerCase() === handleKey)) {
+    for (const { handle } of cleaned) {
+      if (!nextCompetitors.some(c => (c.handle || "").toLowerCase() === handle)) {
         nextCompetitors.push({
-          handle: `@${h}`,
+          handle,
           tag: safeTag,
           source: "manual",
           verified: null,
@@ -2304,16 +2389,25 @@ async function handleAppendCompetitorScrape(req, res) {
     if (nextCompetitors.length !== existingCompetitors.length) {
       await fbSet(`/preproduction/socialOrganic/${projectId}/research/competitors`, nextCompetitors);
     }
-    scrapeHandles = cleaned.map(h => `@${h}`);
+    scrapeHandles = cleaned.map(c => c.handle);
   } else {
-    scrapeHandles = existingCompetitors.map(c => c.handle).filter(Boolean);
+    // Refresh path re-scrapes the stored chips — they must all be
+    // valid profiles too (older projects can hold pasted-URL chips).
+    const { cleaned, bad } = splitCompetitorsByValidity(existingCompetitors);
+    if (bad.length > 0) {
+      return res.status(400).json({
+        error: `${bad.length} competitor ${bad.length === 1 ? "entry isn't an Instagram profile" : "entries aren't Instagram profiles"} — remove or re-add ${bad.length === 1 ? "it" : "them"} as @handles`,
+        detail: describeBadHandles(bad),
+      });
+    }
+    scrapeHandles = cleaned.map(c => c.handle);
   }
 
   if (scrapeHandles.length === 0) {
     return res.status(400).json({ error: "No handles to scrape" });
   }
 
-  const directUrls = scrapeHandles.map(h => `https://www.instagram.com/${h.replace(/^@/, "")}/`);
+  const directUrls = scrapeHandles.map(h => `https://www.instagram.com/${h.slice(1)}/`);
   const perHandle = Math.min(80, Math.max(20, resultsLimit || 60));
 
   // Mark the bundle running again. lastRefreshAt persists from the previous
@@ -2699,12 +2793,18 @@ Suggest competitor handles and keywords now.`;
   // or causes the chip to be dropped entirely.
   const claudeCompetitors = (parsed.competitors || [])
     .map(c => {
-      if (typeof c === "string") return { handle: c.startsWith("@") ? c : `@${c.replace(/^@+/, "")}`, tag: "direct", reason: "", source: "ai", verified: null };
-      const h = (c.handle || c.username || "").trim();
-      if (!h) return null;
+      // parseIgHandle also canonicalises URLs Claude occasionally emits
+      // ("https://www.instagram.com/x/" → "@x") and drops anything with
+      // no Instagram username in it (reel links, free text).
+      if (typeof c === "string") {
+        const p = parseIgHandle(c);
+        return p.handle ? { handle: p.handle, tag: "direct", reason: "", source: "ai", verified: null } : null;
+      }
+      const p = parseIgHandle(c.handle || c.username || "");
+      if (!p.handle) return null;
       const tag = c.tag === "inspiration" ? "inspiration" : "direct";
       return {
-        handle: h.startsWith("@") ? h : `@${h.replace(/^@+/, "")}`,
+        handle: p.handle,
         tag,
         reason: c.reason || "",
         source: "ai",
