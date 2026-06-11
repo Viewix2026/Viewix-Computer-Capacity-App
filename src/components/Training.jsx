@@ -1,12 +1,12 @@
 // Training — module library with per-role visibility + Meeting Feedback sub-tab.
 //
-// Visibility rules:
+// Visibility rules live in src/lib/trainingVisibility.js (deny by default):
+//   founders / manager / lead → everything
 //   closer            → only "sales"-named categories
 //   editor            → everything EXCEPT "sales"-named categories
-//   trial             → ONLY the "Editor Onboarding" category (the
-//                       11-module starter pack). Anything else is
-//                       gated behind the editor or higher role.
-//   manager / founders / lead → everything
+//   trial + anything unrecognised → ONLY the "Trial Editor Onboarding"
+//                       category. Unknown roles fall to the most
+//                       restricted view, never the full library.
 //
 // Admins + closers also get the Meeting Feedback sub-tab for
 // Claude-powered sales call analysis.
@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { BTN, NB } from "../config";
 import { getCurrentUserName } from "../firebase";
+import { visibleTrainingCategories } from "../lib/trainingVisibility";
 import { MeetingFeedback } from "./MeetingFeedback";
 import { TranscriptInsightsLab } from "./TranscriptInsightsLab";
 
@@ -85,10 +86,15 @@ export function Training({
   const addSuggestion = (type, title, desc) => setTrainingSuggestions(p => [...p, { id: `sug-${Date.now()}`, type, title, description: desc, author: userName, createdAt: new Date().toISOString(), status: "pending" }]);
   const dismissSuggestion = (id) => setTrainingSuggestions(p => p.filter(s => s.id !== id));
 
+  // Role-visible categories — the single visibility boundary. The module
+  // lookup below searches this (not raw trainingData) so a stale
+  // activeModuleId can never open a module outside the viewer's roles.
+  const visibleTraining = visibleTrainingCategories(role, trainingData);
+
   // Find active module + its category
   let activeMod = null, activeCat = null;
   if (activeModuleId) {
-    trainingData.forEach(c => {
+    visibleTraining.forEach(c => {
       const m = (c.modules || []).find(m2 => m2.id === activeModuleId);
       if (m) { activeMod = m; activeCat = c; }
     });
@@ -200,13 +206,6 @@ export function Training({
   // ═══════════════════════════════════════════
   // LIST VIEW
   // ═══════════════════════════════════════════
-  const visibleTraining = role === "closer"
-    ? trainingData.filter(c => (c.name || "").toLowerCase().includes("sales"))
-    : role === "trial"
-    ? trainingData.filter(c => (c.name || "").toLowerCase().includes("trial editor onboarding"))
-    : role === "editor"
-    ? trainingData.filter(c => !(c.name || "").toLowerCase().includes("sales"))
-    : trainingData;
   const canSeeMeetingFeedback = isFounder || role === "closer";
 
   return (
