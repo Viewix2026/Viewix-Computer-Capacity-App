@@ -30,21 +30,95 @@ const ClientMark = ({ name, size = "sm" }) => {
 const STATUS_TONE = { active: "blue", archived: "muted" };
 function statusLabel(p) {
   if (p.status === "archived") return "Delivered";
-  if (p.needsYou) return "Needs your review";
+  if (cutsWaiting(p)) return "Needs your review";
   return ["Kickoff", "On set", "In editing", "In review"][p.phase] || "In progress";
+}
+
+const PHASE_NAMES = ["Kickoff", "Shooting", "Editing", "Review"];
+
+// Cuts actually awaiting the client on a project. The server computes
+// counts.waiting per video (delivered AND latest revision response is
+// neither Approved nor Need Revisions — see api/_clientRedact.js).
+// The subtraction fallback covers a stale API response only; it can
+// undercount toggled-back videos, never overcount.
+function cutsWaiting(p) {
+  const c = p.counts || {};
+  if (typeof c.waiting === "number") return c.waiting;
+  return p.needsYou ? Math.max((c.ready || 0) - (c.approved || 0), 0) : 0;
+}
+
+// Dense desktop row (design: one line per project — client mark ·
+// name · phase · videos · AM · CTA). The whole row opens the project,
+// which lands directly on its videos.
+function ProjectRow({ p, onOpen, mid }) {
+  const waiting = cutsWaiting(p);
+  return (
+    <div onClick={onOpen} style={{
+      display: "grid",
+      gridTemplateColumns: mid ? "48px minmax(160px, 1fr) 170px 70px 40px 150px" : "56px minmax(200px, 1fr) 220px 90px 44px 170px",
+      alignItems: "center", gap: mid ? 14 : 20,
+      padding: mid ? "16px 18px" : "18px 24px",
+      background: waiting ? "rgba(0,130,250,0.025)" : "transparent",
+      cursor: "pointer",
+    }}>
+      <ClientMark name={p.orgName} size="sm" />
+
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {p.projectName}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
+          <span style={{ fontSize: 12, color: "var(--text-3)" }}>{p.orgName}</span>
+          {p.productLine && (
+            <>
+              <span style={{ color: "var(--line-3)" }}>·</span>
+              <Label style={{ fontSize: 10 }}>{p.productLine}</Label>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div style={{ paddingBottom: 4 }}>
+        <PhaseTrack current={p.phase} compact />
+        <Label color="var(--text-3)" style={{ fontSize: 9, display: "block", marginTop: 6 }}>
+          {PHASE_NAMES[p.phase] || ""}
+        </Label>
+      </div>
+
+      <div>
+        <Label style={{ fontSize: 9 }}>Videos</Label>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", marginTop: 2, letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>
+          {p.counts?.ready || 0}<span style={{ color: "var(--text-3)" }}>/{p.counts?.total || 0}</span>
+        </div>
+      </div>
+
+      <div title={p.accountManager?.name ? `Managed by ${p.accountManager.name}` : undefined}>
+        <AmAvatar am={p.accountManager} size={34} />
+      </div>
+
+      <div style={{ justifySelf: "end" }}>
+        {/* stopPropagation: the row div also navigates — without it a
+            CTA click pushes the same history entry twice and Back
+            appears dead. The real <button> stays for keyboard users. */}
+        {waiting
+          ? <BtnPrimary style={{ height: 38, fontSize: 13, whiteSpace: "nowrap" }} onClick={(e) => { e.stopPropagation(); onOpen(); }}>Review {waiting} {waiting === 1 ? "cut" : "cuts"}</BtnPrimary>
+          : <BtnGhost style={{ height: 38, fontSize: 13 }} onClick={(e) => { e.stopPropagation(); onOpen(); }}>Open <Icon.arrow /></BtnGhost>}
+      </div>
+    </div>
+  );
 }
 
 function ProjectCard({ p, onOpen, narrow }) {
   return (
     <div style={{ position: "relative", padding: narrow ? "16px 16px 14px" : "24px 24px 22px", borderRadius: 16, border: "1px solid var(--line)", background: "var(--surface)", display: "flex", flexDirection: "column", gap: narrow ? 12 : 18, overflow: "hidden", boxShadow: "0 1px 0 rgba(15,18,26,0.02)" }}>
-      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: p.needsYou ? "var(--warn)" : "var(--accent)" }} />
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: cutsWaiting(p) ? "var(--warn)" : "var(--accent)" }} />
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <ClientMark name={p.orgName} size="sm" />
         <div style={{ flex: 1, minWidth: 0 }}>
           <Label color="var(--text-3)" style={{ fontSize: 10 }}>{p.orgName}</Label>
           <span style={{ fontSize: 11, color: "var(--text-3)", marginLeft: 8, fontWeight: 600 }}>{p.productLine || ""}</span>
         </div>
-        <Pill tone={p.needsYou ? "amber" : STATUS_TONE[p.status] || "muted"}>{statusLabel(p)}</Pill>
+        <Pill tone={cutsWaiting(p) ? "amber" : STATUS_TONE[p.status] || "muted"}>{statusLabel(p)}</Pill>
       </div>
 
       <h3 style={{ margin: 0, fontSize: narrow ? 18 : 22, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--heading)", lineHeight: 1.25 }}>
@@ -59,20 +133,20 @@ function ProjectCard({ p, onOpen, narrow }) {
         <div>
           <Label style={{ fontSize: 10 }}>Deliveries</Label>
           <div style={{ fontSize: narrow ? 16 : 22, fontWeight: 700, marginTop: 6, letterSpacing: "-0.01em", color: "var(--text)" }}>
-            {p.counts.ready}<span style={{ color: "var(--text-3)" }}>/{p.counts.total}</span>
+            {p.counts?.ready || 0}<span style={{ color: "var(--text-3)" }}>/{p.counts?.total || 0}</span>
           </div>
         </div>
         <div>
           <Label style={{ fontSize: 10 }}>Approved</Label>
           <div style={{ fontSize: narrow ? 16 : 22, fontWeight: 700, marginTop: 6, letterSpacing: "-0.01em", color: "var(--text)" }}>
-            {p.counts.approved}<span style={{ color: "var(--text-3)" }}>/{p.counts.total}</span>
+            {p.counts?.approved || 0}<span style={{ color: "var(--text-3)" }}>/{p.counts?.total || 0}</span>
           </div>
         </div>
         {!narrow && (
           <div>
             <Label style={{ fontSize: 10 }}>Posted</Label>
             <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6, letterSpacing: "-0.01em", color: "var(--text)" }}>
-              {p.counts.posted}<span style={{ color: "var(--text-3)" }}>/{p.counts.total}</span>
+              {p.counts?.posted || 0}<span style={{ color: "var(--text-3)" }}>/{p.counts?.total || 0}</span>
             </div>
           </div>
         )}
@@ -87,8 +161,8 @@ function ProjectCard({ p, onOpen, narrow }) {
           </div>
         </div>
         <div style={{ flex: 1 }} />
-        {p.needsYou
-          ? <BtnPrimary style={{ height: 38, fontSize: 13 }} onClick={onOpen}><Icon.spark /> Review</BtnPrimary>
+        {cutsWaiting(p)
+          ? <BtnPrimary style={{ height: 38, fontSize: 13 }} onClick={onOpen}><Icon.spark /> Review {cutsWaiting(p)} {cutsWaiting(p) === 1 ? "cut" : "cuts"}</BtnPrimary>
           : <BtnGhost style={{ height: 38, fontSize: 13 }} onClick={onOpen}><Icon.film /> Open</BtnGhost>}
       </div>
     </div>
@@ -96,22 +170,16 @@ function ProjectCard({ p, onOpen, narrow }) {
 }
 
 function DashboardBody({ data, narrow, onOpenProject }) {
+  const mid = useIsNarrow(1280);          // 900-1280: single column, tighter rows
   const projects = data?.projects || [];
   const active = projects.filter(p => p.status !== "archived");
   const archived = projects.filter(p => p.status === "archived");
-  const waiting = active.filter(p => p.needsYou).length;
+  const waiting = active.reduce((n, p) => n + cutsWaiting(p), 0);
   const am =
     active.find(p => p.accountManager?.name)?.accountManager ||
     projects.find(p => p.accountManager?.name)?.accountManager || null;
   const first = (data?.displayName || "there").split(/[ @]/)[0];
   const first0 = first.charAt(0).toUpperCase() + first.slice(1);
-
-  const stats = [
-    { lbl: "Waiting on you", val: String(waiting), sub: waiting ? "Cuts to review" : "All caught up", tone: waiting ? "amber" : null },
-    { lbl: "In progress", val: String(active.length), sub: "Active projects" },
-    { lbl: "Delivered", val: String(archived.length), sub: "Wrapped" },
-    { lbl: "Total videos", val: String(projects.reduce((n, p) => n + (p.counts?.total || 0), 0)), sub: "Across all projects" },
-  ];
 
   if (projects.length === 0) {
     return (
@@ -126,68 +194,154 @@ function DashboardBody({ data, narrow, onOpenProject }) {
     );
   }
 
-  return (
-    <>
-      <div style={{ padding: narrow ? "20px 20px 12px" : "40px 40px 28px", borderBottom: "1px solid var(--line)" }}>
-        <Label>{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</Label>
-        <h1 style={{ margin: "8px 0 0", fontSize: narrow ? 24 : 42, fontWeight: 600, letterSpacing: "-0.025em", color: "var(--heading)" }}>
-          Hi {first0} - <span style={{ color: "var(--text-3)" }}>{waiting ? `${waiting} ${waiting === 1 ? "cut" : "cuts"} waiting on you.` : "you're all caught up."}</span>
-        </h1>
-      </div>
+  const waitingCuts = waiting;
+  const waitingProjects = active.filter(p => cutsWaiting(p) > 0).sort((a, b) => cutsWaiting(b) - cutsWaiting(a));
+  const topWaiting = waitingProjects[0] || null;
+  const dateLine = new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
-      <div style={{ padding: narrow ? "16px 20px 8px" : "36px 40px 24px", display: narrow ? "block" : "grid", gridTemplateColumns: "1fr 360px", gap: 32, alignItems: "flex-start" }}>
-        <div>
-          <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr 1fr" : "repeat(4, 1fr)", marginBottom: narrow ? 20 : 36, border: "1px solid var(--line)", borderRadius: 14, background: "var(--surface)", overflow: "hidden" }}>
+  const archivedList = archived.length > 0 && (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: narrow ? "0 0 12px" : "28px 0 14px" }}>
+        <SectionTag n={active.length ? "02" : "01"}>Delivered & archived</SectionTag>
+        <Label style={{ fontSize: 10 }}>{archived.length} wrapped</Label>
+      </div>
+      <div style={{ border: "1px solid var(--line)", borderRadius: 14, overflow: "hidden", background: "var(--surface)" }}>
+        {archived.map((p, i) => {
+          const total = p.counts?.total || 0;
+          return (
+            <div
+              key={p.projectId}
+              role="button" tabIndex={0}
+              onClick={() => onOpenProject(p.projectId)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenProject(p.projectId); } }}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: narrow ? "14px 14px" : "14px 24px", borderTop: i ? "1px solid var(--line)" : "none", cursor: "pointer" }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: narrow ? 13 : 14, fontWeight: 600, color: "var(--text)" }}>{p.projectName}</div>
+                <div style={{ fontSize: narrow ? 11 : 12, color: "var(--text-3)", marginTop: 2 }}>{p.orgName} · {total} {total === 1 ? "video" : "videos"}</div>
+              </div>
+              <Icon.arrow style={{ color: "var(--text-3)" }} />
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+
+  // Mobile keeps the design's mobile shape: merged greeting, compact
+  // 2x2 stats, AM card high, card stack, delivered list. (Desktop
+  // dropped the stat strip for the action banner, so stats are
+  // mobile-only.)
+  if (narrow) {
+    const stats = [
+      { lbl: "Waiting on you", val: String(waiting), sub: waiting ? "Cuts to review" : "All caught up", tone: waiting ? "amber" : null },
+      { lbl: "In progress", val: String(active.length), sub: "Active projects" },
+      { lbl: "Delivered", val: String(archived.length), sub: "Wrapped" },
+      { lbl: "Total videos", val: String(projects.reduce((n, p) => n + (p.counts?.total || 0), 0)), sub: "Across all projects" },
+    ];
+    return (
+      <>
+        <div style={{ padding: "20px 20px 12px" }}>
+          <Label>{dateLine}</Label>
+          <h1 style={{ margin: "8px 0 0", fontSize: 24, fontWeight: 600, letterSpacing: "-0.025em", color: "var(--heading)" }}>
+            Hi {first0} - <span style={{ color: "var(--text-3)" }}>{waitingCuts ? `${waitingCuts} ${waitingCuts === 1 ? "cut" : "cuts"} waiting on you.` : "you're all caught up."}</span>
+          </h1>
+        </div>
+        <div style={{ padding: "16px 20px 32px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", marginBottom: 20, border: "1px solid var(--line)", borderRadius: 14, background: "var(--surface)", overflow: "hidden" }}>
             {stats.map((s, i) => (
-              <div key={i} style={{ padding: "20px 22px", borderLeft: !narrow && i ? "1px solid var(--line)" : "none", borderTop: narrow && i >= 2 ? "1px solid var(--line)" : "none" }}>
-                <Label style={{ fontSize: 10 }}>{s.lbl}</Label>
-                <div className="mono" style={{ fontSize: 30, fontWeight: 500, marginTop: 8, letterSpacing: "-0.02em", color: s.tone === "amber" ? "var(--warn)" : "var(--text)" }}>{s.val}</div>
-                <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>{s.sub}</div>
+              <div key={i} style={{ padding: "16px 16px", borderLeft: i % 2 ? "1px solid var(--line)" : "none", borderTop: i >= 2 ? "1px solid var(--line)" : "none" }}>
+                <Label style={{ fontSize: 9 }}>{s.lbl}</Label>
+                <div className="mono" style={{ fontSize: 22, fontWeight: 700, marginTop: 4, letterSpacing: "-0.01em", color: s.tone === "amber" ? "var(--warn)" : "var(--heading)" }}>{s.val}</div>
+                <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>{s.sub}</div>
               </div>
             ))}
           </div>
 
-          {narrow && <div style={{ marginBottom: 20 }}><AccountManagerCard am={am} /></div>}
+          <div style={{ marginBottom: 20 }}><AccountManagerCard am={am} /></div>
 
           {active.length > 0 && (
             <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                 <SectionTag n="01">In progress</SectionTag>
-                <Label style={{ fontSize: 11 }}>{active.length} {active.length === 1 ? "project" : "projects"}</Label>
+                <Label style={{ fontSize: 10 }}>{active.length} {active.length === 1 ? "project" : "projects"}</Label>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 18, marginBottom: 36 }}>
-                {active.map(p => <ProjectCard key={p.projectId} p={p} narrow={narrow} onOpen={() => onOpenProject(p.projectId)} />)}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
+                {active.map(p => <ProjectCard key={p.projectId} p={p} narrow onOpen={() => onOpenProject(p.projectId)} />)}
               </div>
             </>
           )}
 
-          {archived.length > 0 && (
-            <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-                <SectionTag n="02">Delivered & archived</SectionTag>
-                <Label style={{ fontSize: 11 }}>{archived.length} wrapped</Label>
+          {archivedList}
+        </div>
+      </>
+    );
+  }
+
+  // Desktop — the design's dense layout: compact greeting, one action
+  // banner only when cuts are waiting (no stat strip), project rows in
+  // a single bordered list, delivered directly below, AM rail right.
+  return (
+    <>
+      <div style={{ padding: "28px 40px 0" }}>
+        <Label>{dateLine}</Label>
+        <h1 style={{ margin: "6px 0 0", fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--heading)" }}>
+          Hi {first0}
+        </h1>
+
+        {topWaiting && (
+          <div style={{
+            marginTop: 20, padding: "16px 20px", borderRadius: 14,
+            border: "1px solid var(--accent-line)",
+            background: "linear-gradient(90deg, rgba(0,130,250,0.07), rgba(0,130,250,0.02))",
+            display: "flex", alignItems: "center", gap: 16,
+          }}>
+            <span style={{ width: 40, height: 40, borderRadius: 10, background: "var(--accent)", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto" }}><Icon.film /></span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--heading)" }}>
+                {waitingCuts} {waitingCuts === 1 ? "cut is" : "cuts are"} waiting on your review
               </div>
-              <div style={{ border: "1px solid var(--line)", borderRadius: 14, overflow: "hidden", background: "var(--surface)", marginBottom: 40 }}>
-                {archived.map((p, i) => (
-                  <div key={p.projectId} onClick={() => onOpenProject(p.projectId)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderTop: i ? "1px solid var(--line)" : "none", cursor: "pointer" }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{p.projectName}</div>
-                      <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 2 }}>{p.orgName} · {p.counts.total} videos</div>
-                    </div>
-                    <Icon.arrow style={{ color: "var(--text-3)" }} />
+              <div style={{ fontSize: 13, color: "var(--text-2)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {topWaiting.orgName} · {topWaiting.projectName}{waitingProjects.length > 1 ? ` and ${waitingProjects.length - 1} more ${waitingProjects.length === 2 ? "project" : "projects"}` : ""}
+              </div>
+            </div>
+            <BtnPrimary style={{ height: 40, whiteSpace: "nowrap" }} onClick={() => onOpenProject(topWaiting.projectId)}>
+              Review now <Icon.arrow />
+            </BtnPrimary>
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: "28px 40px 24px", display: "grid", gridTemplateColumns: mid ? "1fr" : "1fr 340px", gap: 28, alignItems: "flex-start" }}>
+        <div>
+          {active.length > 0 && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <SectionTag n="01">In progress</SectionTag>
+                <Label style={{ fontSize: 10 }}>{active.length} {active.length === 1 ? "project" : "projects"}</Label>
+              </div>
+              <div style={{ border: "1px solid var(--line)", borderRadius: 14, overflow: "hidden", background: "var(--surface)", boxShadow: "0 1px 0 rgba(15,18,26,0.02)" }}>
+                {active.map((p, i) => (
+                  <div key={p.projectId} style={{ borderTop: i ? "1px solid var(--line)" : "none" }}>
+                    <ProjectRow p={p} mid={mid} onOpen={() => onOpenProject(p.projectId)} />
                   </div>
                 ))}
               </div>
             </>
           )}
+
+          {archivedList}
         </div>
 
-        {!narrow && (
-          <aside style={{ display: "flex", flexDirection: "column", gap: 18, position: "sticky", top: 24, zIndex: 1 }}>
-            <AccountManagerCard am={am} />
-          </aside>
-        )}
+        {mid
+          ? <div style={{ maxWidth: 420 }}><AccountManagerCard am={am} /></div>
+          : (
+            <aside style={{ display: "flex", flexDirection: "column", gap: 18, position: "sticky", top: 24, zIndex: 1 }}>
+              <AccountManagerCard am={am} />
+            </aside>
+          )}
       </div>
+      <div style={{ height: 32 }} />
     </>
   );
 }
