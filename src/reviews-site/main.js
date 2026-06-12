@@ -9,7 +9,7 @@ import "./styles.css";
 import TESTIMONIALS from "./testimonials.json";
 import {
   avatarColour, initials, fmtDate, badgeText,
-  buildStream, rowChunks, ROW_DURATIONS,
+  buildStream, rowChunks, ROW_DURATIONS, thumbnailUrlsFor,
 } from "./stream.js";
 
 function reviewCard(r) {
@@ -90,6 +90,31 @@ function testimonialCard(t) {
   el.querySelector(".vplay").setAttribute("aria-label", `Play testimonial from ${t.clientName}`);
   el.querySelector(".client").textContent = t.clientName;
   el.querySelector(".title").textContent = t.title || "";
+
+  // Real video thumbnail in the facade so people can see what they're
+  // about to play (still NO iframe until click). Walks the candidate
+  // list on error; if all fail, the brand-gradient facade remains.
+  const thumbs = thumbnailUrlsFor(t);
+  if (thumbs.length) {
+    const img = document.createElement("img");
+    img.className = "vthumb";
+    img.alt = "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    let i = 0;
+    img.src = thumbs[i];
+    img.addEventListener("error", () => {
+      i += 1;
+      if (i < thumbs.length) img.src = thumbs[i];
+      else img.remove();
+    });
+    // maxresdefault sometimes "succeeds" as a 120x90 grey placeholder
+    // instead of 404ing — treat that as a miss too.
+    img.addEventListener("load", () => {
+      if (img.naturalWidth <= 120 && i + 1 < thumbs.length) { i += 1; img.src = thumbs[i]; }
+    });
+    el.querySelector(".vmedia").prepend(img);
+  }
 
   // Facade pattern: the iframe is created ON CLICK only. Non-negotiable
   // (performance + privacy). Aspect ratio is locked in CSS pre-load.
