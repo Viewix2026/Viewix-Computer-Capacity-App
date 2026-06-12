@@ -58,7 +58,7 @@ function PlatformTile({ orgName, tile, onReconnect, reconnecting }) {
   );
 }
 
-export function ConnectedAccounts({ user, theme, onTheme, onSignOut, onBack }) {
+export function ConnectedAccounts({ user, theme, onTheme, onSignOut, onBack, onNav }) {
   const narrow = useIsNarrow();
   const [menuOpen, setMenuOpen] = useState(false);
   const [state, setState] = useState({ loading: true, accounts: [], error: null });
@@ -157,14 +157,14 @@ export function ConnectedAccounts({ user, theme, onTheme, onSignOut, onBack }) {
 
   if (narrow) {
     return (
-      <MobileShell user={user} title="Connected accounts" back onBack={onBack} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut}>
+      <MobileShell user={user} title="Connected accounts" back onBack={onBack} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} activeTab="" onNav={onNav}>
         {inner}
       </MobileShell>
     );
   }
   return (
     <div style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-      <PortalNav active="Accounts" user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} />
+      <PortalNav active="Accounts" user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} onNav={onNav} />
       <div className="vx-scroll" style={{ flex: 1, overflow: "auto" }}>{inner}</div>
     </div>
   );

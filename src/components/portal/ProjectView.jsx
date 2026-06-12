@@ -20,7 +20,7 @@ const ClientMark = ({ name, box = 56 }) => {
 
 const PHASE_META = ["Stage 1 of 4 · Kickoff", "Stage 2 of 4 · Shooting", "Stage 3 of 4 · Editing", "Stage 4 of 4 · Review"];
 
-export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, onBack, authFetch }) {
+export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, onBack, onNav, authFetch }) {
   const narrow = useIsNarrow();
   const [tab, setTab] = useState("deliveries");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -128,7 +128,7 @@ export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, o
 
   if (narrow) {
     return (
-      <MobileShell user={user} title={d?.projectName || "Project"} back onBack={onBack} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut}>
+      <MobileShell user={user} title={d?.projectName || "Project"} back onBack={onBack} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} activeTab="Projects" onNav={onNav}>
         {inner}
       </MobileShell>
     );
@@ -137,7 +137,7 @@ export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, o
     <div style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
       <PortalNav
         active="Projects" user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)}
-        theme={theme} onTheme={onTheme} onSignOut={onSignOut}
+        theme={theme} onTheme={onTheme} onSignOut={onSignOut} onNav={onNav}
         context={d ? (<><span style={{ color: "var(--text-3)", cursor: "pointer" }} onClick={onBack}>{d.orgName}</span><span style={{ color: "var(--text-4)" }}>/</span><span style={{ color: "var(--text)" }}>{d.projectName}</span></>) : null}
       />
       <div className="vx-scroll" style={{ flex: 1, overflow: "auto" }}>{inner}</div>

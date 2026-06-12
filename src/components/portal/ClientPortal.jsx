@@ -9,6 +9,7 @@ import { SignIn } from "./SignIn";
 import { Dashboard } from "./Dashboard";
 import { ProjectView } from "./ProjectView";
 import { ConnectedAccounts } from "./ConnectedAccounts";
+import { Analytics } from "./Analytics";
 
 const THEME_KEY = "vx_portal_theme";
 
@@ -26,10 +27,14 @@ function PortalLoading({ label = "Loading your portal..." }) {
 // Parse the in-portal route from the pathname:
 //   /clients, /clients/         -> { name:"dashboard" }
 //   /clients/p/<shortId>        -> { name:"project", id }
+//   /clients/analytics          -> { name:"analytics" }
 //   /clients/accounts           -> { name:"accounts" }   (Phase 5)
 function parseRoute() {
   if (/^\/clients\/accounts\/?$/i.test(window.location.pathname)) {
     return { name: "accounts" };
+  }
+  if (/^\/clients\/analytics\/?$/i.test(window.location.pathname)) {
+    return { name: "analytics" };
   }
   const m = window.location.pathname.match(/^\/clients\/p\/([a-z0-9]{4,16})/i);
   if (m) return { name: "project", id: m[1].toLowerCase() };
@@ -99,6 +104,11 @@ export function ClientPortal() {
     setUser(null);
   }, [navigate]);
 
+  // Top-level tab navigation (PortalNav / MobileTabBar).
+  const onNavTab = useCallback((tab) => {
+    navigate(tab === "Analytics" ? "/clients/analytics" : "/clients/");
+  }, [navigate]);
+
   // Finish a cross-device link once the user re-enters their email.
   const completeWithEmail = useCallback(async (email) => {
     setCompleteErr("");
@@ -131,6 +141,18 @@ export function ClientPortal() {
         onTheme={onTheme}
         onSignOut={onSignOut}
         onBack={() => navigate("/clients/")}
+        onNav={onNavTab}
+        authFetch={authFetch}
+      />
+    );
+  } else if (route.name === "analytics") {
+    body = (
+      <Analytics
+        user={user}
+        theme={theme}
+        onTheme={onTheme}
+        onSignOut={onSignOut}
+        onNav={onNavTab}
         authFetch={authFetch}
       />
     );
@@ -142,6 +164,7 @@ export function ClientPortal() {
         onTheme={onTheme}
         onSignOut={onSignOut}
         onBack={() => navigate("/clients/")}
+        onNav={onNavTab}
       />
     );
   } else {
@@ -152,6 +175,7 @@ export function ClientPortal() {
         onTheme={onTheme}
         onSignOut={onSignOut}
         onOpenProject={(shortId) => navigate(`/clients/p/${shortId}`)}
+        onNav={onNavTab}
         authFetch={authFetch}
       />
     );
