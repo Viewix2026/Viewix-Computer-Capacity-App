@@ -148,7 +148,13 @@ function CenteredState({ children }) {
 // hero proof — and the very next thing is the single top winning post
 // (Winning's first card is accented) plus the first next-video idea.
 // One proof, one post, one idea before scroll. Not a mini dashboard.
-function PortalBody({ p }) {
+//
+// Exported: the logged-in portal's Analytics tab
+// (src/components/portal/Analytics.jsx) renders this same body so the
+// shareable /r/ link and the portal tab stay one implementation.
+// `embedded` drops the standalone page's logo header (the portal nav
+// already carries the mark) but keeps the freshness line.
+export function PortalBody({ p, embedded = false }) {
   const company = p?.header?.companyName || "Your content";
   const freshness = p?.meta?.freshnessLine || "";
   const ds = p?.meta?.dataState || {};
@@ -157,10 +163,11 @@ function PortalBody({ p }) {
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 16px 64px" }}>
       <div className="rise" style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
+        display: "flex", alignItems: "center",
+        justifyContent: embedded ? "flex-end" : "space-between",
         gap: 12, marginBottom: 18,
       }}>
-        <Logo h={28} />
+        {!embedded && <Logo h={28} />}
         <span style={{ fontSize: 12, color: "var(--muted)", textAlign: "right" }}>
           {freshness}
         </span>

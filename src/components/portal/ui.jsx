@@ -271,7 +271,7 @@ export const UserMenu = ({ user = {}, theme = "light", onTheme = () => {}, onSig
   );
 };
 
-export const PortalNav = ({ active = "Projects", context, user, menuOpen = false, onMenu = () => {}, theme = "light", onTheme = () => {}, onSignOut = () => {} }) => {
+export const PortalNav = ({ active = "Projects", context, user, menuOpen = false, onMenu = () => {}, theme = "light", onTheme = () => {}, onSignOut = () => {}, onNav = () => {} }) => {
   const name = user?.displayName || user?.email || "You";
   const initials = (name.match(/\b\w/g) || ["Y"]).slice(0, 2).join("").toUpperCase();
   return (
@@ -283,13 +283,14 @@ export const PortalNav = ({ active = "Projects", context, user, menuOpen = false
       <ViewixLogo size={22} />
       <div style={{ width: 1, height: 20, background: "var(--line-2)" }} />
       <nav style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {["Projects"].map(t => (
-          <span key={t} style={{
+        {["Projects", "Analytics"].map(t => (
+          <button key={t} onClick={t === active ? undefined : () => onNav(t)} style={{
             padding: "8px 12px", borderRadius: 7,
             fontSize: 13, fontWeight: t === active ? 600 : 500,
             color: t === active ? "var(--text)" : "var(--text-3)",
             background: t === active ? "rgba(15,18,26,0.04)" : "transparent",
-          }}>{t}</span>
+            cursor: t === active ? "default" : "pointer",
+          }}>{t}</button>
         ))}
       </nav>
       {context && (
@@ -359,10 +360,38 @@ export const MobileTopBar = ({ title, back, onBack, user, menuOpen = false, onMe
   );
 };
 
-export const MobileShell = ({ title, back, onBack, user, menuOpen = false, onMenu = () => {}, theme = "light", onTheme = () => {}, onSignOut = () => {}, showStatusBar = true, children }) => (
+// Bottom tab bar from the design's mobile shell. Two live tabs only:
+// Library is a dead placeholder in the design (its own ship checklist
+// says pull it) and Account already lives in the top-bar avatar menu.
+export const MobileTabBar = ({ active = "Projects", onNav = () => {} }) => (
+  <div style={{
+    display: "flex", justifyContent: "space-around", alignItems: "center",
+    borderTop: "1px solid var(--line)", background: "var(--surface)",
+    padding: "10px 0 18px", flex: "0 0 auto",
+    position: "sticky", bottom: 0, zIndex: 5,
+  }}>
+    {[
+      { lbl: "Projects", icon: <Icon.film /> },
+      { lbl: "Analytics", icon: <Icon.spark /> },
+    ].map(t => (
+      <button key={t.lbl} onClick={t.lbl === active ? undefined : () => onNav(t.lbl)} style={{
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+        padding: "0 28px",
+        color: t.lbl === active ? "var(--accent)" : "var(--text-3)",
+        cursor: t.lbl === active ? "default" : "pointer",
+      }}>
+        {t.icon}
+        <span style={{ fontSize: 10, fontWeight: t.lbl === active ? 700 : 500 }}>{t.lbl}</span>
+      </button>
+    ))}
+  </div>
+);
+
+export const MobileShell = ({ title, back, onBack, user, menuOpen = false, onMenu = () => {}, theme = "light", onTheme = () => {}, onSignOut = () => {}, showStatusBar = true, activeTab = "Projects", onNav = null, children }) => (
   <div style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
     {showStatusBar && <MobileStatusBar />}
     <MobileTopBar title={title} back={back} onBack={onBack} user={user} menuOpen={menuOpen} onMenu={onMenu} theme={theme} onTheme={onTheme} onSignOut={onSignOut} />
     <div className="vx-scroll" style={{ flex: 1, overflow: "auto", minHeight: 0 }}>{children}</div>
+    {onNav && <MobileTabBar active={activeTab} onNav={onNav} />}
   </div>
 );

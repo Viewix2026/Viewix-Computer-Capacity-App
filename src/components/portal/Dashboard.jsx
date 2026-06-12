@@ -192,7 +192,7 @@ function DashboardBody({ data, narrow, onOpenProject }) {
   );
 }
 
-export function Dashboard({ user, theme, onTheme, onSignOut, onOpenProject, authFetch }) {
+export function Dashboard({ user, theme, onTheme, onSignOut, onOpenProject, onNav, authFetch }) {
   const narrow = useIsNarrow();
   const [state, setState] = useState({ loading: true, error: "", data: null });
   const [menuOpen, setMenuOpen] = useState(false);
@@ -238,14 +238,14 @@ export function Dashboard({ user, theme, onTheme, onSignOut, onOpenProject, auth
 
   if (narrow) {
     return (
-      <MobileShell user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut}>
+      <MobileShell user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} activeTab="Projects" onNav={onNav}>
         {inner}
       </MobileShell>
     );
   }
   return (
     <div style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-      <PortalNav active="Projects" user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} />
+      <PortalNav active="Projects" user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} onNav={onNav} />
       <div className="vx-scroll" style={{ flex: 1, overflow: "auto" }}>{inner}</div>
     </div>
   );
