@@ -14,13 +14,14 @@
 // Public team-home content lives at /teamHome (rule: read by any auth
 // user, write by founder/founders). Used to live at /foundersData,
 // which only role=founders could read — leads / editors / closers /
-// trial all saw the empty state for both fields. We fall back to
-// foundersData during the migration window so founder users with
-// legacy data still see their headline + video while the App's
-// migration effect copies it across to /teamHome.
+// trial all saw the empty state for both fields. The migration to
+// /teamHome is long done (App.jsx's copy effect is removed); the
+// foundersData fallback reads below are kept as a display-only
+// safety net for rollback.
 
 import { useEffect, useRef } from "react";
 import { Icon } from "./Icon";
+import { fbSet } from "../firebase";
 import { VideoEmbed } from "./shared/VideoEmbed";
 import { VotwReactions } from "./shared/VotwReactions";
 import { VotwComments } from "./shared/VotwComments";
@@ -77,6 +78,12 @@ export function Home({ teamHome, setTeamHome, foundersData, setFoundersData, tea
   void isFounders;
   const updateTeamQuote = (next) => {
     if (typeof setTeamHome === "function") setTeamHome(p => ({ ...(p || {}), teamQuote: next }));
+    // Persist the leaf directly, same as Capacity's VOTW editor.
+    // /teamHome is no longer in App.jsx's bulk-write loop — relying on
+    // it meant a second founder tab could write its lagging copy of
+    // the whole object back over text being typed here (and the
+    // 400ms debounce lost the final keystrokes on quick navigate).
+    fbSet("/teamHome/teamQuote", next || null);
   };
 
   const today = new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long" });
