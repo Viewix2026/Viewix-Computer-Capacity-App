@@ -22,7 +22,10 @@ const PHASE_META = ["Stage 1 of 4 · Kickoff", "Stage 2 of 4 · Shooting", "Stag
 
 export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, onBack, onNav, authFetch }) {
   const narrow = useIsNarrow();
-  const [tab, setTab] = useState("deliveries");
+  // The project page IS the videos (no Deliveries tab — per Jeremy,
+  // 2026-06-13). Pre-production and Posting schedule open as their own
+  // views via quiet links, with a back-to-videos affordance.
+  const [view, setView] = useState("videos");
   const [menuOpen, setMenuOpen] = useState(false);
   const [state, setState] = useState({ loading: true, error: "", data: null });
 
@@ -83,27 +86,6 @@ export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, o
           )}
         </div>
 
-        {/* Tabs */}
-        <div style={{ display: "flex", alignItems: "center", gap: 0, padding: narrow ? "0 12px" : "0 32px", borderBottom: "1px solid var(--line)", background: "var(--surface)", overflowX: "auto" }}>
-          {[
-            { k: "deliveries", label: "Deliveries", icon: <Icon.film /> },
-            { k: "preprod", label: "Pre-production", icon: <Icon.doc /> },
-            // Phase 5C — Posting Schedule. Read-only in v1; reschedule
-            // requests go through the account manager. We surface the
-            // tab even when no schedule exists yet so the client can
-            // see the empty-state explanation ("Once every video is
-            // approved your AM will line them up…").
-            { k: "schedule", label: "Posting schedule", icon: <Icon.cal /> },
-          ].map(t => {
-            const a = t.k === tab;
-            return (
-              <button key={t.k} onClick={() => setTab(t.k)} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "14px 18px", borderBottom: a ? "2px solid var(--accent)" : "2px solid transparent", color: a ? "var(--text)" : "var(--text-3)", fontSize: 14, fontWeight: a ? 600 : 500, marginBottom: -1, whiteSpace: "nowrap" }}>
-                {t.icon}<span>{t.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
         {/* Phase strip */}
         <div style={{ padding: narrow ? "16px 16px 22px" : "22px 32px 26px", background: "var(--surface)", borderBottom: "1px solid var(--line)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
@@ -113,14 +95,43 @@ export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, o
           </div>
         </div>
 
-        {tab === "deliveries" && (
-          <Deliveries deliveries={d.deliveries ? { ...d.deliveries, orgName: d.orgName } : null} accountManager={d.accountManager} narrow={narrow} />
-        )}
-        {tab === "preprod" && (
-          <PreProduction preproduction={d.preproduction} narrow={narrow} />
-        )}
-        {tab === "schedule" && (
-          <PostingSchedule projectShortId={projectShortId} authFetch={authFetch} narrow={narrow} />
+        {view === "videos" ? (
+          <>
+            {/* Quiet links to the project's other surfaces.
+                Posting schedule stays visible even with no schedule yet
+                (Phase 5C) so the empty-state explanation is reachable. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: narrow ? "12px 16px 0" : "16px 32px 0", flexWrap: "wrap" }}>
+              {[
+                { k: "preprod", label: "Pre-production", icon: <Icon.doc /> },
+                { k: "schedule", label: "Posting schedule", icon: <Icon.cal /> },
+              ].map(l => (
+                <button key={l.k} onClick={() => setView(l.k)} style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  padding: "8px 14px", borderRadius: 999,
+                  border: "1px solid var(--line)", background: "var(--surface)",
+                  color: "var(--text-2)", fontSize: 13, fontWeight: 500,
+                }}>
+                  {l.icon} {l.label} <Icon.arrow style={{ color: "var(--text-3)" }} />
+                </button>
+              ))}
+            </div>
+            <Deliveries deliveries={d.deliveries ? { ...d.deliveries, orgName: d.orgName } : null} accountManager={d.accountManager} narrow={narrow} />
+          </>
+        ) : (
+          <>
+            <div style={{ padding: narrow ? "12px 16px 0" : "16px 32px 0" }}>
+              <button onClick={() => setView("videos")} style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                padding: "8px 14px", borderRadius: 999,
+                border: "1px solid var(--line)", background: "var(--bg-2)",
+                color: "var(--text-2)", fontSize: 13, fontWeight: 500,
+              }}>
+                <Icon.back /> Back to videos
+              </button>
+            </div>
+            {view === "preprod" && <PreProduction preproduction={d.preproduction} narrow={narrow} />}
+            {view === "schedule" && <PostingSchedule projectShortId={projectShortId} authFetch={authFetch} narrow={narrow} />}
+          </>
         )}
       </>
     );

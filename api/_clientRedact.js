@@ -65,7 +65,19 @@ export function deliveryCounts(videos) {
   const approved = arr.filter(v => v && (v.revision1 === "Approved" || v.revision2 === "Approved")).length;
   const posted = arr.filter(v => v && v.posted).length;
   const changes = arr.filter(v => v && (v.revision1 === "Need Revisions" || v.revision2 === "Need Revisions")).length;
-  return { total, ready, approved, posted, changes };
+  // Cuts genuinely awaiting the CLIENT: delivered, and the latest
+  // revision response (R2 wins over R1, mirroring the reconciler's
+  // deriveViewixStatus) is neither Approved nor Need Revisions.
+  // NOT ready - approved: those two counts live on orthogonal axes
+  // (viewixStatus vs revision fields), so a toggled-back video
+  // (R1 Approved, R2 Need Revisions, ball back with Viewix) would
+  // silently cancel a genuinely-waiting cut from a subtraction.
+  const waiting = arr.filter(v => {
+    if (!v || !(v.viewixStatus === "Ready for Review" || v.viewixStatus === "Completed")) return false;
+    const latest = v.revision2 || v.revision1;
+    return latest !== "Approved" && latest !== "Need Revisions";
+  }).length;
+  return { total, ready, approved, posted, changes, waiting };
 }
 
 // Heuristic phase for the Kickoff -> Shooting -> Editing -> Review track
@@ -143,7 +155,7 @@ export function redactProjectListItem({ project, account, delivery, preprod, edi
     phase: derivePhase(project, delivery, preprod),
     productLine: project?.productLine || null,
     counts,
-    needsYou: counts.ready > 0 && counts.approved < counts.total,
+    needsYou: counts.waiting > 0,
     accountManager: accountManagerBlock(account, editors),
   };
 }
