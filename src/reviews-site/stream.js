@@ -68,7 +68,24 @@ export function thumbnailUrlsFor(t) {
 // Slice the stream into N row chunks (design: 4 rows, sequential
 // chunks, alternating direction, per-row duration).
 export const ROWS = 4;
-export const ROW_DURATIONS = ["52s", "64s", "58s", "70s"];
+
+// Motion is defined as constant SPEED, not fixed duration. The design
+// file shipped fixed durations (52-70s) tuned to its 15-card demo; the
+// -50% loop distance scales with track width, so the same duration on
+// the real 80+-card stream moved ~6x the pixels per second and felt
+// frantic (Jeremy 2026-06-13: "very disorienting"). Per-row variation
+// keeps the organic drift the design wanted. ~28px/s crosses a 1400px
+// viewport in ~50s — inside the design's stated 30-60s intent.
+export const ROW_SPEEDS_PPS = [30, 24, 28, 22];
+
+// Seamless loop = translateX(-50%), so the loop distance is HALF the
+// track's scroll width. Returns a css duration string, floored so a
+// degenerate narrow track can never spin.
+export function durationForTrack(scrollWidthPx, pxPerSecond) {
+  const distance = Math.max(0, Number(scrollWidthPx) || 0) / 2;
+  const pps = Math.max(1, Number(pxPerSecond) || 1);
+  return `${Math.max(20, Math.round(distance / pps))}s`;
+}
 
 export function rowChunks(stream, rows = ROWS) {
   const per = Math.ceil(stream.length / rows) || 1;
