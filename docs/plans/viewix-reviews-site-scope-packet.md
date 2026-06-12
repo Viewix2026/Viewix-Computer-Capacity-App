@@ -1,8 +1,9 @@
 # Scope Packet — viewixreviews.com.au reviews wall
 
-**Status:** BUILT 2026-06-12 — design delivered + implemented on branch
-`worktree-viewix-reviews-site`; code Codex loop converged (3 → 0, verdict
-SHIP); 26/26 tests green; browser-verified in preview. At Gate 2.
+**Status:** LIVE-PENDING-DNS 2026-06-12 — shipped via PR #296 (22f279e);
+first sync verified in prod (61 reviews, 5.0, publish gate passed);
+testimonials (22 from Jeremy's YouTube playlist) + cron-auth refactor in
+follow-up PR; DNS cutover is the only remaining step.
 **Created:** 2026-06-11
 
 ## Implementation deltas (Gate 1.5 — none material)
@@ -21,18 +22,21 @@ No material deviations from the approved plan. Notes:
 - Firebase rules untouched: default-deny already covers /reviewsSite (admin
   SDK bypasses rules) — no separate rules deploy needed.
 
-## Remaining before DNS cutover (launch checklist)
+## Launch checklist — state at 2026-06-12
 
-1. Jeremy: testimonial list → src/reviews-site/testimonials.json.
-2. Vercel env: APIFY_API_TOKEN (exists), REVIEWS_PLACE_URL or
-   REVIEWS_PLACE_ID, REVIEWS_MIN_COUNT (set from the verified Google count;
-   safe-defaults to 50 if unset/garbage). Optional: APIFY_REVIEWS_ACTOR,
-   SLACK_REVIEWS_ALERT_CHANNEL_ID.
-3. Add viewixreviews.com.au (+ www) to the Vercel project.
-4. Manual authenticated `/api/cron/reviews-sync?force=1` → verify publish.
-5. Done checks below (JSON-not-HTML on the reviews host, route leak
-   spot-check, OG preview, phone check).
-6. LAST: point DNS at Vercel.
+1. ~~Testimonials~~ DONE — 22 entries from the "Client Testimonials"
+   playlist; the duplicate Masari landscape cut was dropped in favour of
+   the 9:16 Short (reverse by editing testimonials.json).
+2. ~~Vercel env~~ DONE — REVIEWS_PLACE_URL (Maps CID URL for the verified
+   Dulwich Hill listing, 5.0/61), REVIEWS_MIN_COUNT=55.
+3. ~~Domains~~ DONE — apex + www attached, SSL pre-issued.
+4. ~~First sync~~ DONE — published 61/61 through the gate,
+   lastSyncAt 2026-06-12T13:14Z. Cron-auth refactored to _cronAuth
+   (manual runs = ?secret=$CRON_TEST_SECRET&force=1).
+5. Post-DNS done checks: JSON-not-HTML on the reviews host, /r/x route
+   leak spot-check, OG preview, phone check.
+6. REMAINING: GoDaddy DNS cutover (A @ → 76.76.21.21, CNAME www →
+   cname.vercel-dns.com — confirm records in Vercel domains UI at cutover).
 
 ## Outcome
 
