@@ -256,3 +256,23 @@ test("cronAuth: CRON_TEST_SECRET query unlocks force; forged x-vercel-cron is re
   const forged = isAuthorizedCron({ headers: { "x-vercel-cron": "1" }, url: "/api/cron/reviews-sync?force=1" });
   assert.equal(forged.ok, false);
 });
+
+// ── edge middleware root routing (middleware.js) ────────────────────
+// Vercel serves filesystem index.html for "/" BEFORE rewrites — the
+// middleware closes that gap for the reviews host only.
+
+test("middleware: reviews apex root rewrites to /reviews.html", async () => {
+  const { rootRouteFor } = await import("../../middleware.js");
+  assert.deepEqual(rootRouteFor("viewixreviews.com.au"), { action: "rewrite", pathname: "/reviews.html" });
+  assert.deepEqual(rootRouteFor("VIEWIXREVIEWS.COM.AU"), { action: "rewrite", pathname: "/reviews.html" });
+});
+
+test("middleware: www root 308s to apex; every other host falls through", async () => {
+  const { rootRouteFor } = await import("../../middleware.js");
+  assert.deepEqual(rootRouteFor("www.viewixreviews.com.au"), { action: "redirect", location: "https://viewixreviews.com.au/" });
+  assert.deepEqual(rootRouteFor("planner.viewix.com.au"), { action: "next" });
+  assert.deepEqual(rootRouteFor("viewix-computer-capacity-app.vercel.app"), { action: "next" });
+  assert.deepEqual(rootRouteFor(null), { action: "next" });
+  // a port suffix must not break host matching
+  assert.deepEqual(rootRouteFor("viewixreviews.com.au:443"), { action: "rewrite", pathname: "/reviews.html" });
+});
