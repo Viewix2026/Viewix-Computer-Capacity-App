@@ -29,24 +29,29 @@ export function badgeText(meta) {
   return { rating, count: meta.count };
 }
 
-// Merge stream: a testimonial after EVERY 3rd review — fixed index
-// rule from the design spec ("after review index 2, 5, 8..."), holds
-// as the count grows; testimonials cycle if slots outnumber them, and
-// unused testimonials append at the tail.
+// Merge stream: testimonials distributed EVENLY through the reviews by
+// stride. The design's original "after every 3rd review, append
+// leftovers at the tail" rule dumped unused videos in a cluster at the
+// stream end (Jeremy 2026-06-13: "the video testimonials are all at
+// the bottom"). Stride placement keeps the deterministic fixed-by-index
+// spirit, uses every testimonial exactly once per loop, and holds as
+// the review count grows: video k lands after review
+// floor((k+1) · R / (V+1)).
 export function buildStream(reviews, testimonials) {
-  const stream = [];
-  let v = 0;
-  (reviews || []).forEach((r, i) => {
-    stream.push({ kind: "review", data: r });
-    if ((i + 1) % 3 === 0 && testimonials?.length) {
-      stream.push({ kind: "video", data: testimonials[v % testimonials.length] });
-      v++;
-    }
-  });
-  while (v < (testimonials?.length || 0)) {
-    stream.push({ kind: "video", data: testimonials[v] });
-    v++;
+  const R = reviews?.length || 0;
+  const V = testimonials?.length || 0;
+  if (!R) return (testimonials || []).map((t) => ({ kind: "video", data: t }));
+  const after = new Map(); // review index -> videos to insert after it
+  for (let k = 0; k < V; k++) {
+    const pos = Math.min(R - 1, Math.floor(((k + 1) * R) / (V + 1)));
+    if (!after.has(pos)) after.set(pos, []);
+    after.get(pos).push(testimonials[k]);
   }
+  const stream = [];
+  reviews.forEach((r, i) => {
+    stream.push({ kind: "review", data: r });
+    for (const t of after.get(i) || []) stream.push({ kind: "video", data: t });
+  });
   return stream;
 }
 
