@@ -35,8 +35,13 @@ No material deviations from the approved plan. Notes:
    (manual runs = ?secret=$CRON_TEST_SECRET&force=1).
 5. Post-DNS done checks: JSON-not-HTML on the reviews host, /r/x route
    leak spot-check, OG preview, phone check.
-6. REMAINING: GoDaddy DNS cutover (A @ → 76.76.21.21, CNAME www →
-   cname.vercel-dns.com — confirm records in Vercel domains UI at cutover).
+6. ~~DNS~~ DONE 2026-06-12 — GoDaddy: A @ → 216.150.1.1, CNAME www →
+   2694a2e192df6154.vercel-dns-017.com (Vercel's current records, not the
+   legacy ones first documented here); www 308s to apex. SITE IS LIVE.
+   Post-launch additions: bare-root host routing needed edge middleware
+   (middleware.js, PR #300 — Vercel serves filesystem index.html for "/"
+   before rewrites), and testimonial facades got real YouTube thumbnails
+   on Jeremy's feedback (maxres→hq fallback, still click-to-load).
 
 ## Outcome
 
