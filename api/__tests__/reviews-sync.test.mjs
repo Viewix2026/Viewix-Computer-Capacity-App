@@ -236,3 +236,23 @@ test("fmtDate: en-AU month-year, safe on garbage", () => {
   assert.equal(fmtDate(null), "");
   assert.equal(fmtDate("not-a-date"), "");
 });
+
+// ── cron auth contract (reviews-sync relies on _cronAuth semantics) ─
+
+test("cronAuth: bearer CRON_SECRET authorizes but never unlocks force", async () => {
+  const { isAuthorizedCron } = await import("../_cronAuth.js");
+  process.env.CRON_SECRET = "s3cret";
+  process.env.CRON_TEST_SECRET = "t3st";
+  const r = isAuthorizedCron({ headers: { authorization: "Bearer s3cret" }, url: "/api/cron/reviews-sync" });
+  assert.deepEqual({ ok: r.ok, secretValid: r.secretValid }, { ok: true, secretValid: false });
+});
+
+test("cronAuth: CRON_TEST_SECRET query unlocks force; forged x-vercel-cron is rejected", async () => {
+  const { isAuthorizedCron } = await import("../_cronAuth.js");
+  process.env.CRON_SECRET = "s3cret";
+  process.env.CRON_TEST_SECRET = "t3st";
+  const manual = isAuthorizedCron({ headers: {}, url: "/api/cron/reviews-sync?secret=t3st&force=1" });
+  assert.deepEqual({ ok: manual.ok, secretValid: manual.secretValid }, { ok: true, secretValid: true });
+  const forged = isAuthorizedCron({ headers: { "x-vercel-cron": "1" }, url: "/api/cron/reviews-sync?force=1" });
+  assert.equal(forged.ok, false);
+});

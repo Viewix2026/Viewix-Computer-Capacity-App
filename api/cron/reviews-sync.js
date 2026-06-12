@@ -5,8 +5,9 @@
 //
 // Every invocation:
 //   1. If a pending Apify run exists → finish it (ingest / fail / wait).
-//   2. Else, if the last successful sync is older than 7 days (or
-//      ?force=1) → start a new scrape, persist pendingRunId BEFORE
+//   2. Else, if the last successful sync is older than 7 days (or a
+//      CRON_TEST_SECRET-authorized ?force=1) → start a new scrape,
+//      persist pendingRunId BEFORE
 //      polling (Codex R2#2), poll to an internal cutoff, ingest if it
 //      completes in time. A slow run is picked up tomorrow (R2#1) —
 //      single writer, no webhook (Codex F13).
@@ -20,6 +21,7 @@
 
 import { adminGet, adminPatch } from "../_fb-admin.js";
 import { slackPostMessage } from "../_slack-helpers.js";
+import { isAuthorizedCron } from "../_cronAuth.js";
 import {
   DEFAULT_REVIEWS_ACTOR, TERMINAL_FAIL,
   buildActorInput, startReviewsRun, getRun, getDatasetItems,
@@ -33,10 +35,12 @@ const POLL_EVERY_MS = 10_000;
 const STALE_PENDING_MS = 24 * 60 * 60 * 1000;
 
 export default async function handler(req, res) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) return res.status(500).json({ error: "CRON_SECRET not configured" });
-  const auth = req.headers.authorization || "";
-  if (auth !== `Bearer ${cronSecret}`) return res.status(401).json({ error: "Unauthorized" });
+  // Repo-canonical cron auth (see _cronAuth.js and the 2026-05-16
+  // incident writeup there). Accepts the Vercel-injected CRON_SECRET
+  // bearer or a manual ?secret=$CRON_TEST_SECRET run; only the test
+  // secret unlocks the force override below.
+  const cronAuth = isAuthorizedCron(req);
+  if (!cronAuth.ok) return res.status(401).json({ error: "Unauthorized" });
 
   const token = process.env.APIFY_API_TOKEN;
   if (!token) return res.status(500).json({ error: "APIFY_API_TOKEN not configured" });
@@ -73,7 +77,10 @@ export default async function handler(req, res) {
     }
 
     // ── 2. Start a new scrape if due ───────────────────────────────
-    const force = req.query?.force === "1";
+    // force is a test-only override: requires the CRON_TEST_SECRET
+    // path (secretValid) per the _cronAuth contract — a real Vercel
+    // cron invocation can never pass it.
+    const force = cronAuth.secretValid && req.query?.force === "1";
     const last = state.lastSuccessfulSyncAt ? new Date(state.lastSuccessfulSyncAt).getTime() : 0;
     if (!force && Date.now() - last < WEEK_MS) {
       return res.status(200).json({ status: "not-due", lastSuccessfulSyncAt: state.lastSuccessfulSyncAt });
@@ -136,7 +143,7 @@ async function ingest({ token, run }) {
     });
     await alert(
       `Reviews sync *blocked by publish gate* — wall unchanged.\n${gate.reason}\n` +
-      `If the lower count is legitimate, lower REVIEWS_MIN_COUNT in Vercel and re-run with ?force=1.`
+      `If the lower count is legitimate, lower REVIEWS_MIN_COUNT in Vercel and re-run with ?secret=$CRON_TEST_SECRET&force=1.`
     );
     return { published: false, gate: gate.reason, scraped: items.length, rejected };
   }
