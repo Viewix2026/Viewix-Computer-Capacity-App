@@ -50,6 +50,21 @@ export function buildStream(reviews, testimonials) {
   return stream;
 }
 
+// Real-thumbnail facade (Jeremy 2026-06-12: the brand-gradient facade
+// hid what each video was). Ordered candidate URLs, best first:
+// maxresdefault (1280px) only exists for HD uploads, hqdefault (480px)
+// exists for every YouTube video — the <img> walks the list on error.
+// Vimeo has no keyless thumbnail endpoint, so an empty list keeps the
+// gradient facade.
+export function thumbnailUrlsFor(t) {
+  if (!t || t.provider !== "youtube" || !t.videoId) return [];
+  const id = encodeURIComponent(t.videoId);
+  return [
+    `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`,
+    `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+  ];
+}
+
 // Slice the stream into N row chunks (design: 4 rows, sequential
 // chunks, alternating direction, per-row duration).
 export const ROWS = 4;

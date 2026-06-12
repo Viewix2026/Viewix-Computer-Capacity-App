@@ -276,3 +276,14 @@ test("middleware: www root 308s to apex; every other host falls through", async 
   // a port suffix must not break host matching
   assert.deepEqual(rootRouteFor("viewixreviews.com.au:443"), { action: "rewrite", pathname: "/reviews.html" });
 });
+
+test("thumbnails: youtube gets maxres→hq candidates, vimeo/garbage stay gradient", async () => {
+  const { thumbnailUrlsFor } = await import("../../src/reviews-site/stream.js");
+  assert.deepEqual(thumbnailUrlsFor({ provider: "youtube", videoId: "8-xMK87huo4" }), [
+    "https://i.ytimg.com/vi/8-xMK87huo4/maxresdefault.jpg",
+    "https://i.ytimg.com/vi/8-xMK87huo4/hqdefault.jpg",
+  ]);
+  assert.deepEqual(thumbnailUrlsFor({ provider: "vimeo", videoId: "123" }), []);
+  assert.deepEqual(thumbnailUrlsFor(null), []);
+  assert.deepEqual(thumbnailUrlsFor({ provider: "youtube" }), []);
+});
