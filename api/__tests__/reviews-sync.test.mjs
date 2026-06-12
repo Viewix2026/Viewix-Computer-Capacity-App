@@ -287,3 +287,17 @@ test("thumbnails: youtube gets maxres→hq candidates, vimeo/garbage stay gradie
   assert.deepEqual(thumbnailUrlsFor(null), []);
   assert.deepEqual(thumbnailUrlsFor({ provider: "youtube" }), []);
 });
+
+test("motion: duration derives from track width at constant px/s", async () => {
+  const { durationForTrack } = await import("../../src/reviews-site/stream.js");
+  // 18000px track -> 9000px loop at 30px/s = 300s
+  assert.equal(durationForTrack(18000, 30), "300s");
+  // design-demo scale: 2000px track at 24px/s ≈ 42s
+  assert.equal(durationForTrack(2000, 24), "42s");
+  // degenerate inputs can never produce a fast spin: zero width floors
+  // at 20s, an absurd speed request floors at 20s, and a zero speed
+  // clamps to 1px/s (slower is always safe)
+  assert.equal(durationForTrack(0, 30), "20s");
+  assert.equal(durationForTrack(500, 99999), "20s");
+  assert.equal(durationForTrack(500, 0), "250s");
+});

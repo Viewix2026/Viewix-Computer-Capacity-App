@@ -9,7 +9,7 @@ import "./styles.css";
 import TESTIMONIALS from "./testimonials.json";
 import {
   avatarColour, initials, fmtDate, badgeText,
-  buildStream, rowChunks, ROW_DURATIONS, thumbnailUrlsFor,
+  buildStream, rowChunks, ROW_SPEEDS_PPS, durationForTrack, thumbnailUrlsFor,
 } from "./stream.js";
 
 function reviewCard(r) {
@@ -145,7 +145,6 @@ function renderWall(reviews) {
 
     const track = document.createElement("div");
     track.className = "track";
-    track.style.setProperty("--dur", ROW_DURATIONS[i % ROW_DURATIONS.length]);
     items.forEach((it) =>
       track.appendChild(it.kind === "review" ? reviewCard(it.data) : testimonialCard(it.data))
     );
@@ -163,6 +162,16 @@ function renderWall(reviews) {
 
     row.appendChild(track);
     wall.appendChild(row);
+
+    // Constant-speed motion: duration derives from the track's real
+    // width (static per dataset — cards are fixed-width). Set after
+    // attach (layout exists even in hidden tabs) and refined once
+    // fonts settle, since text width nudges the track a little.
+    const pps = ROW_SPEEDS_PPS[i % ROW_SPEEDS_PPS.length];
+    const applyDuration = () =>
+      track.style.setProperty("--dur", durationForTrack(track.scrollWidth, pps));
+    applyDuration();
+    document.fonts?.ready?.then(applyDuration);
   });
 }
 
