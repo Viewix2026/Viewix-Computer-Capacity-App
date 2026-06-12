@@ -435,7 +435,18 @@ export default function App(){
    any of those writes and clobber the fresh data. Symptom we hit:
    pasting a link on one video reverted the previous video's link;
    flipping Viewix status quickly across rows occasionally reverted
-   one of them. */if(ready("/training"))fbSet("/training",trainingData);if(ready("/trainingSuggestions"))fbSet("/trainingSuggestions",trainingSuggestions);if(ready("/todos")){const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);}if(ready("/foundersMetrics"))fbSet("/foundersMetrics",foundersMetrics);if(teamLunch&&ready("/teamLunch"))fbSet("/teamLunch",teamLunch);if(isFounder&&ready("/teamHome"))fbSet("/teamHome",teamHome);if(isFounders&&ready("/foundersData"))fbSet("/foundersData",foundersData);if(ready("/buyerJourney"))fbSet("/buyerJourney",buyerJourney);if(ready("/turnaround"))fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
+   one of them. */if(ready("/training"))fbSet("/training",trainingData);if(ready("/trainingSuggestions"))fbSet("/trainingSuggestions",trainingSuggestions);if(ready("/todos")){const tObj={};todos.forEach(t=>{if(t&&t.id)tObj[t.id]=t;});fbSet("/todos",tObj);}if(ready("/foundersMetrics"))fbSet("/foundersMetrics",foundersMetrics);if(teamLunch&&ready("/teamLunch"))fbSet("/teamLunch",teamLunch);/* /teamHome intentionally NOT written from the bulk-write loop.
+   Capacity's VOTW editor and Home's teamQuote textarea both fbSet
+   /teamHome/... leaves directly per edit. A whole-object write here
+   replayed whatever THIS tab last heard — so a second founder tab
+   left open anywhere echoed a lagging snapshot back over the typist's
+   fresh keystrokes 400ms after each listener fire. The typist's
+   recentlyWroteTo guard hides the revert for only 1.5s after their
+   last write; pause longer and the textarea snaps back to the stale
+   text, and typing continues from it. Symptom we hit: VOTW note and
+   creator saved with mid-string chunks missing ("Luke's first s
+   shoot!"). Same two-client clobber pattern as /deliveries and
+   /accounts. */if(isFounders&&ready("/foundersData"))fbSet("/foundersData",foundersData);if(ready("/buyerJourney"))fbSet("/buyerJourney",buyerJourney);if(ready("/turnaround"))fbSet("/turnaround",turnaround);/* /accounts intentionally NOT written from the bulk-write loop.
    Reason: AccountsDashboard's updateAccount / updateMilestone /
    setSigningDate already fbSet directly at click time, AND
    accounts are written by server endpoints too (webhook-deal-won
@@ -453,7 +464,7 @@ export default function App(){
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing&&ready("/salePricing"))fbSet("/salePricing",salePricing);if(saleThankYou&&ready("/saleThankYou"))fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,teamHome,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing&&ready("/salePricing"))fbSet("/salePricing",salePricing);if(saleThankYou&&ready("/saleThankYou"))fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,salePricing,saleThankYou]);
 
   // shortId backfill moved into useDeliveriesSync — same logic, same trigger.
 
@@ -515,36 +526,15 @@ export default function App(){
   // deletes of any member actually stick. (Vish is also now gone from
   // the DEF_EDS seed, so a fresh workspace won't reintroduce him.)
 
-  // One-time migration: copy the public Home-page fields (teamQuote +
-  // videoOfTheWeek) out of /foundersData into /teamHome where every
-  // role can read them. Only runs when:
-  //   1. The current user has founder-tier access (isFounder — covers
-  //      both `founder` and `founders` now that the /foundersData
-  //      read rule allows both, and both can write /teamHome).
-  //      Was isFounders-only, which meant a `founder` user wouldn't
-  //      trigger the migration even though they could see and edit
-  //      teamHome — Home stayed empty until a `founders` user
-  //      logged in.
-  //   2. /foundersData has at least one of the public fields.
-  //   3. /teamHome doesn't already have a value for that field —
-  //      we never overwrite teamHome edits. Existing /teamHome data
-  //      always wins.
-  // Once /teamHome carries the values, every role's Home page picks
-  // them up via the unconditional listener above. The legacy fields
-  // on /foundersData are left in place (untouched) so a rollback
-  // doesn't lose data.
-  useEffect(()=>{
-    if(!isFounder)return;
-    const fdQuote=foundersData?.teamQuote;
-    const fdVotw=foundersData?.videoOfTheWeek;
-    const thQuote=teamHome?.teamQuote;
-    const thVotw=teamHome?.videoOfTheWeek;
-    const patch={};
-    if(fdQuote && !thQuote) patch.teamQuote=fdQuote;
-    if(fdVotw && !thVotw) patch.videoOfTheWeek=fdVotw;
-    if(Object.keys(patch).length===0) return;
-    setTeamHome(prev=>({...(prev||{}),...patch}));
-  },[isFounder,foundersData?.teamQuote,foundersData?.videoOfTheWeek,teamHome?.teamQuote,teamHome?.videoOfTheWeek]);
+  // The one-time /foundersData → /teamHome migration effect that lived
+  // here (copying teamQuote + videoOfTheWeek across) is gone. It
+  // completed long ago — /teamHome has been the live source for months
+  // — and it only persisted via the bulk-write loop, which no longer
+  // carries /teamHome. Left in place it had a footgun: clearing the
+  // VOTW nulled /teamHome/videoOfTheWeek, which re-armed the `!thVotw`
+  // condition and resurrected the stale legacy copy still sitting on
+  // /foundersData. Home.jsx still falls back to fd.* for display, so
+  // a rollback loses nothing.
 
   // currentActiveProjects is now owned by the daily cron at
   // /api/cron/capacity-stats, which patches /inputs with the correct

@@ -107,11 +107,12 @@ export function Capacity({
   // leaf directly, so the network request is in flight the moment
   // the producer commits the change. Local setTeamHome stays so
   // the UI stays responsive without waiting for the listener
-  // round-trip. The bulk-write loop's `if(isFounder)fbSet("/teamHome",
-  // teamHome)` in App.jsx is now redundant for VOTW (will write
-  // the same data 400ms later) but harmless — keeping it
-  // untouched avoids breaking the teamQuote edit path which still
-  // relies on the bulk loop.
+  // round-trip. /teamHome is OUT of App.jsx's bulk-write loop —
+  // calling the whole-object write there "harmless" was wrong: a
+  // second founder tab heard these leaf-write echoes, then bulk-wrote
+  // its lagging copy of the whole object back over the typist's fresh
+  // keystrokes (the jumbled-VOTW-note bug). teamQuote now leaf-writes
+  // from Home.jsx the same way.
   const updateVotw = (patch) => {
     if (typeof setTeamHome !== "function") return;
     setTeamHome(p => {
