@@ -194,22 +194,32 @@ test("meta: empty map yields null rating, zero count", () => {
 const reviewsOf = (n) => Array.from({ length: n }, (_, i) => ({ authorDisplayName: `R${i}`, rating: 5, text: "x", createdAt: NOW }));
 const vids = (n) => Array.from({ length: n }, (_, i) => ({ provider: "youtube", videoId: `v${i}`, clientName: `C${i}`, aspect: "16:9" }));
 
-test("stream: video card after every 3rd review, leftovers appended (design rule)", () => {
-  const s = buildStream(reviewsOf(7), vids(4));
+test("stream: testimonials spread evenly by stride, no tail cluster", () => {
+  const s = buildStream(reviewsOf(61), vids(22));
   const kinds = s.map((x) => x.kind);
-  // 7 reviews → slots after idx 2 and 5 (2 slots), then 2 unused appended
-  assert.deepEqual(kinds, ["review", "review", "review", "video", "review", "review", "review", "video", "review", "video", "video"]);
+  // every testimonial appears exactly once
+  assert.equal(kinds.filter((k) => k === "video").length, 22);
+  // the stream never ends in a glued video block of more than one
+  assert.notEqual(kinds.slice(-2).join(","), "video,video");
+  // max run of consecutive videos is 1 when reviews outnumber videos
+  assert.equal(/video,video/.test(kinds.join(",")), false);
+  // deterministic: same inputs, same stream
+  assert.deepEqual(s, buildStream(reviewsOf(61), vids(22)));
 });
 
-test("stream: testimonials cycle when slots outnumber supply", () => {
-  const s = buildStream(reviewsOf(9), vids(2));
-  const videos = s.filter((x) => x.kind === "video").map((x) => x.data.videoId);
-  assert.deepEqual(videos, ["v0", "v1", "v0"]);
+test("stream: sparse supply spaces videos by stride, dense supply still places all", () => {
+  const sparse = buildStream(reviewsOf(9), vids(2)).map((x) => x.kind);
+  // 2 videos in 9 reviews land at thirds, not glued anywhere
+  assert.deepEqual(sparse.filter((k) => k === "video").length, 2);
+  assert.equal(/video,video/.test(sparse.join(",")), false);
+  const dense = buildStream(reviewsOf(3), vids(9)).map((x) => x.kind);
+  assert.equal(dense.filter((k) => k === "video").length, 9);
 });
 
-test("stream: empty testimonials yields reviews-only; empty reviews yields videos-only tail", () => {
+test("stream: empty testimonials yields reviews-only; empty reviews yields videos-only", () => {
   assert.equal(buildStream(reviewsOf(5), []).every((x) => x.kind === "review"), true);
   assert.equal(buildStream([], vids(3)).every((x) => x.kind === "video"), true);
+  assert.equal(buildStream([], vids(3)).length, 3);
 });
 
 test("rowChunks: splits into at most 4 non-empty sequential rows", () => {
