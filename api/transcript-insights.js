@@ -36,6 +36,23 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "merge needs distinct survivorId and loserId" });
       }
 
+      // Same-type validation BEFORE any mutation — a late check would
+      // strand an already-archived loser on a rejected merge. `type` is
+      // immutable after creation, so this pre-read is race-free; the
+      // transactions below still re-check active status atomically.
+      // Cross-type merges corrupt the KB (objection evidence folded into
+      // a content idea) and, with the theme layer, the theme grouping.
+      const [survivorPre, loserPre] = await Promise.all([
+        adminGet(`/transcriptInsights/items/${survivorId}`),
+        adminGet(`/transcriptInsights/items/${loserId}`),
+      ]);
+      if (!survivorPre || !loserPre) {
+        return res.status(409).json({ error: "survivor or loser not found" });
+      }
+      if (survivorPre.type !== loserPre.type) {
+        return res.status(409).json({ error: "merge requires items of the same type" });
+      }
+
       // Archive the loser first and capture its committed snapshot so we
       // fold in exactly the weight/sources it had at archive time.
       const loserRes = await runRtdbTransaction(`/transcriptInsights/items/${loserId}`, (cur) => {

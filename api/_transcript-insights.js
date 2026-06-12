@@ -12,6 +12,7 @@
 // verbatim transcript spans, never summary paraphrases.
 
 import { adminGet, adminSet, runRtdbTransaction } from "./_fb-admin.js";
+import { THEMES, OTHER_KEY, validTheme } from "../src/lib/insightThemes.js";
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
@@ -103,6 +104,16 @@ function trimTranscript(t, cap = 24000) {
   );
 }
 
+// Per-type theme list rendered into both prompts. Static at module load —
+// keeps the system prompt cacheable (cache_control: ephemeral).
+function themeListBlock() {
+  return ["objection", "painPoint", "contentIdea"]
+    .map((type) =>
+      `${type}:\n` +
+      THEMES[type].map((t) => `- "${t.key}": ${t.blurb}`).join("\n"))
+    .join("\n\n");
+}
+
 export const EXTRACTION_SYSTEM_PROMPT = `You maintain a deduplicated, weighted knowledge base of sales-call insights that closers study to improve. You receive ONE sales call's transcript plus the current canonical list of insights already in the knowledge base. Your job: decide which insights in this call are genuinely NEW versus restatements of ones already on the list, and assign each a severity.
 
 TAXONOMY — every insight is exactly one of:
@@ -123,12 +134,17 @@ SEVERITY (how deal-threatening / how strongly felt, as expressed IN THIS CALL):
 
 QUOTE: every insight MUST include a "quote" that is a VERBATIM span copied from the transcript (the closest single sentence/phrase that evidences it). Do not paraphrase, summarise, or invent. Keep it short.
 
+THEME: every NEW insight must also carry a "theme" — the single best canonical theme key FOR THAT INSIGHT'S TYPE from the lists below. Use "${OTHER_KEY}" only when nothing genuinely fits; a near-fit beats "${OTHER_KEY}".
+
+CANONICAL THEMES PER TYPE:
+${themeListBlock()}
+
 LIMITS: at most 8 insights total across increments + new. Only surface insights that are actually useful to a closer — skip filler.
 
 OUTPUT: STRICT JSON only, no markdown fences, no commentary. Exactly this shape:
 {
   "increments": [ { "id": "<existing canonical id>", "quote": "<verbatim transcript span>", "severity": "low|medium|high" } ],
-  "new": [ { "type": "objection|painPoint|contentIdea", "title": "<<=80 char canonical label>", "description": "<1-3 sentences: what it is + how a closer should handle/use it>", "quote": "<verbatim transcript span>", "severity": "low|medium|high" } ]
+  "new": [ { "type": "objection|painPoint|contentIdea", "theme": "<theme key for that type>", "title": "<<=80 char canonical label>", "description": "<1-3 sentences: what it is + how a closer should handle/use it>", "quote": "<verbatim transcript span>", "severity": "low|medium|high" } ]
 }
 An empty result is valid and expected for low-signal calls: {"increments":[],"new":[]}.`;
 
@@ -256,6 +272,10 @@ export async function extractAndMergeInsights({
     const record = {
       id: itemId,
       type: item.type,
+      // Validated against the fixed taxonomy; anything off-list (or a
+      // missing field from an older cached prompt) lands in "other" and
+      // surfaces in the Uncategorised group rather than poisoning a theme.
+      theme: validTheme(item.type, item.theme) ? item.theme : OTHER_KEY,
       title: String(item.title).slice(0, 80),
       description: String(item.description || "").slice(0, 600),
       severity: validSeverity(item.severity),
@@ -280,4 +300,81 @@ export async function extractAndMergeInsights({
   });
 
   return { added, incremented, skipped };
+}
+
+// ─── Theme backfill classifier ───────────────────────────────────────
+// Used only by the self-heal cron's phase-2 sweep to classify items that
+// predate the theme field (or whose extraction landed unthemed). One call
+// per batch of ≤40 items.
+
+export const CLASSIFY_SYSTEM_PROMPT = `You assign sales-call insights to canonical themes for a video production agency's sales knowledge base. You receive a JSON array of items, each { "id", "type", "title", "description" }. For EVERY item, pick the single best theme key FROM THE LIST FOR THAT ITEM'S TYPE. Use "${OTHER_KEY}" only when nothing genuinely fits — a near-fit beats "${OTHER_KEY}".
+
+CANONICAL THEMES PER TYPE:
+${themeListBlock()}
+
+OUTPUT: STRICT JSON only — a single plain object mapping every input id to its theme key, no markdown fences, no commentary:
+{ "<id>": "<theme key>", ... }`;
+
+// Pure validation core — exported for unit tests. Enforces the output
+// contract on an already-parsed classifier response: plain object only,
+// hallucinated ids dropped (counted), missing/non-string/off-list values
+// fall back to OTHER_KEY (counted) so one bad value doesn't sink 39 good
+// ones — but parseable garbage at scale (>20% junk) throws, failing the
+// whole batch instead of bulk-writing "other".
+export function validateClassifierOutput(items, parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("classifyInsightThemes: response is not a plain object");
+  }
+
+  const byId = new Map(items.map((i) => [i.id, i]));
+  let unknownCount = 0;
+  for (const id of Object.keys(parsed)) {
+    if (!byId.has(id)) unknownCount++; // hallucinated id — dropped
+  }
+
+  const assignments = {};
+  let invalidCount = 0, otherCount = 0;
+  for (const item of items) {
+    const val = parsed[item.id];
+    let theme;
+    if (typeof val === "string" && validTheme(item.type, val)) {
+      theme = val;
+    } else {
+      theme = OTHER_KEY; // missing from response, non-string, or off-list
+      invalidCount++;
+    }
+    if (theme === OTHER_KEY) otherCount++;
+    assignments[item.id] = theme;
+  }
+
+  if ((invalidCount + unknownCount) / items.length > 0.2) {
+    throw new Error(
+      `classifyInsightThemes: quality gate tripped — ${invalidCount} invalid/missing + ${unknownCount} unknown ids of ${items.length}`
+    );
+  }
+
+  return { assignments, otherCount, invalidCount, unknownCount };
+}
+
+// Returns { assignments: {id → themeKey}, otherCount, invalidCount,
+// unknownCount }. Throws on malformed output or when the quality gate
+// trips — the caller treats a throw as "this batch writes NOTHING" and
+// the hourly sweep naturally retries.
+export async function classifyInsightThemes(items, apiKey) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { assignments: {}, otherCount: 0, invalidCount: 0, unknownCount: 0 };
+  }
+  if (!apiKey) throw new Error("classifyInsightThemes: missing apiKey");
+
+  const payload = items.map((i) => ({
+    id: i.id,
+    type: i.type,
+    title: String(i.title || "").slice(0, 80),
+    description: String(i.description || "").slice(0, 300),
+  }));
+
+  const raw = await callClaude(CLASSIFY_SYSTEM_PROMPT, `ITEMS:\n${JSON.stringify(payload)}`, apiKey);
+  const parsed = parseJSON(raw); // throws on malformed JSON → batch fails
+
+  return validateClassifierOutput(items, parsed);
 }

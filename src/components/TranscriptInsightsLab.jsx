@@ -1,10 +1,17 @@
 // Transcript Insights Lab — a continually-updated, weighted knowledge
 // base of recurring Objections / Pain Points / Content Ideas mined from
-// sales-call transcripts. Items are written ONLY server-side (extraction
-// pass + self-heal cron); /transcriptInsights is `.write:false` at the
-// RTDB rules layer. This component never calls fbSet — every founder
-// mutation goes through authFetch("/api/transcript-insights") and the
-// list refreshes via the live fbListenSafe subscription.
+// sales-call transcripts, consolidated into canonical themes (see
+// src/lib/insightThemes.js — fixed taxonomy, no in-app editor). Items are
+// written ONLY server-side (extraction pass + self-heal cron);
+// /transcriptInsights is `.write:false` at the RTDB rules layer. This
+// component never calls fbSet — every founder mutation goes through
+// authFetch("/api/transcript-insights") and the list refreshes via the
+// live fbListenSafe subscription.
+//
+// Default view groups items by `${type}:${theme}` (themes are per-type, so
+// a bare theme key would collapse the three "other" buckets into one
+// group). Searching flattens to the classic card list — results must never
+// hide behind a collapsed group.
 //
 // Rendered in two places:
 //   • Founders → Transcript Insights Lab  (full controls)
@@ -12,6 +19,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { fbListenSafe, authFetch } from "../firebase";
+import { OTHER_KEY, themeLabel, validTheme } from "../lib/insightThemes";
 
 const SEVERITY_MULTIPLIER = { low: 1, medium: 3, high: 6 };
 
@@ -41,6 +49,12 @@ function relTime(iso) {
 
 const score = (it) => (it.weight || 0) * (SEVERITY_MULTIPLIER[it.severity] || 1);
 
+// Group key: theme buckets never cross types.
+const groupKey = (it) => {
+  const theme = validTheme(it.type, it.theme) && it.theme !== OTHER_KEY ? it.theme : OTHER_KEY;
+  return `${it.type}:${theme}`;
+};
+
 export function TranscriptInsightsLab({ readOnly = false }) {
   const [items, setItems] = useState({});
   const [loaded, setLoaded] = useState(false);
@@ -48,6 +62,7 @@ export function TranscriptInsightsLab({ readOnly = false }) {
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
+  const [openGroups, setOpenGroups] = useState(() => new Set());
   const [mergeSel, setMergeSel] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -67,6 +82,8 @@ export function TranscriptInsightsLab({ readOnly = false }) {
     return c;
   }, [all]);
 
+  const searching = query.trim().length > 0;
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return all
@@ -78,6 +95,36 @@ export function TranscriptInsightsLab({ readOnly = false }) {
       .sort((a, b) => (score(b) - score(a)) ||
         String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
   }, [all, typeFilter, query, showArchived]);
+
+  // Theme groups over the visible set (skipped entirely while searching).
+  // Sorted by Σ score desc; Uncategorised buckets always last.
+  const groups = useMemo(() => {
+    if (searching) return [];
+    const map = new Map();
+    for (const it of visible) {
+      const key = groupKey(it);
+      let g = map.get(key);
+      if (!g) {
+        const themeKey = key.split(":")[1];
+        g = { key, type: it.type, themeKey, items: [], score: 0, weight: 0, sev: { high: 0, medium: 0, low: 0 } };
+        map.set(key, g);
+      }
+      g.items.push(it); // visible is score-sorted, so group order inherits it
+      g.score += score(it);
+      g.weight += it.weight || 1;
+      g.sev[SEV_META[it.severity] ? it.severity : "medium"]++;
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      ((a.themeKey === OTHER_KEY) - (b.themeKey === OTHER_KEY)) ||
+      (b.score - a.score) ||
+      a.key.localeCompare(b.key));
+  }, [visible, searching]);
+
+  const toggleGroup = (key) => setOpenGroups(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   const doOp = async (body) => {
     setBusy(true); setErr(null);
@@ -98,8 +145,19 @@ export function TranscriptInsightsLab({ readOnly = false }) {
     }
   };
 
-  const toggleMerge = (id) => setMergeSel(sel =>
-    sel.includes(id) ? sel.filter(x => x !== id) : sel.length < 2 ? [...sel, id] : sel);
+  const selectedItems = mergeSel.map(id => all.find(it => it.id === id)).filter(Boolean);
+
+  // Merges never cross types (the server 409s them too).
+  const toggleMerge = (id) => setMergeSel(sel => {
+    if (sel.includes(id)) return sel.filter(x => x !== id);
+    if (sel.length >= 2) return sel;
+    if (sel.length === 1) {
+      const a = all.find(it => it.id === sel[0]);
+      const b = all.find(it => it.id === id);
+      if (a && b && a.type !== b.type) return sel;
+    }
+    return [...sel, id];
+  });
 
   const runMerge = async () => {
     if (mergeSel.length !== 2) return;
@@ -130,22 +188,130 @@ export function TranscriptInsightsLab({ readOnly = false }) {
     { key: "contentIdea", label: `Content Ideas (${counts.contentIdea})` },
   ];
 
+  const renderCard = (it) => {
+    const tm = TYPE_META[it.type] || { label: it.type, color: "var(--muted)", bg: "transparent" };
+    const sm = SEV_META[it.severity] || SEV_META.medium;
+    const open = expandedId === it.id;
+    const selected = mergeSel.includes(it.id);
+    // Cross-type second pick is a no-op server-side; grey the control out.
+    const crossType = !selected && selectedItems.length === 1 && selectedItems[0].type !== it.type;
+    const sources = Array.isArray(it.sources) ? it.sources : [];
+    return (
+      <div key={it.id} style={{ background: "var(--card)", border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`, borderRadius: 10, overflow: "hidden", opacity: it.status === "archived" ? 0.6 : 1 }}>
+        <div
+          onClick={() => setExpandedId(open ? null : it.id)}
+          style={{ padding: "12px 14px", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 10 }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: tm.bg, color: tm.color }}>{tm.label}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: sm.bg, color: sm.color }}>{sm.label}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", padding: "2px 7px", borderRadius: 4, background: "var(--bg)" }}>×{it.weight || 1}</span>
+              {searching && (
+                <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border)", color: "var(--muted)" }}>
+                  {themeLabel(it.type, it.theme)}
+                </span>
+              )}
+              <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: "auto" }}>{relTime(it.lastSeenAt)}</span>
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{it.title}</div>
+            {it.description && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>{it.description}</div>}
+          </div>
+        </div>
+
+        {open && (
+          <div style={{ borderTop: "1px solid var(--border)", padding: "10px 14px", background: "var(--bg)" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", marginBottom: 8 }}>
+              {sources.length} source{sources.length === 1 ? "" : "s"}
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {sources.map((s, i) => (
+                <div key={i} style={{ fontSize: 12, color: "var(--fg)", borderLeft: "2px solid var(--border)", paddingLeft: 10 }}>
+                  <div style={{ color: "var(--muted)", fontSize: 11, marginBottom: 2 }}>
+                    {s.clientName || "Unknown"}{s.salesperson ? ` · ${s.salesperson}` : ""}{s.at ? ` · ${new Date(s.at).toLocaleDateString("en-AU")}` : ""}
+                    {s.recordingUrl && <> · <a href={s.recordingUrl} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>recording</a></>}
+                  </div>
+                  {s.quote && <div style={{ fontStyle: "italic" }}>“{s.quote}”</div>}
+                </div>
+              ))}
+              {sources.length === 0 && <div style={{ fontSize: 12, color: "var(--muted)" }}>No sources recorded.</div>}
+            </div>
+
+            {!readOnly && (
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                {it.status === "archived" ? (
+                  <button onClick={() => doOp({ action: "unarchive", id: it.id })} disabled={busy} style={ctrlBtn}>Unarchive</button>
+                ) : (
+                  <>
+                    <button onClick={() => doOp({ action: "archive", id: it.id })} disabled={busy} style={ctrlBtn}>Archive</button>
+                    <button
+                      onClick={() => toggleMerge(it.id)}
+                      disabled={busy || crossType}
+                      title={crossType ? "Merges can't cross types" : undefined}
+                      style={{ ...ctrlBtn, ...(selected ? { borderColor: "var(--accent)", color: "var(--accent)" } : {}), ...(crossType ? { opacity: 0.4, cursor: "not-allowed" } : {}) }}
+                    >
+                      {selected ? "Selected" : "Select to merge"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderGroup = (g) => {
+    const tm = TYPE_META[g.type] || { label: g.type, color: "var(--muted)", bg: "transparent" };
+    const open = openGroups.has(g.key);
+    const sevBits = ["high", "medium", "low"]
+      .filter(s => g.sev[s] > 0)
+      .map(s => (
+        <span key={s} style={{ fontSize: 10, fontWeight: 700, color: SEV_META[s].color }}>
+          {g.sev[s]} {s === "medium" ? "med" : s}
+        </span>
+      ));
+    return (
+      <div key={g.key} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+        <div
+          onClick={() => toggleGroup(g.key)}
+          style={{ padding: "12px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, background: "var(--card)" }}
+        >
+          <span style={{ fontSize: 11, color: "var(--muted)", width: 12, flexShrink: 0 }}>{open ? "▾" : "▸"}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: tm.bg, color: tm.color, flexShrink: 0 }}>{tm.label}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", minWidth: 0 }}>{themeLabel(g.type, g.themeKey)}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", padding: "2px 7px", borderRadius: 4, background: "var(--bg)", flexShrink: 0 }} title="Total mentions across all sources">×{g.weight}</span>
+          <span style={{ display: "flex", gap: 8, flexShrink: 0 }}>{sevBits}</span>
+          <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: "auto", flexShrink: 0 }}>
+            {g.items.length} insight{g.items.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        {open && (
+          <div style={{ display: "grid", gap: 8, padding: "10px 12px", background: "var(--bg)", borderTop: "1px solid var(--border)" }}>
+            {g.items.map(renderCard)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div>
       <div style={{ marginBottom: 8 }}>
         <h3 style={{ fontSize: 14, fontWeight: 700, color: "var(--fg)", margin: 0 }}>Transcript Insights Lab</h3>
         <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-          Recurring objections, pain points and content ideas mined from every analysed sales call. Ranked by how often they come up, weighted by how deal-threatening they are.
+          Recurring objections, pain points and content ideas mined from every analysed sales call, consolidated into canonical themes. Ranked by how often they come up, weighted by how deal-threatening they are.
         </div>
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", margin: "14px 0" }}>
         {TYPE_PILLS.map(p => (
-          <button key={p.key} onClick={() => setTypeFilter(p.key)} style={pill(typeFilter === p.key)}>{p.label}</button>
+          <button key={p.key} onClick={() => { setTypeFilter(p.key); setMergeSel([]); }} style={pill(typeFilter === p.key)}>{p.label}</button>
         ))}
         <input
           value={query}
-          onChange={e => setQuery(e.target.value)}
+          onChange={e => { setQuery(e.target.value); setMergeSel([]); }}
           placeholder="Search…"
           style={{ ...inputSt, flex: "1 1 160px", minWidth: 140 }}
         />
@@ -162,9 +328,10 @@ export function TranscriptInsightsLab({ readOnly = false }) {
       )}
 
       {!readOnly && mergeSel.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 12, borderRadius: 8, background: "var(--card)", border: "1px solid var(--accent)" }}>
-          <span style={{ fontSize: 12, color: "var(--fg)" }}>
-            {mergeSel.length === 1 ? "Select one more item to merge" : "Merge the two selected items (higher-ranked survives)"}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 12, borderRadius: 8, background: "var(--card)", border: "1px solid var(--accent)", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: "var(--fg)", minWidth: 0 }}>
+            {selectedItems.map(it => `“${(it.title || "").slice(0, 48)}${(it.title || "").length > 48 ? "…" : ""}”`).join("  +  ")}
+            {mergeSel.length === 1 ? " — select one more (same type) to merge" : " — higher-ranked survives"}
           </span>
           {mergeSel.length === 2 && (
             <button onClick={runMerge} disabled={busy} style={{ ...ctrlBtn, background: "var(--accent)", color: "#fff", borderColor: "var(--accent)", opacity: busy ? 0.5 : 1 }}>Merge</button>
@@ -174,67 +341,7 @@ export function TranscriptInsightsLab({ readOnly = false }) {
       )}
 
       <div style={{ display: "grid", gap: 8 }}>
-        {visible.map(it => {
-          const tm = TYPE_META[it.type] || { label: it.type, color: "var(--muted)", bg: "transparent" };
-          const sm = SEV_META[it.severity] || SEV_META.medium;
-          const open = expandedId === it.id;
-          const selected = mergeSel.includes(it.id);
-          const sources = Array.isArray(it.sources) ? it.sources : [];
-          return (
-            <div key={it.id} style={{ background: "var(--card)", border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`, borderRadius: 10, overflow: "hidden", opacity: it.status === "archived" ? 0.6 : 1 }}>
-              <div
-                onClick={() => setExpandedId(open ? null : it.id)}
-                style={{ padding: "12px 14px", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 10 }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: tm.bg, color: tm.color }}>{tm.label}</span>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: sm.bg, color: sm.color }}>{sm.label}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--fg)", padding: "2px 7px", borderRadius: 4, background: "var(--bg)" }}>×{it.weight || 1}</span>
-                    <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: "auto" }}>{relTime(it.lastSeenAt)}</span>
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{it.title}</div>
-                  {it.description && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>{it.description}</div>}
-                </div>
-              </div>
-
-              {open && (
-                <div style={{ borderTop: "1px solid var(--border)", padding: "10px 14px", background: "var(--bg)" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", marginBottom: 8 }}>
-                    {sources.length} source{sources.length === 1 ? "" : "s"}
-                  </div>
-                  <div style={{ display: "grid", gap: 8 }}>
-                    {sources.map((s, i) => (
-                      <div key={i} style={{ fontSize: 12, color: "var(--fg)", borderLeft: "2px solid var(--border)", paddingLeft: 10 }}>
-                        <div style={{ color: "var(--muted)", fontSize: 11, marginBottom: 2 }}>
-                          {s.clientName || "Unknown"}{s.salesperson ? ` · ${s.salesperson}` : ""}{s.at ? ` · ${new Date(s.at).toLocaleDateString("en-AU")}` : ""}
-                          {s.recordingUrl && <> · <a href={s.recordingUrl} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>recording</a></>}
-                        </div>
-                        {s.quote && <div style={{ fontStyle: "italic" }}>“{s.quote}”</div>}
-                      </div>
-                    ))}
-                    {sources.length === 0 && <div style={{ fontSize: 12, color: "var(--muted)" }}>No sources recorded.</div>}
-                  </div>
-
-                  {!readOnly && (
-                    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                      {it.status === "archived" ? (
-                        <button onClick={() => doOp({ action: "unarchive", id: it.id })} disabled={busy} style={ctrlBtn}>Unarchive</button>
-                      ) : (
-                        <>
-                          <button onClick={() => doOp({ action: "archive", id: it.id })} disabled={busy} style={ctrlBtn}>Archive</button>
-                          <button onClick={() => toggleMerge(it.id)} disabled={busy} style={{ ...ctrlBtn, ...(selected ? { borderColor: "var(--accent)", color: "var(--accent)" } : {}) }}>
-                            {selected ? "Selected" : "Select to merge"}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {searching ? visible.map(renderCard) : groups.map(renderGroup)}
 
         {loaded && visible.length === 0 && (
           <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
