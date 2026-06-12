@@ -92,6 +92,9 @@
     },
     "api/ghl-lead-webhook.js": {
       "maxDuration": 60
+    },
+    "api/cron/reviews-sync.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -182,9 +185,23 @@
     {
       "path": "/api/sync-shoot-calendar",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/reviews-sync",
+      "schedule": "15 20 * * *"
     }
   ],
   "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "has": [{ "type": "host", "value": "viewixreviews.com.au" }],
+      "destination": "/reviews.html"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "has": [{ "type": "host", "value": "www.viewixreviews.com.au" }],
+      "destination": "/reviews.html"
+    },
     { "source": "/d/:rest*", "destination": "/index.html" },
     { "source": "/p/:rest*", "destination": "/index.html" },
     { "source": "/s/:rest*", "destination": "/index.html" },
@@ -196,6 +213,12 @@
     { "source": "/r/:rest*", "destination": "/index.html" }
   ],
   "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "www.viewixreviews.com.au" }],
+      "destination": "https://viewixreviews.com.au/:path*",
+      "permanent": true
+    },
     { "source": "/c", "destination": "/clients", "permanent": false },
     { "source": "/c/", "destination": "/clients/", "permanent": false },
     { "source": "/c/:rest*", "destination": "/clients/:rest*", "permanent": false }

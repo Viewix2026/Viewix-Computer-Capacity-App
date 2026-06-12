@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Viewix Reviews - See what our clients say about working with Viewix</title>
+<meta name="description" content="Viewix reviews from real clients. Every five-star Google review of Viewix, Sydney's social video production agency - unedited, counted live.">
+<meta property="og:title" content="Viewix Reviews - Glad you're here.">
+<meta property="og:description" content="See what our clients say about working with us.">
+<meta property="og:image" content="assets/og-viewixreviews.png">
+<meta property="og:url" content="https://viewixreviews.com.au">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- ================================================================
+  VIEWIXREVIEWS.COM.AU - design spec file
+  One page, one job: make the credibility question feel settled.
+
+  IMPLEMENTATION NOTES FOR DEV (in priority order):
+  1. Review/testimonial data comes from the API in the shapes used in
+     the REVIEWS / TESTIMONIALS arrays below. Nothing is hardcoded -
+     the rating badge derives {rating} and {count} from data.
+  2. Testimonial slot rule: a video card is inserted into the stream
+     AFTER EVERY 3rd REVIEW (i.e. after review index 2, 5, 8...).
+     Fixed by index, holds as the count grows. With ~20 testimonials
+     available the supply comfortably covers 61+ reviews; testimonials
+     cycle if slots ever outnumber them.
+  3. Marquee is CSS transform only. Each row renders its sequence
+     TWICE; the second copy is aria-hidden="true". translateX(-50%)
+     keyframe = seamless loop. A card crosses the viewport in ~45-60s.
+  4. Hover on a row pauses that row (animation-play-state). The global
+     pause button toggles .is-paused on <body> - both mechanisms
+     coexist.
+  5. prefers-reduced-motion: reduce -> .wall collapses to a static
+     grid (see @media block). The .demo-reduced class applies the
+     same styles for demo/testing.
+  6. Mobile (<=720px): static stacked column, NO marquee. Native
+     scroll is already motion; a vertical marquee fights the thumb.
+  7. Video iframes DO NOT EXIST in the DOM until click. The facade is
+     a thumbnail div + play button; click swaps in the iframe with
+     autoplay=1. Aspect ratio locked via CSS aspect-ratio before load.
+  8. Long reviews clamp at 7 lines with an expand toggle. Expanded
+     cards push row height; rows are top-aligned so neighbours don't
+     stretch.
+  9. Monogram avatar colour: hash of authorDisplayName -> one of
+     [Blue #0082FA, Dark Navy #004F99, Dark Orange #AE3A00]. No
+     photos, ever.
+  10. Demo-only chrome (state switcher, top-right) is marked with
+      data-demo and is NOT part of the production build.
+================================================================ -->
+
+<style>
+  :root {
+    --blue:        #0082FA;
+    --navy:        #004F99;
+    --orange:      #F87700;
+    --orange-dark: #AE3A00;
+    --grey-bg:     #F4F5F9;
+    --grey-mid:    #CBCCD1;
+    --ink:         #1A1A2E;
+    --white:       #FFFFFF;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--grey-bg);
+    color: var(--ink);
+    font-family: 'Montserrat', Arial, Helvetica, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ============ HERO ============ */
+  .hero {
+    text-align: center;
+    padding: 64px 24px 40px;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  .hero .logo { height: 30px; display: inline-block; margin-bottom: 36px; }
+  .hero .eyebrow {
+    display: block;
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--navy);
+    margin-bottom: 14px;
+  }
+  .hero h1 {
+    margin: 0 0 18px;
+    font-size: clamp(32px, 5.4vw, 56px);
+    font-weight: 700;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    color: var(--blue);
+    text-wrap: balance;
+  }
+  .hero .sub {
+    margin: 0 auto 28px;
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--ink);
+    max-width: 560px;
+  }
+
+  /* Live rating badge - values rendered from data, never hardcoded */
+  .badge {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: var(--white);
+    border: 1px solid var(--grey-mid);
+    border-radius: 999px;
+    padding: 10px 20px;
+    font-size: 15px; font-weight: 600;
+    margin-bottom: 30px;
+  }
+  .badge .star { color: var(--orange); font-size: 17px; }
+  .badge .gicon { width: 20px; height: 20px; display: inline-block; }
+
+  /* CTA - the page's single loudest element */
+  .cta {
+    display: inline-block;
+    background: var(--orange);
+    color: var(--white);
+    font-family: inherit;
+    font-size: 16px; font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 16px 38px;
+    border-radius: 10px;
+    border: none;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background .15s, transform .15s;
+  }
+  .cta:hover { background: var(--orange-dark); transform: translateY(-1px); }
+  .cta:focus-visible { outline: 3px solid var(--navy); outline-offset: 3px; }
+
+  /* ============ REVIEW WALL (marquee) ============ */
+  .wall {
+    overflow: hidden;
+    padding: 8px 0 48px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .row { overflow: hidden; }
+  .track {
+    display: flex;
+    gap: 20px;
+    width: max-content;
+    padding: 0 10px;
+    animation: scroll-l var(--dur, 50s) linear infinite;
+    align-items: flex-start;       /* expanded cards don't stretch neighbours */
+  }
+  .row[data-dir="r"] .track { animation-name: scroll-r; }
+  @keyframes scroll-l { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  @keyframes scroll-r { from { transform: translateX(-50%); } to { transform: translateX(0); } }
+
+  .row:hover .track,
+  body.is-paused .track { animation-play-state: paused; }
+
+  /* ============ CARDS ============ */
+  .card {
+    background: var(--white);
+    border: 1px solid var(--grey-mid);
+    border-radius: 14px;
+    padding: 22px 22px 18px;
+    width: 360px;
+    flex: 0 0 auto;
+  }
+  .card .head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%;
+    color: var(--white); font-weight: 700; font-size: 15px;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .card .who { min-width: 0; }
+  .card .name { font-size: 14px; font-weight: 600; }
+  .card .date { font-size: 12px; color: #6b7280; margin-top: 1px; }
+  .stars { color: var(--blue); font-size: 14px; letter-spacing: 2px; margin-bottom: 10px; }
+  .card .text {
+    font-size: 14px; line-height: 1.6; margin: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 7;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card.expanded .text { -webkit-line-clamp: unset; }
+  .more {
+    background: none; border: none; padding: 0;
+    margin-top: 8px;
+    font-family: inherit; font-size: 13px; font-weight: 600;
+    color: var(--blue); cursor: pointer;
+  }
+  .more:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+  /* Owner reply - visually subordinate */
+  .reply {
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--grey-bg);
+    border-radius: 8px;
+    font-size: 12.5px; line-height: 1.55; color: #4b5563;
+  }
+  .reply b { color: var(--ink); font-weight: 600; }
+
+  /* Google attribution - subtle, no fake Google chrome */
+  .gline {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--grey-bg);
+    font-size: 11px; color: #6b7280;
+  }
+  .gline .gicon { width: 13px; height: 13px; display: inline-block; }
+
+  /* ============ TESTIMONIAL CARD (video) ============ */
+  .vcard {
+    background: var(--navy);
+    border-radius: 14px;
+    width: 420px;
+    flex: 0 0 auto;
+    overflow: hidden;
+    color: var(--white);
+  }
+  .vcard.portrait { width: 240px; }
+  .vmedia {
+    position: relative;
+    aspect-ratio: 16 / 9;          /* locked BEFORE load - no shift */
+    background:
+      radial-gradient(120% 100% at 80% 0%, rgba(0,130,250,.45), transparent 60%),
+      var(--navy);
+    cursor: pointer;
+  }
+  .vcard.portrait .vmedia { aspect-ratio: 9 / 16; }
+  .vmedia iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .vplay {
+    position: absolute; inset: 0; margin: auto;
+    width: 64px; height: 64px; border-radius: 50%;
+    background: var(--orange);
+    border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s, transform .15s;
+  }
+  .vplay:hover { background: var(--orange-dark); transform: scale(1.06); }
+  .vplay:focus-visible { outline: 3px solid var(--white); outline-offset: 3px; }
+  .vplay svg { margin-left: 4px; }
+  .vmeta { padding: 14px 18px 16px; }
+  .vmeta .tag {
+    font-size: 10px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: rgba(255,255,255,.65);
+  }
+  .vmeta .client { font-size: 16px; font-weight: 700; margin-top: 4px; }
+  .vmeta .title { font-size: 13px; color: rgba(255,255,255,.75); margin-top: 2px; }
+
+  /* ============ PAUSE TOGGLE ============ */
+  .pause-btn {
+    position: fixed; left: 18px; bottom: 18px; z-index: 40;
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--white);
+    border: 1px solid var(--grey-mid);
+    border-radius: 999px;
+    padding: 10px 16px;
+    font-family: inherit; font-size: 13px; font-weight: 600;
+    color: var(--ink); cursor: pointer;
+    box-shadow: 0 4px 14px rgba(26,26,46,.08);
+  }
+  .pause-btn:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+  .pause-btn .ico { color: var(--blue); display: inline-flex; }
+
+  /* ============ FOOTER ============ */
+  footer {
+    text-align: center;
+    padding: 36px 24px 48px;
+    font-size: 12.5px; color: #6b7280;
+  }
+  footer img { height: 20px; display: block; margin: 0 auto 12px; }
+
+  /* ============ EMPTY / PRE-LAUNCH STATE ============ */
+  .empty-state { display: none; max-width: 980px; margin: 0 auto; padding: 0 24px 64px; }
+  body.is-empty .empty-state { display: block; }
+  body.is-empty .wall, body.is-empty .badge { display: none; }
+  .empty-state .vgrid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
+    justify-items: center; margin-top: 8px;
+  }
+  .empty-state .vcard { width: 100%; max-width: 460px; }
+  .empty-line {
+    text-align: center; font-size: 14px; color: #6b7280;
+    margin: 26px 0 0;
+  }
+
+  /* ============ REDUCED MOTION -> STATIC GRID ============ */
+  /* Identical rules apply under the media query and the demo class. */
+  @media (prefers-reduced-motion: reduce) {
+    .track { animation: none !important; width: auto; flex-wrap: wrap; justify-content: center; }
+    .track > [aria-hidden] { display: none; }   /* no duplicate cards in grid mode */
+    .wall { padding-left: 24px; padding-right: 24px; }
+    .pause-btn { display: none; }            /* nothing to pause */
+  }
+  body.demo-reduced .track { animation: none !important; width: auto; flex-wrap: wrap; justify-content: center; }
+  body.demo-reduced .track > [aria-hidden] { display: none; }
+  body.demo-reduced .wall { padding-left: 24px; padding-right: 24px; }
+  body.demo-reduced .pause-btn { display: none; }
+
+  /* ============ MOBILE: static stacked column ============ */
+  @media (max-width: 720px) {
+    .track { animation: none !important; width: auto; flex-direction: column; align-items: center; }
+    .track > [aria-hidden] { display: none; }
+    .card, .vcard { width: 100%; max-width: 420px; }
+    .vcard.portrait { max-width: 280px; }
+    .wall { padding-left: 20px; padding-right: 20px; }
+    .pause-btn { display: none; }
+    .empty-state .vgrid { grid-template-columns: 1fr; }
+  }
+
+  /* ============ DEMO CHROME (not production) ============ */
+  .demo-panel {
+    position: fixed; right: 14px; top: 14px; z-index: 50;
+    background: var(--ink); color: var(--white);
+    border-radius: 10px; padding: 8px;
+    display: flex; gap: 4px; align-items: center;
+    font-size: 11px;
+  }
+  .demo-panel span { padding: 0 6px; opacity: .6; font-weight: 700; letter-spacing: .08em; }
+  .demo-panel button {
+    background: transparent; color: var(--white);
+    border: 1px solid rgba(255,255,255,.25); border-radius: 6px;
+    font-family: inherit; font-size: 11px; font-weight: 600;
+    padding: 5px 9px; cursor: pointer;
+  }
+  .demo-panel button[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); }
+</style>
+</head>
+<body>
+
+  <!-- DEMO ONLY - state switcher for review. Not part of production. -->
+  <div class="demo-panel" data-demo>
+    <span>DEMO</span>
+    <button data-state="normal"  aria-pressed="true">Normal</button>
+    <button data-state="empty"   aria-pressed="false">Empty</button>
+    <button data-state="paused"  aria-pressed="false">Paused</button>
+    <button data-state="reduced" aria-pressed="false">Reduced motion</button>
+  </div>
+
+  <!-- ============ HERO ============ -->
+  <header class="hero">
+    <img class="logo" src="assets/viewix-logo.png" alt="Viewix">
+    <span class="eyebrow">Viewix Reviews</span>
+    <h1>Glad you're here.</h1>
+    <p class="sub">See what our clients say about working with Viewix.</p>
+    <div class="badge" id="rating-badge">
+      <svg class="gicon" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46a5.53 5.53 0 0 1-2.4 3.62v3h3.87c2.27-2.09 3.57-5.17 3.57-8.81z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.87-3a7.22 7.22 0 0 1-10.8-3.8H1.27v3.1A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.27 14.29a7.21 7.21 0 0 1 0-4.58v-3.1H1.27a12 12 0 0 0 0 10.78l4-3.1z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.59 1.8l3.43-3.44A11.97 11.97 0 0 0 1.27 6.61l4 3.1A7.22 7.22 0 0 1 12 4.77z"/></svg>
+      <span id="badge-text">… ★ · … Google reviews</span>
+    </div>
+    <br>
+    <a class="cta" href="https://viewix.com.au">www.viewix.com.au</a>
+  </header>
+
+  <!-- ============ EMPTY / PRE-LAUNCH ============ -->
+  <section class="empty-state" aria-label="Client testimonials">
+    <div class="vgrid" id="empty-vgrid"></div>
+    <p class="empty-line">Reviews are syncing from Google - check back shortly.</p>
+  </section>
+
+  <!-- ============ REVIEW WALL ============ -->
+  <main class="wall" id="wall" aria-label="Client reviews"></main>
+
+  <!-- Pause control - keyboard focusable, serves touch + SR users -->
+  <button class="pause-btn" id="pause-btn" aria-pressed="false">
+    <span class="ico" id="pause-ico">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+    </span>
+    <span id="pause-label">Pause motion</span>
+  </button>
+
+  <footer>
+    <img src="assets/viewix-logo.png" alt="Viewix">
+    Viewix Pty Ltd · Sydney, Australia · <a href="https://viewix.com.au" style="color:var(--blue); text-decoration:none;">viewix.com.au</a>
+  </footer>
+
+<script>
+/* ================================================================
+   DATA - exact shapes per the API contract. ~15 reviews + 2
+   testimonials, realistic dummy content. NOTHING below hardcodes
+   the review count or rating: the badge derives both.
+================================================================ */
+const REVIEWS = [
+  { authorDisplayName:"Sarah Mitchell",   rating:5, createdAt:"2026-04-18", text:"We'd been burned by two video agencies before Viewix. The difference was obvious from the first call - they asked about our CAC and conversion targets before they asked about 'the vision'. Eight videos in and our cost per lead from Meta is down 38%. They just get that the video is the means, not the end." },
+  { authorDisplayName:"Daniel Nguyen",    rating:5, createdAt:"2026-04-02", text:"Fast, sharp, zero hand-holding required. Scripts arrived ready to shoot, the shoot day ran to the minute, and the cuts came back before deadline. Rare." },
+  { authorDisplayName:"Priya Raman",      rating:5, createdAt:"2026-03-27", text:"The pre-production process alone is worth it. They scraped our channel, told us exactly why our content wasn't moving, and rebuilt our format mix from the data up. First month posting their stuff: 3x our median views. We've signed for the year.", ownerReply:{ text:"Thanks Priya - that founder series of yours is still our favourite shoot this quarter.", createdAt:"2026-03-29" } },
+  { authorDisplayName:"Tom Castellaro",   rating:5, createdAt:"2026-03-15", text:"Booked them for a one-off brand film, stayed for the monthly retainer. The portal they give you to review cuts is better than tools I've paid for." },
+  { authorDisplayName:"Jessica Wei",      rating:5, createdAt:"2026-03-08", text:"As a marketing team of one, I needed an agency that didn't need managing. Viewix runs the whole pipeline - scripts, shoot, edits, even tells me what to post next and why. My CMO thinks I've hired three people." },
+  { authorDisplayName:"Marcus Oliveri",   rating:5, createdAt:"2026-02-22", text:"Straight shooters. They told us our idea for the campaign wouldn't perform and showed us the numbers on why. The alternative they pitched did 4x what our previous best video did. That conversation paid for the whole engagement." },
+  { authorDisplayName:"Hannah Bourke",    rating:5, createdAt:"2026-02-14", text:"Two rounds of revisions included and we barely needed one. The first cuts were that close. Editing quality is genuinely a level above what we got elsewhere - hooks land in the first two seconds, captions are clean, pacing is tight." },
+  { authorDisplayName:"Raj Patel",        rating:5, createdAt:"2026-02-03", text:"Their ads packages are the real deal. Same footage, nine variants, every aspect ratio - plugged straight into Meta Ads Manager. ROAS went from 2.1 to 3.4 inside six weeks. The variant testing matrix they hand over is something our media buyer still talks about." },
+  { authorDisplayName:"Chloe Anderson",   rating:5, createdAt:"2026-01-28", text:"Professional from kickoff to delivery. Weekly updates without asking, a clear portal showing exactly where every video sits, and an account manager who actually answers the phone." },
+  { authorDisplayName:"Ben Tran",         rating:5, createdAt:"2026-01-19", text:"We make industrial equipment. Not exactly TikTok material, we thought. Viewix found the angle - our fitters, the workshop, the weird satisfying machinery shots - and now our hiring pipeline is full and sales calls open with 'saw your videos'. Did not see that coming.", ownerReply:{ text:"The CNC close-ups carried that whole series, Ben. Pleasure working with the team.", createdAt:"2026-01-21" } },
+  { authorDisplayName:"Lucy Hargreaves",  rating:5, createdAt:"2026-01-08", text:"Shoot days are run like a production line, in a good way. Call sheet ahead of time, every setup pre-planned, talent prepped. We got 14 usable videos out of one day." },
+  { authorDisplayName:"Andrew Kospetas",  rating:5, createdAt:"2025-12-18", text:"Worked with them across two companies now. Both times the same: clear pricing, no scope surprises, content that performs. The monthly analytics read they send is written in plain English - what won, why, and what to make next. Board-ready without edits." },
+  { authorDisplayName:"Mei Lin Chang",    rating:5, createdAt:"2025-12-05", text:"Responsive, organised, and the work speaks for itself. Our launch videos cleared a million combined views organically. No paid push." },
+  { authorDisplayName:"Oliver Whitfield", rating:5, createdAt:"2025-11-22", text:"What sold me: they turn down work that isn't a fit. We came in asking for a corporate explainer and they redirected us to a cheaper format that suited the goal better. Agencies that leave money on the table to get the outcome right are the ones you keep." },
+  { authorDisplayName:"Georgia Pappas",   rating:5, createdAt:"2025-11-10", text:"Six months in: every deadline hit, every video approved within two rounds, engagement up across the board. The team feels like an extension of ours rather than a vendor. Couldn't recommend more highly." },
+];
+
+const TESTIMONIALS = [
+  { provider:"youtube", videoId:"dQw4w9WgXcQ", clientName:"Clayton Utz",      title:"Quarterly shoot-day program",  aspect:"16:9" },
+  { provider:"youtube", videoId:"oHg5SJYRHA0", clientName:"Hola Health",      title:"Founder series - 12 videos",   aspect:"9:16" },
+  { provider:"youtube", videoId:"ScMzIvxBSi4", clientName:"Chickanji",        title:"Viral focused package - 16 videos", aspect:"9:16" },
+  { provider:"youtube", videoId:"jNQXAC9IVRw", clientName:"Solace Beauty",    title:"Product launch campaign",      aspect:"16:9" },
+  { provider:"youtube", videoId:"9bZkp7q19f0", clientName:"Meridian Legal",   title:"Partner profile series",       aspect:"16:9" },
+  { provider:"youtube", videoId:"kJQP7kiw5Fk", clientName:"NorthSide Gyms",   title:"Member stories - 8 videos",    aspect:"9:16" },
+];
+
+/* ================================================================
+   RENDER
+================================================================ */
+const AVATAR_COLOURS = ["#0082FA", "#004F99", "#AE3A00"];  // brand only
+const hashName = (s) => [...s].reduce((a,c) => (a*31 + c.charCodeAt(0)) >>> 0, 7);
+const initials = (s) => s.split(/\s+/).map(w => w[0]).slice(0,2).join("").toUpperCase();
+const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-AU", { month:"short", year:"numeric" });
+
+function reviewCard(r) {
+  const el = document.createElement("article");
+  el.className = "card";
+  const colour = AVATAR_COLOURS[hashName(r.authorDisplayName) % AVATAR_COLOURS.length];
+  el.innerHTML = `
+    <div class="head">
+      <span class="avatar" style="background:${colour}">${initials(r.authorDisplayName)}</span>
+      <div class="who">
+        <div class="name"></div>
+        <div class="date">${fmtDate(r.createdAt)}</div>
+      </div>
+    </div>
+    <div class="stars" aria-label="${r.rating} out of 5 stars">${"★".repeat(r.rating)}</div>
+    <p class="text"></p>
+    <div class="gline"><svg class="gicon" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46a5.53 5.53 0 0 1-2.4 3.62v3h3.87c2.27-2.09 3.57-5.17 3.57-8.81z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.87-3a7.22 7.22 0 0 1-10.8-3.8H1.27v3.1A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.27 14.29a7.21 7.21 0 0 1 0-4.58v-3.1H1.27a12 12 0 0 0 0 10.78l4-3.1z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.59 1.8l3.43-3.44A11.97 11.97 0 0 0 1.27 6.61l4 3.1A7.22 7.22 0 0 1 12 4.77z"/></svg> Google review</div>
+  `;
+  el.querySelector(".name").textContent = r.authorDisplayName;
+  el.querySelector(".text").textContent = r.text;
+  /* Design decision: ownerReply is accepted in the data shape but NOT
+     rendered - the page reads cleaner as pure client voice. */
+
+  // Clamp rule: 7 lines, expand on tap. Only add the toggle if clamped.
+  // Checked on first paint AND on first visibility (rAF never fires in a
+  // hidden/background tab, so an IntersectionObserver backstops it).
+  const ensureClampToggle = () => {
+    const t = el.querySelector(".text");
+    if (!t || el.querySelector(".more")) return;
+    if (t.scrollHeight > t.clientHeight + 2) {
+      const btn = document.createElement("button");
+      btn.className = "more";
+      btn.textContent = "Read more";
+      btn.addEventListener("click", () => {
+        const on = el.classList.toggle("expanded");
+        btn.textContent = on ? "Show less" : "Read more";
+      });
+      t.after(btn);
+    }
+  };
+  requestAnimationFrame(ensureClampToggle);
+  new IntersectionObserver((entries, obs) => {
+    if (entries.some(e => e.isIntersecting)) { ensureClampToggle(); obs.disconnect(); }
+  }).observe(el);
+  return el;
+}
+
+function testimonialCard(t) {
+  const el = document.createElement("article");
+  el.className = "vcard" + (t.aspect === "9:16" ? " portrait" : "");
+  el.innerHTML = `
+    <div class="vmedia">
+      <button class="vplay" aria-label="Play testimonial from ${t.clientName}">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M7 4.5v15l13-7.5z"/></svg>
+      </button>
+    </div>
+    <div class="vmeta">
+      <div class="tag">Client testimonial</div>
+      <div class="client"></div>
+      <div class="title"></div>
+    </div>
+  `;
+  el.querySelector(".client").textContent = t.clientName;
+  el.querySelector(".title").textContent = t.title;
+
+  // Facade pattern: iframe is created ON CLICK only. Non-negotiable.
+  el.querySelector(".vplay").addEventListener("click", () => {
+    const media = el.querySelector(".vmedia");
+    const src = t.provider === "youtube"
+      ? `https://www.youtube-nocookie.com/embed/${t.videoId}?autoplay=1`
+      : `https://player.vimeo.com/video/${t.videoId}?autoplay=1`;
+    media.innerHTML = `<iframe src="${src}" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen title="Testimonial: ${t.clientName}"></iframe>`;
+  });
+  return el;
+}
+
+/* Merge stream: testimonial after every 3rd review (fixed index rule).
+   Client has ~20 testimonials - the higher ratio is intentional. */
+function buildStream() {
+  const stream = [];
+  let v = 0;
+  REVIEWS.forEach((r, i) => {
+    stream.push({ kind:"review", data:r });
+    if ((i + 1) % 3 === 0 && TESTIMONIALS.length) {
+      stream.push({ kind:"video", data:TESTIMONIALS[v % TESTIMONIALS.length] });
+      v++;
+    }
+  });
+  // Any unused testimonials append at the stream tail
+  while (v < TESTIMONIALS.length) { stream.push({ kind:"video", data:TESTIMONIALS[v] }); v++; }
+  return stream;
+}
+
+function render() {
+  /* Badge - derived, never hardcoded */
+  const count = REVIEWS.length;
+  const rating = (REVIEWS.reduce((a,r) => a + r.rating, 0) / count).toFixed(1);
+  document.getElementById("badge-text").innerHTML =
+    `${rating} <span class="star">★</span> · ${count} Google reviews`;
+
+  /* Wall: 3 rows, sequential chunks, alternating direction.
+     Each row's sequence is rendered twice; copy #2 is aria-hidden. */
+  const stream = buildStream();
+  const wall = document.getElementById("wall");
+  const ROWS = 4;
+  const per = Math.ceil(stream.length / ROWS);
+  const durs = ["52s", "64s", "58s", "70s"];   // slightly different speeds = organic drift
+
+  for (let i = 0; i < ROWS; i++) {
+    const items = stream.slice(i * per, (i + 1) * per);
+    if (!items.length) continue;
+    const row = document.createElement("div");
+    row.className = "row";
+    row.dataset.dir = i % 2 ? "r" : "l";
+
+    const make = (hidden) => {
+      const track = document.createElement("div");
+      track.className = "track";
+      track.style.setProperty("--dur", durs[i]);
+      if (hidden) track.setAttribute("aria-hidden", "true");
+      items.forEach(it => track.appendChild(
+        it.kind === "review" ? reviewCard(it.data) : testimonialCard(it.data)
+      ));
+      return track;
+    };
+
+    /* Both copies live in one track for a seamless -50% loop.
+       Each DUPLICATED CARD carries aria-hidden="true" itself (not a
+       wrapper) so screen readers hear each review exactly once and the
+       static-grid CSS can hide duplicates via .track > [aria-hidden]. */
+    const track = make(false);
+    const dup = make(true);
+    while (dup.firstChild) {
+      const kid = dup.firstChild;
+      kid.setAttribute("aria-hidden", "true");
+      kid.inert = true;   // removes the duplicate's buttons/links from tab order
+      track.appendChild(kid);
+    }
+    row.appendChild(track);
+    wall.appendChild(row);
+  }
+
+  /* Empty-state testimonials grid */
+  const vg = document.getElementById("empty-vgrid");
+  TESTIMONIALS.forEach(t => vg.appendChild(testimonialCard(t)));
+}
+render();
+
+/* ================================================================
+   PAUSE TOGGLE
+================================================================ */
+const pauseBtn = document.getElementById("pause-btn");
+pauseBtn.addEventListener("click", () => {
+  const paused = document.body.classList.toggle("is-paused");
+  pauseBtn.setAttribute("aria-pressed", String(paused));
+  document.getElementById("pause-label").textContent = paused ? "Play motion" : "Pause motion";
+  document.getElementById("pause-ico").innerHTML = paused
+    ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>'
+    : '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
+});
+
+/* ================================================================
+   DEMO STATE SWITCHER (not production)
+================================================================ */
+document.querySelectorAll("[data-state]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("[data-state]").forEach(b => b.setAttribute("aria-pressed","false"));
+    btn.setAttribute("aria-pressed","true");
+    const s = btn.dataset.state;
+    document.body.classList.toggle("is-empty",    s === "empty");
+    document.body.classList.toggle("demo-reduced", s === "reduced");
+    const wantPaused = (s === "paused");
+    if (document.body.classList.contains("is-paused") !== wantPaused) pauseBtn.click();
+  });
+});
+</script>
+</body>
+</html>

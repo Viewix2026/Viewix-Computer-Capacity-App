@@ -1,0 +1,254 @@
+/* viewixreviews.com.au — styles ported 1:1 from the design spec
+   (docs/plans/viewix-reviews-design/viewixreviews.html). Brand tokens
+   only; structural deltas from the spec are commented inline. */
+
+:root {
+  --blue:        #0082FA;
+  --navy:        #004F99;
+  --orange:      #F87700;
+  --orange-dark: #AE3A00;
+  --grey-bg:     #F4F5F9;
+  --grey-mid:    #CBCCD1;
+  --ink:         #1A1A2E;
+  --white:       #FFFFFF;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--grey-bg);
+  color: var(--ink);
+  font-family: 'Montserrat', Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============ HERO ============ */
+.hero {
+  text-align: center;
+  padding: 64px 24px 40px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+.hero .logo { height: 30px; display: inline-block; margin-bottom: 36px; }
+.hero .eyebrow {
+  display: block;
+  font-size: 13px; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--navy);
+  margin-bottom: 14px;
+}
+.hero h1 {
+  margin: 0 0 18px;
+  font-size: clamp(32px, 5.4vw, 56px);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  color: var(--blue);
+  text-wrap: balance;
+}
+.hero .sub {
+  margin: 0 auto 28px;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--ink);
+  max-width: 560px;
+}
+
+/* Live rating badge - values rendered from data, never hardcoded */
+.badge {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: var(--white);
+  border: 1px solid var(--grey-mid);
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 15px; font-weight: 600;
+  margin-bottom: 30px;
+}
+.badge[hidden] { display: none; }
+.badge .star { color: var(--orange); font-size: 17px; }
+.badge .gicon { width: 20px; height: 20px; display: inline-block; }
+
+/* CTA - the page's single loudest element */
+.cta {
+  display: inline-block;
+  background: var(--orange);
+  color: var(--white);
+  font-family: inherit;
+  font-size: 16px; font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 16px 38px;
+  border-radius: 10px;
+  border: none;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .15s, transform .15s;
+}
+.cta:hover { background: var(--orange-dark); transform: translateY(-1px); }
+.cta:focus-visible { outline: 3px solid var(--navy); outline-offset: 3px; }
+
+/* ============ REVIEW WALL (marquee) ============ */
+.wall {
+  overflow: hidden;
+  padding: 8px 0 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.row { overflow: hidden; }
+.track {
+  display: flex;
+  gap: 20px;
+  width: max-content;
+  padding: 0 10px;
+  animation: scroll-l var(--dur, 50s) linear infinite;
+  align-items: flex-start;       /* expanded cards don't stretch neighbours */
+}
+.row[data-dir="r"] .track { animation-name: scroll-r; }
+@keyframes scroll-l { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes scroll-r { from { transform: translateX(-50%); } to { transform: translateX(0); } }
+
+.row:hover .track,
+body.is-paused .track { animation-play-state: paused; }
+
+/* ============ CARDS ============ */
+.card {
+  background: var(--white);
+  border: 1px solid var(--grey-mid);
+  border-radius: 14px;
+  padding: 22px 22px 18px;
+  width: 360px;
+  flex: 0 0 auto;
+}
+.card .head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  color: var(--white); font-weight: 700; font-size: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+}
+.card .who { min-width: 0; }
+.card .name { font-size: 14px; font-weight: 600; }
+.card .date { font-size: 12px; color: #6b7280; margin-top: 1px; }
+.stars { color: var(--blue); font-size: 14px; letter-spacing: 2px; margin-bottom: 10px; }
+.card .text {
+  font-size: 14px; line-height: 1.6; margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card.expanded .text { -webkit-line-clamp: unset; }
+.more {
+  background: none; border: none; padding: 0;
+  margin-top: 8px;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--blue); cursor: pointer;
+}
+.more:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+/* Google attribution - subtle, no fake Google chrome */
+.gline {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--grey-bg);
+  font-size: 11px; color: #6b7280;
+}
+.gline .gicon { width: 13px; height: 13px; display: inline-block; }
+
+/* ============ TESTIMONIAL CARD (video) ============ */
+.vcard {
+  background: var(--navy);
+  border-radius: 14px;
+  width: 420px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: var(--white);
+}
+.vcard.portrait { width: 240px; }
+.vmedia {
+  position: relative;
+  aspect-ratio: 16 / 9;          /* locked BEFORE load - no shift */
+  background:
+    radial-gradient(120% 100% at 80% 0%, rgba(0,130,250,.45), transparent 60%),
+    var(--navy);
+  cursor: pointer;
+}
+.vcard.portrait .vmedia { aspect-ratio: 9 / 16; }
+.vmedia iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.vplay {
+  position: absolute; inset: 0; margin: auto;
+  width: 64px; height: 64px; border-radius: 50%;
+  background: var(--orange);
+  border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, transform .15s;
+}
+.vplay:hover { background: var(--orange-dark); transform: scale(1.06); }
+.vplay:focus-visible { outline: 3px solid var(--white); outline-offset: 3px; }
+.vplay svg { margin-left: 4px; }
+.vmeta { padding: 14px 18px 16px; }
+.vmeta .tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: rgba(255,255,255,.65);
+}
+.vmeta .client { font-size: 16px; font-weight: 700; margin-top: 4px; }
+.vmeta .title { font-size: 13px; color: rgba(255,255,255,.75); margin-top: 2px; }
+
+/* ============ PAUSE TOGGLE ============ */
+.pause-btn {
+  position: fixed; left: 18px; bottom: 18px; z-index: 40;
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--white);
+  border: 1px solid var(--grey-mid);
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--ink); cursor: pointer;
+  box-shadow: 0 4px 14px rgba(26,26,46,.08);
+}
+.pause-btn[hidden] { display: none; }
+.pause-btn:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+.pause-btn .ico { color: var(--blue); display: inline-flex; }
+
+/* ============ FOOTER ============ */
+footer {
+  text-align: center;
+  padding: 36px 24px 48px;
+  font-size: 12.5px; color: #6b7280;
+}
+footer img { height: 20px; display: block; margin: 0 auto 12px; }
+footer a { color: var(--blue); text-decoration: none; }
+
+/* ============ EMPTY / PRE-LAUNCH STATE ============ */
+.empty-state { display: none; max-width: 980px; margin: 0 auto; padding: 0 24px 64px; }
+body.is-empty .empty-state { display: block; }
+body.is-empty .wall { display: none; }
+.empty-state .vgrid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 22px;
+  justify-items: center; margin-top: 8px;
+}
+.empty-state .vgrid:empty { display: none; }
+.empty-state .vcard { width: 100%; max-width: 460px; }
+.empty-line {
+  text-align: center; font-size: 14px; color: #6b7280;
+  margin: 26px 0 0;
+}
+
+/* ============ REDUCED MOTION -> STATIC GRID ============ */
+@media (prefers-reduced-motion: reduce) {
+  .track { animation: none !important; width: auto; flex-wrap: wrap; justify-content: center; }
+  .track > [aria-hidden] { display: none; }   /* no duplicate cards in grid mode */
+  .wall { padding-left: 24px; padding-right: 24px; }
+  .pause-btn { display: none; }               /* nothing to pause */
+}
+
+/* ============ MOBILE: static stacked column ============ */
+@media (max-width: 720px) {
+  .track { animation: none !important; width: auto; flex-direction: column; align-items: center; }
+  .track > [aria-hidden] { display: none; }
+  .card, .vcard { width: 100%; max-width: 420px; }
+  .vcard.portrait { max-width: 280px; }
+  .wall { padding-left: 20px; padding-right: 20px; }
+  .pause-btn { display: none; }
+  .empty-state .vgrid { grid-template-columns: 1fr; }
+}

@@ -11,7 +11,8 @@
     "test:delivery-am": "node api/public/__tests__/delivery-am.test.mjs",
     "test:captions": "node api/_preprodCaptions.test.mjs",
     "test:calendar": "node --test tests/*.test.js",
-    "test:ig-handle": "node --test shared/__tests__/igHandle.test.mjs"
+    "test:ig-handle": "node --test shared/__tests__/igHandle.test.mjs",
+    "test:reviews": "node --test api/__tests__/reviews-sync.test.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
