@@ -18,6 +18,7 @@ import {
   resolveDealValue,
   resolveDeal,
   resolveDealClaims,
+  resolveWonDealId,
   parseVideoCount,
   extractNumberOfVideos,
   extractDealPersonId,
@@ -422,6 +423,47 @@ test("resolveDeal: tie => ambiguous, no entry; mismatch/none => null", () => {
   // no candidate => null
   assert.equal(resolveDeal({ projectName: "Nope" }, CARRY_IDX), null);
 });
+
+// ─── resolveWonDealId (webhook-deal-won FK capture at win-time) ───────────
+// The webhook stamps project.attioDealId from the deal list it just synced, so
+// the nightly contact backfill can match by id instead of fragile name matching.
+{
+  const idx = buildDealIndex({ data: [
+    deal({ id: "wd-uniq", name: "Hola Health Retainer Month 2", value: 4000, companyId: "co-hola" }),
+    deal({ id: "wd-a", name: "Meta Ads Standard", value: 7000, companyId: "co-a" }),
+    deal({ id: "wd-b", name: "Meta Ads Standard", value: 9000, companyId: "co-b" }),
+  ] }, { includeZeroValue: true });
+
+  test("resolveWonDealId: unique deal name resolves the record id via name", () => {
+    const r = resolveWonDealId(idx, { dealName: "Hola Health Retainer Month 2" });
+    assert.equal(r.dealId, "wd-uniq");
+    assert.equal(r.via, "name");
+  });
+
+  test("resolveWonDealId: payload deal id (carried in companyId) wins via fk, name ignored", () => {
+    // Zapier maps the deal's record id into companyId; a record-id hit is the
+    // strongest signal and resolves even when the deal name is generic/edited.
+    const r = resolveWonDealId(idx, { dealName: "anything at all", companyId: "wd-uniq" });
+    assert.equal(r.dealId, "wd-uniq");
+    assert.equal(r.via, "fk");
+  });
+
+  test("resolveWonDealId: same-named deals + no company => ambiguous, never guesses", () => {
+    assert.deepEqual(resolveWonDealId(idx, { dealName: "Meta Ads Standard" }), { ambiguous: true });
+  });
+
+  test("resolveWonDealId: same-named deals disambiguated by the project's company id", () => {
+    const r = resolveWonDealId(idx, { dealName: "Meta Ads Standard", companyId: "co-b" });
+    assert.equal(r.dealId, "wd-b");
+    assert.equal(r.via, "name");
+  });
+
+  test("resolveWonDealId: no candidate / blank name => null (left FK-less for the nightly)", () => {
+    assert.equal(resolveWonDealId(idx, { dealName: "No Such Deal" }), null);
+    assert.equal(resolveWonDealId(idx, { dealName: "" }), null);
+    assert.equal(resolveWonDealId(idx, {}), null);
+  });
+}
 
 // ─── normaliseCloseDate (webhook-deal-won's milestone anchor) ──────
 // Regression: an unparseable closeDate ("13/05/2026") used to throw

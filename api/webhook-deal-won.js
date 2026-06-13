@@ -4,7 +4,7 @@
 // Writes to Firebase via admin SDK (falls back to REST if service account not configured)
 
 import { adminGet, adminSet, adminPatch, getAdmin, runRtdbTransaction } from "./_fb-admin.js";
-import { parseVideoCount, normaliseCloseDate, dealDedupKey, findRecentDuplicateProject } from "../shared/attio-extract.js";
+import { parseVideoCount, normaliseCloseDate, dealDedupKey, findRecentDuplicateProject, buildDealIndex, resolveWonDealId } from "../shared/attio-extract.js";
 import { identifyDeal, productLineLabel, videoTypeToPartnership } from "./_tiers.js";
 import { computeFoundersMetrics } from "./_attio-metrics.js";
 import { send as sendEmail } from "./_email/send.js";
@@ -644,6 +644,37 @@ export default async function handler(req, res) {
         } catch (metricsErr) {
           console.error("Founders metrics calc failed:", metricsErr);
           results.foundersMetrics = `failed: ${metricsErr.message}`;
+        }
+
+        // --- 5b. STAMP THE DEAL FOREIGN KEY ---
+        // Capture the won deal's Attio record_id onto the project as attioDealId,
+        // the strong foreign key the nightly contact backfill (sync-attio-cache.js)
+        // matches on before it falls back to fragile name matching. Resolve it now,
+        // at win-time, because projectName still equals the deal name so the match
+        // is reliable — and once stored the FK survives any later project-name edit
+        // that would otherwise break the nightly's name fallback (the exact failure
+        // that leaves projects like "Hola Health …" permanently un-emailable: no FK
+        // was ever stored, and the edited project name no longer matches the deal).
+        // Reuses the allDeals we just fetched (no extra Attio call) and never
+        // guesses — an ambiguous/unmatched deal leaves attioDealId null and the
+        // nightly stamps the reason for the daily digest. Non-fatal: the project +
+        // confirmation email are already committed above, so any failure here just
+        // defers the FK to the nightly name match.
+        try {
+          const dealIndex = buildDealIndex({ data: allDeals }, { includeZeroValue: true });
+          const fk = resolveWonDealId(dealIndex, { dealName, companyId });
+          if (fk && fk.dealId) {
+            await fbPatch(`/projects/${projectId}`, { attioDealId: fk.dealId });
+            if (links.preprodId && links.preprodType) {
+              await fbPatch(`/preproduction/${links.preprodType}/${links.preprodId}`, { attioDealId: fk.dealId });
+            }
+            results.attioDealId = `linked via ${fk.via}`;
+          } else {
+            results.attioDealId = fk && fk.ambiguous ? "ambiguous — left blank" : "no confident match — left blank";
+          }
+        } catch (fkErr) {
+          console.error("webhook-deal-won: attioDealId resolution failed:", fkErr.message);
+          results.attioDealId = `failed: ${fkErr.message}`;
         }
       } else {
         results.attioCache = "skipped (no ATTIO_API_KEY)";

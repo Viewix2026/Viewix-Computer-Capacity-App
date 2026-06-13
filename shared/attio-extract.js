@@ -383,6 +383,29 @@ export function resolveDeal(project, dealIndex) {
   return null; // none or mismatch -> no confident deal to backfill from
 }
 
+// Win-time foreign-key resolver for api/webhook-deal-won.js. Given the deal list
+// just synced to /attioCache and the won deal's name + the payload's companyId,
+// return the deal's Attio record_id to stamp as project.attioDealId — the strong
+// FK the nightly contact backfill (sync-attio-cache.js) prefers over fragile name
+// matching. Resolution mirrors resolveDeal: a record-id hit on companyId first
+// (the Zapier payload maps the deal id into that field), else a confident
+// name(+company) match. The webhook is the ideal moment to capture it: projectName
+// still equals the deal name (so the name path resolves cleanly), and once stored
+// the FK survives any later project-name edit that would break the nightly's name
+// fallback — the exact failure that leaves projects un-emailable. Returns
+// { dealId, via } on a confident match, { ambiguous: true } on a tie, or null when
+// there is no confident deal. Never guesses: an ambiguous/absent match leaves the
+// project FK-less so the nightly stamps blocked_ambiguous / blocked_no_deal.
+export function resolveWonDealId(dealIndex, { dealName, companyId } = {}) {
+  const m = resolveDeal(
+    { projectName: (dealName || "").trim(), attioCompanyId: companyId || null, attioDealId: null },
+    dealIndex,
+  );
+  if (m && m.dealId && !m.ambiguous) return { dealId: m.dealId, via: m.via };
+  if (m && m.ambiguous) return { ambiguous: true };
+  return null;
+}
+
 // The deal record ids a project could be CLAIMING, for the double-count guard in
 // computeProfitability — distinct from resolveDealValue (attaches a value, FK
 // only) and resolveDeal (backfill, one confident match). Returns the FK id when
