@@ -105,6 +105,9 @@ export const PORTAL_CSS = `
   border: 0; outline: 0; margin: 0;
 }
 .vx button { cursor: pointer; }
+.vx button:focus-visible, .vx a:focus-visible, .vx [role="button"]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 .vx-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
 .vx-scroll::-webkit-scrollbar-thumb { background: rgba(15,18,26,0.12); border-radius: 4px; }

@@ -47,17 +47,48 @@ function cutsWaiting(p) {
   return p.needsYou ? Math.max((c.ready || 0) - (c.approved || 0), 0) : 0;
 }
 
-// Dense desktop row (design: one line per project — client mark ·
-// name · phase · videos · AM · CTA). The whole row opens the project,
-// which lands directly on its videos.
-function ProjectRow({ p, onOpen, mid }) {
+// Dense desktop row (design v2: one line per project — client mark ·
+// name · phase · videos · quick links · CTA; the AM avatar left the
+// rows as redundant with the rail card). The whole row opens the
+// project, which lands directly on its videos.
+//
+// Quick-link chip into a project sub-view. Real <a> so middle-click /
+// long-press work; SPA-navigated via onGo. stopPropagation: the row
+// div also navigates.
+function QuickChip({ icon, label, href, onGo, stacked }) {
+  return (
+    <a
+      href={href}
+      title={label}
+      onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); e.stopPropagation(); onGo(); }}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        padding: stacked ? "5px 9px" : "7px 11px", borderRadius: 8,
+        border: "1px solid var(--line)", background: "var(--bg-2)",
+        color: "var(--text-2)", fontSize: stacked ? 11.5 : 12, fontWeight: 600,
+        textDecoration: "none", whiteSpace: "nowrap",
+      }}
+    >
+      <span style={{ color: "var(--accent)", display: "inline-flex" }}>{icon}</span>
+      {label}
+    </a>
+  );
+}
+
+function ProjectRow({ p, onOpen, onOpenView, mid }) {
   const waiting = cutsWaiting(p);
+  const chips = (
+    <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: mid ? "column" : "row", gap: 6, alignItems: mid ? "stretch" : "center" }}>
+      <QuickChip icon={<Icon.doc />} label="Pre-prod" href={`/clients/p/${p.projectId}/preprod`} onGo={() => onOpenView("preprod")} stacked={mid} />
+      <QuickChip icon={<Icon.cal />} label="Schedule" href={`/clients/p/${p.projectId}/schedule`} onGo={() => onOpenView("schedule")} stacked={mid} />
+    </div>
+  );
   return (
     <div onClick={onOpen} style={{
       display: "grid",
-      gridTemplateColumns: mid ? "48px minmax(160px, 1fr) 170px 70px 40px 150px" : "56px minmax(200px, 1fr) 220px 90px 44px 170px",
-      alignItems: "center", gap: mid ? 14 : 20,
-      padding: mid ? "16px 18px" : "18px 24px",
+      gridTemplateColumns: mid ? "48px minmax(160px, 1fr) 180px 70px 90px 150px" : "56px minmax(180px, 1fr) 200px 70px 190px 150px",
+      alignItems: "center", gap: mid ? 14 : 16,
+      padding: mid ? "16px 18px" : "18px 20px",
       background: waiting ? "rgba(0,130,250,0.025)" : "transparent",
       cursor: "pointer",
     }}>
@@ -92,9 +123,7 @@ function ProjectRow({ p, onOpen, mid }) {
         </div>
       </div>
 
-      <div title={p.accountManager?.name ? `Managed by ${p.accountManager.name}` : undefined}>
-        <AmAvatar am={p.accountManager} size={34} />
-      </div>
+      {chips}
 
       <div style={{ justifySelf: "end" }}>
         {/* stopPropagation: the row div also navigates — without it a
@@ -170,7 +199,11 @@ function ProjectCard({ p, onOpen, narrow }) {
 }
 
 function DashboardBody({ data, narrow, onOpenProject }) {
-  const mid = useIsNarrow(1280);          // 900-1280: single column, tighter rows
+  // 900-1440: single column, tighter rows with stacked chips. The
+  // two-col grid (content + 340px rail) only fits the full row grid
+  // from 1440 up; the earlier 1280 cutoff left a 1280-1375 overflow
+  // band.
+  const mid = useIsNarrow(1440);
   const projects = data?.projects || [];
   const active = projects.filter(p => p.status !== "archived");
   const archived = projects.filter(p => p.status === "archived");
@@ -323,7 +356,7 @@ function DashboardBody({ data, narrow, onOpenProject }) {
               <div style={{ border: "1px solid var(--line)", borderRadius: 14, overflow: "hidden", background: "var(--surface)", boxShadow: "0 1px 0 rgba(15,18,26,0.02)" }}>
                 {active.map((p, i) => (
                   <div key={p.projectId} style={{ borderTop: i ? "1px solid var(--line)" : "none" }}>
-                    <ProjectRow p={p} mid={mid} onOpen={() => onOpenProject(p.projectId)} />
+                    <ProjectRow p={p} mid={mid} onOpen={() => onOpenProject(p.projectId)} onOpenView={(v) => onOpenProject(p.projectId, v)} />
                   </div>
                 ))}
               </div>

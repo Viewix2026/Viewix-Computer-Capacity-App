@@ -25,10 +25,12 @@ function PortalLoading({ label = "Loading your portal..." }) {
 }
 
 // Parse the in-portal route from the pathname:
-//   /clients, /clients/         -> { name:"dashboard" }
-//   /clients/p/<shortId>        -> { name:"project", id }
-//   /clients/analytics          -> { name:"analytics" }
-//   /clients/accounts           -> { name:"accounts" }   (Phase 5)
+//   /clients, /clients/                  -> { name:"dashboard" }
+//   /clients/p/<shortId>                 -> { name:"project", id, view:"videos" }
+//   /clients/p/<shortId>/preprod         -> { name:"project", id, view:"preprod" }
+//   /clients/p/<shortId>/schedule        -> { name:"project", id, view:"schedule" }
+//   /clients/analytics                   -> { name:"analytics" }
+//   /clients/accounts                    -> { name:"accounts" }   (Phase 5)
 function parseRoute() {
   if (/^\/clients\/accounts\/?$/i.test(window.location.pathname)) {
     return { name: "accounts" };
@@ -36,8 +38,8 @@ function parseRoute() {
   if (/^\/clients\/analytics\/?$/i.test(window.location.pathname)) {
     return { name: "analytics" };
   }
-  const m = window.location.pathname.match(/^\/clients\/p\/([a-z0-9]{4,16})/i);
-  if (m) return { name: "project", id: m[1].toLowerCase() };
+  const m = window.location.pathname.match(/^\/clients\/p\/([a-z0-9]{4,16})(?:\/(preprod|schedule))?\/?$/i);
+  if (m) return { name: "project", id: m[1].toLowerCase(), view: (m[2] || "videos").toLowerCase() };
   return { name: "dashboard" };
 }
 
@@ -63,8 +65,10 @@ export function ClientPortal() {
       try {
         await completeClientSignIn();           // uses pending email (same device)
         if (cancelled) return;
-        // Strip the long sign-in query string, keep the /clients/ route.
-        window.history.replaceState(null, "", "/clients/");
+        // Strip the long sign-in query string, keep the path — the
+        // continue URL may carry a deep link (/clients/p/{id}/preprod).
+        window.history.replaceState(null, "", window.location.pathname);
+        setRoute(parseRoute());
         setCompleting(false);
       } catch (e) {
         if (cancelled) return;
@@ -114,7 +118,8 @@ export function ClientPortal() {
     setCompleteErr("");
     try {
       await completeClientSignIn(email);
-      window.history.replaceState(null, "", "/clients/");
+      window.history.replaceState(null, "", window.location.pathname);
+      setRoute(parseRoute());
       setNeedEmail(false);
     } catch (e) {
       setCompleteErr(e?.message || "Could not complete sign-in");
@@ -136,6 +141,8 @@ export function ClientPortal() {
     body = (
       <ProjectView
         projectShortId={route.id}
+        view={route.view}
+        onViewChange={(v) => navigate(`/clients/p/${route.id}${v === "videos" ? "" : `/${v}`}`)}
         user={user}
         theme={theme}
         onTheme={onTheme}
@@ -174,7 +181,7 @@ export function ClientPortal() {
         theme={theme}
         onTheme={onTheme}
         onSignOut={onSignOut}
-        onOpenProject={(shortId) => navigate(`/clients/p/${shortId}`)}
+        onOpenProject={(shortId, view) => navigate(`/clients/p/${shortId}${view && view !== "videos" ? `/${view}` : ""}`)}
         onNav={onNavTab}
         authFetch={authFetch}
       />
