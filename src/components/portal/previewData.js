@@ -28,12 +28,19 @@ const AM = {
   bookingUrl: "https://calendar.app.google/viewix-jordan",
 };
 
+// Data-URI logo so the image path renders offline in the sandbox.
+const CHICKANJI_LOGO = { url: "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="10" fill="%23ff8a00"/><text x="24" y="31" font-family="Montserrat,Arial" font-size="20" font-weight="800" fill="white" text-anchor="middle">C</text><circle cx="24" cy="40" r="2" fill="white"/></svg>'), bg: "#ff8a00" };
+
+// Test matrix for the chip gating + logos:
+//  viral16  — has preprod, NOT all approved → Pre-prod chip only, has logo
+//  holaedu8 — has preprod, ALL approved      → both chips, no logo (initials)
+//  solfound6 — no preprod, none approved     → no chips, no logo
 const PROJECTS = [
-  { projectId: "viral16", orgName: "Chickanji", projectName: "Viral Focused Package", status: "active", phase: 3, productLine: "Social — viral", counts: { total: 6, ready: 5, approved: 3, posted: 2, changes: 1, waiting: 2 }, needsYou: true, accountManager: AM },
-  { projectId: "holaedu8", orgName: "Hola Health", projectName: "Always-on · Education series", status: "active", phase: 2, productLine: "Social — organic", counts: { total: 8, ready: 3, approved: 3, posted: 2, changes: 1, waiting: 0 }, needsYou: false, accountManager: AM },
-  { projectId: "solfound6", orgName: "Solace Beauty", projectName: "Founder POV · 6-pack", status: "active", phase: 1, productLine: "Meta ads", counts: { total: 6, ready: 0, approved: 0, posted: 0, changes: 0, waiting: 0 }, needsYou: false, accountManager: AM },
-  { projectId: "brandfilm", orgName: "Chickanji", projectName: "Brand film · 60s", status: "archived", phase: 3, productLine: "Brand film", counts: { total: 1, ready: 1, approved: 1, posted: 1, changes: 0, waiting: 0 }, needsYou: false, accountManager: AM },
-  { projectId: "winterads", orgName: "Hola Health", projectName: "Performance ads · winter", status: "archived", phase: 3, productLine: "Meta ads", counts: { total: 8, ready: 8, approved: 8, posted: 8, changes: 0, waiting: 0 }, needsYou: false, accountManager: AM },
+  { projectId: "viral16", orgName: "Chickanji", logo: CHICKANJI_LOGO, hasPreprod: true, projectName: "Viral Focused Package", status: "active", phase: 3, productLine: "Social — viral", counts: { total: 6, ready: 5, approved: 3, posted: 2, changes: 1, waiting: 2 }, needsYou: true, accountManager: AM },
+  { projectId: "holaedu8", orgName: "Hola Health", logo: null, hasPreprod: true, projectName: "Always-on · Education series", status: "active", phase: 2, productLine: "Social — organic", counts: { total: 8, ready: 8, approved: 8, posted: 5, changes: 0, waiting: 0 }, needsYou: false, accountManager: AM },
+  { projectId: "solfound6", orgName: "Solace Beauty", logo: null, hasPreprod: false, projectName: "Founder POV · 6-pack", status: "active", phase: 1, productLine: "Meta ads", counts: { total: 6, ready: 0, approved: 0, posted: 0, changes: 0, waiting: 0 }, needsYou: false, accountManager: AM },
+  { projectId: "brandfilm", orgName: "Chickanji", logo: CHICKANJI_LOGO, hasPreprod: false, projectName: "Brand film · 60s", status: "archived", phase: 3, productLine: "Brand film", counts: { total: 1, ready: 1, approved: 1, posted: 1, changes: 0, waiting: 0 }, needsYou: false, accountManager: AM },
+  { projectId: "winterads", orgName: "Hola Health", logo: null, hasPreprod: true, projectName: "Performance ads · winter", status: "archived", phase: 3, productLine: "Meta ads", counts: { total: 8, ready: 8, approved: 8, posted: 8, changes: 0, waiting: 0 }, needsYou: false, accountManager: AM },
 ];
 
 const VIRAL_ROWS = [
@@ -48,6 +55,7 @@ const VIRAL_ROWS = [
 function detail(p, rows, preprodType) {
   return {
     orgName: p.orgName,
+    logo: p.logo || null,
     projectName: p.projectName,
     status: p.status,
     phase: p.phase,
@@ -55,10 +63,13 @@ function detail(p, rows, preprodType) {
     accountManager: AM,
     deliveries: rows.length
       ? { available: true, counts: p.counts, rows }     // deliveryId omitted: writes stay inert in preview
+      : { available: false, counts: p.counts },
+    // Gated on the project's hasPreprod so the pre-prod pill hides when
+    // unlinked. embeddable:false renders the clean "open in its own
+    // page" card — an embedded iframe to /p/{id} can't auth in sandbox.
+    preproduction: p.hasPreprod
+      ? { available: true, embeddable: false, url: "#", type: preprodType || "metaAds" }
       : { available: false },
-    // embeddable:false renders the clean "open in its own page" card —
-    // an embedded iframe to /p/{id} can't auth in the sandbox.
-    preproduction: { available: true, embeddable: false, url: "#", type: preprodType || "metaAds" },
   };
 }
 

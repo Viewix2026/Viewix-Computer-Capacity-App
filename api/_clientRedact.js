@@ -62,9 +62,15 @@ export function deliveryCounts(videos) {
   const arr = Array.isArray(videos) ? videos : [];
   const total = arr.length;
   const ready = arr.filter(v => v && (v.viewixStatus === "Ready for Review" || v.viewixStatus === "Completed")).length;
-  const approved = arr.filter(v => v && (v.revision1 === "Approved" || v.revision2 === "Approved")).length;
+  // approved/changes are LATEST-wins (R2 over R1), matching `waiting`
+  // below and the reconciler's deriveViewixStatus. A toggled-back video
+  // (R1 Approved, R2 Need Revisions) is NOT currently approved — it's
+  // back with Viewix. OR-across-revisions wrongly counted it as both,
+  // which made allApproved (Schedule gate) fire mid-revision.
+  const latestRev = v => (v && (v.revision2 || v.revision1)) || "";
+  const approved = arr.filter(v => latestRev(v) === "Approved").length;
   const posted = arr.filter(v => v && v.posted).length;
-  const changes = arr.filter(v => v && (v.revision1 === "Need Revisions" || v.revision2 === "Need Revisions")).length;
+  const changes = arr.filter(v => latestRev(v) === "Need Revisions").length;
   // Cuts genuinely awaiting the CLIENT: delivered, and the latest
   // revision response (R2 wins over R1, mirroring the reconciler's
   // deriveViewixStatus) is neither Approved nor Need Revisions.
@@ -144,18 +150,31 @@ function orgName(project, account) {
   return String(account?.companyName || project?.clientName || "").trim() || "Your organisation";
 }
 
+// The client's own brand mark from the account record. `logoUrl` may be
+// a Google Drive share link (serves HTML, not bytes), so it runs through
+// the same normaliser the AM photo uses. `bg` carries the producer's
+// logoBg preference so a white-on-transparent mark sits on the right
+// surface. null when no logo is set — the UI falls back to initials.
+// Mirrors buildClientLogo() used by the public /d/ delivery page.
+function clientLogo(account) {
+  const url = normalizeAvatarUrl(clean(account?.logoUrl));
+  return url ? { url, bg: clean(account?.logoBg) || "white" } : null;
+}
+
 // Dashboard list item. NOT a filtered project — a built projection.
 export function redactProjectListItem({ project, account, delivery, preprod, editors }) {
   const counts = deliveryCounts(delivery?.videos);
   return {
     projectId: project?.shortId || null,          // shortId, not raw internal id
     orgName: orgName(project, account),
+    logo: clientLogo(account),                     // {url,bg} or null → UI falls back to initials
     projectName: String(project?.projectName || "Untitled project"),
     status: project?.status === "archived" ? "archived" : "active",
     phase: derivePhase(project, delivery, preprod),
     productLine: project?.productLine || null,
     counts,
     needsYou: counts.waiting > 0,
+    hasPreprod: !!preprod,                         // a resolved preprod node → pre-prod link is live
     accountManager: accountManagerBlock(account, editors),
   };
 }
@@ -219,6 +238,7 @@ export function redactProjectDetail({ project, account, delivery, preprod, deliv
   return {
     projectId: project?.shortId || null,
     orgName: orgName(project, account),
+    logo: clientLogo(account),
     projectName: String(project?.projectName || "Untitled project"),
     status: project?.status === "archived" ? "archived" : "active",
     phase: derivePhase(project, delivery, preprod),

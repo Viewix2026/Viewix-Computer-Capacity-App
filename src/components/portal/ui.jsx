@@ -205,7 +205,7 @@ export const ManagerPhoto = ({ size = 72, initials = "VX", style }) => (
   </div>
 );
 
-export const UserMenu = ({ user = {}, theme = "light", onTheme = () => {}, onSignOut = () => {}, anchor = "right", style = {} }) => {
+export const UserMenu = ({ user = {}, onSignOut = () => {}, anchor = "right", style = {} }) => {
   const name = user.displayName || user.email || "You";
   const initials = (name.match(/\b\w/g) || ["Y"]).slice(0, 2).join("").toUpperCase();
   return (
@@ -214,7 +214,7 @@ export const UserMenu = ({ user = {}, theme = "light", onTheme = () => {}, onSig
       width: 304, background: "var(--surface)",
       border: "1px solid var(--line-2)", borderRadius: 14,
       boxShadow: "0 24px 56px -16px rgba(15,18,26,0.28), 0 1px 0 rgba(255,255,255,0.6) inset",
-      padding: 8, zIndex: 50, ...style,
+      padding: 8, zIndex: 70, ...style,
     }}>
       <div style={{ padding: "12px 12px 14px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--line)", marginBottom: 6 }}>
         <div style={{
@@ -227,34 +227,6 @@ export const UserMenu = ({ user = {}, theme = "light", onTheme = () => {}, onSig
           <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>{name}</div>
           <div style={{ fontSize: 12, color: "var(--text-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email || ""}</div>
         </div>
-      </div>
-
-      <div style={{ padding: "10px 12px", borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Appearance</div>
-          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>
-            {theme === "dark" ? "Dark - internal preview" : "Light - standard"}
-          </div>
-        </span>
-        <div style={{ display: "inline-flex", padding: 3, borderRadius: 8, background: "var(--bg-2)", border: "1px solid var(--line)" }}>
-          {[{ k: "light", label: "Light" }, { k: "dark", label: "Dark" }].map(t => {
-            const active = theme === t.k;
-            return (
-              <button key={t.k} onClick={() => onTheme(t.k)} style={{
-                padding: "5px 10px", borderRadius: 6,
-                background: active ? "var(--surface)" : "transparent",
-                color: active ? "var(--text)" : "var(--text-3)",
-                fontSize: 12, fontWeight: 600,
-                border: active ? "1px solid var(--line-2)" : "1px solid transparent",
-                boxShadow: active ? "0 1px 2px rgba(15,18,26,0.06)" : "none",
-              }}>{t.label}</button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div style={{ margin: "4px 4px 8px", padding: "8px 12px", borderRadius: 8, background: "var(--orange-soft)", border: "1px solid var(--orange-line)", fontSize: 11, color: "var(--orange-2)", lineHeight: 1.45 }}>
-        Dark mode is currently internal-only. Surface to clients later as a preference.
       </div>
 
       <div style={{ borderTop: "1px solid var(--line)", marginTop: 6, paddingTop: 6 }}>
@@ -271,11 +243,14 @@ export const UserMenu = ({ user = {}, theme = "light", onTheme = () => {}, onSig
   );
 };
 
-export const PortalNav = ({ active = "Projects", context, user, menuOpen = false, onMenu = () => {}, theme = "light", onTheme = () => {}, onSignOut = () => {}, onNav = () => {} }) => {
+export const PortalNav = ({ active = "Projects", context, user, brand = null, menuOpen = false, onMenu = () => {}, onSignOut = () => {}, onNav = () => {} }) => {
   const name = user?.displayName || user?.email || "You";
   const initials = (name.match(/\b\w/g) || ["Y"]).slice(0, 2).join("").toUpperCase();
   return (
     <div style={{
+      // position+z so the user menu dropdown layers ABOVE the sticky AM
+      // rail card in the scroll area below (which has its own z-context).
+      position: "relative", zIndex: 60,
       height: 64, display: "flex", alignItems: "center", gap: 24,
       padding: "0 28px", borderBottom: "1px solid var(--line)",
       background: "rgba(255,255,255,0.78)", backdropFilter: "blur(10px)", flex: "0 0 auto",
@@ -300,6 +275,12 @@ export const PortalNav = ({ active = "Projects", context, user, menuOpen = false
         </>
       )}
       <div style={{ flex: 1 }} />
+      {brand && (
+        <>
+          <ClientBrand brand={brand} />
+          <div style={{ width: 1, height: 26, background: "var(--line-2)" }} />
+        </>
+      )}
       <div style={{ position: "relative" }}>
         <div onClick={onMenu} style={{
           display: "flex", alignItems: "center", gap: 10,
@@ -316,8 +297,27 @@ export const PortalNav = ({ active = "Projects", context, user, menuOpen = false
           <span style={{ fontSize: 13, color: "var(--text-2)" }}>{name}</span>
           <Icon.chev style={{ color: "var(--text-3)", marginLeft: 2, transform: menuOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
         </div>
-        {menuOpen && <UserMenu user={user} theme={theme} onTheme={onTheme} onSignOut={onSignOut} />}
+        {menuOpen && <UserMenu user={user} onSignOut={onSignOut} />}
       </div>
+    </div>
+  );
+};
+
+// The signed-in client's own brand mark + name, shown top-right of the
+// nav next to the user. Logo image when set, else an initials chip
+// (also falls back to initials if the logo URL fails to load).
+export const ClientBrand = ({ brand }) => {
+  const [broken, setBroken] = useState(false);
+  if (!brand) return null;
+  const initials = (String(brand.name || "?").match(/\b\w/g) || ["?"]).slice(0, 2).join("").toUpperCase();
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+      {brand.logo?.url && !broken
+        ? <div style={{ width: 30, height: 30, borderRadius: 8, background: brand.logo.bg || "#fff", border: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flex: "0 0 auto" }}>
+            <img src={brand.logo.url} alt={brand.name} onError={() => setBroken(true)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 4 }} />
+          </div>
+        : <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--bg-2)", border: "1px solid var(--line)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "var(--text-2)", flex: "0 0 auto" }}>{initials}</div>}
+      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 180 }}>{brand.name}</span>
     </div>
   );
 };
@@ -331,11 +331,11 @@ export const MobileStatusBar = () => (
   </div>
 );
 
-export const MobileTopBar = ({ title, back, onBack, user, menuOpen = false, onMenu = () => {}, theme = "light", onTheme = () => {}, onSignOut = () => {} }) => {
+export const MobileTopBar = ({ title, back, onBack, user, brand = null, menuOpen = false, onMenu = () => {}, onSignOut = () => {} }) => {
   const name = user?.displayName || user?.email || "You";
   const initials = (name.match(/\b\w/g) || ["Y"]).slice(0, 2).join("").toUpperCase();
   return (
-    <div style={{ height: 52, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", borderBottom: "1px solid var(--line)", background: "var(--surface)", flex: "0 0 auto", position: "relative" }}>
+    <div style={{ height: 52, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", borderBottom: "1px solid var(--line)", background: "var(--surface)", flex: "0 0 auto", position: "relative", zIndex: 60 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
         {back && (
           <button onClick={onBack} style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-2)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><Icon.back /></button>
@@ -344,6 +344,7 @@ export const MobileTopBar = ({ title, back, onBack, user, menuOpen = false, onMe
           ? <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
           : <ViewixLogo size={20} />}
       </div>
+      {brand && !back && !title && <ClientBrand brand={brand} />}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={onMenu} style={{
           width: 34, height: 34, borderRadius: 999,
@@ -353,7 +354,7 @@ export const MobileTopBar = ({ title, back, onBack, user, menuOpen = false, onMe
           border: menuOpen ? "2px solid var(--accent-2)" : "none",
         }}>{initials}</button>
         {menuOpen && (
-          <UserMenu user={user} theme={theme} onTheme={onTheme} onSignOut={onSignOut} anchor="right" style={{ top: "calc(100% + 10px)", right: 8, width: 296 }} />
+          <UserMenu user={user} onSignOut={onSignOut} anchor="right" style={{ top: "calc(100% + 10px)", right: 8, width: 296 }} />
         )}
       </div>
     </div>
@@ -387,10 +388,10 @@ export const MobileTabBar = ({ active = "Projects", onNav = () => {} }) => (
   </div>
 );
 
-export const MobileShell = ({ title, back, onBack, user, menuOpen = false, onMenu = () => {}, theme = "light", onTheme = () => {}, onSignOut = () => {}, showStatusBar = true, activeTab = "Projects", onNav = null, children }) => (
+export const MobileShell = ({ title, back, onBack, user, brand = null, menuOpen = false, onMenu = () => {}, onSignOut = () => {}, showStatusBar = true, activeTab = "Projects", onNav = null, children }) => (
   <div style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
     {showStatusBar && <MobileStatusBar />}
-    <MobileTopBar title={title} back={back} onBack={onBack} user={user} menuOpen={menuOpen} onMenu={onMenu} theme={theme} onTheme={onTheme} onSignOut={onSignOut} />
+    <MobileTopBar title={title} back={back} onBack={onBack} user={user} brand={brand} menuOpen={menuOpen} onMenu={onMenu} onSignOut={onSignOut} />
     <div className="vx-scroll" style={{ flex: 1, overflow: "auto", minHeight: 0 }}>{children}</div>
     {onNav && <MobileTabBar active={activeTab} onNav={onNav} />}
   </div>
