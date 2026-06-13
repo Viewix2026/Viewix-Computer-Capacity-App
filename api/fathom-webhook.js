@@ -21,12 +21,10 @@
 import { adminSet, getAdmin, runRtdbTransaction } from "./_fb-admin.js";
 import { runMeetingFeedbackAnalysis } from "./meeting-feedback.js";
 import { deriveFeedbackId } from "./_fathom-dedup.js";
+import { SALESPEOPLE, detectSalesperson, detectSalespersonFromTranscript } from "./_fathom-detect.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SECRET = process.env.FATHOM_WEBHOOK_SECRET;
-
-// Salespeople to detect from invitee list (order matters — longest first to avoid partial matches)
-const SALESPEOPLE = ["Brandon", "Jeremy"];
 
 async function fbSet(path, data) {
   const { err } = getAdmin();
@@ -48,28 +46,6 @@ function detectMeetingType(name) {
   if (n.includes("content blueprint") || n.includes("content strategy")) return "blueprint";
   if (n.includes("blueprint") || n.includes("proposal") || n.includes("pitch") || n.includes("presentation")) return "blueprint";
   if (n.includes("catchup") || n.includes("catch up") || n.includes("follow") || n.includes("check-in") || n.includes("check in")) return "catchup";
-  return "";
-}
-
-// Try to detect the Viewix salesperson from whatever the webhook sender gave
-// us. Fathom's native payload has `invitees` as objects; Zapier/Make may send
-// `attendees`, `participants`, or individual `hostName`/`organizer` fields.
-// We throw everything into one haystack and look for SALESPEOPLE substrings.
-function detectSalesperson(invitees, meetingName, extras = {}) {
-  const inviteeNames = (invitees || []).map(i => {
-    if (typeof i === "string") return i;
-    return (i?.name || i?.displayName || i?.fullName || i?.email || "").toString();
-  });
-  const extraFields = [
-    extras.hostName, extras.host, extras.organizer, extras.owner,
-    extras.meetingHost, extras.scheduledBy, extras.assignedTo,
-    ...(Array.isArray(extras.attendees) ? extras.attendees.map(a => typeof a === "string" ? a : (a?.name || a?.email || "")) : []),
-    ...(Array.isArray(extras.participants) ? extras.participants.map(a => typeof a === "string" ? a : (a?.name || a?.email || "")) : []),
-  ].filter(Boolean);
-  const combined = [...inviteeNames, ...extraFields, meetingName || ""].join(" ").toLowerCase();
-  for (const sp of SALESPEOPLE) {
-    if (combined.includes(sp.toLowerCase())) return sp;
-  }
   return "";
 }
 
@@ -132,6 +108,8 @@ export default async function handler(req, res) {
       // detectSalesperson so detection still works when `invitees` is absent.
       hostName, host, organizer, owner, meetingHost, scheduledBy, assignedTo,
       attendees, participants,
+      // Fathom's native webhook field names
+      recorded_by, calendar_invitees,
     } = body;
     let { clientName, salesperson, meetingType } = body;
 
@@ -153,8 +131,14 @@ export default async function handler(req, res) {
     if (!salesperson) {
       salesperson = detectSalesperson(invitees, meetingName, {
         hostName, host, organizer, owner, meetingHost, scheduledBy, assignedTo, attendees, participants,
+        recordedBy: recorded_by, calendarInvitees: calendar_invitees,
       });
     }
+    // Metadata detection only works when the sender maps attendee/host fields
+    // through — in practice the integration often sends just name + transcript.
+    // The transcript's speaker labels ("Jeremy Farrugia (Viewix)") are the
+    // reliable signal, so fall back to those.
+    if (!salesperson) salesperson = detectSalespersonFromTranscript(transcript);
     if (!clientName) clientName = deriveClientName(meetingName, invitees);
 
     // Payload-derived id — identical across sender timeout-retries, so
