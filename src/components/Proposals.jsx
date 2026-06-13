@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { BTN } from "../config";
 import { makeShortId, validateLinkUrl } from "../utils";
 import {
-  fbSetAsync, fbUpdateAsync, fbListenSafe,
+  fbSetAsync, fbUpdateAsync,
   getCurrentUserUid, getCurrentUserName, getCurrentUserEmail,
 } from "../firebase";
 
@@ -54,26 +54,6 @@ const LOOKS = [
   ["desk", "Designer's desk"],
 ];
 
-// Pre-won Attio stages worth proposing to (the prospect picker filters to these).
-const PROSPECT_STAGES = ["Lead", "Meeting Booked", "Quoted", "On Hold"];
-
-// ─── Attio deal field extractors (mirror NurtureLapsed.jsx) ───
-function getStage(deal) {
-  const v = deal?.values || {};
-  for (const c of [v.stage, v.status, v.deal_stage, v.pipeline_stage]) {
-    const t = c?.[0]?.status?.title || c?.[0]?.value;
-    if (t) return typeof t === "string" ? t : "";
-  }
-  return "";
-}
-function getCompanyRef(deal) {
-  const ref = deal?.values?.associated_company;
-  if (Array.isArray(ref) && ref[0]) return { id: ref[0].target_record_id || "", name: ref[0].target_object_name || "" };
-  return { id: ref?.target_record_id || "", name: "" };
-}
-function getDealName(deal) { return deal?.values?.name?.[0]?.value || ""; }
-function dealRecordId(deal) { return deal?.id?.record_id || (typeof deal?.id === "string" ? deal.id : "") || ""; }
-
 function fmtWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -105,11 +85,18 @@ function ReviewPanel({ job, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // Clone ONLY the edited path (structural sharing). The old full JSON
+  // deep-clone on every keystroke is what made the text-heavy form lag and
+  // feel frozen as it filled up.
   const set = (path, v) => setBrief((prev) => {
-    const next = JSON.parse(JSON.stringify(prev));
     const keys = path.split(".");
+    const clone = (x) => (Array.isArray(x) ? x.slice() : { ...(x || {}) });
+    const next = clone(prev);
     let o = next;
-    for (let i = 0; i < keys.length - 1; i++) { if (o[keys[i]] == null) o[keys[i]] = {}; o = o[keys[i]]; }
+    for (let i = 0; i < keys.length - 1; i++) {
+      o[keys[i]] = clone(o[keys[i]]);
+      o = o[keys[i]];
+    }
     o[keys[keys.length - 1]] = v;
     return next;
   });
@@ -198,18 +185,23 @@ function ReviewPanel({ job, onDone }) {
       {problems.length > 0 && (
         <div style={{ fontSize: 12, color: "var(--amber)", lineHeight: 1.5 }}>{problems.map((p, i) => <div key={i}>· {p}</div>)}</div>
       )}
-      {err && <div style={{ color: "var(--danger)", fontSize: 12, fontWeight: 600 }}>{err}</div>}
+      {err && <div style={{ color: "var(--danger)", fontSize: 12, fontWeight: 600, whiteSpace: "pre-line" }}>{err}</div>}
 
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-        <button disabled={busy || problems.length > 0} onClick={() => write({ status: "approved", draftBrief: brief }, onDone)}
-          style={{ ...BTN, background: problems.length ? "var(--border)" : "var(--success)", color: "white", opacity: busy ? 0.6 : 1 }}>
-          {busy ? "Working…" : "Approve & render"}
+        {/* Always clickable — if anything's missing, clicking shows exactly what
+            (never a dead button). Only render-ready briefs get sent to the worker. */}
+        <button disabled={busy} onClick={() => {
+          if (problems.length) { setErr(`Can't render yet — fix these first:\n• ${problems.join("\n• ")}`); return; }
+          write({ status: "approved", draftBrief: brief }, onDone);
+        }}
+          style={{ ...BTN, background: problems.length ? "var(--amber)" : "var(--success)", color: "white", opacity: busy ? 0.6 : 1, whiteSpace: "nowrap" }}>
+          {busy ? "Sending to renderer…" : problems.length ? `Approve & render (${problems.length} to fix)` : "Approve & render"}
         </button>
         <button disabled={busy} onClick={() => write({ status: "queued", draftBrief: null, selectedTranscriptId: null }, onDone)}
           style={{ ...BTN, background: "transparent", color: "var(--muted)", border: "1px solid var(--border)" }}>
           Re-draft from scratch
         </button>
-        <span style={{ fontSize: 11, color: "var(--faint)" }}>Approving locks the prices and sends it to the renderer.</span>
+        <span style={{ fontSize: 11, color: "var(--faint)" }}>Approving locks the prices and sends it to the Mac mini renderer.</span>
       </div>
     </div>
   );
@@ -220,7 +212,6 @@ export function Proposals({ proposalJobs, setProposalJobs, isFounder, isFounders
   const [company, setCompany]   = useState("");
   const [email, setEmail]       = useState("");
   const [look, setLook]         = useState("wall");
-  const [pickedId, setPickedId] = useState(""); // selected Attio deal record_id, or "" for manual
   const [busy, setBusy]         = useState(false);
   const [formErr, setFormErr]   = useState("");
   const [reviewId, setReviewId] = useState(null); // job expanded in the review panel
@@ -240,44 +231,9 @@ export function Proposals({ proposalJobs, setProposalJobs, isFounder, isFounders
     }
   }
 
-  // Live Attio deal list for the prospect picker. Read-gated to
-  // founders/manager — closers get a clean denial and the manual path.
-  const [attioDeals, setAttioDeals] = useState(null); // null = loading, [] = none/denied
-  useEffect(() => {
-    if (role === "closer") { setAttioDeals([]); return; } // closers can't read /attioCache — skip the denied listener (no retry noise)
-    return fbListenSafe(
-      "/attioCache",
-      (d) => setAttioDeals(Array.isArray(d?.data) ? d.data : []),
-      () => setAttioDeals([]) // denied or error -> manual entry only
-    );
-  }, [role]);
-
-  const prospects = useMemo(() => {
-    if (!Array.isArray(attioDeals)) return [];
-    return attioDeals
-      .map((deal) => {
-        const co = getCompanyRef(deal);
-        return {
-          dealId: dealRecordId(deal),
-          companyId: co.id,
-          companyName: co.name || getDealName(deal),
-          dealName: getDealName(deal),
-          stage: getStage(deal),
-        };
-      })
-      .filter((p) => p.dealId && p.companyName && PROSPECT_STAGES.includes(p.stage))
-      .sort((a, b) => a.companyName.localeCompare(b.companyName));
-  }, [attioDeals]);
-
-  function pickDeal(id) {
-    setPickedId(id);
-    const p = prospects.find((x) => x.dealId === id);
-    if (p) setCompany(p.companyName); // prefill; user can still edit
-  }
-
   function resetForm() {
     setShowForm(false); setCompany(""); setEmail(""); setLook("wall");
-    setPickedId(""); setFormErr("");
+    setFormErr("");
   }
 
   async function createJob() {
@@ -285,16 +241,12 @@ export function Proposals({ proposalJobs, setProposalJobs, isFounder, isFounders
     if (!name) { setFormErr("Company name is required."); return; }
     const uid = getCurrentUserUid();
     if (!uid) { setFormErr("Your session is not ready yet. Refresh and try again."); return; }
-    const picked = prospects.find((x) => x.dealId === pickedId);
     const id = `pj-${Date.now()}-${makeShortId(6)}`;
     const job = {
       id,
       status: "queued",
       companyName: name,
       contactEmail: email.trim(),
-      companyId: picked?.companyId || "",
-      dealId: picked?.dealId || "",      // Attio deal record_id; worker hydrates context from it
-      stage: picked?.stage || "",
       lookVariant: look || "wall",
       requestedBy: { uid, name: getCurrentUserName() || getCurrentUserEmail() || "Unknown" },
       createdAt: new Date().toISOString(),
@@ -338,19 +290,6 @@ export function Proposals({ proposalJobs, setProposalJobs, isFounder, isFounders
         {showForm && (
           <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "var(--r4)", padding: 24, marginBottom: 28 }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: "var(--fg)", marginBottom: 18 }}>New proposal</div>
-
-            {/* Prospect picker (founders/manager — Attio cache read) */}
-            {Array.isArray(attioDeals) && prospects.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <label style={lbl}>Link an Attio deal (optional)</label>
-                <select value={pickedId} onChange={(e) => pickDeal(e.target.value)} style={{ ...inputStyle, appearance: "auto", cursor: "pointer" }}>
-                  <option value="">— Manual entry —</option>
-                  {prospects.map((p) => (
-                    <option key={p.dealId} value={p.dealId}>{p.companyName} · {p.stage}</option>
-                  ))}
-                </select>
-              </div>
-            )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
               <div>
