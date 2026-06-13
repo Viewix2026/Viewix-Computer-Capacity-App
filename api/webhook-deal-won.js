@@ -662,7 +662,10 @@ export default async function handler(req, res) {
         // defers the FK to the nightly name match.
         try {
           const dealIndex = buildDealIndex({ data: allDeals }, { includeZeroValue: true });
-          const fk = resolveWonDealId(dealIndex, { dealName, companyId });
+          // Pass the normalised signing date so the helper can corroborate a weak
+          // name match against the won deal's close_date (rejects a stale same-named
+          // sibling when the real just-won deal is missing from this refresh).
+          const fk = resolveWonDealId(dealIndex, { dealName, companyId, closeDate: signingDate });
           if (fk && fk.dealId) {
             await fbPatch(`/projects/${projectId}`, { attioDealId: fk.dealId });
             if (links.preprodId && links.preprodType) {
