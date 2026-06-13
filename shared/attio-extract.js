@@ -68,6 +68,27 @@ export function extractDate(d) {
   return d?.created_at || null;
 }
 
+// STRICT won-close date: the deal's actual close-date cell only
+// (close_date / closed_at / won_date), or null. Deliberately does NOT fall back to
+// created_at like extractDate — a deal's creation time is not proof of WHEN it was
+// won. Used by resolveWonDealId to corroborate a weak name match: a stale same-named
+// sibling created on the just-won deal's signing day must NOT pass corroboration via
+// a coincidental created_at (it would stamp the wrong FK — the exact failure the
+// corroboration exists to prevent).
+export function extractCloseDateStrict(d) {
+  const v = d?.values || {};
+  const candidates = [v.close_date, v.closed_at, v.won_date];
+  for (const c of candidates) {
+    const cell = c?.[0];
+    // date-typed Attio cells surface the day under `date`; timestamp cells under
+    // `value`. Read both (still NO created_at fallback) so a date-typed close_date
+    // can't silently fail corroboration and turn the name path into a no-op.
+    const val = cell?.value || cell?.date;
+    if (val) return val;
+  }
+  return null;
+}
+
 export function extractStage(d) {
   const v = d?.values || {};
   const candidates = [v.stage, v.status, v.deal_stage, v.pipeline_stage];
@@ -266,6 +287,9 @@ export function buildDealIndex(attioCache, { includeZeroValue = false } = {}) {
       peopleIds: extractDealPeopleIds(d),
       companyId: extractDealCompanyId(d),
       closeDate: extractDate(d),
+      // Strict won-close date (no created_at fallback) — only for win-event
+      // corroboration in resolveWonDealId. See extractCloseDateStrict.
+      wonCloseDate: extractCloseDateStrict(d),
     };
     // Index by record id first — a confident foreign key even for a deal whose
     // name is blank (which the byName index below would drop).
@@ -381,6 +405,46 @@ export function resolveDeal(project, dealIndex) {
   if (m.kind === "match")     return { entry: m.entry, dealId: m.entry.recordId, ambiguous: false, via: m.via };
   if (m.kind === "ambiguous") return { entry: null, dealId: null, ambiguous: true };
   return null; // none or mismatch -> no confident deal to backfill from
+}
+
+// Win-time foreign-key resolver for api/webhook-deal-won.js. Given the deal list
+// just synced to /attioCache and the won deal's name + the payload's companyId,
+// return the deal's Attio record_id to stamp as project.attioDealId — the strong
+// FK the nightly contact backfill (sync-attio-cache.js) prefers over fragile name
+// matching. Resolution mirrors resolveDeal: a record-id hit on companyId first
+// (the Zapier payload maps the deal id into that field), else a confident
+// name(+company) match. The webhook is the ideal moment to capture it: projectName
+// still equals the deal name (so the name path resolves cleanly), and once stored
+// the FK survives any later project-name edit that would break the nightly's name
+// fallback — the exact failure that leaves projects un-emailable. Returns
+// { dealId, via } on a confident match, { ambiguous: true } on a tie, or null when
+// there is no confident deal. Never guesses: an ambiguous/absent match leaves the
+// project FK-less so the nightly stamps blocked_ambiguous / blocked_no_deal.
+export function resolveWonDealId(dealIndex, { dealName, companyId, closeDate } = {}) {
+  const m = resolveDeal(
+    { projectName: (dealName || "").trim(), attioCompanyId: companyId || null, attioDealId: null },
+    dealIndex,
+  );
+  if (!m) return null;
+  if (m.ambiguous) return { ambiguous: true };
+  // A record-id (FK) hit on companyId IS this exact deal — definitive, stamp it.
+  if (m.via === "fk") return { dealId: m.dealId, via: "fk" };
+  // A NAME match is weaker proof: a unique same-name(+company) candidate can be a
+  // STALE sibling of the just-won deal when the real one is missing from the synced
+  // list — it sits past the 1000-deal cache cap, OR Attio read-after-write lag still
+  // reports its pre-Won stage so buildDealIndex (Won-only) drops it, leaving an older
+  // same-named Won deal as the lone candidate. A bare name match would then stamp the
+  // WRONG deal id — wrong contact AND wrong revenue (attioDealId is the FK
+  // resolveDealValue trusts). Corroborate with the deal's STRICT close date
+  // (entry.wonCloseDate — close_date/closed_at/won_date only, NEVER the created_at
+  // fallback, which a sibling created on the just-won deal's signing day would
+  // otherwise satisfy): the just-won deal's close_date equals the payload's, a stale
+  // sibling's does not. Stamp only when both are present and agree (date-only);
+  // otherwise leave FK-less for the nightly to resolve — never guess.
+  const wonDate = String(closeDate || "").slice(0, 10);
+  const entryDate = String(m.entry?.wonCloseDate || "").slice(0, 10);
+  if (wonDate && entryDate && wonDate === entryDate) return { dealId: m.dealId, via: "name" };
+  return null;
 }
 
 // The deal record ids a project could be CLAIMING, for the double-count guard in

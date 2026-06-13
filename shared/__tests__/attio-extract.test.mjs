@@ -18,6 +18,7 @@ import {
   resolveDealValue,
   resolveDeal,
   resolveDealClaims,
+  resolveWonDealId,
   parseVideoCount,
   extractNumberOfVideos,
   extractDealPersonId,
@@ -422,6 +423,123 @@ test("resolveDeal: tie => ambiguous, no entry; mismatch/none => null", () => {
   // no candidate => null
   assert.equal(resolveDeal({ projectName: "Nope" }, CARRY_IDX), null);
 });
+
+// ─── resolveWonDealId (webhook-deal-won FK capture at win-time) ───────────
+// The webhook stamps project.attioDealId from the deal list it just synced, so
+// the nightly contact backfill matches by id, not fragile name matching. A NAME
+// match is corroborated by the won close date so a stale same-named sibling (the
+// real just-won deal missing from the synced list) can never be stamped.
+{
+  // deal() defaults closeDate to "2026-05-01".
+  const idx = buildDealIndex({ data: [
+    deal({ id: "wd-uniq", name: "Hola Health Retainer Month 2", value: 4000, companyId: "co-hola" }),
+    deal({ id: "wd-a", name: "Meta Ads Standard", value: 7000, companyId: "co-a" }),
+    deal({ id: "wd-b", name: "Meta Ads Standard", value: 9000, companyId: "co-b" }),
+  ] }, { includeZeroValue: true });
+
+  test("resolveWonDealId: unique name + matching close date resolves the id via name", () => {
+    const r = resolveWonDealId(idx, { dealName: "Hola Health Retainer Month 2", closeDate: "2026-05-01" });
+    assert.equal(r.dealId, "wd-uniq");
+    assert.equal(r.via, "name");
+  });
+
+  test("resolveWonDealId: a name match WITHOUT a corroborating close date => null (never guesses)", () => {
+    // No date to confirm this candidate is the just-won event — refuse to stamp.
+    assert.equal(resolveWonDealId(idx, { dealName: "Hola Health Retainer Month 2" }), null);
+  });
+
+  test("resolveWonDealId: payload deal id (carried in companyId) wins via fk — no close date needed", () => {
+    // A record-id hit is definitive; corroboration only guards the weak name path.
+    const r = resolveWonDealId(idx, { dealName: "anything at all", companyId: "wd-uniq" });
+    assert.equal(r.dealId, "wd-uniq");
+    assert.equal(r.via, "fk");
+  });
+
+  test("resolveWonDealId: same-named deals + no company => ambiguous, never guesses", () => {
+    assert.deepEqual(resolveWonDealId(idx, { dealName: "Meta Ads Standard", closeDate: "2026-05-01" }), { ambiguous: true });
+  });
+
+  test("resolveWonDealId: same-named deals disambiguated by company id (+ matching date)", () => {
+    const r = resolveWonDealId(idx, { dealName: "Meta Ads Standard", companyId: "co-b", closeDate: "2026-05-01" });
+    assert.equal(r.dealId, "wd-b");
+    assert.equal(r.via, "name");
+  });
+
+  test("resolveWonDealId: no candidate / blank name => null (left FK-less for the nightly)", () => {
+    assert.equal(resolveWonDealId(idx, { dealName: "No Such Deal", closeDate: "2026-05-01" }), null);
+    assert.equal(resolveWonDealId(idx, { dealName: "" }), null);
+    assert.equal(resolveWonDealId(idx, {}), null);
+  });
+
+  // Finding-1 regression: the just-won deal is MISSING from the synced list (past the
+  // 1000 cap, or read-lag still reports its pre-Won stage so it isn't indexed),
+  // leaving only an OLDER same-name/company deal as the lone candidate. A bare name
+  // match would wrongly stamp the old id; the close-date guard rejects it.
+  {
+    const onlyOld = buildDealIndex({ data: [
+      deal({ id: "old-retainer", name: "Monthly Retainer", value: 1000, companyId: "co-1", closeDate: "2026-01-10" }),
+    ] }, { includeZeroValue: true });
+
+    test("resolveWonDealId: stale same-name sibling (just-won absent) is NOT stamped — date mismatch", () => {
+      assert.equal(resolveWonDealId(onlyOld, { dealName: "Monthly Retainer", companyId: "co-1", closeDate: "2026-06-10" }), null);
+    });
+    test("resolveWonDealId: the SAME lone candidate IS stamped when the close date matches", () => {
+      const r = resolveWonDealId(onlyOld, { dealName: "Monthly Retainer", companyId: "co-1", closeDate: "2026-01-10" });
+      assert.equal(r.dealId, "old-retainer");
+      assert.equal(r.via, "name");
+    });
+  }
+
+  // Finding-4 regression: a stale sibling with NO close_date must NOT corroborate via
+  // extractDate's created_at fallback. buildDealIndex stores a STRICT wonCloseDate
+  // (null when close_date/closed_at/won_date are all absent), so a created_at that
+  // coincides with the signing day can no longer satisfy the guard.
+  test("resolveWonDealId: close_date-absent sibling does NOT false-match via created_at", () => {
+    const noCloseDate = buildDealIndex({ data: [{
+      id: { record_id: "old-cd-absent" },
+      created_at: "2026-06-10T01:00:00Z",
+      values: {
+        name: [{ value: "Quarterly Refresh" }],
+        stage: [{ status: { title: "Won" } }],
+        value: [{ currency_value: 1000 }],
+        associated_company: [{ target_record_id: "co-2" }],
+        // no close_date / closed_at / won_date — extractDate would fall back to
+        // created_at (2026-06-10), but wonCloseDate stays null.
+      },
+    }] }, { includeZeroValue: true });
+    assert.equal(resolveWonDealId(noCloseDate, { dealName: "Quarterly Refresh", companyId: "co-2", closeDate: "2026-06-10" }), null);
+  });
+
+  // Round-3 hardening: a date-typed close_date cell surfaces the day under `date`,
+  // not `value`. extractCloseDateStrict must read it, else corroboration false-
+  // negatives and the name path silently never stamps.
+  test("resolveWonDealId: strict close date reads a date-typed cell ({date}) too", () => {
+    const dateShaped = buildDealIndex({ data: [{
+      id: { record_id: "dt-1" },
+      values: {
+        name: [{ value: "Date Shaped Deal" }],
+        stage: [{ status: { title: "Won" } }],
+        value: [{ currency_value: 2000 }],
+        associated_company: [{ target_record_id: "co-3" }],
+        close_date: [{ date: "2026-05-20" }], // {date} not {value}
+      },
+    }] }, { includeZeroValue: true });
+    const r = resolveWonDealId(dateShaped, { dealName: "Date Shaped Deal", companyId: "co-3", closeDate: "2026-05-20" });
+    assert.equal(r.dealId, "dt-1");
+    assert.equal(r.via, "name");
+  });
+
+  // Two genuinely different deals share name AND company (e.g. a re-purchase). Even
+  // with a matching date we must NOT guess — the matcher returns ambiguous before the
+  // date guard is consulted, so the nightly surfaces it for a human instead.
+  test("resolveWonDealId: same name + same company, both present => ambiguous", () => {
+    const dup = buildDealIndex({ data: [
+      deal({ id: "bv-1", name: "Brand Video", value: 5000, companyId: "co-z", closeDate: "2026-06-01" }),
+      deal({ id: "bv-2", name: "Brand Video", value: 6000, companyId: "co-z", closeDate: "2026-06-10" }),
+    ] }, { includeZeroValue: true });
+    assert.deepEqual(resolveWonDealId(dup, { dealName: "Brand Video", companyId: "co-z", closeDate: "2026-06-10" }), { ambiguous: true });
+  });
+}
 
 // ─── normaliseCloseDate (webhook-deal-won's milestone anchor) ──────
 // Regression: an unparseable closeDate ("13/05/2026") used to throw
