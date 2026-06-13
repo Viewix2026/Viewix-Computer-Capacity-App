@@ -87,7 +87,11 @@ export default async function handler(req, res) {
     const preprod = ppId && ppType === "metaAds" ? metaAds[ppId]
       : ppId && ppType === "socialOrganic" ? socialOrganic[ppId]
         : null;
-    out.push(redactProjectListItem({ project, account, delivery, preprod, editors }));
+    const item = redactProjectListItem({ project, account, delivery, preprod, editors });
+    // A legacy project without a shortId has no openable route — the
+    // dashboard would render dead rows and real hrefs to /clients/p/null.
+    if (!item.projectId) continue;
+    out.push(item);
   }
 
   // Active first, then by name — stable, no internal sort keys leaked.

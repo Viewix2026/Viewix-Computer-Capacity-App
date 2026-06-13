@@ -20,12 +20,14 @@ const ClientMark = ({ name, box = 56 }) => {
 
 const PHASE_META = ["Stage 1 of 4 · Kickoff", "Stage 2 of 4 · Shooting", "Stage 3 of 4 · Editing", "Stage 4 of 4 · Review"];
 
-export function ProjectView({ projectShortId, user, theme, onTheme, onSignOut, onBack, onNav, authFetch }) {
+// The project page IS the videos (no Deliveries tab — per Jeremy,
+// 2026-06-13). Pre-production and Posting schedule open as their own
+// views via quiet links, with a back-to-videos affordance. The view
+// lives in the URL (/clients/p/{id}[/preprod|/schedule]) so dashboard
+// quick-link chips can deep-link and back/refresh behave.
+export function ProjectView({ projectShortId, view = "videos", onViewChange = () => {}, user, theme, onTheme, onSignOut, onBack, onNav, authFetch }) {
   const narrow = useIsNarrow();
-  // The project page IS the videos (no Deliveries tab — per Jeremy,
-  // 2026-06-13). Pre-production and Posting schedule open as their own
-  // views via quiet links, with a back-to-videos affordance.
-  const [view, setView] = useState("videos");
+  const setView = onViewChange;
   const [menuOpen, setMenuOpen] = useState(false);
   const [state, setState] = useState({ loading: true, error: "", data: null });
 

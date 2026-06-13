@@ -406,10 +406,17 @@ export async function sendClientSignInLink(email) {
   await new Promise(res => onFB(res));
   const clean = String(email || "").trim().toLowerCase();
   if (!clean || !clean.includes("@")) throw new Error("Enter a valid email address");
+  // Land back on the route the user was trying to reach (SignIn renders
+  // as a body swap, so pathname still holds the deep link — e.g.
+  // /clients/p/{id}/preprod from a shared dashboard chip). Fall back to
+  // the portal home for anything that isn't a portal path, so the
+  // short-circuit still catches it before the staff gate.
+  const returnTo = /^\/clients(\/|$)/.test(window.location.pathname)
+    ? window.location.pathname
+    : "/clients/";
   const actionCodeSettings = {
-    // Land back on the portal route so the short-circuit catches it
-    // before the staff gate. handleCodeInApp must be true for email-link.
-    url: `${window.location.origin}/clients/`,
+    // handleCodeInApp must be true for email-link.
+    url: `${window.location.origin}${returnTo}`,
     handleCodeInApp: true,
   };
   await auth.sendSignInLinkToEmail(clean, actionCodeSettings);
