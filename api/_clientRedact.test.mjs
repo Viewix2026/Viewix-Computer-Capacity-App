@@ -133,6 +133,35 @@ assert.equal(c.total, 2);
 assert.equal(c.ready, 2);
 assert.equal(c.approved, 1);
 
+// 5b. approved/changes are LATEST-wins (R2 over R1). A toggled-back
+//     video (R1 Approved → R2 Need Revisions) is NOT approved — it's
+//     back with Viewix. Guards the Schedule-gate regression.
+const toggled = deliveryCounts([
+  { viewixStatus: "Completed", revision1: "Approved", revision2: "Need Revisions", posted: false },
+  { viewixStatus: "Completed", revision1: "Need Revisions", revision2: "Approved", posted: false },
+]);
+assert.equal(toggled.approved, 1, "toggled-back R1-approved/R2-needrev must NOT count as approved");
+assert.equal(toggled.changes, 1, "R1-needrev/R2-approved must NOT count as changes");
+
+// 5c. logo + hasPreprod (new fields). null when no logoUrl; {url,bg}
+//     with bg defaulting to white when set; hasPreprod both ways.
+assert.equal(li.logo, null, "no logoUrl → logo null (initials fallback)");
+assert.equal(li.hasPreprod, true, "resolved preprod node → hasPreprod true");
+const liNoPP = redactProjectListItem({ project, account, delivery, preprod: null, editors });
+assert.equal(liNoPP.hasPreprod, false, "no preprod node → hasPreprod false");
+const liLogo = redactProjectListItem({
+  project, delivery, preprod, editors,
+  account: { ...account, logoUrl: "https://cdn.test/acme.png" },
+});
+assert.deepEqual(Object.keys(liLogo.logo).sort(), ["bg", "url"], "logo has exactly {url,bg}");
+assert.equal(liLogo.logo.url, "https://cdn.test/acme.png");
+assert.equal(liLogo.logo.bg, "white", "logoBg defaults to white");
+const liLogoBg = redactProjectListItem({
+  project, delivery, preprod, editors,
+  account: { ...account, logoUrl: "https://cdn.test/acme.png", logoBg: "#0a3c3a" },
+});
+assert.equal(liLogoBg.logo.bg, "#0a3c3a", "logoBg passes through when set");
+
 // 6. metaAds preprod → not embeddable
 const dMeta = redactProjectDetail({
   project: { ...project, links: { ...project.links, preprodType: "metaAds" } },
@@ -141,4 +170,4 @@ const dMeta = redactProjectDetail({
 assert.equal(dMeta.preproduction.type, "metaAds");
 assert.equal(dMeta.preproduction.embeddable, false);
 
-console.log("OK — _clientRedact allowlist pinned (6 groups passed)");
+console.log("OK — _clientRedact allowlist pinned (6 groups + logo/preprod/latest-wins)");

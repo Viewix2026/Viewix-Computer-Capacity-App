@@ -16,7 +16,12 @@ import { Analytics } from "./Analytics";
 // import tree-shakes out of production builds.
 import { PREVIEW_USER, previewFetch } from "./previewData";
 
-const THEME_KEY = "vx_portal_theme";
+// Dark mode is removed from the client portal. theme is pinned light
+// and onTheme is a no-op — both kept only so the shared chrome props
+// resolve without threading churn. (A client who previously toggled
+// dark no longer gets stuck there: we never read the old preference.)
+const theme = "light";
+const onTheme = () => {};
 
 function PortalLoading({ label = "Loading your portal..." }) {
   return (
@@ -63,9 +68,6 @@ export function ClientPortal() {
   const [needEmail, setNeedEmail] = useState(false);     // cross-device link open
   const [completeErr, setCompleteErr] = useState("");
   const [route, setRoute] = useState(parseRoute());
-  const [theme, setTheme] = useState(() => {
-    try { return window.localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; }
-  });
 
   useEffect(() => {
     document.title = "Viewix — Client Portal";
@@ -119,11 +121,6 @@ export function ClientPortal() {
     const onPop = () => setRoute(parseRoute());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
-  const onTheme = useCallback((t) => {
-    setTheme(t);
-    try { window.localStorage.setItem(THEME_KEY, t); } catch {}
   }, []);
 
   const onSignOut = useCallback(async () => {
@@ -218,7 +215,7 @@ export function ClientPortal() {
   }
 
   return (
-    <div className={"vx" + (theme === "dark" ? " dark" : "")}>
+    <div className="vx">
       <style>{PORTAL_CSS}</style>
       {body}
     </div>

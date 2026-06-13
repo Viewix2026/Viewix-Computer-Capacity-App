@@ -13,19 +13,41 @@ function clientColor(name) {
   for (const c of String(name || "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return palette[h % palette.length];
 }
-const ClientMark = ({ name, size = "sm" }) => {
+// Renders the client's real logo (account.logoUrl) when set, else a
+// branded initials block. `logo` = { url, bg } | null.
+const ClientMark = ({ name, logo, size = "sm" }) => {
   const box = size === "sm" ? 44 : 64;
+  const [broken, setBroken] = useState(false);
+  if (logo?.url && !broken) {
+    return (
+      <div style={{
+        width: box, height: box, borderRadius: 10, background: logo.bg || "#fff",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        flex: "0 0 auto", overflow: "hidden",
+        border: "1px solid var(--line)", boxShadow: "0 4px 14px -6px rgba(15,18,26,0.25)",
+      }}>
+        <img src={logo.url} alt={name || "Client"} onError={() => setBroken(true)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: box * 0.16 }} />
+      </div>
+    );
+  }
   const initials = (String(name || "?").match(/\b\w/g) || ["?"]).slice(0, 2).join("").toUpperCase();
   const bg = clientColor(name);
   return (
     <div style={{
-      width: box, height: box, borderRadius: 10, background: bg, color: "#fff",
+      width: box, height: box, borderRadius: 10,
+      background: `linear-gradient(145deg, ${bg}, ${bg}cc)`, color: "#fff",
       display: "flex", alignItems: "center", justifyContent: "center",
       fontWeight: 800, fontSize: box * 0.36, letterSpacing: "0.02em",
-      flex: "0 0 auto", boxShadow: `0 4px 14px -4px ${bg}88`,
+      flex: "0 0 auto", boxShadow: `0 5px 16px -5px ${bg}99`,
     }}>{initials}</div>
   );
 };
+
+// All the client's videos approved → the schedule surface is meaningful.
+function allApproved(p) {
+  const c = p.counts || {};
+  return (c.total || 0) > 0 && c.approved === c.total;
+}
 
 const STATUS_TONE = { active: "blue", archived: "muted" };
 function statusLabel(p) {
@@ -77,22 +99,28 @@ function QuickChip({ icon, label, href, onGo, stacked }) {
 
 function ProjectRow({ p, onOpen, onOpenView, mid }) {
   const waiting = cutsWaiting(p);
-  const chips = (
+  // Pre-prod chip only when a review is actually linked; Schedule chip
+  // only once every video is approved (the schedule is meaningless
+  // before then). A row can legitimately show zero chips.
+  const showPreprod = !!p.hasPreprod;
+  const showSchedule = allApproved(p);
+  const chips = (showPreprod || showSchedule) ? (
     <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: mid ? "column" : "row", gap: 6, alignItems: mid ? "stretch" : "center" }}>
-      <QuickChip icon={<Icon.doc />} label="Pre-prod" href={`/clients/p/${p.projectId}/preprod`} onGo={() => onOpenView("preprod")} stacked={mid} />
-      <QuickChip icon={<Icon.cal />} label="Schedule" href={`/clients/p/${p.projectId}/schedule`} onGo={() => onOpenView("schedule")} stacked={mid} />
+      {showPreprod && <QuickChip icon={<Icon.doc />} label="Pre-prod" href={`/clients/p/${p.projectId}/preprod`} onGo={() => onOpenView("preprod")} stacked={mid} />}
+      {showSchedule && <QuickChip icon={<Icon.cal />} label="Schedule" href={`/clients/p/${p.projectId}/schedule`} onGo={() => onOpenView("schedule")} stacked={mid} />}
     </div>
-  );
+  ) : <span />;
   return (
-    <div onClick={onOpen} style={{
+    <div onClick={onOpen} className="vx-prow" style={{
       display: "grid",
       gridTemplateColumns: mid ? "48px minmax(160px, 1fr) 180px 70px 90px 150px" : "56px minmax(180px, 1fr) 200px 70px 190px 150px",
       alignItems: "center", gap: mid ? 14 : 16,
       padding: mid ? "16px 18px" : "18px 20px",
-      background: waiting ? "rgba(0,130,250,0.025)" : "transparent",
-      cursor: "pointer",
+      borderLeft: `3px solid ${waiting ? "var(--accent)" : "transparent"}`,
+      background: waiting ? "rgba(0,130,250,0.04)" : "transparent",
+      cursor: "pointer", transition: "background .14s ease",
     }}>
-      <ClientMark name={p.orgName} size="sm" />
+      <ClientMark name={p.orgName} logo={p.logo} size="sm" />
 
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "var(--heading)", letterSpacing: "-0.01em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -142,7 +170,7 @@ function ProjectCard({ p, onOpen, narrow }) {
     <div style={{ position: "relative", padding: narrow ? "16px 16px 14px" : "24px 24px 22px", borderRadius: 16, border: "1px solid var(--line)", background: "var(--surface)", display: "flex", flexDirection: "column", gap: narrow ? 12 : 18, overflow: "hidden", boxShadow: "0 1px 0 rgba(15,18,26,0.02)" }}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: cutsWaiting(p) ? "var(--warn)" : "var(--accent)" }} />
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <ClientMark name={p.orgName} size="sm" />
+        <ClientMark name={p.orgName} logo={p.logo} size="sm" />
         <div style={{ flex: 1, minWidth: 0 }}>
           <Label color="var(--text-3)" style={{ fontSize: 10 }}>{p.orgName}</Label>
           <span style={{ fontSize: 11, color: "var(--text-3)", marginLeft: 8, fontWeight: 600 }}>{p.productLine || ""}</span>
@@ -403,6 +431,15 @@ export function Dashboard({ user, theme, onTheme, onSignOut, onOpenProject, onNa
 
   const noAccess = !state.loading && !state.error && state.data && (state.data.projects || []).length === 0 && !state.data.displayName;
 
+  // Client brand for the top-right of the nav: only when every project
+  // belongs to one org (the common case). Agency clients spanning
+  // multiple accounts get no single mark.
+  const projectsData = state.data?.projects || [];
+  const orgNames = [...new Set(projectsData.map(p => p.orgName))];
+  const brand = orgNames.length === 1
+    ? { name: orgNames[0], logo: projectsData.find(p => p.logo)?.logo || null }
+    : null;
+
   let inner;
   if (state.loading) {
     inner = <div style={{ padding: 80, textAlign: "center", color: "var(--text-3)" }}><ViewixLogo size={24} style={{ margin: "0 auto 14px" }} />Loading your projects...</div>;
@@ -425,14 +462,14 @@ export function Dashboard({ user, theme, onTheme, onSignOut, onOpenProject, onNa
 
   if (narrow) {
     return (
-      <MobileShell user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} activeTab="Projects" onNav={onNav}>
+      <MobileShell user={user} brand={brand} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} onSignOut={onSignOut} activeTab="Projects" onNav={onNav}>
         {inner}
       </MobileShell>
     );
   }
   return (
     <div style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-      <PortalNav active="Projects" user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} onNav={onNav} />
+      <PortalNav active="Projects" user={user} brand={brand} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} onSignOut={onSignOut} onNav={onNav} />
       <div className="vx-scroll" style={{ flex: 1, overflow: "auto" }}>{inner}</div>
     </div>
   );

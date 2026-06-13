@@ -10,15 +10,29 @@ function clientColor(name) {
   for (const c of String(name || "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return palette[h % palette.length];
 }
-const ClientMark = ({ name, box = 56 }) => {
+const ClientMark = ({ name, logo, box = 56 }) => {
+  const [broken, setBroken] = useState(false);
+  if (logo?.url && !broken) {
+    return (
+      <div style={{ width: box, height: box, borderRadius: 10, background: logo.bg || "#fff", border: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flex: "0 0 auto", boxShadow: "0 4px 14px -6px rgba(15,18,26,0.25)" }}>
+        <img src={logo.url} alt={name || "Client"} onError={() => setBroken(true)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: box * 0.16 }} />
+      </div>
+    );
+  }
   const initials = (String(name || "?").match(/\b\w/g) || ["?"]).slice(0, 2).join("").toUpperCase();
   const bg = clientColor(name);
   return (
-    <div style={{ width: box, height: box, borderRadius: 10, background: bg, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: box * 0.36, flex: "0 0 auto", boxShadow: `0 4px 14px -4px ${bg}88` }}>{initials}</div>
+    <div style={{ width: box, height: box, borderRadius: 10, background: `linear-gradient(145deg, ${bg}, ${bg}cc)`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: box * 0.36, flex: "0 0 auto", boxShadow: `0 5px 16px -5px ${bg}99` }}>{initials}</div>
   );
 };
 
 const PHASE_META = ["Stage 1 of 4 · Kickoff", "Stage 2 of 4 · Shooting", "Stage 3 of 4 · Editing", "Stage 4 of 4 · Review"];
+
+// Every video approved → the posting-schedule surface is meaningful.
+function allApprovedDetail(d) {
+  const c = d?.deliveries?.counts || {};
+  return (c.total || 0) > 0 && c.approved === c.total;
+}
 
 // The project page IS the videos (no Deliveries tab — per Jeremy,
 // 2026-06-13). Pre-production and Posting schedule open as their own
@@ -71,7 +85,7 @@ export function ProjectView({ projectShortId, view = "videos", onViewChange = ()
           {!narrow && (
             <button onClick={onBack} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", borderRadius: 8, color: "var(--text-3)", fontSize: 13, border: "1px solid var(--line)", background: "var(--bg-2)" }}><Icon.back /> Projects</button>
           )}
-          <ClientMark name={d.orgName} box={narrow ? 40 : 56} />
+          <ClientMark name={d.orgName} logo={d.logo} box={narrow ? 40 : 56} />
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <h1 style={{ margin: 0, fontSize: narrow ? 18 : 26, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--heading)" }}>{d.projectName}</h1>
@@ -99,24 +113,32 @@ export function ProjectView({ projectShortId, view = "videos", onViewChange = ()
 
         {view === "videos" ? (
           <>
-            {/* Quiet links to the project's other surfaces.
-                Posting schedule stays visible even with no schedule yet
-                (Phase 5C) so the empty-state explanation is reachable. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: narrow ? "12px 16px 0" : "16px 32px 0", flexWrap: "wrap" }}>
-              {[
-                { k: "preprod", label: "Pre-production", icon: <Icon.doc /> },
-                { k: "schedule", label: "Posting schedule", icon: <Icon.cal /> },
-              ].map(l => (
-                <button key={l.k} onClick={() => setView(l.k)} style={{
-                  display: "inline-flex", alignItems: "center", gap: 8,
-                  padding: "8px 14px", borderRadius: 999,
-                  border: "1px solid var(--line)", background: "var(--surface)",
-                  color: "var(--text-2)", fontSize: 13, fontWeight: 500,
-                }}>
-                  {l.icon} {l.label} <Icon.arrow style={{ color: "var(--text-3)" }} />
-                </button>
-              ))}
-            </div>
+            {/* Quiet links to the project's other surfaces. Pre-production
+                shows only when a review is actually linked; Posting
+                schedule shows only once every video is approved (it's
+                empty/meaningless before then). The bar hides entirely
+                when neither qualifies. */}
+            {(() => {
+              const links = [
+                d.preproduction?.available && { k: "preprod", label: "Pre-production", icon: <Icon.doc /> },
+                allApprovedDetail(d) && { k: "schedule", label: "Posting schedule", icon: <Icon.cal /> },
+              ].filter(Boolean);
+              if (!links.length) return null;
+              return (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: narrow ? "12px 16px 0" : "16px 32px 0", flexWrap: "wrap" }}>
+                  {links.map(l => (
+                    <button key={l.k} onClick={() => setView(l.k)} style={{
+                      display: "inline-flex", alignItems: "center", gap: 8,
+                      padding: "8px 14px", borderRadius: 999,
+                      border: "1px solid var(--line)", background: "var(--surface)",
+                      color: "var(--text-2)", fontSize: 13, fontWeight: 500,
+                    }}>
+                      {l.icon} {l.label} <Icon.arrow style={{ color: "var(--text-3)" }} />
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
             <Deliveries deliveries={d.deliveries ? { ...d.deliveries, orgName: d.orgName } : null} accountManager={d.accountManager} narrow={narrow} />
           </>
         ) : (
@@ -139,9 +161,11 @@ export function ProjectView({ projectShortId, view = "videos", onViewChange = ()
     );
   }
 
+  const brand = d ? { name: d.orgName, logo: d.logo } : null;
+
   if (narrow) {
     return (
-      <MobileShell user={user} title={d?.projectName || "Project"} back onBack={onBack} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} theme={theme} onTheme={onTheme} onSignOut={onSignOut} activeTab="Projects" onNav={onNav}>
+      <MobileShell user={user} brand={brand} title={d?.projectName || "Project"} back onBack={onBack} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)} onSignOut={onSignOut} activeTab="Projects" onNav={onNav}>
         {inner}
       </MobileShell>
     );
@@ -149,8 +173,8 @@ export function ProjectView({ projectShortId, view = "videos", onViewChange = ()
   return (
     <div style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
       <PortalNav
-        active="Projects" user={user} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)}
-        theme={theme} onTheme={onTheme} onSignOut={onSignOut} onNav={onNav}
+        active="Projects" user={user} brand={brand} menuOpen={menuOpen} onMenu={() => setMenuOpen(o => !o)}
+        onSignOut={onSignOut} onNav={onNav}
         context={d ? (<><span style={{ color: "var(--text-3)", cursor: "pointer" }} onClick={onBack}>{d.orgName}</span><span style={{ color: "var(--text-4)" }}>/</span><span style={{ color: "var(--text)" }}>{d.projectName}</span></>) : null}
       />
       <div className="vx-scroll" style={{ flex: 1, overflow: "auto" }}>{inner}</div>

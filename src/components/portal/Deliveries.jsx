@@ -123,9 +123,16 @@ function NextStep({ am }) {
       <p style={{ margin: "0 0 18px", fontSize: 14, color: "var(--text-2)", lineHeight: 1.55, maxWidth: 520 }}>
         Your videos are live. {firstName} can line up what's next - a sustained organic run, or cutting your top performers into Meta ad variants.
       </p>
-      <a href={`mailto:${am?.email || "hello@viewix.com.au"}`} style={{ textDecoration: "none", display: "inline-block" }}>
-        <BtnPrimary style={{ height: 44 }}><Icon.cal /> Talk about what's next</BtnPrimary>
-      </a>
+      {/* Books a call on the AM's calendar — the right next step is a
+          conversation, not an email into the void. Falls back to email
+          only when no booking link is set on the account. */}
+      {am?.bookingUrl
+        ? <a href={am.bookingUrl} target="_blank" rel="noopener" style={{ textDecoration: "none", display: "inline-block" }}>
+            <BtnPrimary style={{ height: 44 }}><Icon.cal /> Book a call with {firstName}<span style={{ marginLeft: 4, opacity: 0.85 }}><Icon.external /></span></BtnPrimary>
+          </a>
+        : <a href={`mailto:${am?.email || "hello@viewix.com.au"}`} style={{ textDecoration: "none", display: "inline-block" }}>
+            <BtnPrimary style={{ height: 44 }}><Icon.cal /> Talk about what's next</BtnPrimary>
+          </a>}
     </div>
   );
 }

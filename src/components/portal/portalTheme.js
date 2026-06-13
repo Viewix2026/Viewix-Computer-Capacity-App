@@ -108,6 +108,12 @@ export const PORTAL_CSS = `
 .vx button:focus-visible, .vx a:focus-visible, .vx [role="button"]:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
+/* Dense project rows: lift on hover. !important to beat the inline
+   waiting-tint background; the left accent + shadow add depth. */
+.vx-prow:hover {
+  background: var(--surface-2) !important;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
 
 .vx-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
 .vx-scroll::-webkit-scrollbar-thumb { background: rgba(15,18,26,0.12); border-radius: 4px; }
