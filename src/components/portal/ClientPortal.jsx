@@ -10,6 +10,11 @@ import { Dashboard } from "./Dashboard";
 import { ProjectView } from "./ProjectView";
 import { ConnectedAccounts } from "./ConnectedAccounts";
 import { Analytics } from "./Analytics";
+// DEV-only: mock user + data so /clients/?preview renders the whole
+// portal without Firebase auth (which can't complete in the preview
+// sandbox). Every use below is import.meta.env.DEV-gated, so this
+// import tree-shakes out of production builds.
+import { PREVIEW_USER, previewFetch } from "./previewData";
 
 const THEME_KEY = "vx_portal_theme";
 
@@ -44,8 +49,17 @@ function parseRoute() {
 }
 
 export function ClientPortal() {
-  const [user, setUser] = useState(undefined);          // undefined=boot, null=signed out, obj=in
-  const [completing, setCompleting] = useState(looksLikeClientSignInLink());
+  // DEV preview mode: captured once at mount. import.meta.env.DEV is a
+  // build-time false in prod, so this folds to `false`, PREVIEW_USER /
+  // previewFetch references below become dead, and the import is
+  // tree-shaken away. ?preview survives SPA nav because the flag lives
+  // in state and navigate() re-appends the query param.
+  const [preview] = useState(() => import.meta.env.DEV
+    && typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).has("preview"));
+
+  const [user, setUser] = useState(import.meta.env.DEV && preview ? PREVIEW_USER : undefined); // undefined=boot, null=signed out, obj=in
+  const [completing, setCompleting] = useState(import.meta.env.DEV && preview ? false : looksLikeClientSignInLink());
   const [needEmail, setNeedEmail] = useState(false);     // cross-device link open
   const [completeErr, setCompleteErr] = useState("");
   const [route, setRoute] = useState(parseRoute());
@@ -53,12 +67,17 @@ export function ClientPortal() {
     try { return window.localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; }
   });
 
-  useEffect(() => { document.title = "Viewix — Client Portal"; initFB(); }, []);
+  useEffect(() => {
+    document.title = "Viewix — Client Portal";
+    if (import.meta.env.DEV && preview) return;   // no Firebase in preview
+    initFB();
+  }, [preview]);
 
   // Complete an email-link sign-in if we arrived via one. Gate on the
   // URL-only check (the CDN auth SDK may not be loaded yet);
   // completeClientSignIn awaits onFB and does the authoritative check.
   useEffect(() => {
+    if (import.meta.env.DEV && preview) return;
     if (!looksLikeClientSignInLink()) return;
     let cancelled = false;
     (async () => {
@@ -84,13 +103,18 @@ export function ClientPortal() {
   }, []);
 
   // Continuous auth subscription.
-  useEffect(() => onClientAuthChanged(u => setUser(u)), []);
+  useEffect(() => {
+    if (import.meta.env.DEV && preview) return undefined;   // mock user, no Firebase auth
+    return onClientAuthChanged(u => setUser(u));
+  }, [preview]);
 
-  // In-portal navigation (history API + popstate).
+  // In-portal navigation (history API + popstate). In preview mode the
+  // ?preview flag is re-appended so a manual reload stays in preview.
   const navigate = useCallback((to) => {
-    window.history.pushState(null, "", to);
+    const q = import.meta.env.DEV && preview ? (to.includes("?") ? "&preview=1" : "?preview=1") : "";
+    window.history.pushState(null, "", to + q);
     setRoute(parseRoute());
-  }, []);
+  }, [preview]);
   useEffect(() => {
     const onPop = () => setRoute(parseRoute());
     window.addEventListener("popstate", onPop);
@@ -103,10 +127,11 @@ export function ClientPortal() {
   }, []);
 
   const onSignOut = useCallback(async () => {
+    if (import.meta.env.DEV && preview) { navigate("/clients/"); return; }   // keep the mock session
     try { await signOutUser(); } catch {}
     navigate("/clients/");
     setUser(null);
-  }, [navigate]);
+  }, [navigate, preview]);
 
   // Top-level tab navigation (PortalNav / MobileTabBar).
   const onNavTab = useCallback((tab) => {
@@ -125,6 +150,10 @@ export function ClientPortal() {
       setCompleteErr(e?.message || "Could not complete sign-in");
     }
   }, []);
+
+  // In preview, all /api/client/* calls resolve from local fixtures.
+  // Prod folds this to `authFetch` and tree-shakes previewFetch out.
+  const apiFetch = import.meta.env.DEV && preview ? previewFetch : authFetch;
 
   let body;
   if (completing) {
@@ -149,7 +178,7 @@ export function ClientPortal() {
         onSignOut={onSignOut}
         onBack={() => navigate("/clients/")}
         onNav={onNavTab}
-        authFetch={authFetch}
+        authFetch={apiFetch}
       />
     );
   } else if (route.name === "analytics") {
@@ -160,7 +189,7 @@ export function ClientPortal() {
         onTheme={onTheme}
         onSignOut={onSignOut}
         onNav={onNavTab}
-        authFetch={authFetch}
+        authFetch={apiFetch}
       />
     );
   } else if (route.name === "accounts") {
@@ -183,7 +212,7 @@ export function ClientPortal() {
         onSignOut={onSignOut}
         onOpenProject={(shortId, view) => navigate(`/clients/p/${shortId}${view && view !== "videos" ? `/${view}` : ""}`)}
         onNav={onNavTab}
-        authFetch={authFetch}
+        authFetch={apiFetch}
       />
     );
   }
