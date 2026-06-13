@@ -25,13 +25,14 @@ function at(obj, path) {
 }
 function isFilled(v) { return typeof v === "string" && v.trim().length > 0; }
 
-// Copy-fit budgets mirror generate.mjs, which only WARNS at these thresholds —
-// real clipping starts well past them. So a small overrun (≤15%) is a review
-// flag the founder can trim, not a hard rejection; egregious overruns fail.
-function budgetCheck(path, v, max, errors, flags) {
-  if (typeof v !== "string") return;
-  if (v.length > Math.ceil(max * 1.15)) errors.push(`${path} is ${v.length} chars (budget ${max}) — far too long, will clip`);
-  else if (v.length > max) flags.push(`${path} is ${v.length} chars (budget ${max}) — slightly long, trim before approving`);
+// Copy-fit budgets mirror generate.mjs, which only WARNS at these thresholds.
+// Length is NEVER a hard fail: the founder review panel is where long lines get
+// trimmed and the renderer doesn't refuse on length. So always FLAG, never
+// error — a good draft must not be thrown away over one long sentence.
+function budgetCheck(path, v, max, _errors, flags) {
+  if (typeof v !== "string" || v.length <= max) return;
+  const sev = v.length > Math.ceil(max * 1.15) ? "too long, will clip" : "slightly long";
+  flags.push(`${path} is ${v.length} chars (budget ${max}) — ${sev}, trim before approving`);
 }
 
 export function validateBrief(brief, { requirePrices = false } = {}) {
