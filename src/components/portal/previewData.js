@@ -104,12 +104,44 @@ const ANALYTICS = {
       header: {
         companyName: "Chickanji",
         momentumSentence: "A clear step up from your last 30 days.",
-        heroProof: "Your charcoal-chicken ASMR cut hit 4.8x your usual views — your strongest hook this month.",
+        heroProof: "Your strongest videos this month are short charcoal-chicken hero shots. The top one reached 4.8x your usual views.",
+        positive: true,
+        gathering: false,
       },
       meta: {
-        freshnessLine: "Updated 12 June. Based on public Instagram data.",
-        dataState: { header: "live", winning: "gathering", nextVideos: "gathering", formatPlaybook: "gathering", story: "gathering", niche: "gathering" },
-        whatThisIncludes: "A monthly read on what's working across your content — what to make more of, and what's moving the numbers.",
+        freshnessLine: "Updated 12 June. Based on public Instagram data we can access.",
+        dataState: { header: "ready", winning: "ready", nextVideos: "ready", formatPlaybook: "ready", story: "ready", niche: "ready" },
+        whatThisIncludes: "A monthly read on what's working across your public Instagram videos.",
+      },
+      winning: [
+        { multiple: 4.8, formatLabel: "Food hero shot · 0:18", winLabel: "4.8x your usual views", views: 47200, likes: 3100, comments: 127, caption: "When the charcoal hits different - the smoky wing drop", postUrl: "#", thumbnail: null },
+        { multiple: 2.9, formatLabel: "ASMR · 0:24", winLabel: "2.9x your usual views", views: 28400, likes: 1900, comments: 64, caption: "Sound on - the crunch on the new smoky wings", postUrl: "#", thumbnail: null },
+        { multiple: 1.9, formatLabel: "Founder story · 0:41", winLabel: "1.9x your usual views", views: 19000, likes: 1200, comments: 88, caption: "Three mates, one grill - why we started Chickanji", postUrl: "#", thumbnail: null },
+        { multiple: 1.5, formatLabel: "Behind the pass · 0:30", winLabel: "1.5x your usual views", views: 15200, likes: 940, comments: 41, caption: "12:30 lunch rush, plated calm", postUrl: "#", thumbnail: null },
+      ],
+      nextVideos: [
+        { idea: "Another charcoal hero shot - try the new loaded fries", why: "Your food hero shots are pulling 1.4x your usual reach. Same format, a menu item your audience hasn't seen yet.", sourcePostUrl: "#" },
+        { idea: "Founder rapid-fire - top 5 questions about the grill", why: "Your founder clips keep the trust and your audience is asking for more of the story.", sourcePostUrl: "#" },
+        { idea: "ASMR close-up of the wing sauce pour", why: "Short ASMR is hot in your space right now - a low-effort cousin of your best post.", sourcePostUrl: null },
+      ],
+      formatPlaybook: [
+        { format: "food hero shot", comparisonSentence: "Your food hero shots pull 1.4x your usual views.", sampleWords: "based on 6 posts so far" },
+        { format: "ASMR", comparisonSentence: "ASMR clips run 1.1x your usual.", sampleWords: "based on 4 posts so far" },
+        { format: "founder story", comparisonSentence: "Founder stories are about 1.0x - your baseline.", sampleWords: "based on 5 posts so far" },
+        { format: "behind the scenes", comparisonSentence: "Behind-the-scenes is at 0.7x so far.", sampleWords: "based on 3 posts so far" },
+      ],
+      story: {
+        sinceLabel: "since 12 March 2026",
+        postsPublished: 28,
+        bestPost: { caption: "When the charcoal hits different", views: 47200, postUrl: "#" },
+        followerTrajectory: { start: 142, latest: 2184, label: "followers" },
+      },
+      niche: {
+        comparisonSentence: "Your average reel reaches 1.4x the typical account in your space right now.",
+        marketTakeaways: [
+          { takeaway: "Charcoal-grill spots are leading with close-up food hero shots under 20 seconds.", sourcePostUrl: "#" },
+          { takeaway: "Founder-on-camera 'why we started' clips are over-indexing across local food.", sourcePostUrl: "#" },
+        ],
       },
     },
   }],
