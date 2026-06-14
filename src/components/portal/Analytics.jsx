@@ -1,21 +1,21 @@
 // Client portal — Analytics tab (design section 04, "Growth
-// Intelligence"). The page chrome is the .vx portal shell; the report
-// body REUSES the public /r/ surface (PortalBody + zones, scoped under
-// .viewix-portal with CSS_LIGHT) so the logged-in tab and the
-// shareable link stay one implementation.
+// Intelligence").
+//
+// DESKTOP renders the proportioned multi-zone dashboard
+// (AnalyticsDashboard, .vx tokens) faithful to the Claude Design.
+// MOBILE keeps the mobile-first /r/ report body (PortalBody, scoped
+// under .viewix-portal + CSS_LIGHT) — the design's own mobile is a
+// single column, and the /r/ shareable link stays one implementation.
 //
 // Data comes from /api/client/analytics — the same client-safe
 // /analytics/public projection the /r/ page reads, resolved server-side
 // because the accountId → portalShortId mapping is staff-only.
-//
-// The report body is light-only by design (the /r/ surface has no dark
-// variant): .viewix-portal paints its own white background, so under
-// the internal-only .vx.dark preview it renders as a white island.
 
 import { useEffect, useState } from "react";
 import { PortalNav, MobileShell, ViewixLogo, Icon, useIsNarrow } from "./ui";
 import { CSS_LIGHT } from "../../config";
 import { PortalBody } from "../../features/clientPortal/ClientPortal";
+import { AnalyticsDashboard } from "./AnalyticsDashboard";
 
 function GatheringState({ narrow }) {
   return (
@@ -80,31 +80,36 @@ export function Analytics({ user, theme, onTheme, onSignOut, onNav, authFetch })
   } else if (!current) {
     inner = state.hasAccess ? <GatheringState narrow={narrow} /> : <NoAccessState narrow={narrow} />;
   } else {
-    inner = (
+    const switcher = accounts.length > 1 && (
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: narrow ? "16px 16px 0" : "16px 36px 0", maxWidth: narrow ? 720 : undefined, margin: narrow ? "0 auto" : undefined }}>
+        {accounts.map((a, i) => {
+          const active = i === Math.min(selected, accounts.length - 1);
+          return (
+            <button key={a.accountId} onClick={() => setSelected(i)} style={{
+              padding: "7px 14px", borderRadius: 999, fontSize: 12,
+              fontWeight: active ? 600 : 500,
+              border: active ? "1px solid var(--accent-line)" : "1px solid var(--line)",
+              background: active ? "var(--accent-soft)" : "var(--surface)",
+              color: active ? "var(--accent)" : "var(--text-2)",
+            }}>{a.name}</button>
+          );
+        })}
+      </div>
+    );
+    inner = narrow ? (
       <>
-        {accounts.length > 1 && (
-          <div style={{ maxWidth: 720, margin: "0 auto", padding: "16px 16px 0", display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {accounts.map((a, i) => {
-              const active = i === Math.min(selected, accounts.length - 1);
-              return (
-                <button key={a.accountId} onClick={() => setSelected(i)} style={{
-                  padding: "7px 14px", borderRadius: 999, fontSize: 12,
-                  fontWeight: active ? 600 : 500,
-                  border: active ? "1px solid var(--accent-line)" : "1px solid var(--line)",
-                  background: active ? "var(--accent-soft)" : "var(--surface)",
-                  color: active ? "var(--accent)" : "var(--text-2)",
-                }}>{a.name}</button>
-              );
-            })}
-          </div>
-        )}
-        {/* The /r/ report body, verbatim. minHeight:0 overrides the
-            standalone page's 100vh so it sits inside the portal scroll;
-            letterSpacing resets the .vx tracking so type matches /r/. */}
+        {switcher}
+        {/* Mobile: the /r/ report body. minHeight:0 overrides the
+            standalone page's 100vh; letterSpacing resets .vx tracking. */}
         <div className="viewix-portal" style={{ minHeight: 0, letterSpacing: "normal" }}>
           <style>{CSS_LIGHT}</style>
           <PortalBody p={current.projection} embedded />
         </div>
+      </>
+    ) : (
+      <>
+        {switcher}
+        <AnalyticsDashboard p={current.projection} company={current.name} />
       </>
     );
   }
