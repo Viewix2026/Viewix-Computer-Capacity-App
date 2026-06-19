@@ -1068,7 +1068,7 @@ async function getFantasticExample() {
 // rough estimate for chunking. Beyond batchSize we just split each
 // format's videoCount as-is — Claude will produce however many rows
 // the format declares.
-function chunkSelectedFormatsForScripting(formats, batchSize) {
+export function chunkSelectedFormatsForScripting(formats, batchSize) {
   const batches = [];
   let currentBatch = [];
   let currentCount = 0;
@@ -1126,6 +1126,27 @@ function chunkSelectedFormatsForScripting(formats, batchSize) {
   return batches;
 }
 
+// Hard cap for the Idea Selection flow: a script batch must never contain
+// more rows than the producer ticked for that batch. The model is told to
+// produce exactly one row per ticked idea (in order, ticked ideas first),
+// but the shared system prompt — and any founder override of it — still
+// carries the legacy "total rows must equal numberOfVideos" rule, so on a
+// round whose numberOfVideos exceeds the ticked count the model pads the
+// table back up: the "13 ticked but 40 scripts" bug. Trusting idea-order,
+// the first N rows are the ticked ideas; rows beyond N are padding we drop.
+//
+// Legacy projects (no formatIdeas, so hasIdeas=false / _tickedIdeas null)
+// pass through untouched — their row count is still videoCount-driven.
+// Exported for the regression test.
+export function capScriptRowsToTickedCount(batchRows, batch, hasIdeas) {
+  if (!Array.isArray(batchRows)) return [];
+  if (!hasIdeas) return batchRows;
+  const expected = (Array.isArray(batch) ? batch : []).reduce(
+    (sum, f) => sum + (Array.isArray(f?._tickedIdeas) ? f._tickedIdeas.length : 0), 0);
+  if (expected > 0 && batchRows.length > expected) return batchRows.slice(0, expected);
+  return batchRows;
+}
+
 function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExample, sherpaBlock = "" }) {
   // New schema sources — Brand Truth and client research are already approved.
   const bt = project.brandTruth?.fields || {};
@@ -1173,9 +1194,25 @@ function buildScriptUserMessage({ project, selectedFormatObjects, fantasticExamp
 
   const extraBlock = extraLinks.length ? extraLinks.map(u => `  Extra link: ${u}`).join("\n") : "";
 
+  // Idea Selection flow: the producer has ticked a specific subset and the
+  // ROW COUNT IS THE TICKED COUNT — not the deal's round total. The shared
+  // system prompt still carries the legacy "total rows must equal
+  // numberOfVideos / Count: N" rule (and founders can override that prompt
+  // live in Firebase), so feeding numberOfVideos here makes Claude pad the
+  // table up to the round target — the "13 ticked but 40 scripts" bug.
+  // When ticked ideas drive the batch we state the exact count and suppress
+  // the round-total signal. handleGenerateScript also hard-caps the parsed
+  // rows so this holds even if the model ignores the instruction.
+  const batchTickedTotal = selectedFormatObjects.reduce(
+    (sum, f) => sum + (Array.isArray(f._tickedIdeas) ? f._tickedIdeas.length : 0), 0);
+  const isTickedFlow = batchTickedTotal > 0;
+  const rowCountLine = isTickedFlow
+    ? `TOTAL SCRIPT ROWS TO PRODUCE: ${batchTickedTotal} — produce EXACTLY one row per ticked idea listed below, in the order given. Do NOT pad, merge, invent, or drop rows, and IGNORE any round/deal video target: the ticked ideas are the complete and exact list.`
+    : (project.numberOfVideos ? `TOTAL VIDEOS TO SHOOT THIS ROUND: ${project.numberOfVideos}` : "");
+
   return `CLIENT: ${project.companyName}
 ${project.videoType ? `DEAL TYPE: ${project.videoType}` : ""}
-${project.numberOfVideos ? `TOTAL VIDEOS TO SHOOT THIS ROUND: ${project.numberOfVideos}` : ""}
+${rowCountLine}
 ${sherpaBlock}
 APPROVED BRAND TRUTH (from Tab 1):
 - Brand Truths: ${bt.brandTruths || "(none)"}
@@ -1497,7 +1534,14 @@ async function handleGenerateScript(req, res) {
     if (!truncated) {
       try {
         const parsed = parseJSON(text);
-        return Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [];
+        // Hard cap (Idea Selection flow): a batch can never emit more rows
+        // than the producer ticked. Closes the "13 ticked but 40 scripts"
+        // bug deterministically, independent of whether the model obeys the
+        // prompt or a founder has overridden it. Split-retry sub-batches cap
+        // at their own leaves, so the flattened total stays exact. Legacy
+        // (hasIdeas=false) projects pass through untouched.
+        return capScriptRowsToTickedCount(
+          Array.isArray(parsed.scriptTable) ? parsed.scriptTable : [], batch, hasIdeas);
       } catch (e) {
         parseErr = e;
       }
