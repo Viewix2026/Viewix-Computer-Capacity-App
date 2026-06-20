@@ -9,14 +9,17 @@
 // (forging github.prUrl, requestedBy, status:'done'). Routing every create/
 // update/delete through a role-checked Admin-SDK endpoint closes that hole and
 // lets the backend — not a rule expression — own the state machine.
+//
+// Phase 3: a transition to `ready` opens a GitHub issue (build brief) and
+// advances the ticket to `building`. Inert until GITHUB_REQUESTS_* env vars
+// exist, in which case the ticket simply stays at `ready`.
 
-import crypto from "crypto";
-import { adminGet, adminSet, adminPatch } from "./_fb-admin.js";
+import { adminGet, adminSet, adminPatch, mutateRecord } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors, actorFrom } from "./_requireAuth.js";
-
-const STATUSES = ["triage", "ready", "building", "review", "done"];
-const TYPES = ["bug", "feature"];
-const PRIORITIES = ["low", "med", "high"];
+import {
+  STATUSES, TYPES, PRIORITIES, newRequestId, validId, buildTicket,
+  createIssueForTicket, githubRequestsConfig,
+} from "./_dashboard-requests.js";
 
 // Fields a founder may edit via `update` from the board UI. Everything else
 // (id, source, requestedBy, slack, github, createdAt, createdByUid) is
@@ -28,15 +31,6 @@ function clampStr(v, max) {
   const t = v.trim();
   if (!t) return null;
   return t.length > max ? t.slice(0, max) : t;
-}
-
-// Ticket ids are interpolated straight into the RTDB path, so a raw `/`
-// (or RTDB-illegal key chars) would let an id like "foo/createdAt" reach a
-// nested node under /dashboardRequests. Even on a founders-only endpoint that
-// bypasses rules, restrict ids to the minting charset (req_<ts>_<hex> and any
-// Slack-intake ids stay within this set).
-function validId(v) {
-  return typeof v === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(v) ? v : null;
 }
 
 export default async function handler(req, res) {
@@ -63,31 +57,18 @@ export default async function handler(req, res) {
     if (action === "create") {
       const title = clampStr(req.body?.title, 200);
       if (!title) return res.status(400).json({ error: "title is required" });
-      const body = clampStr(req.body?.body, 8000) || "";
-      const type = TYPES.includes(req.body?.type) ? req.body.type : "bug";
-      const priority = PRIORITIES.includes(req.body?.priority) ? req.body.priority : null;
-
-      const id = `req_${now}_${crypto.randomBytes(4).toString("hex")}`;
-      const ticket = {
-        id,
+      const ticket = buildTicket({
+        id: newRequestId(),
         title,
-        body,
-        type,
-        status: "triage",
-        priority,
+        body: clampStr(req.body?.body, 8000) || "",
+        type: req.body?.type,
+        priority: req.body?.priority,
         source: "manual",
         requestedBy: { slackUserId: null, name: actor.name || actor.email || "Founder" },
-        slack: null,
-        screenshots: [],
-        clarifications: [],
-        plan: null,
-        github: null,
-        createdAt: now,
-        updatedAt: now,
         createdByUid: actor.uid,
-      };
-      await adminSet(`/dashboardRequests/${id}`, ticket);
-      return res.status(200).json({ ok: true, id, ticket });
+      });
+      await adminSet(`/dashboardRequests/${ticket.id}`, ticket);
+      return res.status(200).json({ ok: true, id: ticket.id, ticket });
     }
 
     // ─── update ──────────────────────────────────────────────────────
@@ -125,7 +106,47 @@ export default async function handler(req, res) {
       }
       patch.updatedAt = now;
       await adminPatch(`/dashboardRequests/${id}`, patch);
-      return res.status(200).json({ ok: true, id, patch });
+
+      // Phase 3 handoff: a transition INTO `ready` (no prior github) opens a
+      // GitHub issue and advances to `building`. Never fail the status change
+      // the founder just made — the handoff is best-effort around it.
+      //
+      // Duplicate-safe (Codex R2-F2): the OLD try/catch left `github` unstamped
+      // when the post-create patch failed, so the next ready-drag made a second
+      // issue. Now we claim the handoff transactionally with a `pending` marker
+      // (blocks re-entry), and only ever RELEASE the claim when no issue was
+      // actually created — so an issue can never be created twice.
+      let github = null;
+      if (patch.status === "ready" && !existing.github && githubRequestsConfig()) {
+        const claim = await mutateRecord(`/dashboardRequests/${id}`,
+          cur => (cur.github ? cur : { ...cur, github: { handoff: "pending", at: Date.now() } }));
+        const claimed = claim.committed && claim.snapshot?.github?.handoff === "pending";
+        if (claimed) {
+          try {
+            github = await createIssueForTicket({ ...existing, ...patch });
+          } catch (e) {
+            console.error("dashboard-requests: GitHub issue create failed:", e?.message || e);
+            await adminPatch(`/dashboardRequests/${id}`, { github: null }); // no issue made → allow retry
+            github = null;
+          }
+          if (github) {
+            // Issue exists — do NOT release the claim on a later failure, or a
+            // re-drag would duplicate it. Stamp best-effort; worst case the
+            // ticket sits at `ready` with the issue recorded as pending.
+            try {
+              await adminPatch(`/dashboardRequests/${id}`, { github, status: "building", updatedAt: Date.now() });
+            } catch (e) {
+              console.error("dashboard-requests: handoff stamp failed (issue exists):", e?.message || e);
+              // Best-effort recovery so the ticket isn't orphaned from its
+              // issue: record the issue identity (status stays `ready`). The
+              // card then shows the link and the Phase-4 webhook can still
+              // match it by issueNumber.
+              await adminPatch(`/dashboardRequests/${id}`, { github }).catch(() => {});
+            }
+          }
+        }
+      }
+      return res.status(200).json({ ok: true, id, patch, github });
     }
 
     // ─── delete ──────────────────────────────────────────────────────

@@ -180,5 +180,46 @@ The repo already runs this exact shape for `#scheduling`:
   hookless `CardBody` (no duplicate `useDraggable` id).
 - Convergence pass: all four blocking findings verified resolved, no regressions → **APPROVE**.
 
-**Real Codex loop (Jeremy's Mac):** end-of-run check-off — point Codex at this plan + the Phase 1
-diff to confirm with the actual OpenAI-authed tool.
+**Round 3 (Phases 2–4 built code) — Claude red-team stand-in, this session. Verdict: REWORK → CONVERGED.**
+- R3-F1 [CRITICAL]: concurrent thread replies silently dropped an answer. **Resolved:** unprompted
+  replies captured as `{q:null}` notes (rendered as "They added: …" / "Additional detail").
+- R3-F2 [CRITICAL]: Phase 3 duplicate-GitHub-issue race (failed stamp re-fired creation).
+  **Resolved:** transactional `pending` claim; claim released only when no issue was created, so an
+  issue can never be created twice. Stamp-failure best-effort records the issue identity.
+- R3-F4 [MAJOR]: thread stranded at the question cap on an LLM error. **Resolved:** minimal-ticket
+  fallback at the cap.
+- R3-F6 [MAJOR]: a new request inside an already-filed thread was swallowed. **Resolved:** one-time
+  hint via a raw abort-if-set transaction (posts exactly once).
+- R3-F7 [MAJOR]: a manual "not planned" issue close falsely said "shipped". **Resolved:** gate
+  issue-close completion on `state_reason === "completed"`; PR-merge path independent.
+- R3-F9 [MINOR]: GitHub `@mention`/`#ref` injection from Slack text. **Resolved:** `ghSafe()` (U+200B)
+  on all user-controlled fields; permalinks left raw.
+- Security posture confirmed sound: verify-before-ack, constant-time signatures, inert paths do no
+  work. Convergence pass: all six resolved, no regressions → **APPROVE**.
+- Coverage: `api/__tests__/dashboard-requests.test.mjs` (validId / buildTicket invariants /
+  referencedIssues), `node --test` green.
+
+**Status: Phases 1–4 built.** Remaining is Jeremy-only setup (Slack app + scopes, Vercel env vars,
+GitHub PAT + webhook + Events URL wired last, deploy RTDB rules) and the **real Codex loop** on the
+Mac against this plan + the full diff.
+
+## Environment variables (Jeremy's one-time setup)
+All new endpoints are **inert** (clean 200 no-op) until their secrets exist, so deploying the code
+changes nothing in prod until these are set and the Slack Events / GitHub webhook URLs are wired
+**last**.
+
+| Var | Phase | Notes |
+|-----|-------|-------|
+| `SLACK_REQUEST_SIGNING_SECRET` | 2 | Slack app signing secret (Events API) |
+| `SLACK_REQUEST_BOT_TOKEN` | 2 + 4 | `xoxb-…`; scopes `channels:history`, `chat:write`, `reactions:write`, `files:read`. Also used for the ✅ reaction in Phase 4 |
+| `SLACK_REQUEST_CHANNEL_ID` | 2 | the `#dashboard-feature-requests` channel id; invite the bot to it |
+| `SLACK_REQUEST_ALLOWED_USER_IDS` | 2 | optional comma-list to fence intake to the team |
+| `SLACK_REQUEST_MODEL` | 2 | optional; default `claude-haiku-4-6` |
+| `ANTHROPIC_API_KEY` | 2 | already configured in the project |
+| `GITHUB_REQUESTS_TOKEN` | 3 | PAT with issues:write on the target repo |
+| `GITHUB_REQUESTS_REPO` | 3 | `owner/name` |
+| `GITHUB_REQUESTS_WEBHOOK_SECRET` | 4 | shared secret for the GitHub webhook (issues + pull_request events) |
+
+Endpoints: Slack Events URL → `/api/slack-request-listener`; GitHub webhook → `/api/github-request-webhook`
+(subscribe to `issues` + `pull_request`). Both registered in `vercel.json`. Deploy RTDB rules with
+`firebase deploy --only database` after merging.
