@@ -35,6 +35,13 @@
       }
     },
 
+    "dashboardRequests": {
+      ".read": "auth != null && auth.token.role == 'founders'",
+      ".write": false,
+      ".indexOn": ["createdAt"]
+    },
+    "dashboardRequestsIntake": { ".read": false, ".write": false },
+
     "users": {
       ".read":  "auth != null && auth.token.role == 'founders'",
       ".write": false,
