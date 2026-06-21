@@ -42,6 +42,9 @@
     "api/slack-request-listener.js": {
       "maxDuration": 60
     },
+    "api/slack-request-interactivity.js": {
+      "maxDuration": 30
+    },
     "api/github-request-webhook.js": {
       "maxDuration": 30
     },
