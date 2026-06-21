@@ -22,11 +22,11 @@ const MAX_FETCH = 2000; // hard cap on messages pulled, so a huge channel can't 
 const APPLY_BUDGET_MS = 240_000; // wall-clock budget per apply call (maxDuration is 300s)
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function fetchHistory(botToken, channel, cutoffTs) {
+async function fetchHistory(botToken, channel, cutoffTs, oldestTs) {
   const msgs = [];
   let cursor;
   do {
-    const params = new URLSearchParams({ channel, limit: "200", latest: String(cutoffTs), inclusive: "false" });
+    const params = new URLSearchParams({ channel, limit: "200", latest: String(cutoffTs), oldest: String(oldestTs || 0), inclusive: "false" });
     if (cursor) params.set("cursor", cursor);
     const r = await fetch(`https://slack.com/api/conversations.history?${params}`, { headers: { Authorization: `Bearer ${botToken}` } });
     const d = await r.json().catch(() => ({}));
@@ -110,11 +110,15 @@ export default async function handler(req, res) {
   if (!botToken || !channel) return res.status(400).json({ error: "SLACK_REQUEST_BOT_TOKEN / SLACK_REQUEST_CHANNEL_ID not configured" });
 
   const mode = req.body?.mode || "preview";
-  const before = /^\d{4}-\d{2}-\d{2}$/.test(req.body?.before || "") ? req.body.before : "2026-06-18";
+  // Window: [from 00:00, before 00:00). Defaults cover Jun 17 → Jun 22 inclusive
+  // (from = Jun 17, before = Jun 23). Both overridable via the request body.
+  const before = /^\d{4}-\d{2}-\d{2}$/.test(req.body?.before || "") ? req.body.before : "2026-06-23";
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.body?.from || "") ? req.body.from : "2026-06-17";
   const cutoff = Math.floor(new Date(`${before}T00:00:00Z`).getTime() / 1000);
+  const oldest = Math.floor(new Date(`${from}T00:00:00Z`).getTime() / 1000);
 
   let history;
-  try { history = await fetchHistory(botToken, channel, cutoff); }
+  try { history = await fetchHistory(botToken, channel, cutoff, oldest); }
   catch (e) { return res.status(502).json({ error: e.message }); }
 
   const eligibleMsgs = history.filter(eligible);
