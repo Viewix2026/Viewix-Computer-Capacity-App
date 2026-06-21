@@ -110,9 +110,9 @@ function Column({ col, tickets, onOpen }) {
   const { setNodeRef, isOver } = useDroppable({ id: col.key });
   return (
     <div style={{ flex: "1 1 0", minWidth: 200 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
         <span>{col.label}</span>
-        <span>{tickets.length}</span>
+        <span style={{ background: "var(--card)", borderRadius: 10, padding: "0 7px", fontSize: 11, lineHeight: "16px", color: "var(--fg)" }}>{tickets.length}</span>
       </div>
       <div
         ref={setNodeRef}
