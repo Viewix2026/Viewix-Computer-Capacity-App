@@ -26,12 +26,30 @@ import { buildTicket, ticketIdForThread } from "../api/_dashboard-requests.js";
 const DB_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 const SLACK_API = "https://slack.com/api";
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
-const MODEL = process.env.SLACK_REQUEST_MODEL || "claude-haiku-4-5";
 
 const APPLY = process.argv.includes("--apply");
 const beforeArg = (process.argv.find(a => a.startsWith("--before=")) || "").split("=")[1] || "2026-06-18";
 const CUTOFF_TS = Math.floor(new Date(`${beforeArg}T00:00:00Z`).getTime() / 1000);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Read .env.local ourselves rather than trusting `node --env-file`: the huge
+// quoted FIREBASE_SERVICE_ACCOUNT value breaks Node's simple --env-file parser
+// for the lines after it, so SLACK_REQUEST_*/ANTHROPIC_API_KEY silently never
+// reach process.env. Reading the file directly is robust regardless.
+const ENV_TEXT = (() => {
+  try { return readFileSync(new URL("../.env.local", import.meta.url), "utf8"); }
+  catch { return ""; }
+})();
+function envVar(key) {
+  const m = ENV_TEXT.match(new RegExp(`^${key}=(.*)$`, "m"));
+  if (!m) return process.env[key] || "";
+  let v = m[1].trim();
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+  return v;
+}
+
+const MODEL = envVar("SLACK_REQUEST_MODEL") || "claude-haiku-4-5";
+const ANTHROPIC_KEY = envVar("ANTHROPIC_API_KEY");
 
 // ─── Firebase admin (self-init; .env.local stores FIREBASE_SERVICE_ACCOUNT with
 // unescaped inner quotes that node --env-file truncates, so parse it directly) ──
@@ -51,8 +69,8 @@ admin.initializeApp({ credential: admin.credential.cert(loadServiceAccount()), d
 const db = admin.database();
 
 // ─── Slack ─────────────────────────────────────────────────────────
-const BOT = process.env.SLACK_REQUEST_BOT_TOKEN;
-const CHANNEL = process.env.SLACK_REQUEST_CHANNEL_ID;
+const BOT = envVar("SLACK_REQUEST_BOT_TOKEN");
+const CHANNEL = envVar("SLACK_REQUEST_CHANNEL_ID");
 async function slack(method, body, { get = false } = {}) {
   const opts = { method: get ? "GET" : "POST", headers: { Authorization: `Bearer ${BOT}` } };
   let url = `${SLACK_API}/${method}`;
@@ -112,7 +130,7 @@ async function triageMessage(text, fileCount) {
   }];
   const r = await fetch(ANTHROPIC_API, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: MODEL, max_tokens: 600,
       tools, tool_choice: { type: "tool", name: "triage" },
@@ -141,7 +159,7 @@ async function permalink(ts) {
 
 // ─── Main ──────────────────────────────────────────────────────────
 async function main() {
-  if (!BOT || !CHANNEL || !process.env.ANTHROPIC_API_KEY) {
+  if (!BOT || !CHANNEL || !ANTHROPIC_KEY) {
     throw new Error("Missing SLACK_REQUEST_BOT_TOKEN / SLACK_REQUEST_CHANNEL_ID / ANTHROPIC_API_KEY");
   }
   console.log(`\nBackfill — ${APPLY ? "APPLY (will post + create)" : "DRY RUN (no changes)"} · cutoff: before ${beforeArg} UTC\n`);
