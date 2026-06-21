@@ -42,6 +42,21 @@ async function callApi(action, payload) {
   return r.json();
 }
 
+// ─── Copyable command (for kicking off the build in Claude Code) ───
+function CopyCommand({ text }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch { /* clipboard blocked — user can select manually */ }
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <code style={{ flex: 1, background: "var(--bg, #0b0f17)", border: "1px solid var(--border, rgba(255,255,255,0.12))", borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "var(--fg)", fontFamily: "ui-monospace, SFMono-Regular, monospace", overflowX: "auto", whiteSpace: "nowrap" }}>{text}</code>
+      <button onClick={copy} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border, rgba(255,255,255,0.12))", background: "transparent", color: copied ? "#10B981" : "var(--muted)", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>{copied ? "Copied ✓" : "Copy"}</button>
+    </div>
+  );
+}
+
 // ─── Card body (presentational, no hooks) ──────────────────────────
 // Shared by the draggable Card and the DragOverlay clone, so the overlay
 // never instantiates a second useDraggable with the same id (Codex R2-F8).
@@ -283,6 +298,12 @@ function Drawer({ ticket, onClose, onError }) {
             <a href={ticket.github.issueUrl} target="_blank" rel="noreferrer" style={{ color: "#3B82F6" }}>Issue #{ticket.github.issueNumber} ↗</a>
             {ticket.github.prUrl && <> · <a href={ticket.github.prUrl} target="_blank" rel="noreferrer" style={{ color: "#3B82F6" }}>PR ↗</a></>}
           </div></>)}
+
+        {ticket.github?.issueNumber && (<>
+          <div style={label}>Build in Claude Code</div>
+          <CopyCommand text={`/build-dashboard-request ${ticket.github.issueNumber}`} />
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>Paste into Claude Code on your Mac — it'll ask questions, run the Codex loop, then ship.</div>
+        </>)}
 
         {ticket.slack?.permalink && (<><div style={label}>Slack thread</div><a href={ticket.slack.permalink} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: "#3B82F6" }}>Open in Slack ↗</a></>)}
 
