@@ -1,0 +1,66 @@
+# Auto-implement Dashboard Requests
+#
+# When the request pipeline files a GitHub issue (label `dashboard-request`,
+# added automatically by api/_dashboard-requests.js when a board ticket reaches
+# "Ready"), this launches Claude Code to read the build brief, implement the
+# fix on a branch, and open a PR that closes the issue. You review + merge —
+# and the request webhook then flips the ticket to Done + ✅ in Slack.
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token` on your Max plan) —
+# runs on the subscription, NOT the metered API. See the PR description for the
+# one-time setup (install the Claude GitHub app + add the secret).
+#
+# Scope: fires ONLY on issues carrying the `dashboard-request` label (so it
+# never runs on unrelated/manual issues), plus @claude mentions for follow-ups.
+
+name: Dashboard Requests — auto-implement
+
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+
+# Don't run two implementations for the same issue at once (opened + labeled can
+# both fire when the API creates an issue with the label already attached).
+concurrency:
+  group: dashboard-request-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    # Only our pipeline's issues, or an explicit @claude follow-up comment.
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'dashboard-request')) ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --max-turns 25
+            --model claude-opus-4-8
+          prompt: |
+            You are implementing a Viewix dashboard bug/feature request that was triaged in Slack and filed as this GitHub issue. The issue body is a build brief: a description, clarifying Q&A, screenshot links, and a ticket id.
+
+            Do the following:
+            1. Read the issue carefully. The change should be SCOPED to what the issue asks — do not refactor unrelated code.
+            2. Explore the repo to find the right files (this is a Vite + React frontend with Vercel serverless functions under api/ and Firebase RTDB; founder features live under src/components/Founders*).
+            3. Implement the fix on a new branch.
+            4. If the repo has tests or a build (npm run build), run them and make sure they pass.
+            5. Open a pull request that says "Closes #<this issue number>" so the request pipeline auto-closes the ticket on merge.
+            6. You are running unattended — you cannot ask questions mid-run. If anything is ambiguous or you had to make a judgement call, DON'T guess silently: state your assumptions and any open strategy questions clearly in the PR description under a "## Assumptions & questions for review" heading so Jeremy can decide at review time.
+            7. Keep the PR small and reviewable. Do not merge it.
