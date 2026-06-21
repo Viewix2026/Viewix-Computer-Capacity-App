@@ -321,6 +321,8 @@ export function FoundersRequests() {
   const [openId, setOpenId] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [backfilling, setBackfilling] = useState(false);
   const [activeId, setActiveId] = useState(null);
   // optimistic status override so a dragged card doesn't snap back during the
   // server round-trip; cleared once RTDB echoes the new status.
@@ -387,16 +389,57 @@ export function FoundersRequests() {
     }
   };
 
+  const backfillCall = async (mode) => {
+    const r = await authFetch("/api/dashboard-requests-backfill", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }),
+    });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || `backfill failed (${r.status})`); }
+    return r.json();
+  };
+
+  const runBackfill = async () => {
+    setErr(""); setNote("");
+    try {
+      const pv = await backfillCall("preview");
+      if (!pv.toProcess) { setNote(`Nothing to backfill — ${pv.alreadyTicketed} past request(s) already logged.`); return; }
+      const ok = window.confirm(
+        `Found ${pv.toProcess} past request(s) to log (of ${pv.eligible} found; ${pv.alreadyTicketed} already done).\n\n` +
+        `This will post clarifying questions into those old Slack threads and create tickets. Proceed?`);
+      if (!ok) return;
+      setBackfilling(true);
+      let created = 0, remaining = Infinity, guard = 0;
+      while (remaining > 0 && guard < 100) {
+        const r = await backfillCall("apply");
+        created += r.created; remaining = r.remaining; guard++;
+        setNote(`Backfilling… ${created} created, ${remaining} remaining.`);
+      }
+      setNote(`Done — backfilled ${created} ticket(s).`);
+    } catch (e) { setErr(e.message); }
+    setBackfilling(false);
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 13, color: "var(--muted)" }}>
           Bug &amp; feature requests. Drag cards between columns to update status.
         </div>
-        {!showNew && (
-          <button onClick={() => setShowNew(true)} style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: "#3B82F6", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ New ticket</button>
-        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={runBackfill} disabled={backfilling} title="Scan past #dashboard-feature-requests messages and log them as tickets" style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid var(--border, rgba(255,255,255,0.15))", background: "transparent", color: "var(--muted)", fontSize: 13, cursor: backfilling ? "default" : "pointer" }}>
+            {backfilling ? "Backfilling…" : "Backfill backlog"}
+          </button>
+          {!showNew && (
+            <button onClick={() => setShowNew(true)} style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: "#3B82F6", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ New ticket</button>
+          )}
+        </div>
       </div>
+
+      {note && (
+        <div style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)", color: "#10B981", padding: "8px 12px", borderRadius: 6, fontSize: 13, marginBottom: 12, display: "flex", justifyContent: "space-between" }}>
+          <span>{note}</span>
+          <button onClick={() => setNote("")} style={{ border: "none", background: "transparent", color: "#10B981", cursor: "pointer" }}>×</button>
+        </div>
+      )}
 
       {err && (
         <div style={{ background: "rgba(244,114,182,0.12)", border: "1px solid rgba(244,114,182,0.3)", color: "#F472B6", padding: "8px 12px", borderRadius: 6, fontSize: 13, marginBottom: 12, display: "flex", justifyContent: "space-between" }}>

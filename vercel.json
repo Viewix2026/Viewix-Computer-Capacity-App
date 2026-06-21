@@ -48,6 +48,9 @@
     "api/github-request-webhook.js": {
       "maxDuration": 30
     },
+    "api/dashboard-requests-backfill.js": {
+      "maxDuration": 300
+    },
     "api/slack-interactivity.js": {
       "maxDuration": 30
     },
