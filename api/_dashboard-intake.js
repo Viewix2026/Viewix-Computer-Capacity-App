@@ -29,8 +29,12 @@ export const MAX_QUESTION_ROUNDS = 5;
 export const RX = { THINKING: "eyes", LOGGED: "memo", ERROR: "warning" };
 
 export const INTAKE_ROOT = "/dashboardRequestsIntake";
-// Slack ts ("1718…​.123456") contains a ".", illegal in an RTDB key.
-export const threadPath = (rootTs) => `${INTAKE_ROOT}/threads/${String(rootTs).replace(/\./g, "_")}`;
+// Slack ts ("1718…​.123456") contains a ".", illegal in an RTDB key. Defensively
+// neutralize EVERY RTDB-illegal char (not just "."), because this is now reached
+// from the interactivity endpoint with an attacker-shapeable button value — a
+// raw "/" would otherwise let a forged value traverse to an arbitrary node
+// (Codex R-F1). The interactivity endpoint also validates the ts shape upstream.
+export const threadPath = (rootTs) => `${INTAKE_ROOT}/threads/${String(rootTs).replace(/[.#$/\[\]]/g, "_")}`;
 
 // Slack mrkdwn uses single-asterisk *bold*; the model tends to emit **bold**.
 // Convert so questions don't render literal asterisks.
@@ -53,8 +57,12 @@ export async function ensureIntakeState(path, initial) {
 // ─── Record an answer (typed reply OR button click) ────────────────
 // Fills the last pending question's answer; an answer with no pending slot
 // (concurrent replies, or unprompted info) is kept as a note rather than lost.
+// Returns true iff state actually changed — callers gate triage on that so a
+// no-op reply doesn't spend a redundant Claude call (Codex R-F3).
 export async function recordReply({ path, text, files = [] }) {
-  return mutateRecord(path, (cur) => {
+  let changed = false;
+  await mutateRecord(path, (cur) => {
+    changed = false; // reset each invocation — RTDB may re-run the mutator
     if (cur.ticketCreated) return cur;
     const rounds = Array.isArray(cur.rounds) ? cur.rounds.map(r => ({ ...r })) : [];
     let filled = false;
@@ -64,8 +72,10 @@ export async function recordReply({ path, text, files = [] }) {
     if (!filled && text) rounds.push({ q: null, a: text });
     const screenshots = (Array.isArray(cur.screenshots) ? cur.screenshots : []).concat(files).slice(0, 20);
     if (!filled && !text && files.length === 0) return cur;
+    changed = true;
     return { ...cur, rounds, screenshots };
   });
+  return changed;
 }
 
 // ─── Render a question (plain text, or buttons for a choice set) ────
@@ -126,17 +136,25 @@ export async function triage({ rootTs, channel, botToken }) {
     const options = Array.isArray(decision.options)
       ? decision.options.filter(o => typeof o === "string" && o.trim()).slice(0, 5)
       : [];
+    // `didAppend` (reset each run) tells us whether THIS call appended the
+    // question vs aborted because one was already outstanding — so only the
+    // appending caller posts it. Relying on `last.q === q` would let a second
+    // concurrent triage re-post when both Claude calls returned the same text
+    // (Codex R-F3/F4).
+    let didAppend = false;
     const tx = await mutateRecord(path, (cur) => {
+      didAppend = false;
       if (cur.ticketCreated) return cur;
       const rounds = Array.isArray(cur.rounds) ? cur.rounds.slice() : [];
       if (rounds.some(r => r && r.a == null)) return cur; // a question is already outstanding
       rounds.push(options.length >= 2 ? { q, a: null, options } : { q, a: null });
+      didAppend = true;
       return { ...cur, rounds, questionCount: (cur.questionCount || 0) + 1 };
     });
-    const rounds = tx.snapshot?.rounds || [];
-    const roundIndex = rounds.length - 1;
-    const last = rounds[roundIndex];
-    if (tx.committed && last && last.a == null && last.q === q && !tx.snapshot?.ticketCreated) {
+    if (didAppend && tx.committed) {
+      // We just appended, and the "one pending at a time" guard guarantees it's
+      // the terminal round, so its index is length-1.
+      const roundIndex = (tx.snapshot?.rounds?.length || 1) - 1;
       await renderQuestion({ channel, rootTs, roundIndex, question: q, options, botToken });
     }
     return;

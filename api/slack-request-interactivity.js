@@ -18,20 +18,23 @@
 
 import { waitUntil } from "@vercel/functions";
 import { adminGet, mutateRecord } from "./_fb-admin.js";
-import { readRawBody, verifySlackSignature, slackUpdateMessage } from "./_slack-helpers.js";
+import { readRawBody, verifySlackSignature, slackUpdateMessage, parseAllowlist } from "./_slack-helpers.js";
 import { threadPath, toSlackMrkdwn, triage } from "./_dashboard-intake.js";
 
 export const config = { api: { bodyParser: false } };
 
-// Parse a button value "rootTs::roundIndex::optIndex". rootTs itself never
-// contains "::". Returns null for anything malformed/forged. Exported for tests.
+// Parse a button value "rootTs::roundIndex::optIndex". Returns null for anything
+// malformed/forged. rootTs MUST be a Slack message ts (digits.digits) — without
+// this check a forged value could carry a "/"-laden rootTs that escapes the
+// intake subtree once it reaches threadPath (Codex R-F1). Exported for tests.
 export function parseButtonValue(value) {
   const parts = String(value == null ? "" : value).split("::");
   if (parts.length !== 3) return null;
   const rootTs = parts[0];
   const roundIndex = Number(parts[1]);
   const optIndex = Number(parts[2]);
-  if (!rootTs || !Number.isInteger(roundIndex) || roundIndex < 0) return null;
+  if (!/^\d{1,20}\.\d{1,20}$/.test(rootTs)) return null; // Slack ts shape only
+  if (!Number.isInteger(roundIndex) || roundIndex < 0) return null;
   if (!Number.isInteger(optIndex) || optIndex < 0) return null;
   return { rootTs, roundIndex, optIndex };
 }
@@ -70,8 +73,15 @@ async function processInteraction(payload) {
   const channel = payload.channel?.id;
   const action = (payload.actions || [])[0];
   if (!botToken || !channel || !action) return;
-  if (wantChannel && channel !== wantChannel) return; // not our channel
+  // Mandatory channel guard — if unset, don't process clicks from anywhere
+  // (Codex R-F8: treating missing config as "allow all" is the wrong default).
+  if (!wantChannel || channel !== wantChannel) return;
   if (!String(action.action_id || "").startsWith("dr_ans_")) return; // not our button
+
+  // Allowlist gate, mirroring the listener — a non-allowlisted member who can
+  // see the buttons must not be able to inject answers (Codex R-F8).
+  const allowlist = parseAllowlist(process.env.SLACK_REQUEST_ALLOWED_USER_IDS);
+  if (allowlist && !allowlist.has(payload.user?.id)) return;
 
   const parsed = parseButtonValue(action.value);
   if (!parsed) return;
@@ -92,23 +102,29 @@ async function processInteraction(payload) {
     return;
   }
 
-  // Fill THIS round's answer (targeted, transactional). If a concurrent click /
-  // typed reply already filled it, this is a no-op and we don't double-record.
-  const tx = await mutateRecord(path, (cur) => {
+  // Fill THIS round's answer (targeted, transactional). `didWrite` (reset each
+  // run) means OUR mutator wrote it — not just that the stored value equals
+  // `answer`, which would be true for a losing concurrent click too and double-
+  // fire triage (Codex R-F7).
+  let didWrite = false;
+  await mutateRecord(path, (cur) => {
+    didWrite = false;
     if (cur.ticketCreated) return cur;
     const rounds = Array.isArray(cur.rounds) ? cur.rounds.map(r => ({ ...r })) : [];
     const r = rounds[roundIndex];
     if (!r || r.a != null) return cur; // already answered → no change
     r.a = answer;
+    didWrite = true;
     return { ...cur, rounds };
   });
-  const recorded = tx.snapshot?.rounds?.[roundIndex]?.a === answer;
 
+  // Best-effort: blank the buttons so the message isn't re-clickable. If this
+  // fails the round.a != null guard above is the real safety net against a
+  // re-click double-record.
   if (msgTs) await disableButtons({ channel, msgTs, question: round.q, chosen: answer, botToken });
 
-  // Only advance if WE recorded the answer (avoid double-triage on a race;
-  // triage is idempotent-ish but this keeps it clean).
-  if (recorded) await triage({ rootTs, channel, botToken });
+  // Advance only if WE recorded the answer (a losing race must not re-triage).
+  if (didWrite) await triage({ rootTs, channel, botToken });
 }
 
 // Replace the question message with the chosen answer and no buttons, so it

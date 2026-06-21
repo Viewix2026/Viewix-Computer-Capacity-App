@@ -161,6 +161,6 @@ async function handleReply({ event, channel, botToken, text, files }) {
     return;
   }
 
-  await recordReply({ path, text, files });
-  await triage({ rootTs, channel, botToken });
+  const changed = await recordReply({ path, text, files });
+  if (changed) await triage({ rootTs, channel, botToken });
 }
