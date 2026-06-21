@@ -61,7 +61,7 @@ export async function ensureIntakeState(path, initial) {
 // no-op reply doesn't spend a redundant Claude call (Codex R-F3).
 export async function recordReply({ path, text, files = [] }) {
   let changed = false;
-  await mutateRecord(path, (cur) => {
+  const tx = await mutateRecord(path, (cur) => {
     changed = false; // reset each invocation — RTDB may re-run the mutator
     if (cur.ticketCreated) return cur;
     const rounds = Array.isArray(cur.rounds) ? cur.rounds.map(r => ({ ...r })) : [];
@@ -75,7 +75,9 @@ export async function recordReply({ path, text, files = [] }) {
     changed = true;
     return { ...cur, rounds, screenshots };
   });
-  return changed;
+  // Only report a change if the transaction actually committed — a record
+  // deleted mid-flight commits null and would otherwise leave `changed` stale.
+  return changed && !!tx.committed;
 }
 
 // ─── Render a question (plain text, or buttons for a choice set) ────

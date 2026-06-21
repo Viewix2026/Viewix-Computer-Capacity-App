@@ -412,6 +412,13 @@ export function FoundersRequests() {
         const r = await backfillCall("apply");
         created += r.created; remaining = r.remaining; guard++;
         setNote(`Backfilling… ${created} created, ${remaining} remaining.`);
+        // Stop the moment a batch makes no progress (e.g. Anthropic/Slack
+        // erroring) — otherwise we'd spin re-charging Claude for nothing.
+        if (!r.progressed) {
+          setNote(`Stopped — backfilled ${created} ticket(s); ${remaining} couldn't be processed (likely a transient Slack/Claude error). Try again in a bit.`);
+          setBackfilling(false);
+          return;
+        }
       }
       setNote(`Done — backfilled ${created} ticket(s).`);
     } catch (e) { setErr(e.message); }
