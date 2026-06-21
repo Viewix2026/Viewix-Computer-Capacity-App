@@ -7,6 +7,31 @@ import assert from "node:assert/strict";
 
 import { buildTicket, validId, newRequestId, ticketIdForThread, buildIssueBody } from "../_dashboard-requests.js";
 import { referencedIssues, closingReferences } from "../github-request-webhook.js";
+import { toSlackMrkdwn } from "../_dashboard-intake.js";
+import { parseButtonValue } from "../slack-request-interactivity.js";
+
+test("toSlackMrkdwn converts **bold** to Slack *bold*", () => {
+  assert.equal(toSlackMrkdwn("**Which tab** is slow?"), "*Which tab* is slow?");
+  assert.equal(toSlackMrkdwn("no markup here"), "no markup here");
+  assert.equal(toSlackMrkdwn("**a** and **b**"), "*a* and *b*");
+  assert.equal(toSlackMrkdwn(null), "");
+});
+
+test("parseButtonValue accepts rootTs::round::opt, rejects malformed/forged", () => {
+  assert.deepEqual(parseButtonValue("1718000000.123456::2::0"), { rootTs: "1718000000.123456", roundIndex: 2, optIndex: 0 });
+  assert.equal(parseButtonValue("1718000000.123456::2"), null, "missing optIndex");
+  assert.equal(parseButtonValue("a::b::c"), null, "non-numeric indices");
+  assert.equal(parseButtonValue("::1::0"), null, "empty rootTs");
+  assert.equal(parseButtonValue("1700.0::-1::0"), null, "negative round rejected");
+  assert.equal(parseButtonValue(""), null);
+  assert.equal(parseButtonValue(null), null);
+  assert.equal(parseButtonValue("1700.0::1::0::extra"), null, "too many parts");
+  // Forged rootTs that isn't a Slack ts must be rejected — it would otherwise
+  // reach threadPath and could traverse to an arbitrary RTDB node (Codex R-F1).
+  assert.equal(parseButtonValue("foo/../scheduling::0::0"), null, "path-injection rootTs rejected");
+  assert.equal(parseButtonValue("notats::0::0"), null, "non-ts rootTs rejected");
+  assert.equal(parseButtonValue("1700000000.123#x::0::0"), null, "rootTs with illegal char rejected");
+});
 
 test("validId accepts the minting charset, rejects path-injection", () => {
   assert.ok(validId("req_1718000000000_deadbeef"));
