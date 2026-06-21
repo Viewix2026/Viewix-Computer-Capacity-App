@@ -15,11 +15,11 @@ import {
 import { fbListenSafe, authFetch } from "../firebase";
 
 const COLUMNS = [
-  { key: "triage", label: "Triage" },
-  { key: "ready", label: "Ready" },
-  { key: "building", label: "Building" },
-  { key: "review", label: "Review" },
-  { key: "done", label: "Done" },
+  { key: "triage", label: "Triage", color: "#94A3B8" },    // slate — new/unsorted
+  { key: "ready", label: "Ready", color: "#3B82F6" },      // blue — queued to build
+  { key: "building", label: "Building", color: "#F59E0B" }, // amber — in progress
+  { key: "review", label: "Review", color: "#A78BFA" },    // violet — awaiting review
+  { key: "done", label: "Done", color: "#10B981" },        // green — complete
 ];
 const COLUMN_KEYS = COLUMNS.map(c => c.key);
 
@@ -108,17 +108,19 @@ function Card({ ticket, onOpen }) {
 // ─── Column ────────────────────────────────────────────────────────
 function Column({ col, tickets, onOpen }) {
   const { setNodeRef, isOver } = useDroppable({ id: col.key });
+  const tint = (a) => col.color + a; // col.color is #RRGGBB; append alpha hex
   return (
     <div style={{ flex: "1 1 0", minWidth: 200 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
-        <span>{col.label}</span>
-        <span>{tickets.length}</span>
+      <div style={{ borderTop: `3px solid ${col.color}`, borderRadius: 3, marginBottom: 8 }} />
+      <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ color: col.color }}>{col.label}</span>
+        <span style={{ background: tint("26"), color: col.color, borderRadius: 10, padding: "0 7px", fontSize: 11, lineHeight: "16px", fontWeight: 700 }}>{tickets.length}</span>
       </div>
       <div
         ref={setNodeRef}
         style={{
-          background: isOver ? "rgba(59,130,246,0.08)" : "transparent",
-          border: "1px dashed " + (isOver ? "rgba(59,130,246,0.4)" : "transparent"),
+          background: isOver ? tint("14") : "transparent",
+          border: "1px dashed " + (isOver ? tint("66") : "transparent"),
           borderRadius: 8,
           padding: 6,
           minHeight: 120,
