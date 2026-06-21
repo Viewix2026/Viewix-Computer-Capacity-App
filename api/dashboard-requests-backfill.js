@@ -10,14 +10,16 @@
 //   questions onto the original message. Returns `remaining` so the caller can
 //   loop until 0. Idempotent (keyed by ticketIdForThread) — safe to re-run.
 
-import { getAdmin, adminGet } from "./_fb-admin.js";
+import { getAdmin, adminGet, adminPatch } from "./_fb-admin.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 import { buildTicket, ticketIdForThread } from "./_dashboard-requests.js";
 import { slackPostMessage, slackAddReaction, slackGetPermalink, slackGetUserName } from "./_slack-helpers.js";
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = process.env.SLACK_REQUEST_MODEL || "claude-haiku-4-5";
-const BATCH = 15; // per apply call — the UI loops until remaining hits 0
+const BATCH = 8; // per apply call — the UI loops until a batch makes no progress
+const MAX_FETCH = 2000; // hard cap on messages pulled, so a huge channel can't DoS the function
+const APPLY_BUDGET_MS = 240_000; // wall-clock budget per apply call (maxDuration is 300s)
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function fetchHistory(botToken, channel, cutoffTs) {
@@ -31,8 +33,8 @@ async function fetchHistory(botToken, channel, cutoffTs) {
     if (!d.ok) throw new Error(`conversations.history: ${d.error || r.status}`);
     msgs.push(...(d.messages || []));
     cursor = d.response_metadata?.next_cursor || "";
-    if (cursor) await sleep(300);
-  } while (cursor);
+    if (cursor && msgs.length < MAX_FETCH) await sleep(300);
+  } while (cursor && msgs.length < MAX_FETCH);
   return msgs;
 }
 
@@ -85,6 +87,15 @@ async function triageMessage(apiKey, text, fileCount) {
   };
 }
 
+async function postQuestions(botToken, channel, ts, questions) {
+  if (questions.length) {
+    const lines = ["👋 Logging this on the Dashboard Requests board (retro cleanup). A few things that'd help us action it:",
+      ...questions.map(q => `• ${q}`)];
+    await slackPostMessage({ channel, thread_ts: ts, text: lines.join("\n"), botToken });
+  }
+  await slackAddReaction({ channel, timestamp: ts, name: "memo", botToken });
+}
+
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
   setCors(req, res);
@@ -108,7 +119,14 @@ export default async function handler(req, res) {
 
   const eligibleMsgs = history.filter(eligible);
   const all = (await adminGet("/dashboardRequests")) || {};
-  const pending = eligibleMsgs.filter(m => !all[ticketIdForThread(m.ts)]);
+  // A message is still "pending" if it has no ticket yet, OR it has a backfilled
+  // ticket whose questions never made it to Slack (commit-then-post-fail) — so
+  // we re-drive the post instead of silently skipping it forever (Codex R-F3).
+  const isPending = (m) => {
+    const t = all[ticketIdForThread(m.ts)];
+    return !t || (t.backfilled && t.clarificationsPosted !== true);
+  };
+  const pending = eligibleMsgs.filter(isPending);
 
   if (mode === "preview") {
     return res.status(200).json({
@@ -125,44 +143,69 @@ export default async function handler(req, res) {
     if (!apiKey) return res.status(400).json({ error: "ANTHROPIC_API_KEY not configured" });
     const { db } = getAdmin();
     const batch = pending.slice(0, BATCH);
-    let created = 0;
+    const startedAt = Date.now();
+    let progressed = 0; // tickets created OR questions re-driven this batch
+    let created = 0, failed = 0;
+
     for (const m of batch) {
+      if (Date.now() - startedAt > APPLY_BUDGET_MS) break; // wall-clock guard (Codex R-F4)
       const id = ticketIdForThread(m.ts);
-      let decision;
-      try { decision = await triageMessage(apiKey, (m.text || "").trim(), filesOf(m).length); }
-      catch (e) { console.error("backfill triage failed:", e?.message || e); continue; }
+      // Wrap the WHOLE per-message unit so one Slack 429 / error can't abort the
+      // batch and 500 the call (Codex R-F2).
+      try {
+        const existing = all[id] || (await adminGet(`/dashboardRequests/${id}`));
 
-      const [name, link] = await Promise.all([
-        slackGetUserName({ user: m.user, botToken }),
-        slackGetPermalink({ channel, message_ts: m.ts, botToken }),
-      ]);
-      const ticket = buildTicket({
-        id, title: decision.title, body: m.text || "", type: decision.type, priority: null, source: "slack",
-        requestedBy: { slackUserId: m.user, name: name || "Teammate" },
-        slack: { channelId: channel, messageTs: m.ts, threadTs: m.ts, permalink: link || null },
-        screenshots: filesOf(m), clarifications: decision.questions.map(q => ({ q, a: null })),
-      });
-      ticket.backfilled = true;
+        // Re-drive: ticket exists but its questions never posted → just post + flag.
+        if (existing && existing.backfilled && existing.clarificationsPosted !== true) {
+          const qs = (existing.clarifications || []).map(c => c && c.q).filter(Boolean);
+          await postQuestions(botToken, channel, m.ts, qs);
+          await adminPatch(`/dashboardRequests/${id}`, { clarificationsPosted: true });
+          progressed++;
+          await sleep(500);
+          continue;
+        }
+        if (existing) continue; // already fully handled
 
-      // Create-if-absent; only post to Slack if WE created it (no double-posting
-      // on a concurrent run / re-click).
-      let won = false;
-      if (db) {
-        const tx = await db.ref(`/dashboardRequests/${id}`).transaction(cur => (cur ? cur : ticket));
-        won = !!(tx.committed && tx.snapshot?.val()?.createdAt === ticket.createdAt);
+        // New ticket.
+        const decision = await triageMessage(apiKey, (m.text || "").trim(), filesOf(m).length);
+        const [name, link] = await Promise.all([
+          slackGetUserName({ user: m.user, botToken }),
+          slackGetPermalink({ channel, message_ts: m.ts, botToken }),
+        ]);
+        const ticket = buildTicket({
+          id, title: decision.title, body: m.text || "", type: decision.type, priority: null, source: "slack",
+          requestedBy: { slackUserId: m.user, name: name || "Teammate" },
+          slack: { channelId: channel, messageTs: m.ts, threadTs: m.ts, permalink: link || null },
+          screenshots: filesOf(m), clarifications: decision.questions.map(q => ({ q, a: null })),
+        });
+        ticket.backfilled = true;
+        ticket.clarificationsPosted = false; // flipped true only after the post succeeds
+
+        // Create-if-absent; only post if WE created it (no double-post on a
+        // concurrent run / re-click).
+        let won = false;
+        if (db) {
+          const tx = await db.ref(`/dashboardRequests/${id}`).transaction(cur => (cur ? cur : ticket));
+          won = !!(tx.committed && tx.snapshot?.val()?.createdAt === ticket.createdAt);
+        }
+        if (!won) continue;
+
+        // Post AFTER commit; flag only on success, so a post failure here is
+        // retried on the next run instead of being lost (Codex R-F3).
+        await postQuestions(botToken, channel, m.ts, decision.questions);
+        await adminPatch(`/dashboardRequests/${id}`, { clarificationsPosted: true });
+        created++;
+        progressed++;
+        await sleep(500);
+      } catch (e) {
+        console.error("backfill: message failed, skipping:", e?.message || e);
+        failed++;
       }
-      if (!won) continue;
-
-      if (decision.questions.length) {
-        const lines = ["👋 Logging this on the Dashboard Requests board (retro cleanup). A few things that'd help us action it:",
-          ...decision.questions.map(q => `• ${q}`)];
-        await slackPostMessage({ channel, thread_ts: m.ts, text: lines.join("\n"), botToken });
-      }
-      await slackAddReaction({ channel, timestamp: m.ts, name: "memo", botToken });
-      created++;
-      await sleep(700);
     }
-    return res.status(200).json({ ok: true, processed: batch.length, created, remaining: Math.max(0, pending.length - batch.length) });
+    return res.status(200).json({
+      ok: true, processed: batch.length, created, failed, progressed,
+      remaining: Math.max(0, pending.length - progressed),
+    });
   }
 
   return res.status(400).json({ error: `unknown mode: ${mode}` });
