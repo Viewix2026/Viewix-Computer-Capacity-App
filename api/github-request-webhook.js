@@ -13,7 +13,7 @@
 import crypto from "crypto";
 import { waitUntil } from "@vercel/functions";
 import { adminGet, adminPatch } from "./_fb-admin.js";
-import { findTicketByIssueNumber } from "./_dashboard-requests.js";
+import { findTicketByIssueNumber, githubRequestsConfig } from "./_dashboard-requests.js";
 import { readRawBody, slackSwapReaction, REACTION } from "./_slack-helpers.js";
 
 export const config = { api: { bodyParser: false } };
@@ -54,9 +54,24 @@ function verifyGithubSignature({ rawBody, signature, secret }) {
 }
 
 async function processWebhook(payload) {
+  // Ignore webhooks from any repo other than the configured one. The webhook is
+  // repo-wide and the dashboard repo also sees unrelated PRs/issues, so without
+  // this a stray payload could complete a ticket by a coincidental number
+  // (Codex F2). Only enforce when the repo is configured — if it isn't,
+  // createIssueForTicket is inert so no ticket carries an issueNumber to match.
+  const cfg = githubRequestsConfig();
+  if (cfg) {
+    // When configured, require an exact repo match — a payload with no
+    // repository.full_name is treated as a mismatch, not a bypass (Codex R2-N4).
+    const repo = payload.repository?.full_name;
+    if (!repo || repo.toLowerCase() !== cfg.repo.toLowerCase()) return;
+  }
+
   // Issue closed as COMPLETED (e.g. auto-closed by a merged PR's "closes #N")
-  // → done. Gate on state_reason so a manual "not planned" / "duplicate" close
-  // does NOT falsely tell the Slack reporter it shipped (Codex R2-F7).
+  // → done. This is the PRIMARY done trigger: the issue is unambiguously one we
+  // opened (matched by issueNumber). Gate on state_reason so a manual
+  // "not planned" / "duplicate" close does NOT falsely tell the Slack reporter
+  // it shipped (Codex R2-F7).
   if (payload.issue && payload.action === "closed") {
     if (payload.issue.state_reason === "completed") {
       await completeByIssue(payload.issue.number, null);
@@ -64,20 +79,36 @@ async function processWebhook(payload) {
     return;
   }
 
-  // PR merged → done for every issue it references, and stamp the PR url.
+  // PR merged → done + stamp the PR url, but ONLY for issues the PR explicitly
+  // CLOSES (closes/fixes/resolves #N) — never a bare "#N" mention, or an
+  // incidental cross-reference in an unrelated PR would falsely complete a
+  // ticket sharing that number (Codex F2). The issues.closed path above is the
+  // main trigger; this covers a merge to a non-default branch, where GitHub
+  // does not auto-close the linked issue.
   if (payload.pull_request && payload.action === "closed" && payload.pull_request.merged) {
     const pr = payload.pull_request;
-    const refs = referencedIssues(`${pr.title || ""}\n${pr.body || ""}`);
+    const refs = closingReferences(`${pr.title || ""}\n${pr.body || ""}`);
     for (const n of refs) await completeByIssue(n, pr.html_url);
     return;
   }
 }
 
-// Collect #N references from PR text. Over-matching is harmless — only ids that
-// map to a real ticket do anything. Exported for unit testing.
+// Collect #N references from PR text. Exported for unit testing; retained as a
+// general utility. NOT used for completion — see closingReferences.
 export function referencedIssues(text) {
   const out = new Set();
   for (const m of String(text).matchAll(/#(\d+)/g)) out.add(parseInt(m[1], 10));
+  return [...out].filter(Number.isFinite);
+}
+
+// Collect issues a PR explicitly CLOSES via GitHub's auto-close keywords
+// (close/closes/closed · fix/fixes/fixed · resolve/resolves/resolved #N).
+// Unlike a bare "#N" mention this won't sweep in incidental cross-references,
+// so an unrelated merged PR can't complete a coincidentally-numbered ticket.
+export function closingReferences(text) {
+  const out = new Set();
+  const re = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[:\s]+#(\d+)/gi;
+  for (const m of String(text).matchAll(re)) out.add(parseInt(m[1], 10));
   return [...out].filter(Number.isFinite);
 }
 

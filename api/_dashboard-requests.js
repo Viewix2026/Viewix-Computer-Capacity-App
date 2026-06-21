@@ -23,6 +23,16 @@ export function validId(v) {
   return typeof v === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(v) ? v : null;
 }
 
+// Deterministic ticket id for a Slack intake thread, derived from the root
+// message ts. A retried or concurrent intake then targets the SAME ticket node
+// (an idempotent overwrite) instead of minting a second ticket — which lets the
+// listener write the ticket BEFORE claiming `ticketCreated`, closing the
+// crash-loses-the-request hole. The ts contains a ".", illegal in an RTDB key,
+// so swap it for "_"; the result is also validId-safe.
+export function ticketIdForThread(rootTs) {
+  return `req_${String(rootTs).replace(/\./g, "_")}`;
+}
+
 // Build a fully-formed ticket with server-owned defaults. Callers supply the
 // user-facing fields; this owns id/status/timestamps and the canonical shape,
 // so a Slack-created and a manually-created ticket are byte-compatible.
@@ -94,25 +104,40 @@ function ghSafe(s) {
   return String(s == null ? "" : s).replace(/@/g, "@​").replace(/#/g, "#​");
 }
 
-function buildIssueBody(ticket) {
-  const lines = [ghSafe(ticket.body) || "_(no description)_", ""];
+// Markdown-safe escaping for user-controlled text rendered into the issue
+// BODY (the build brief a cloud Claude session executes): a teammate's report
+// or a screenshot filename must not be able to restructure it — inject
+// headings/lists/tables, break out of a link label, or open a code span.
+// Backslash-escapes the CommonMark structural + inline-format chars and
+// defuses @mentions (not markdown, so escaping alone won't stop the ping).
+// Leaves . - ! + alone so ordinary prose ("v2.0", "drop-down") renders clean.
+function mdSafe(s) {
+  return String(s == null ? "" : s)
+    // `<` is escaped too so raw HTML (<img>, <details>, <!-- comment -->, which
+    // GitHub renders) can't be injected into the brief (Codex R2-N2).
+    .replace(/([\\`*_{}\[\]()#|<>~])/g, "\\$1")
+    .replace(/@/g, "@​");
+}
+
+export function buildIssueBody(ticket) {
+  const lines = [mdSafe(ticket.body) || "_(no description)_", ""];
   const clar = (ticket.clarifications || []).filter(c => c && (c.q || c.a != null));
   if (clar.length) {
     lines.push("## Clarifications");
     for (const c of clar) {
-      if (c.q) lines.push(`- **${ghSafe(c.q)}** — ${ghSafe(c.a ?? "(no answer)")}`);
-      else lines.push(`- ${ghSafe(c.a)}`);
+      if (c.q) lines.push(`- **${mdSafe(c.q)}** — ${mdSafe(c.a ?? "(no answer)")}`);
+      else lines.push(`- ${mdSafe(c.a)}`);
     }
     lines.push("");
   }
   const shots = (ticket.screenshots || []).filter(s => s && s.permalink);
   if (shots.length) {
     lines.push("## Screenshots");
-    for (const s of shots) lines.push(`- [${ghSafe(s.name || "screenshot")}](${s.permalink})`);
+    for (const s of shots) lines.push(`- [${mdSafe(s.name || "screenshot")}](${s.permalink})`);
     lines.push("");
   }
   lines.push("---");
-  lines.push(`Type: \`${ticket.type}\` · Priority: \`${ticket.priority || "none"}\` · Requested by: ${ghSafe(ticket.requestedBy?.name || "?")}`);
+  lines.push(`Type: \`${ticket.type}\` · Priority: \`${ticket.priority || "none"}\` · Requested by: ${mdSafe(ticket.requestedBy?.name || "?")}`);
   if (ticket.slack?.permalink) lines.push(`Slack thread: ${ticket.slack.permalink}`);
   lines.push(`Ticket id: \`${ticket.id}\``);
   return lines.join("\n");

@@ -57,9 +57,14 @@ The repo already runs this exact shape for `#scheduling`:
   server endpoints** that verify the caller's role token (`_requireAuth`, founders) and write via the
   Admin SDK:
   - `api/dashboard-requests.js` — `POST {action:'create'|'update'|'delete', ...}`. `create` builds a
-    `triage`/`source:'manual'` ticket; `update` applies a **validated status transition** (server owns
-    the DAG) + whitelisted field edits, stamping `updatedAt`; `delete` founders-only. The backend, not
-    a rule, owns the state machine. Drag-to-move in the UI calls `update`.
+    `triage`/`source:'manual'` ticket; `update` applies **whitelisted field edits**, each value
+    validated against its allowed set (`status` ∈ STATUSES, `type` ∈ TYPES, …), stamping `updatedAt`;
+    `delete` founders-only. Transitions are intentionally **unrestricted** — it is a founders-only
+    Kanban, so any card can move to any column (including back) by design; there is no transition DAG.
+    The one side-effect, the GitHub handoff, is guarded by *the ticket not already carrying an issue*
+    (not by a DAG), so a re-drag can't open a second issue. The backend, not a rule, owns mutations.
+    Drag-to-move in the UI calls `update`. (Codex R4-F4: the earlier "validated DAG" wording overstated
+    what the code does and is corrected here.)
 - **New sub-tab component** `src/components/FoundersRequests.jsx`: a 5-column Kanban
   (Triage → Ready → Building → Review → Done) reading `/dashboardRequests` via `fbListen`,
   drag-to-move via `@dnd-kit` → `authFetch('/api/dashboard-requests', {action:'update'})`, a card
@@ -199,9 +204,48 @@ The repo already runs this exact shape for `#scheduling`:
 - Coverage: `api/__tests__/dashboard-requests.test.mjs` (validId / buildTicket invariants /
   referencedIssues), `node --test` green.
 
-**Status: Phases 1–4 built.** Remaining is Jeremy-only setup (Slack app + scopes, Vercel env vars,
-GitHub PAT + webhook + Events URL wired last, deploy RTDB rules) and the **real Codex loop** on the
-Mac against this plan + the full diff.
+**Round 4 (real Codex loop — Jeremy's Mac, OpenAI-authed). The FIRST genuinely independent review;
+Rounds 1–3 were a Claude red-team stand-in self-reviewing. Verdict: FIX-THEN-SHIP → CONVERGED in 2 rounds.**
+- R4-C1 [CRITICAL]: the default triage model `claude-haiku-4-6` **404s** (verified live against the
+  Anthropic API — it does not exist; the real id is `claude-haiku-4-5`). Every `callClaudeForTriage`
+  failed, so the bot could never ask a question or file a ticket — the whole Slack path was dead.
+  **Resolved:** default `claude-haiku-4-5`. (Round 1's R1-F3 "fix" swapped one invented id for another.
+  The same latent id still sits in `api/social-organic.js:498` — out of scope here, flagged separately.)
+- R4-H1/F1 [HIGH]: the Phase-3 issue-creation claim used a bare `handoff:"pending"` marker, but
+  `mutateRecord` commits with the *current* snapshot even on an unchanged return — so BOTH concurrent
+  `→ready` racers saw "pending" and both created a GitHub issue (the very duplicate R3-F2 claimed to
+  close). **Resolved:** a **unique `claimToken`** winner-check, plus a stale-reclaim (a pending claim
+  >2 min old with no `issueNumber` is treated as abandoned and re-claimable, so a crash between claim
+  and issue-create can't strand the ticket forever).
+- R4-F2 [HIGH]: the repo-wide GitHub webhook marked a ticket **done** on any bare `#N` mention in any
+  merged PR — and this repo sees normal cloud-Claude PRs referencing issue numbers constantly.
+  **Resolved:** a repository-match guard + completion only on explicit closing keywords
+  (`closes/fixes/resolves #N`, via `closingReferences`); `issues.closed(state_reason=completed)` stays
+  the primary done trigger.
+- R4-F3 [HIGH]: `ticketCreated:true` was committed **before** the ticket write, so a crash in the gap
+  lost the request permanently (later replies saw "already logged" with no board ticket). **Resolved:**
+  a **deterministic id** from the thread root ts + **write-the-ticket-first** (create-if-absent) + a
+  unique `confirmToken`, so a crash re-runs idempotently and concurrent replies announce exactly once.
+- R4-F5/F7/F8 [MED/LOW]: the allowlist now gates **replies** too, not just new posts; `mdSafe` escapes
+  Markdown **and raw HTML** in the issue body (which is the build brief an agent executes); the drawer
+  **and** board clear the `ready→building` optimistic override.
+- Round-2 self-churn (fixes of the fixes, all resolved): N1 create-if-absent so a crash-recovery
+  re-run can't overwrite founder edits; N2 escape `<`; N3 board-override clear; N4 strict repo match.
+- Pushed back: a status-transition DAG (free transitions are correct Kanban UX — see Phase 1).
+  Deferred: screenshot-permalink reliability (input-bound — needs a live Slack smoke test, added to the
+  setup checklist below); an intake-node reaper (`/dashboardRequestsIntake/{events,threads}` grow
+  unbounded but are years from mattering at this volume).
+- Coverage: `api/__tests__/dashboard-requests.test.mjs` now **10/10** (added `closingReferences`,
+  `ticketIdForThread`, and Markdown + raw-HTML injection of `buildIssueBody`). `npm run build` and
+  `node --check` clean. Severity trend **1C+4H+… → 0C/0H/3M/1L → converged** (severity collapse +
+  self-churn dominance).
+
+**Status: Phases 1–4 built; hardened through the real Codex loop (Round 4).** Remaining is Jeremy-only
+setup (Slack app + scopes, Vercel env vars, GitHub PAT + webhook + Events URL wired last, deploy RTDB
+rules). **Live smoke test once wired (Codex R4-F6, input-bound):** post a screenshot-only request in
+the channel and confirm a card with a working screenshot link appears — if the screenshot drops, the
+`message.file_share` event isn't carrying inline permalinks in this workspace and `extractFiles` needs
+a `files.info` fallback (needs the `files:read` scope, already requested).
 
 ## Environment variables (Jeremy's one-time setup)
 All new endpoints are **inert** (clean 200 no-op) until their secrets exist, so deploying the code

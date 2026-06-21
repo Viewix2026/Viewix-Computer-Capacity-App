@@ -194,6 +194,12 @@ function Drawer({ ticket, onClose, onError }) {
         const cur = k === "priority" ? (ticket?.priority || "") : ticket?.[k];
         if (cur === (k === "priority" ? (v || "") : v)) { delete next[k]; changed = true; }
       }
+      // Setting status to `ready` triggers the server-side GitHub handoff, which
+      // auto-advances the ticket to `building`. The intermediate `ready` echo may
+      // never arrive, so an exact-match clear would leave the select stuck on
+      // "Ready" forever — clear it once the ticket has moved on to building
+      // (Codex F8).
+      if (next.status === "ready" && ticket?.status === "building") { delete next.status; changed = true; }
       return changed ? next : prev;
     });
   }, [ticket]);
@@ -321,7 +327,13 @@ export function FoundersRequests() {
       let changed = false;
       for (const [id, st] of Object.entries(prev)) {
         const cur = raw?.[id];
-        if (!cur || cur.status === st) { delete next[id]; changed = true; }
+        // Clear on confirm or deletion, and on the ready→building auto-advance
+        // (the server opens the GitHub issue and skips the `ready` echo, so an
+        // exact-match clear would strand a dragged card in Ready — Codex R2-N3,
+        // same gap the Drawer fix closed for the detail view).
+        if (!cur || cur.status === st || (st === "ready" && cur.status === "building")) {
+          delete next[id]; changed = true;
+        }
       }
       return changed ? next : prev;
     });

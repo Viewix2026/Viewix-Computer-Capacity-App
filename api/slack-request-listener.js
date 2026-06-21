@@ -30,13 +30,16 @@ import {
   slackGetPermalink,
   slackGetUserName,
   parseAllowlist,
+  randomShortId,
 } from "./_slack-helpers.js";
-import { newRequestId, buildTicket } from "./_dashboard-requests.js";
+import { buildTicket, ticketIdForThread } from "./_dashboard-requests.js";
 
 export const config = { api: { bodyParser: false } };
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
-const MODEL = process.env.SLACK_REQUEST_MODEL || "claude-haiku-4-6";
+// claude-haiku-4-5 is the current cheap model (verified live: `claude-haiku-4-6`
+// 404s — it does not exist). Resolves server-side to claude-haiku-4-5-20251001.
+const MODEL = process.env.SLACK_REQUEST_MODEL || "claude-haiku-4-5";
 const MAX_TOKENS = 1024;
 const MAX_QUESTION_ROUNDS = 3;
 const EVENT_DEDUP_TTL_MS = 60 * 60 * 1000;
@@ -112,6 +115,12 @@ async function processEvent(payload) {
     }
   }
 
+  // Allowlist gate (before any LLM call or state write) — applies to BOTH new
+  // posts and thread replies (Codex F5), so a non-allowlisted member can't feed
+  // answers into a tracked intake thread. A null allowlist means open to all.
+  const allowlist = parseAllowlist(process.env.SLACK_REQUEST_ALLOWED_USER_IDS);
+  if (allowlist && !allowlist.has(event.user)) return;
+
   const isReply = event.thread_ts && event.thread_ts !== event.ts;
   if (isReply) await handleReply({ event, channel, botToken, text, files });
   else await handleNewRequest({ event, channel, botToken, text, files });
@@ -129,10 +138,7 @@ function extractFiles(event) {
 async function handleNewRequest({ event, channel, botToken, text, files }) {
   const rootTs = event.ts;
 
-  // Allowlist gate (before any LLM call) — keep token burn off non-team posts.
-  const allowlist = parseAllowlist(process.env.SLACK_REQUEST_ALLOWED_USER_IDS);
-  if (allowlist && !allowlist.has(event.user)) return;
-
+  // (Allowlist is enforced upstream in processEvent for both new posts and replies.)
   const userName = await slackGetUserName({ user: event.user, botToken });
   const path = threadPath(rootTs);
 
@@ -266,16 +272,9 @@ async function triage({ rootTs, channel, botToken }) {
 
 async function createTicketFromState({ rootTs, channel, botToken, decision, state, needsDetail }) {
   const path = threadPath(rootTs);
-  const id = newRequestId();
-
-  // Transactional create-once guard: claim ticketCreated with our id. If
-  // another invocation already claimed it, snapshot carries a different id and
-  // we bail — no double ticket (Codex R1-F6).
-  const tx = await mutateRecord(path, (cur) => {
-    if (cur.ticketCreated) return cur;
-    return { ...cur, ticketCreated: true, ticketId: id, status: "created" };
-  });
-  if (!tx.committed || tx.snapshot?.ticketId !== id) return;
+  // Deterministic id from the thread root → a retried or concurrent invocation
+  // targets the SAME ticket node (idempotent overwrite), never a duplicate.
+  const id = ticketIdForThread(rootTs);
 
   const permalink = await slackGetPermalink({ channel, message_ts: rootTs, botToken });
   const clarifications = (state.rounds || [])
@@ -296,7 +295,32 @@ async function createTicketFromState({ rootTs, channel, botToken, decision, stat
     screenshots: state.screenshots || [],
     clarifications,
   });
-  await adminSet(`/dashboardRequests/${id}`, ticket);
+
+  // Write the ticket FIRST, then claim. If we crash between the two, the next
+  // reply re-runs this and re-writes the SAME id (idempotent) — the request is
+  // never silently lost (Codex F3). The OLD order set `ticketCreated` BEFORE the
+  // write, so a crash in the gap left the thread marked "logged" with no board
+  // ticket behind it.
+  //
+  // Create-IF-ABSENT, never overwrite: in that crash-recovery re-run (or a
+  // concurrent invocation) a founder may already have edited the card or it may
+  // carry a stamped GitHub issue — a blind adminSet would clobber it (Codex
+  // R2-N1). Raw transaction so the SDK's cold-null first pass re-runs against
+  // the server before deciding.
+  const { db } = getAdmin();
+  if (db) await db.ref(`/dashboardRequests/${id}`).transaction(cur => (cur ? cur : ticket));
+  else await adminSet(`/dashboardRequests/${id}`, ticket);
+
+  // Create-once guard for the user-facing confirmation: a UNIQUE token tells the
+  // real winner apart, so concurrent replies post the "logged" message + reaction
+  // exactly once. A bare flag check can't — mutateRecord commits with the current
+  // snapshot even on an unchanged return, so every racer would see the flag set.
+  const confirmToken = randomShortId();
+  const tx = await mutateRecord(path, (cur) => {
+    if (cur.ticketCreated) return cur;
+    return { ...cur, ticketCreated: true, ticketId: id, confirmToken, status: "created" };
+  });
+  if (!tx.committed || tx.snapshot?.confirmToken !== confirmToken) return; // not the winner → already announced
 
   await slackPostMessage({
     channel, thread_ts: rootTs, botToken,

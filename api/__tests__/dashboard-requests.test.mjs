@@ -5,8 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildTicket, validId, newRequestId } from "../_dashboard-requests.js";
-import { referencedIssues } from "../github-request-webhook.js";
+import { buildTicket, validId, newRequestId, ticketIdForThread, buildIssueBody } from "../_dashboard-requests.js";
+import { referencedIssues, closingReferences } from "../github-request-webhook.js";
 
 test("validId accepts the minting charset, rejects path-injection", () => {
   assert.ok(validId("req_1718000000000_deadbeef"));
@@ -66,4 +66,47 @@ test("referencedIssues parses and de-dupes #N from PR text", () => {
   assert.deepEqual(referencedIssues("no refs here"), []);
   assert.deepEqual(referencedIssues("#1 #2 #3"), [1, 2, 3]);
   assert.deepEqual(referencedIssues(""), []);
+});
+
+test("closingReferences matches only explicit closing keywords, not bare mentions", () => {
+  assert.deepEqual(closingReferences("Fixes #12 and closes #13"), [12, 13]);
+  assert.deepEqual(closingReferences("resolved #7, resolve #7"), [7], "keyword variants de-duped");
+  assert.deepEqual(closingReferences("see #42 for context, related to #43"), [], "bare mentions ignored");
+  assert.deepEqual(closingReferences("closes: #9"), [9], "colon form accepted");
+  assert.deepEqual(closingReferences("closed #5\nfixed #6"), [5, 6]);
+  assert.deepEqual(closingReferences(""), []);
+});
+
+test("ticketIdForThread is deterministic and validId-safe", () => {
+  const a = ticketIdForThread("1718000000.123456");
+  assert.equal(a, "req_1718000000_123456");
+  assert.equal(a, ticketIdForThread("1718000000.123456"), "same thread → same id (idempotent create)");
+  assert.ok(validId(a), "derived id must pass validId");
+  assert.equal(validId("req_1718000000.123456"), null, "raw ts (with dot) would be an invalid RTDB key");
+});
+
+test("buildIssueBody escapes markdown so user text can't restructure the build brief", () => {
+  const t = buildTicket({
+    id: "req_1_aaaaaaaa", title: "t", type: "bug",
+    body: "### NotAHeading\n[x](http://evil)",
+    clarifications: [{ q: "where?", a: "`code` and ](http://evil)" }],
+    screenshots: [{ permalink: "https://example.com/s", name: "evil](http://x)" }],
+  });
+  const md = buildIssueBody(t);
+  assert.ok(!/^### NotAHeading$/m.test(md), "a leading heading marker must be escaped");
+  assert.ok(md.includes("\\#"), "hash escaped");
+  assert.ok(md.includes("evil\\]"), "screenshot filename bracket escaped (no link breakout)");
+  assert.ok(md.includes("(https://example.com/s)"), "trusted Slack permalink preserved verbatim");
+});
+
+test("buildIssueBody escapes raw HTML so injected tags don't render in the issue", () => {
+  const t = buildTicket({
+    id: "req_2_bbbbbbbb", title: "t", type: "bug",
+    body: "<img src=x onerror=alert(1)>\n<!-- hide --> rest",
+  });
+  const md = buildIssueBody(t);
+  // Every `<` must be backslash-escaped — GitHub renders `\<img>` as literal
+  // text, never an HTML element, so no raw tag/comment can survive.
+  assert.ok(!/(?<!\\)</.test(md), "no unescaped < may reach the issue body");
+  assert.ok(md.includes("\\<img"), "the injected tag is present only in escaped form");
 });

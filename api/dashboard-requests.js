@@ -26,6 +26,12 @@ import {
 // server-owned and never accepted from the client on an update.
 const EDITABLE = new Set(["status", "title", "body", "type", "priority", "plan"]);
 
+// A `pending` GitHub-handoff claim older than this with no issue stamped is
+// treated as abandoned (the claimer crashed/timed out) and may be re-claimed,
+// so a ticket can't strand at `ready` forever. Comfortably above the endpoint's
+// 30s maxDuration so a still-running claim is never stolen mid-flight.
+const HANDOFF_STALE_MS = 2 * 60 * 1000;
+
 function clampStr(v, max) {
   if (typeof v !== "string") return null;
   const t = v.trim();
@@ -107,32 +113,52 @@ export default async function handler(req, res) {
       patch.updatedAt = now;
       await adminPatch(`/dashboardRequests/${id}`, patch);
 
-      // Phase 3 handoff: a transition INTO `ready` (no prior github) opens a
+      // Phase 3 handoff: a transition INTO `ready` (no real issue yet) opens a
       // GitHub issue and advances to `building`. Never fail the status change
       // the founder just made — the handoff is best-effort around it.
       //
-      // Duplicate-safe (Codex R2-F2): the OLD try/catch left `github` unstamped
-      // when the post-create patch failed, so the next ready-drag made a second
-      // issue. Now we claim the handoff transactionally with a `pending` marker
-      // (blocks re-entry), and only ever RELEASE the claim when no issue was
-      // actually created — so an issue can never be created twice.
+      // Duplicate-safe (Codex R2-F2 / F-loop H1): the claim marker stamps a
+      // UNIQUE token, not a bare "pending". `mutateRecord` commits with the
+      // current snapshot even when the mutator returns it unchanged, so a bare
+      // `handoff === "pending"` check passes for BOTH racers in a concurrent
+      // `→ready` — the token is what tells the real winner apart, so an issue is
+      // created exactly once. Crash-safe (F1): a `pending` claim older than
+      // HANDOFF_STALE_MS with no issueNumber is treated as abandoned and may be
+      // re-claimed, so a Vercel timeout between claim and issue-create can't
+      // strand the ticket forever.
       let github = null;
-      if (patch.status === "ready" && !existing.github && githubRequestsConfig()) {
-        const claim = await mutateRecord(`/dashboardRequests/${id}`,
-          cur => (cur.github ? cur : { ...cur, github: { handoff: "pending", at: Date.now() } }));
-        const claimed = claim.committed && claim.snapshot?.github?.handoff === "pending";
+      const hasRealIssue = existing.github && existing.github.issueNumber;
+      if (patch.status === "ready" && !hasRealIssue && githubRequestsConfig()) {
+        const claimToken = newRequestId();
+        const claimAt = Date.now();
+        const claim = await mutateRecord(`/dashboardRequests/${id}`, (cur) => {
+          const g = cur.github;
+          if (g && g.issueNumber) return cur; // already handed off → never again
+          if (g && g.handoff === "pending" && typeof g.at === "number"
+              && (claimAt - g.at) < HANDOFF_STALE_MS) {
+            return cur; // a fresh claim by a concurrent attempt → don't steal it
+          }
+          return { ...cur, github: { handoff: "pending", at: claimAt, claimToken } };
+        });
+        const claimed = claim.committed
+          && claim.snapshot?.github?.handoff === "pending"
+          && claim.snapshot?.github?.claimToken === claimToken;
         if (claimed) {
           try {
             github = await createIssueForTicket({ ...existing, ...patch });
           } catch (e) {
             console.error("dashboard-requests: GitHub issue create failed:", e?.message || e);
-            await adminPatch(`/dashboardRequests/${id}`, { github: null }); // no issue made → allow retry
+            // Release ONLY our own claim so a concurrent/later attempt can retry
+            // (and never clobber an issue another winner just stamped).
+            await mutateRecord(`/dashboardRequests/${id}`,
+              cur => (cur.github && cur.github.claimToken === claimToken ? { ...cur, github: null } : cur)
+            ).catch(() => {});
             github = null;
           }
           if (github) {
             // Issue exists — do NOT release the claim on a later failure, or a
             // re-drag would duplicate it. Stamp best-effort; worst case the
-            // ticket sits at `ready` with the issue recorded as pending.
+            // ticket sits at `ready` with the issue recorded.
             try {
               await adminPatch(`/dashboardRequests/${id}`, { github, status: "building", updatedAt: Date.now() });
             } catch (e) {
