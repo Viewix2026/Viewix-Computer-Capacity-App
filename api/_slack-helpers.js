@@ -134,6 +134,31 @@ export async function slackAddReaction({ channel, timestamp, name, botToken }) {
   await slackReactionAdd({ channel, name, timestamp, botToken }).catch(() => {});
 }
 
+// ─── Lookups (best-effort, never throw) ────────────────────────────
+// The Dashboard Requests intake bot uses these to stamp a human name on a
+// ticket and a clickable Slack link on the thread. All failures degrade
+// gracefully — a missing name/permalink is not worth failing intake over.
+export async function slackGetPermalink({ channel, message_ts, botToken }) {
+  if (!channel || !message_ts || !botToken) return null;
+  try {
+    const data = await slackCall("chat.getPermalink", { channel, message_ts }, botToken);
+    return data.permalink || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function slackGetUserName({ user, botToken }) {
+  if (!user || !botToken) return null;
+  try {
+    const data = await slackCall("users.info", { user }, botToken);
+    const p = data.user?.profile || {};
+    return p.display_name || p.real_name || data.user?.real_name || data.user?.name || null;
+  } catch {
+    return null;
+  }
+}
+
 // Reaction names — keep in one place so the listener and interactivity
 // surfaces stay in lockstep. Must match Slack emoji names exactly
 // (no surrounding colons in the API call).
