@@ -2781,6 +2781,38 @@ function ScriptStep({ project, onPatch }) {
   const currentFormatIds = selected.map(s => s.formatLibraryId).join("|");
   const formatsChanged = doc && lastGenFormatIds !== currentFormatIds;
 
+  // Keep each format's client-facing reference example in sync with the global
+  // pick in the Format Library (displayExampleUrl). The public review is
+  // anonymous and can't read /formatLibrary, so the resolved example has to be
+  // mirrored into the per-project doc. Generation seeds it; this reconciler
+  // catches changes made after generation, while the producer is on the Script
+  // tab. Writes only on a real diff so it converges (no render→write→render).
+  const [formatLibrary, setFormatLibrary] = useState({});
+  useEffect(() => fbListenSafe("/formatLibrary", d => setFormatLibrary(d || {})), []);
+  useEffect(() => {
+    const formats = doc?.formats;
+    if (!Array.isArray(formats) || formats.length === 0) return;
+    const updates = {};
+    formats.forEach((f, i) => {
+      if (!f || !f.formatLibraryId) return;
+      const lib = formatLibrary[f.formatLibraryId];
+      if (!lib) return;
+      const url = lib.displayExampleUrl || null;
+      const chosen = url && Array.isArray(lib.examples) ? lib.examples.find(e => e && e.url === url) : null;
+      const resolved = chosen
+        ? { url: chosen.url, thumbnail: chosen.thumbnail || null, sourceAccount: chosen.sourceAccount || null }
+        : null;
+      if ((resolved?.url || null) !== (f.displayExample?.url || null)) {
+        // resolved may be null — fbUpdate writing null deletes the key in RTDB,
+        // so ClientReview falls back to examples[0]. That's the intended reset.
+        updates[`${i}/displayExample`] = resolved;
+      }
+    });
+    if (Object.keys(updates).length > 0) {
+      fbUpdate(`/preproduction/socialOrganic/${project.id}/preproductionDoc/formats`, updates);
+    }
+  }, [formatLibrary, doc?.formats, project.id]);
+
   const generate = async () => {
     setGenError(null);
     setGenerating(true);

@@ -1586,21 +1586,33 @@ async function handleGenerateScript(req, res) {
   // Build the `formats` section from the selectedFormatObjects themselves
   // rather than letting Claude invent format descriptions. This is the
   // anti-hallucination guard the plan calls out.
-  const formatsSection = selectedFormatObjects.map((fmt, i) => ({
-    order: i,
-    formatLibraryId: fmt.id,
-    name: fmt.name,
-    // Short client-facing description (shown on the pre-prod review when set;
-    // ClientReview falls back to videoAnalysis when blank). videoAnalysis stays
-    // the long internal field — it's what the script prompts read, not this.
-    clientDescription: fmt.clientDescription || "",
-    videoAnalysis: fmt.videoAnalysis || "",
-    filmingInstructions: fmt.filmingInstructions || "",
-    structureInstructions: fmt.structureInstructions || "",
-    examples: (fmt.examples || []).slice(0, 3).map(e => ({
-      url: e.url, thumbnail: e.thumbnail || null, sourceAccount: e.sourceAccount || null,
-    })),
-  }));
+  const formatsSection = selectedFormatObjects.map((fmt, i) => {
+    // Resolve the producer-chosen client-facing example (set globally per format
+    // in the Format Library as displayExampleUrl). Carried into the doc because
+    // the public review is anonymous and can't read /formatLibrary. null ⇒
+    // ClientReview falls back to the first example, preserving prior behaviour.
+    const chosen = fmt.displayExampleUrl
+      ? (fmt.examples || []).find(e => e && e.url === fmt.displayExampleUrl)
+      : null;
+    return {
+      order: i,
+      formatLibraryId: fmt.id,
+      name: fmt.name,
+      // Short client-facing description (shown on the pre-prod review when set;
+      // ClientReview falls back to videoAnalysis when blank). videoAnalysis stays
+      // the long internal field — it's what the script prompts read, not this.
+      clientDescription: fmt.clientDescription || "",
+      videoAnalysis: fmt.videoAnalysis || "",
+      filmingInstructions: fmt.filmingInstructions || "",
+      structureInstructions: fmt.structureInstructions || "",
+      displayExample: chosen
+        ? { url: chosen.url, thumbnail: chosen.thumbnail || null, sourceAccount: chosen.sourceAccount || null }
+        : null,
+      examples: (fmt.examples || []).slice(0, 3).map(e => ({
+        url: e.url, thumbnail: e.thumbnail || null, sourceAccount: e.sourceAccount || null,
+      })),
+    };
+  });
 
   // New 7-tab schema: clientContext / socialSnapshot / targetViewer are all
   // owned by Tab 1 (project.brandTruth.fields). Tab 7's preproductionDoc is

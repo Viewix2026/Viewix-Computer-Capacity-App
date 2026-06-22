@@ -96,7 +96,10 @@ export function ClientReview({ project, projectId, accountLogo, accountLogoBg })
 
   const formats = useMemo(() => (
     (doc.formats || []).map((f, i) => {
-      const first = Array.isArray(f.examples) && f.examples[0] ? f.examples[0] : null;
+      // Prefer the producer-chosen client-facing example (displayExample, set
+      // globally per format in the Format Library and mirrored into the doc);
+      // otherwise fall back to the first example so existing docs are unchanged.
+      const first = f.displayExample || (Array.isArray(f.examples) && f.examples[0] ? f.examples[0] : null);
       const ref = first?.sourceAccount
         ? (first.sourceAccount.startsWith("@") ? first.sourceAccount : `@${first.sourceAccount}`)
         : handleFromUrl(first?.url) || "@reference";
