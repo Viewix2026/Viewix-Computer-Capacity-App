@@ -395,6 +395,31 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
 
   const examples = Array.isArray(format.examples) ? format.examples : [];
 
+  // Which example the client sees on the pre-production review. Stored globally
+  // on the format (displayExampleUrl); when unset, the first example is the
+  // implicit default. These three handlers write immediately (like "+ Add
+  // example") rather than through the Save/dirty flow — the /formatLibrary
+  // listener rehydrates `format` so the UI updates reactively.
+  const chosenDisplayUrl = format.displayExampleUrl || examples[0]?.url || null;
+  const setDisplayExample = (url) => fbSet(`/formatLibrary/${format.id}/displayExampleUrl`, url);
+  const removeExample = (idx) => {
+    const removed = examples[idx];
+    const next = examples.filter((_, j) => j !== idx);
+    fbSet(`/formatLibrary/${format.id}/examples`, next);
+    // If we removed the client-facing pick, clear it so the review falls back
+    // to the new first example instead of a dangling url.
+    if (removed && removed.url === format.displayExampleUrl) {
+      fbSet(`/formatLibrary/${format.id}/displayExampleUrl`, null);
+    }
+  };
+  const moveExample = (idx, dir) => {
+    const j = idx + dir;
+    if (j < 0 || j >= examples.length) return;
+    const next = [...examples];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    fbSet(`/formatLibrary/${format.id}/examples`, next);
+  };
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -453,7 +478,12 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
         </div>
 
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 8 }}>Examples ({examples.length})</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--fg)", marginBottom: 4 }}>Examples ({examples.length})</div>
+          {examples.length > 0 && (
+            <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 8, lineHeight: 1.4 }}>
+              The highlighted example is what the client sees on pre-production review. Pick one to lock it; until then the first example is used (so reordering can change it).
+            </div>
+          )}
           {examples.length === 0 ? (
             <div style={{ padding: 16, background: "var(--bg)", border: "1px dashed var(--border)", borderRadius: 8, fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
               No examples yet. Shortlist a video in a project and pick "Add as example", or paste a URL via "+ Add example" below.
@@ -465,24 +495,42 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
             // Stacked in a single column down the right side.
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {examples.map((ex, i) => (
-                <div key={i} style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                <div key={i} style={{ background: "var(--bg)", border: `1px solid ${ex.url === chosenDisplayUrl ? "var(--accent)" : "var(--border)"}`, borderRadius: 8, overflow: "hidden" }}>
                   <ReelPreview url={ex.url} thumbnail={ex.thumbnail} aspectRatio="9 / 16" />
-                  <div style={{ padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--border)", gap: 8 }}>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      {ex.sourceAccount && (
-                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {ex.sourceAccount}
+                  <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+                    {/* Pick which example the client sees on the pre-prod review. */}
+                    <button onClick={() => setDisplayExample(ex.url)} title="Show this example to the client on pre-production review"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 10.5, fontWeight: 700, color: ex.url === chosenDisplayUrl ? "var(--accent)" : "var(--muted)", textAlign: "left" }}>
+                      <span style={{ width: 13, height: 13, borderRadius: 999, flexShrink: 0, border: `2px solid ${ex.url === chosenDisplayUrl ? "var(--accent)" : "var(--border)"}`, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                        {ex.url === chosenDisplayUrl && <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} />}
+                      </span>
+                      {ex.url === chosenDisplayUrl ? "Client sees this" : "Show to client"}
+                    </button>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        {ex.sourceAccount && (
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {ex.sourceAccount}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+                          {ex.viewCount != null && `${formatBigLocal(ex.viewCount)} views`}
+                          {ex.sourceClient && (ex.viewCount != null ? ` · ${ex.sourceClient}` : ex.sourceClient)}
                         </div>
-                      )}
-                      <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-                        {ex.viewCount != null && `${formatBigLocal(ex.viewCount)} views`}
-                        {ex.sourceClient && (ex.viewCount != null ? ` · ${ex.sourceClient}` : ex.sourceClient)}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                        <button onClick={() => moveExample(i, -1)} disabled={i === 0} title="Move up"
+                          style={{ background: "none", border: "none", cursor: i === 0 ? "default" : "pointer", color: i === 0 ? "var(--border)" : "var(--muted)", fontSize: 13, padding: 0, lineHeight: 1 }}>↑</button>
+                        <button onClick={() => moveExample(i, 1)} disabled={i === examples.length - 1} title="Move down"
+                          style={{ background: "none", border: "none", cursor: i === examples.length - 1 ? "default" : "pointer", color: i === examples.length - 1 ? "var(--border)" : "var(--muted)", fontSize: 13, padding: 0, lineHeight: 1 }}>↓</button>
+                        <a href={ex.url} target="_blank" rel="noopener noreferrer"
+                          style={{ fontSize: 10, color: "var(--accent)", textDecoration: "none", fontWeight: 700 }}>
+                          Open ↗
+                        </a>
+                        <button onClick={() => removeExample(i)} title="Remove example"
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "#EF4444", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
                       </div>
                     </div>
-                    <a href={ex.url} target="_blank" rel="noopener noreferrer"
-                      style={{ fontSize: 10, color: "var(--accent)", textDecoration: "none", fontWeight: 700, flexShrink: 0 }}>
-                      Open ↗
-                    </a>
                   </div>
                 </div>
               ))}
