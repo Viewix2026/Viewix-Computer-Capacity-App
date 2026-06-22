@@ -4380,6 +4380,9 @@ function ClientResearchStep({ project, onPatch }) {
   const isDone = !!approvals.clientResearch;
 
   const [takeaways, setTakeaways] = useState(project.clientResearch?.keyTakeaways || "");
+  // Re-open an already-approved read for editing. Off by default; the Edit
+  // button in the approved banner flips it on.
+  const [editing, setEditing] = useState(false);
   const [ttHandle, setTtHandle] = useState(handles.tiktok || "");
   const [ytHandle, setYtHandle] = useState(handles.youtube || "");
   const [busy, setBusy] = useState({ tt: false, yt: false });
@@ -4435,14 +4438,18 @@ function ClientResearchStep({ project, onPatch }) {
     if (handles.youtube && handles.youtube !== ytHandle) setYtHandle(handles.youtube);
   }, [handles.youtube]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Debounced takeaways write.
+  // Debounced takeaways write — live auto-save while the producer is still
+  // filling the step. Once approved (isDone) saves are explicit via the
+  // Edit → Save flow, so the debounce is gated off; that lets Cancel revert
+  // to the last saved value instead of a draft already persisted mid-type.
   useEffect(() => {
+    if (isDone) return;
     if (takeaways === (project.clientResearch?.keyTakeaways || "")) return;
     const t = setTimeout(() => {
       fbSet(`/preproduction/socialOrganic/${project.id}/clientResearch/keyTakeaways`, takeaways);
     }, 500);
     return () => clearTimeout(t);
-  }, [takeaways]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [takeaways, isDone]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const startProfileScrape = async (platform, handle) => {
     const clean = handle.trim().replace(/^@/, "");
@@ -4492,6 +4499,20 @@ function ClientResearchStep({ project, onPatch }) {
     fbSet(`/preproduction/socialOrganic/${project.id}/clientResearch/keyTakeaways`, takeaways);
     fbSet(`/preproduction/socialOrganic/${project.id}/approvals/clientResearch`, new Date().toISOString());
     onPatch({ tab: "videoReview" });
+  };
+
+  // Save / cancel a post-approval edit of the read. The approval timestamp
+  // stays intact — this is an in-place revision, not a re-approval. Save
+  // persists the revised text (which flows live to the client review);
+  // Cancel reverts the textarea to the last saved value and re-locks it.
+  const saveEdit = () => {
+    if (!takeaways.trim()) return;
+    fbSet(`/preproduction/socialOrganic/${project.id}/clientResearch/keyTakeaways`, takeaways);
+    setEditing(false);
+  };
+  const cancelEdit = () => {
+    setTakeaways(project.clientResearch?.keyTakeaways || "");
+    setEditing(false);
   };
 
   // Auto-fetch follower counts as soon as Claude's pre-filled handle
@@ -4656,8 +4677,8 @@ function ClientResearchStep({ project, onPatch }) {
         <textarea value={takeaways} onChange={e => setTakeaways(e.target.value)}
           placeholder="e.g. Strong on-camera presence but formats are inconsistent. Best-performing reels are the 'day in the life' ones. No hook formula — we should standardise."
           rows={5}
-          disabled={isDone}
-          style={{ ...inputSt, resize: "vertical", fontSize: 12, fontFamily: "inherit", opacity: isDone ? 0.7 : 1 }} />
+          disabled={isDone && !editing}
+          style={{ ...inputSt, resize: "vertical", fontSize: 12, fontFamily: "inherit", opacity: (isDone && !editing) ? 0.7 : 1 }} />
       </div>
 
       {!isDone && (
@@ -4668,10 +4689,24 @@ function ClientResearchStep({ project, onPatch }) {
           Approve → Video Review
         </button>
       )}
-      {isDone && (
+      {isDone && !editing && (
         <div style={{ padding: 14, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 8, fontSize: 12, color: "#22C55E", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <span>✓ Approved {new Date(approvals.clientResearch).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
-          <button onClick={() => onPatch({ tab: "videoReview" })} style={btnPrimary}>→ Video Review</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setEditing(true)} style={btnSecondary} title="Edit the key takeaways">Edit</button>
+            <button onClick={() => onPatch({ tab: "videoReview" })} style={btnPrimary}>→ Video Review</button>
+          </div>
+        </div>
+      )}
+      {isDone && editing && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={saveEdit}
+            disabled={!takeaways.trim()}
+            title={!takeaways.trim() ? "Key takeaways can't be empty" : "Save the edited read"}
+            style={{ ...btnPrimary, opacity: takeaways.trim() ? 1 : 0.5 }}>
+            Save
+          </button>
+          <button onClick={cancelEdit} style={btnSecondary}>Cancel</button>
         </div>
       )}
     </div>
