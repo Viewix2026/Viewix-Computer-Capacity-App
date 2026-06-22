@@ -12,7 +12,23 @@
 
 import { useEffect, useState, memo } from "react";
 import { fbSet, fbUpdate, fbListenSafe } from "../firebase";
-import { ReelPreview } from "./shared/ReelPreview";
+import { ReelPreview, youTubeIdFromUrl } from "./shared/ReelPreview";
+
+// Pick the best still for a card preview. Prefer a permanent YouTube frame
+// (i.ytimg.com hqdefault is free and never expires) found anywhere in the
+// examples, then the freshest scraped IG thumbnail (which may already have
+// expired — the poster tile falls back to the gradient if it 404s), else
+// null so the card shows just the branded gradient. hqdefault is the most
+// reliable size (maxresdefault 404s for low-res uploads).
+function pickPoster(examples) {
+  const list = Array.isArray(examples) ? examples : [];
+  for (const e of list) {
+    const yt = youTubeIdFromUrl(e?.url);
+    if (yt) return `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`;
+  }
+  const withThumb = list.find(e => e && e.thumbnail);
+  return withThumb ? withThumb.thumbnail : null;
+}
 
 // Shared with other preproduction surfaces so the look-and-feel matches.
 const inputSt = {
@@ -264,7 +280,8 @@ export function FormatFilterBar({ search, setSearch, tagFilter, setTagFilter, al
 // re-renders the IG embed iframe, which kills frame rate.
 const FormatCard = memo(function FormatCard({ format, onClick }) {
   const examples = Array.isArray(format.examples) ? format.examples : [];
-  const firstExample = examples.find(e => e.url || e.thumbnail) || null;
+  const posterSrc = pickPoster(examples);
+  const hasExample = examples.some(e => e && (e.url || e.thumbnail));
   const topTag = (format.tags || [])[0] || null;
 
   return (
@@ -273,15 +290,13 @@ const FormatCard = memo(function FormatCard({ format, onClick }) {
       borderRadius: 10, padding: 0, cursor: "pointer", fontFamily: "inherit",
       overflow: "hidden", opacity: format.archived ? 0.6 : 1, display: "flex", flexDirection: "column",
     }}>
-      {/* Portrait 9:16 — Instagram reels are vertical, so a landscape 16:9
-          window letterboxes the embed with huge black bars. Matches the
-          ratio used on the video-review and shortlist surfaces. */}
+      {/* Portrait 9:16 — Instagram reels are vertical. Static poster tile
+          (no iframe): a real still on top of the branded gradient when one
+          is available, gradient otherwise. The card grid dropped live IG
+          embeds — dozens of iframes were heavy and rendered as empty white
+          boxes. The detail view + shortlist keep the full embeds. */}
       <div style={{ position: "relative" }}>
-        {firstExample ? (
-          <ReelPreview url={firstExample.url} thumbnail={firstExample.thumbnail} aspectRatio="9 / 16" />
-        ) : (
-          <div style={{ aspectRatio: "9 / 16", background: "var(--border)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 32 }}>📼</div>
-        )}
+        <ReelPreview poster thumbnail={posterSrc} showPlay={hasExample} aspectRatio="9 / 16" />
         {topTag && (
           <div style={{ position: "absolute", top: 6, left: 6, padding: "3px 8px", background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
             #{topTag}
