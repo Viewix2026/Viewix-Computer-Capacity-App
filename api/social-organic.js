@@ -2243,12 +2243,13 @@ async function handleStartClientScrape(req, res) {
   const runIds = {};
   const errors = {};
 
-  // Only ONE Apify run for Stage A: the client's reels. Each post returned
-  // carries ownerFollowersCount / owner.followersCount already, so we don't
-  // need a separate profile scrape just to get the IG follower number — the
-  // webhook handler pulls it off the first post directly. Removing the
-  // second run eliminates a point of failure (actor availability / schema
-  // differences) and halves the surface area.
+  // Stage A's main run is the client's reels (async — lands via webhook /
+  // auto-poll). NOTE: posts from apify~instagram-scraper with
+  // resultsType:"posts" do NOT carry the owner's follower count
+  // (ownerFollowersCount is only populated by a profile/details scrape),
+  // so the IG follower number is fetched separately below via the
+  // synchronous profile verifier. An older comment here claimed posts
+  // carried it — they don't, which is why the follower count never landed.
   try {
     runIds.posts = await startApifyRun({
       actorId: APIFY_ACTOR,
@@ -2289,6 +2290,27 @@ async function handleStartClientScrape(req, res) {
   await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape`, {
     apifyRunIds: runIds,
   });
+
+  // Persist the client's IG follower count. The reels run above can't supply
+  // it (posts have no ownerFollowersCount), so hit the profile scraper
+  // synchronously — the same actor + helper the handle verifier uses — and
+  // write it straight to clientScrape.profile.followers.instagram. This path
+  // is what BOTH the producer's Client Research tab and the client-facing
+  // Social Snapshot read. Best-effort: a failure here leaves the count as the
+  // prior "—" but never blocks the reels scrape (which lands independently).
+  // followers comes back on verifyMeta whenever the profile resolves, even if
+  // it flunks the "verified" thresholds (private / low-follower / no-posts).
+  try {
+    const [profileResult] = await apifyVerifyHandlesSync({ handles: [cleanHandle], token: APIFY_TOKEN });
+    const igFollowers = profileResult?.verifyMeta?.followers;
+    if (typeof igFollowers === "number" && igFollowers >= 0) {
+      await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile/followers`, {
+        instagram: igFollowers,
+      });
+    }
+  } catch (e) {
+    console.warn(`[startClientScrape] IG follower fetch failed (non-fatal):`, e.message);
+  }
 
   return res.status(200).json({ success: true, runIds, errors });
 }
