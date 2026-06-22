@@ -1590,6 +1590,10 @@ async function handleGenerateScript(req, res) {
     order: i,
     formatLibraryId: fmt.id,
     name: fmt.name,
+    // Short client-facing description (shown on the pre-prod review when set;
+    // ClientReview falls back to videoAnalysis when blank). videoAnalysis stays
+    // the long internal field — it's what the script prompts read, not this.
+    clientDescription: fmt.clientDescription || "",
     videoAnalysis: fmt.videoAnalysis || "",
     filmingInstructions: fmt.filmingInstructions || "",
     structureInstructions: fmt.structureInstructions || "",

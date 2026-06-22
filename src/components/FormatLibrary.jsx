@@ -338,6 +338,10 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
   };
 
   const [name, setName] = useState(format.name || "");
+  // Short, plain-language description shown to the CLIENT on the pre-production
+  // review (ClientReview.jsx). Separate from videoAnalysis, which stays the
+  // long internal/AI-prompt field. Blank → client falls back to videoAnalysis.
+  const [clientDescription, setClientDescription] = useState(format.clientDescription || "");
   const [videoAnalysis, setVideoAnalysis] = useState(() => mergeLegacy(format));
   const [tags, setTags] = useState(Array.isArray(format.tags) ? format.tags : []);
   const [tagInput, setTagInput] = useState("");
@@ -345,18 +349,25 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
 
   useEffect(() => {
     setName(format.name || "");
+    setClientDescription(format.clientDescription || "");
     setVideoAnalysis(mergeLegacy(format));
     setTags(Array.isArray(format.tags) ? format.tags : []);
   }, [format.id]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const dirty =
     name !== (format.name || "") ||
+    clientDescription !== (format.clientDescription || "") ||
     videoAnalysis !== mergeLegacy(format) ||
     JSON.stringify(tags) !== JSON.stringify(Array.isArray(format.tags) ? format.tags : []);
 
   const save = () => {
     onSave({
       name: name.trim() || format.name,
+      // Stored as-typed (like videoAnalysis) so the `dirty` check stays
+      // consistent after a save — the reset effect is keyed on format.id, which
+      // doesn't change on save. ClientReview trims at render, so trailing
+      // whitespace never reaches the client.
+      clientDescription,
       videoAnalysis,
       // Wipe the legacy fields on save — the merged content lives in
       // videoAnalysis now, so re-saving an old record graduates it to
@@ -414,7 +425,13 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
             </div>
           </FieldRow>
 
-          <FieldRow label="Video analysis" hint="What's happening, why it works, how it's filmed (lighting, camera, wardrobe), and the structure (hook → beats → close).">
+          <FieldRow label="Client-facing description" hint="What the client sees on pre-production review. Short and tailored. Blank = show the full video analysis.">
+            <textarea value={clientDescription} onChange={e => setClientDescription(e.target.value)} rows={4}
+              placeholder="A short, plain-language explanation of this format for the client…"
+              style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+          </FieldRow>
+
+          <FieldRow label="Video analysis" hint="Internal / AI training. What's happening, why it works, how it's filmed (lighting, camera, wardrobe), and the structure (hook → beats → close).">
             <textarea value={videoAnalysis} onChange={e => setVideoAnalysis(e.target.value)} rows={10}
               style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
           </FieldRow>
@@ -510,6 +527,7 @@ function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }
   // into one larger note covering everything ("what's happening, why
   // it works, how it's filmed, structure of the piece").
   const [name, setName] = useState("");
+  const [clientDescription, setClientDescription] = useState("");
   const [analysis, setAnalysis] = useState("");
   const [tagsInput, setTagsInput] = useState("");
   const [exampleUrls, setExampleUrls] = useState("");
@@ -543,6 +561,7 @@ function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }
         id,
         formatType,  // "organic" | "metaAds" — drives sub-tab filter + which preproduction flow pulls this entry.
         name: name.trim(),
+        clientDescription: clientDescription.trim(),  // short, client-facing — shown on pre-prod review
         videoAnalysis: analysis.trim(),
         // Legacy fields — kept blank in fresh writes; left here so old
         // records that still hold them don't crash anything.
@@ -600,7 +619,13 @@ function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }
             style={{ ...inputSt, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }} />
         </FieldRow>
 
-        <FieldRow label="Video analysis" hint="What's happening, why it works, how it's filmed (lighting, camera, wardrobe), and the structure (hook → beats → close).">
+        <FieldRow label="Client-facing description" hint="What the client sees on pre-production review. Short and tailored. Blank = show the full video analysis.">
+          <textarea value={clientDescription} onChange={e => setClientDescription(e.target.value)} rows={3}
+            placeholder="A short, plain-language explanation of this format for the client…"
+            style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
+        </FieldRow>
+
+        <FieldRow label="Video analysis" hint="Internal / AI training. What's happening, why it works, how it's filmed (lighting, camera, wardrobe), and the structure (hook → beats → close).">
           <textarea value={analysis} onChange={e => setAnalysis(e.target.value)} rows={8}
             style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
         </FieldRow>
