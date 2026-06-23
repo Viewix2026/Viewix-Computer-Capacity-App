@@ -65,6 +65,30 @@ function fontStack(family) {
   return `'${family}', sans-serif`;
 }
 
+// Detect whether a font is actually installed/available, by comparing the
+// measured width of a test string in the font vs each generic family. If the
+// font is missing it falls back to the generic and the widths match exactly; if
+// it's installed at least one comparison differs. Reliable for local fonts
+// (no async load) — used to warn when the user picks Instagram Sans without it.
+function isFontInstalled(family) {
+  if (typeof document === "undefined") return true;
+  try {
+    const probe = "ABCabcWQ_mwi0123@#";
+    const px = 72;
+    const ctx = document.createElement("canvas").getContext("2d");
+    return ["monospace", "serif", "sans-serif"].some(generic => {
+      ctx.font = `${px}px ${generic}`;
+      const base = ctx.measureText(probe).width;
+      ctx.font = `${px}px '${family}', ${generic}`;
+      return Math.abs(ctx.measureText(probe).width - base) > 0.5;
+    });
+  } catch {
+    return true;   // can't tell → don't nag
+  }
+}
+
+const IG_SANS_DOWNLOAD = "https://drive.google.com/drive/folders/1VRYlCFizyx6_hZPWxr5dtOx1jzbqJGgu?usp=sharing";
+
 // Google-Fonts web fonts (display name → css2 family slug). Loaded for the live
 // preview via the <link> injected on mount, AND embedded into the export SVG —
 // the rasteriser runs in an isolated context that can't reach Google Fonts, so
@@ -257,8 +281,14 @@ export function TextGenerator() {
   const [align, setAlign] = useState("Center");
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState("");
+  const [igInstalled, setIgInstalled] = useState(true);   // assume present until proven missing (no warning flash)
   const previewRef = useRef(null);
   const exportLock = useRef(false);   // synchronous guard against double-click races
+
+  // Detect whether Instagram Sans is actually installed on this machine, so we
+  // can warn (and point to the download) when it's selected but missing — both
+  // preview and export silently use the Plus Jakarta Sans fallback otherwise.
+  useEffect(() => { setIgInstalled(isFontInstalled("Instagram Sans")); }, []);
 
   // Load the picker's web fonts for the live preview (export embeds them
   // separately). Scoped to this tab — injected once, not in the global chrome.
@@ -401,6 +431,17 @@ export function TextGenerator() {
               </div>
               <CGToggle label="Bold" on={bold} onChange={setBold} />
               <CGToggle label="Italic" on={italic} onChange={setItalic} />
+              {font === "Instagram Sans" && !igInstalled && (
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "9px 11px", borderRadius: VX.r2,
+                  background: "rgba(245,166,35,0.10)", border: "1px solid rgba(245,166,35,0.30)" }}>
+                  <Icon name="bell" size={14} sw={1.9} stroke={VX.amber} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div style={{ fontFamily: VX.sans, fontSize: 11.5, lineHeight: 1.45, color: VX.fg2 }}>
+                    Instagram Sans isn't installed on this computer — preview and export use Plus Jakarta Sans instead.{" "}
+                    <a href={IG_SANS_DOWNLOAD} target="_blank" rel="noopener noreferrer"
+                      style={{ color: VX.accentBright, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Download Instagram Sans →</a>
+                  </div>
+                </div>
+              )}
             </CGGroup>
 
             <CGGroup n="3" label="Size & Colour">
