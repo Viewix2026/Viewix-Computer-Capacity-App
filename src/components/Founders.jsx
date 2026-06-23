@@ -616,6 +616,7 @@ function MonthlyRevenueChart({ chronological, monthlyByKey, now, maxRev, monthly
 
 export function Founders({
   foundersData, setFoundersData,
+  foundersGoals, setFoundersGoals,
   foundersMetrics, setFoundersMetrics,
   foundersTab, setFoundersTab,
   attioDeals, setAttioDeals,
@@ -937,7 +938,7 @@ export function Founders({
           <FoundersTrendGrid metrics={foundersMetrics} />
         </>)}
 
-        {foundersTab === "goals" && <FoundersGoals foundersData={foundersData} setFoundersData={setFoundersData} />}
+        {foundersTab === "goals" && <FoundersGoals foundersGoals={foundersGoals} setFoundersGoals={setFoundersGoals} foundersData={foundersData} />}
         {foundersTab === "advisor" && <FoundersAdvisor foundersData={foundersData} foundersMetrics={foundersMetrics} attioDeals={attioDeals} />}
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
