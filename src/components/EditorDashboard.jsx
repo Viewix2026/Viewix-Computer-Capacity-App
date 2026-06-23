@@ -10,12 +10,12 @@ export function EditorDashboard({ embedded, projects = [], setProjects = null, e
   return (
     <div style={{ fontFamily: "'DM Sans',-apple-system,sans-serif", background: embedded ? "transparent" : "var(--bg)", color: "var(--fg)", minHeight: embedded ? "auto" : "100vh" }}>
       <div style={{ padding: "10px 28px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
-        <Segmented options={["Dashboard", "Caption Generator"]} active={sub} onSelect={setSub} />
+        <Segmented options={["Dashboard", "Text Generator"]} active={sub} onSelect={setSub} />
       </div>
       <div style={{ display: sub === "Dashboard" ? "block" : "none" }}>
         <EditorDashboardViewix projects={projects} setProjects={setProjects} editors={editors} clients={clients} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} viewerRole={viewerRole} currentUserEmail={currentUserEmail} currentUserName={currentUserName} />
       </div>
-      <div style={{ display: sub === "Caption Generator" ? "block" : "none" }}>
+      <div style={{ display: sub === "Text Generator" ? "block" : "none" }}>
         <CaptionGenerator />
       </div>
     </div>
