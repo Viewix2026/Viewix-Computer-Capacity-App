@@ -151,7 +151,7 @@
     },
     {
       "path": "/api/scheduling-flag-flusher",
-      "schedule": "* * * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/scheduling-cleanup",
@@ -183,7 +183,7 @@
     },
     {
       "path": "/api/cron/transcript-insights-selfheal",
-      "schedule": "0 * * * *"
+      "schedule": "0 16 * * *"
     },
     {
       "path": "/api/cron/social-asset-reconcile",
@@ -195,11 +195,11 @@
     },
     {
       "path": "/api/cron/social-schedule-sync",
-      "schedule": "*/15 * * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/sync-shoot-calendar",
-      "schedule": "* * * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/cron/reviews-sync",
