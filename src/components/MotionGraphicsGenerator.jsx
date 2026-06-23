@@ -231,7 +231,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [present, setPresent] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [savedId, setSavedId] = useState("");
+  const [savedGenId, setSavedGenId] = useState(""); // generationId that was saved — compared to result.id so a late save response can't mislabel a newer generation
 
   const [library, setLibrary] = useState({});
   const [libLoaded, setLibLoaded] = useState(false);
@@ -278,7 +278,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     if (abortRef.current) return;
     const controller = new AbortController();
     abortRef.current = controller;
-    setError(""); setSavedId(""); setGenerating(true);
+    setError(""); setGenerating(true);
     const timer = setTimeout(() => controller.abort(), 115_000);
     try {
       const payload = isRefine
@@ -300,16 +300,17 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   function cancel() { if (abortRef.current) abortRef.current.abort(); }
 
   async function saveToLibrary() {
-    if (!result?.id || result.fromLibrary || savedId || savingRef.current) return; // synchronous re-entry guard (no double-save)
+    if (!result?.id || result.fromLibrary || savingRef.current || savedGenId === result.id) return; // re-entry + already-saved guard
     savingRef.current = true;
+    const gid = result.id; // capture so a late response can't mislabel a newer generation
     setError("");
-    const client = names.includes(clientFilter) ? clientFilter : null; // stamp the active client filter if it's a real one
+    const client = allClientNames.includes(clientFilter) ? clientFilter : null; // stamp the active client chip (incl. a stale one)
     try {
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save", generationId: result.id, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || undefined), client }) });
+        body: JSON.stringify({ action: "save", generationId: gid, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || undefined), client }) });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setSavedId(d.id);
+      setSavedGenId(gid);
     } catch (e) { setError(e.message || "Save failed"); }
     finally { savingRef.current = false; }
   }
@@ -365,13 +366,14 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const items = Object.values(library || {}).filter(g => g && g.id && !g.archived).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   // union current clients with any client already stamped on an item, so a
   // removed/renamed client still has a filter chip + select option.
-  const itemClients = [...new Set(items.map(i => i.client).filter(Boolean))];
+  const itemClients = [...new Set(items.map(i => (typeof i.client === "string" ? i.client.trim() : "")).filter(Boolean))];
   const allClientNames = [...new Set([...names, ...itemClients])].sort((a, b) => a.localeCompare(b));
   const filterChips = ["All", ...allClientNames, "Unassigned"];
   const countFor = c => c === "All" ? items.length : c === "Unassigned" ? items.filter(i => !i.client).length : items.filter(i => i.client === c).length;
   const visible = clientFilter === "All" ? items : clientFilter === "Unassigned" ? items.filter(i => !i.client) : items.filter(i => i.client === clientFilter);
 
   const hasResult = !!result;
+  const isSaved = !!result && !result.fromLibrary && savedGenId === result.id;
   const cf = MG_CHROMA.find(c => c.key === chroma);
 
   return (
@@ -440,7 +442,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <MGToolBtn icon="play" label="Replay" onClick={() => setPreviewKey(k => k + 1)} />
             <MGToolBtn icon="external" label="Present" onClick={() => setPresent(true)} />
             <MGToolBtn icon="editors" label="Source" onClick={() => setShowSource(true)} />
-            {!result.fromLibrary && <MGToolBtn icon={savedId ? "check" : "plus"} label={savedId ? "Saved" : "Save"} accent={!savedId} active={!!savedId} onClick={saveToLibrary} />}
+            {!result.fromLibrary && <MGToolBtn icon={isSaved ? "check" : "plus"} label={isSaved ? "Saved" : "Save"} accent={!isSaved} active={isSaved} onClick={saveToLibrary} />}
           </>}
         </div>
 

@@ -265,6 +265,20 @@ export default async function handler(req, res) {
   const { err: adminErr } = getAdmin();
   if (adminErr) return res.status(500).json({ error: "Server storage not configured" });
 
+  // Fresh authority check for EVERY action (generate spends Opus; save/assign/
+  // archive mutate the shared library). The token's role claim lags up to ~1h
+  // after a demotion (setRole doesn't revokeRefreshTokens), so re-check the
+  // synchronously-updated RTDB record rather than trust requireRole's claim alone.
+  try {
+    const rec = await fbGet(`/users/${req._actor.uid}`);
+    if (!rec || rec.active === false || !GENERATE_ROLES.includes(normalizeRole(rec.role))) {
+      return res.status(403).json({ error: "Your account can't use motion graphics" });
+    }
+  } catch (e) {
+    console.error("motion-graphics role check failed:", e);
+    return res.status(500).json({ error: "Request failed" });
+  }
+
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const action = body.action;
 
@@ -304,15 +318,6 @@ async function handleGenerate(req, res, body) {
   }
   if (previousFragment && String(previousFragment).length > LIMITS.previousFragment) {
     return res.status(400).json({ error: "Previous graphic too large to refine" });
-  }
-
-  // Authoritative role/active check against the RTDB user record, which setRole
-  // updates synchronously. The token's role claim lags up to ~1h after a
-  // demotion (revokeRefreshTokens only fires on deactivate/delete, not setRole),
-  // so this closes the demotion-window spend gap that requireRole alone misses.
-  const rec = await fbGet(`/users/${req._actor.uid}`);
-  if (!rec || rec.active === false || !GENERATE_ROLES.includes(normalizeRole(rec.role))) {
-    return res.status(403).json({ error: "Your account can't generate motion graphics" });
   }
 
   // Daily circuit breaker (atomic — aborts at the cap, no read-then-write race).
