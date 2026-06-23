@@ -76,6 +76,7 @@ export function AnalyticsClientDetail({ accountId, onBack }) {
 
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <PortalLinkButton accountId={accountId} enabled={!!config?.enabled} />
+          <PullZernioButton accountId={accountId} enabled={!!config?.enabled} />
           <RecomputeButton accountId={accountId} enabled={!!config?.enabled} />
           <RefreshButton accountId={accountId} enabled={!!config?.enabled} />
         </div>
@@ -622,6 +623,94 @@ function RecomputeButton({ accountId, enabled }) {
           fontSize: 10,
           color: status === "error" ? "#EF4444" : "var(--muted)",
           maxWidth: 240,
+          textAlign: "right",
+        }}>
+          {message}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Founder-triggered Zernio analytics pull — same code path as the
+// daily cron, so the founder can pull the moment a client's accounts
+// are connected in Zernio instead of waiting for the overnight run.
+// Cheap (Zernio API reads + Firebase writes; no Apify, no Claude).
+// Surfaces actionable errors: 402 add-on missing, no Zernio profile,
+// platforms not yet connected.
+function PullZernioButton({ accountId, enabled }) {
+  const [status, setStatus] = useState(null); // null | "pending" | "done" | "warn" | "error"
+  const [message, setMessage] = useState("");
+
+  const onClick = async () => {
+    if (!enabled) return;
+    setStatus("pending");
+    setMessage("");
+    try {
+      const res = await authFetch("/api/analytics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pullZernio", clientId: accountId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus("error");
+        setMessage(data?.detail || data?.error || `HTTP ${res.status}`);
+        return;
+      }
+      const r = data?.result || {};
+      if (r.pulled) {
+        setStatus("done");
+        const windows = Object.entries(r.windows || {}).map(([p, w]) => `${p}:${w}`).join(", ");
+        setMessage(`Pulled ${r.postsWritten} posts across ${r.platformsPulled} platform(s)${windows ? ` (${windows})` : ""}${r.recomputed ? " · rescored" : ""}.`);
+      } else {
+        // Nothing pulled — say WHY so the founder knows the next move.
+        setStatus("warn");
+        const reasons = {
+          not_enabled: "Analytics isn't enabled for this account.",
+          no_platforms: "No platforms toggled on yet — enable them below.",
+          no_zernio_profile: "No Zernio profile for this account — provision one in Social Connections first.",
+          no_connected_accounts: "No enabled platform is connected in Zernio yet — connect the accounts, wait for sync, then retry.",
+          listAccounts_failed: "Couldn't list Zernio accounts — see error.",
+        };
+        setMessage(reasons[r.skipped] || `Nothing pulled (${r.skipped || "no data returned"}).`);
+      }
+    } catch (err) {
+      setStatus("error");
+      setMessage(err?.message || "Network error");
+    }
+  };
+
+  const tooltip = enabled
+    ? "Pull first-party analytics from Zernio now (all connected platforms). Same path as the nightly cron."
+    : "Enable analytics for this account first.";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <button
+        onClick={onClick}
+        disabled={!enabled || status === "pending"}
+        title={tooltip}
+        style={{
+          padding: "8px 14px",
+          borderRadius: 8,
+          border: "1px solid var(--border)",
+          background: "transparent",
+          color: "var(--text)",
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: enabled && status !== "pending" ? "pointer" : "not-allowed",
+          opacity: enabled ? 1 : 0.5,
+          fontFamily: "inherit",
+        }}
+      >
+        {status === "pending" ? "Pulling…" : "Pull Zernio"}
+      </button>
+      {message && (
+        <span style={{
+          fontSize: 10,
+          color: status === "error" ? "#EF4444" : status === "warn" ? "#F59E0B" : "var(--muted)",
+          maxWidth: 260,
           textAlign: "right",
         }}>
           {message}

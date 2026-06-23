@@ -35,6 +35,8 @@ import {
 import { adminGet, adminPatch, getAdmin } from "./_fb-admin.js";
 import { recomputeClientAnalytics } from "./_analyticsScoring.js";
 import { makePortalShortId } from "./_analyticsClientProjection.js";
+import { checkAnalyticsAccess, AnalyticsAddonError } from "./_zernioAnalytics.js";
+import { pullZernioForClient } from "./_zernioPull.js";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
 
@@ -85,6 +87,7 @@ export default async function handler(req, res) {
 
   if (action === "refresh") return await handleRefresh(req, res, body);
   if (action === "recompute") return await handleRecompute(req, res, body);
+  if (action === "pullZernio") return await handlePullZernio(req, res, body);
   if (action === "getPortalLink") return await handleGetPortalLink(req, res, body);
   if (action === "setManualFormatOverride") return await handleSetManualFormatOverride(req, res, body);
   if (action === "clearManualFormatOverride") return await handleClearManualFormatOverride(req, res, body);
@@ -119,6 +122,51 @@ async function handleRecompute(req, res, body) {
   } catch (err) {
     console.error(`[analytics] recompute action failed for ${clientId}:`, err);
     res.status(500).json({ error: err.message || "Recompute failed" });
+  }
+}
+
+// ─── pullZernio ───────────────────────────────────────────────────
+//
+// Founder-triggered Zernio analytics pull for ONE client — same code
+// path as the daily cron (api/_zernioPull.js), so manual and scheduled
+// pulls behave identically. Exists so a founder can pull the moment a
+// client's accounts are connected instead of waiting for the 4am cron
+// (or curling with CRON_SECRET).
+//
+// body.force = "full" → pull the full 366d window on every platform
+// regardless of pull history (useful right after first connect).
+//
+// Cost note: a pull is Zernio API reads (cheap) + Firebase writes — no
+// Apify, no Claude. No rate limit beyond the founder/lead gate; the
+// smart windows in _zernioPull.js keep repeat pulls small anyway.
+async function handlePullZernio(req, res, body) {
+  const clientId = body.clientId || body.accountId;
+  if (!clientId) {
+    res.status(400).json({ error: "Missing clientId" });
+    return;
+  }
+  // Plan-wide add-on preflight BEFORE any writes — same contract as the
+  // cron. A 402 surfaces as a clear, actionable message.
+  try {
+    await checkAnalyticsAccess();
+  } catch (err) {
+    if (err instanceof AnalyticsAddonError) {
+      res.status(402).json({
+        error: "analytics_addon_required",
+        detail: "Zernio Analytics add-on is not active on the plan. Enable it in Zernio billing, then retry.",
+      });
+      return;
+    }
+    res.status(502).json({ error: "preflight_failed", detail: err.message });
+    return;
+  }
+  try {
+    const force = body.force === "full" ? "full" : null;
+    const result = await pullZernioForClient(clientId, { force });
+    res.status(200).json({ ok: true, action: "pullZernio", result });
+  } catch (err) {
+    console.error(`[analytics] pullZernio failed for ${clientId}:`, err);
+    res.status(500).json({ error: err.message || "Zernio pull failed" });
   }
 }
 
