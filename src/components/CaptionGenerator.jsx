@@ -17,8 +17,25 @@
 // canvas-size clamp; double-click export lock; slugged filename; notch=0
 // is a clean (unfiltered) passthrough.
 // ════════════════════════════════════════════════════════════════════
-import { useState, useRef, useId } from "react";
+import { useState, useRef, useId, useEffect } from "react";
 import { Icon } from "./Icon";
+
+// Parse a user-typed colour code into a normalised #RRGGBB, or null if invalid.
+// Accepts hex (#RGB, #RRGGBB, with or without the #) and rgb()/rgba() triples.
+function normalizeColor(raw) {
+  if (typeof raw !== "string") return null;
+  const s = raw.trim();
+  const rgb = s.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i);
+  if (rgb) {
+    const parts = [rgb[1], rgb[2], rgb[3]].map(n => Math.max(0, Math.min(255, parseInt(n, 10))));
+    if (parts.some(n => Number.isNaN(n))) return null;
+    return "#" + parts.map(n => n.toString(16).padStart(2, "0")).join("").toUpperCase();
+  }
+  let h = s.replace(/^#/, "");
+  if (/^[0-9a-fA-F]{3}$/.test(h)) h = h.split("").map(c => c + c).join("");
+  if (/^[0-9a-fA-F]{6}$/.test(h)) return "#" + h.toUpperCase();
+  return null;
+}
 
 // Tokens lifted verbatim from the design kit (match config.js brand hues).
 const VX = {
@@ -98,16 +115,51 @@ function CGSlider({ label, value, min, max, step = 1, unit = "px", onChange }) {
     </div>
   );
 }
+// Colour control: a typeable hex/RGB field (paste an exact brand colour) kept in
+// sync with the native colour-picker swatch. `draft` holds the raw text while the
+// field is focused so typing isn't fought by the normalised value flowing back;
+// invalid input is reverted on blur/Enter.
 function CGSwatch({ label, value, onChange }) {
+  const [draft, setDraft] = useState(value);
+  const focused = useRef(false);
+  const [bad, setBad] = useState(false);
+  // Mirror external changes (the picker) into the field, but not while the user
+  // is mid-type in it.
+  useEffect(() => { if (!focused.current) { setDraft(value); setBad(false); } }, [value]);
+
+  const onType = (raw) => {
+    setDraft(raw);
+    const norm = normalizeColor(raw);
+    setBad(!norm);
+    if (norm && norm !== value) onChange(norm);   // live update when valid
+  };
+  const commit = () => {
+    focused.current = false;
+    const norm = normalizeColor(draft);
+    if (norm) { onChange(norm); setDraft(norm); }
+    else { setDraft(value); }   // revert invalid text
+    setBad(false);
+  };
+
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
       <span style={{ fontFamily: VX.sans, fontSize: 12.5, fontWeight: 600, color: VX.fg2 }}>{label}</span>
-      <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}>
-        <span style={{ fontFamily: VX.mono, fontSize: 11, color: VX.muted, textTransform: "uppercase" }}>{value}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+        <input
+          value={draft}
+          spellCheck={false}
+          aria-label={`${label} hex or RGB code`}
+          onFocus={() => { focused.current = true; }}
+          onChange={e => onType(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === "Enter") { e.currentTarget.blur(); } }}
+          style={{ width: 92, fontFamily: VX.mono, fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: bad ? VX.danger : VX.fg2,
+            background: VX.inset, border: "1px solid " + (bad ? VX.danger : VX.border), borderRadius: VX.r1, padding: "7px 9px", outline: "none", textAlign: "center" }}
+        />
         <span style={{ position: "relative", width: 32, height: 32, borderRadius: 8, border: "1px solid " + VX.border, background: value, overflow: "hidden", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.12)" }}>
-          <input type="color" value={value} onChange={e => onChange(e.target.value)} style={{ position: "absolute", inset: -4, width: "calc(100% + 8px)", height: "calc(100% + 8px)", border: "none", padding: 0, opacity: 0, cursor: "pointer" }} />
+          <input type="color" value={value} onChange={e => onChange(e.target.value)} aria-label={`${label} picker`} style={{ position: "absolute", inset: -4, width: "calc(100% + 8px)", height: "calc(100% + 8px)", border: "none", padding: 0, opacity: 0, cursor: "pointer" }} />
         </span>
-      </label>
+      </div>
     </div>
   );
 }
