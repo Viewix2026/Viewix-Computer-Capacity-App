@@ -6,6 +6,9 @@
     "api/meeting-feedback.js": {
       "maxDuration": 180
     },
+    "api/motion-graphics.js": {
+      "maxDuration": 120
+    },
     "api/transcript-insights.js": {
       "maxDuration": 60
     },

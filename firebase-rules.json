@@ -20,6 +20,8 @@
     "projects": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "runsheets": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "formatLibrary": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "motionGraphicsLibrary": { ".read": "auth != null && auth.token.role != null", ".write": false },
+    "aiUsage": { ".read": "auth != null && auth.token.role == 'founders'", ".write": false },
     "preproductionTemplates": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "meetingFeedback": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
