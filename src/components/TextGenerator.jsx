@@ -50,23 +50,41 @@ const VX = {
   shadow1: "0 1px 2px rgba(0,0,0,0.4)",
 };
 
-const CG_FONTS = ["Arial", "Helvetica", "Impact", "Verdana", "Georgia", "Courier New", "DM Sans"];
+// Plus Jakarta Sans is the default — the closest freely-licensable lookalike to
+// Instagram's (proprietary, un-embeddable) Instagram Sans. Web fonts first, then
+// the system fonts.
+const CG_FONTS = ["Plus Jakarta Sans", "Poppins", "Arial", "Helvetica", "Impact", "Verdana", "Georgia", "Courier New", "DM Sans"];
 
-// The browser rasterises the export SVG in an isolated context that cannot
-// reach Google Fonts, so any web font (only DM Sans here — the other six are
-// system fonts) must be inlined as an @font-face with the bytes embedded, or
-// the PNG silently falls back to a system font while the preview looks right.
-// Best-effort + cached: on any failure we return "" and the export proceeds
-// with the system fallback (no crash, same as before this fix).
+// Google-Fonts web fonts (display name → css2 family slug). Loaded for the live
+// preview via the <link> injected on mount, AND embedded into the export SVG —
+// the rasteriser runs in an isolated context that can't reach Google Fonts, so
+// without an inline @font-face the PNG silently falls back while the preview
+// looks right. Anything not in this map (Arial, Helvetica, …) is a system font
+// and needs no embedding.
+const WEB_FONTS = {
+  "Plus Jakarta Sans": "Plus+Jakarta+Sans",
+  "Poppins": "Poppins",
+  "DM Sans": "DM+Sans",
+};
+// One stylesheet for the live preview covering the weights/styles the tool uses.
+const WEB_FONTS_LINK = "https://fonts.googleapis.com/css2?" +
+  Object.values(WEB_FONTS).map(s => `family=${s}:ital,wght@0,500;0,700;0,800;1,500;1,800`).join("&") +
+  "&display=swap";
+
+// Best-effort + cached: fetch a web font's woff2 and return an inline @font-face
+// string. Returns "" for system fonts or on any failure, so the export proceeds
+// with the system fallback (no crash).
 const _fontFaceCache = {};
-async function dmSansFaceCss(weight, italic) {
-  const key = `dmsans-${weight}-${italic ? "i" : "n"}`;
+async function webFontFaceCss(family, weight, italic) {
+  const slug = WEB_FONTS[family];
+  if (!slug) return "";
+  const key = `${slug}-${weight}-${italic ? "i" : "n"}`;
   if (_fontFaceCache[key] !== undefined) return _fontFaceCache[key];
   let result = "";
   try {
     // css2 axes must be listed alphabetically; italic adds the `ital` axis.
     const axis = italic ? `ital,wght@1,${weight}` : `wght@${weight}`;
-    const cssUrl = `https://fonts.googleapis.com/css2?family=DM+Sans:${axis}&display=swap`;
+    const cssUrl = `https://fonts.googleapis.com/css2?family=${slug}:${axis}&display=swap`;
     const css = await (await fetch(cssUrl)).text();
     const blocks = css.split("@font-face").slice(1);
     let url = null;
@@ -82,7 +100,7 @@ async function dmSansFaceCss(weight, italic) {
       let bin = "";
       for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
       const b64 = btoa(bin);
-      result = `@font-face{font-family:'DM Sans';font-style:${italic ? "italic" : "normal"};font-weight:${weight};src:url(data:font/woff2;base64,${b64}) format('woff2');}`;
+      result = `@font-face{font-family:'${family}';font-style:${italic ? "italic" : "normal"};font-weight:${weight};src:url(data:font/woff2;base64,${b64}) format('woff2');}`;
     }
   } catch {
     result = "";
@@ -216,7 +234,7 @@ function CaptionBox({ text, font, bold, italic, size, textColor, boxColor, opaci
 
 export function TextGenerator() {
   const [text, setText] = useState("Behind every great\nvideo is a great\nstory.");
-  const [font, setFont] = useState("Arial");
+  const [font, setFont] = useState("Plus Jakarta Sans");
   const [bold, setBold] = useState(true);
   const [italic, setItalic] = useState(false);
   const [size, setSize] = useState(56);
@@ -231,6 +249,16 @@ export function TextGenerator() {
   const [exportErr, setExportErr] = useState("");
   const previewRef = useRef(null);
   const exportLock = useRef(false);   // synchronous guard against double-click races
+
+  // Load the picker's web fonts for the live preview (export embeds them
+  // separately). Scoped to this tab — injected once, not in the global chrome.
+  useEffect(() => {
+    const id = "tg-web-fonts";
+    if (document.getElementById(id)) return;
+    const link = document.createElement("link");
+    link.id = id; link.rel = "stylesheet"; link.href = WEB_FONTS_LINK;
+    document.head.appendChild(link);
+  }, []);
 
   const empty = text.trim() === "";
   const tooBig = size > 130 && text.replace(/\n/g, "").length > 40;
@@ -263,9 +291,9 @@ export function TextGenerator() {
       if (document.fonts && document.fonts.ready) {
         try { await document.fonts.ready; } catch { /* non-fatal */ }
       }
-      // Embed the only web font (DM Sans) so the rasteriser doesn't fall back.
-      let fontFaceCss = "";
-      if (snapFont === "DM Sans") fontFaceCss = await dmSansFaceCss(snapBold ? 800 : 500, snapItalic);
+      // Embed the selected web font so the rasteriser doesn't fall back ("" for
+      // system fonts).
+      const fontFaceCss = await webFontFaceCss(snapFont, snapBold ? 800 : 500, snapItalic);
       const styleTag = fontFaceCss ? `<style>${fontFaceCss}</style>` : "";
 
       // The goo blur paints beyond the content box; without bleed the SVG
