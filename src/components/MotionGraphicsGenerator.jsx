@@ -206,8 +206,11 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [fmt, setFmt] = useState("Portrait");
   const [loop, setLoop] = useState(6);
   const [chroma, setChroma] = useState("Transparent");
+  const [brandMode, setBrandMode] = useState("Viewix"); // "Viewix" | "Client site"
+  const [brandUrl, setBrandUrl] = useState("");
 
   const [generating, setGenerating] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null); // { id, html, fragment, dimension, cost, fromLibrary }
   const [refine, setRefine] = useState("");
@@ -258,20 +261,34 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   }
   function onPromptChange(v) { setPrompt(v); if (activePreset) { setActivePreset(""); setPresetLabel(""); } }
 
+  async function enhancePrompt() {
+    if (!prompt.trim() || enhancing || generating) return;
+    setEnhancing(true); setError("");
+    try {
+      const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "enhance", prompt: prompt.trim(), dimension: MG_FORMATS[fmt].dim, durationSec: loop }) });
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (d.prompt) { setPrompt(d.prompt); setActivePreset(""); setPresetLabel(""); }
+    } catch (e) { setError(e.message || "Enhance failed"); }
+    finally { setEnhancing(false); }
+  }
+
   const callGenerate = useCallback(async (isRefine) => {
     if (abortRef.current) return;
     const controller = new AbortController();
     abortRef.current = controller;
     setError(""); setGenerating(true);
-    const timer = setTimeout(() => controller.abort(), 115_000);
+    const timer = setTimeout(() => controller.abort(), 170_000);
     try {
+      const brandUrlArg = brandMode === "Client site" && brandUrl.trim() ? brandUrl.trim() : undefined;
       const payload = isRefine
-        ? { action: "generate", prompt, dimension: result?.dimension || MG_FORMATS[fmt].dim, durationSec: loop, refineInstruction: refine.trim(), previousFragment: result?.fragment || result?.html }
-        : { action: "generate", prompt: prompt.trim(), dimension: MG_FORMATS[fmt].dim, durationSec: loop };
+        ? { action: "generate", prompt, dimension: result?.dimension || MG_FORMATS[fmt].dim, durationSec: loop, refineInstruction: refine.trim(), previousFragment: result?.fragment || result?.html, brandUrl: brandUrlArg }
+        : { action: "generate", prompt: prompt.trim(), dimension: MG_FORMATS[fmt].dim, durationSec: loop, brandUrl: brandUrlArg };
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: controller.signal });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setResult({ id: d.id, html: d.html, fragment: d.fragment, dimension: d.dimension, cost: d.cost, fromLibrary: false });
+      setResult({ id: d.id, html: d.html, fragment: d.fragment, dimension: d.dimension, cost: d.cost, brand: d.brand || null, fromLibrary: false });
       setRefine(""); setPreviewKey(k => k + 1);
     } catch (e) {
       if (e.name === "AbortError") setError("Generation cancelled or timed out.");
@@ -279,7 +296,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     } finally {
       clearTimeout(timer); abortRef.current = null; setGenerating(false);
     }
-  }, [prompt, fmt, loop, refine, result]);
+  }, [prompt, fmt, loop, refine, result, brandMode, brandUrl]);
 
   function cancel() { if (abortRef.current) abortRef.current.abort(); }
 
@@ -387,6 +404,13 @@ export function MotionGraphicsGenerator({ clients = [] }) {
           <MGGroup n="2" label="Describe">
             <textarea value={prompt} onChange={e => onPromptChange(e.target.value)} rows={5} maxLength={2000} placeholder="e.g. Bold stat reveal — “3.2× ROAS” counts up with an orange underline wipe."
               style={{ width: "100%", resize: "vertical", fontFamily: VX.sans, fontSize: 13.5, fontWeight: 500, color: VX.fg, background: VX.inset, border: "1px solid " + VX.border, borderRadius: VX.r3, padding: "11px 13px", lineHeight: 1.5, outline: "none", boxSizing: "border-box" }} />
+            <button onClick={enhancePrompt} disabled={!prompt.trim() || enhancing || generating}
+              title="Expand your rough idea into a vivid, detailed prompt"
+              style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 7, fontFamily: VX.sans, fontSize: 12, fontWeight: 700, padding: "7px 13px", borderRadius: VX.r2,
+                cursor: (!prompt.trim() || enhancing || generating) ? "not-allowed" : "pointer", border: "1px solid " + VX.border, background: VX.card,
+                color: (!prompt.trim() || enhancing || generating) ? VX.faint : VX.accentBright }}>
+              <Icon name="spark" size={14} sw={2} stroke={(!prompt.trim() || enhancing || generating) ? VX.faint : VX.accentBright} />{enhancing ? "Enhancing…" : "Enhance prompt"}
+            </button>
           </MGGroup>
 
           <MGGroup n="3" label="Format">
@@ -399,6 +423,18 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <MGChroma value={chroma} onChange={setChroma} />
             <span style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, lineHeight: 1.5 }}>
               The graphic renders on <strong style={{ color: VX.fg2 }}>{chroma.toLowerCase()}</strong> so you can key it out in your edit.</span>
+          </MGGroup>
+
+          <MGGroup n="5" label="Brand">
+            <MGSegment options={["Viewix", "Client site"]} value={brandMode} onChange={setBrandMode} />
+            {brandMode === "Client site" && (
+              <input value={brandUrl} onChange={e => setBrandUrl(e.target.value)} maxLength={2000} placeholder="https://clientsite.com" spellCheck={false}
+                style={{ width: "100%", fontFamily: VX.sans, fontSize: 13, color: VX.fg, background: VX.inset, border: "1px solid " + VX.border, borderRadius: VX.r2, padding: "9px 12px", outline: "none", boxSizing: "border-box" }} />
+            )}
+            <span style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, lineHeight: 1.5 }}>
+              {brandMode === "Client site"
+                ? "We read the client site's share image + theme colour and match the graphic to their brand."
+                : "Graphics use the Viewix brand."}</span>
           </MGGroup>
         </div>
         <div style={{ padding: "16px 22px", borderTop: "1px solid " + VX.borderSoft }}>
@@ -420,6 +456,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
         <div style={{ height: 56, flex: "0 0 auto", borderBottom: "1px solid " + VX.border, display: "flex", alignItems: "center", gap: 14, padding: "0 22px" }}>
           <span style={{ fontFamily: VX.sans, fontSize: 13, fontWeight: 700, color: VX.fg2 }}>Preview</span>
           {hasResult && <span style={{ fontFamily: VX.mono, fontSize: 11.5, color: VX.muted }}>{MG_FORMATS[dim].sub}{!result.fromLibrary && result.cost != null ? ` · $${Number(result.cost).toFixed(4)}` : ""}</span>}
+          {hasResult && result.brand?.siteName && <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: VX.sans, fontSize: 11, fontWeight: 700, color: VX.accentBright }}><Icon name="link2" size={12} sw={2} stroke={VX.accentBright} />{result.brand.siteName}</span>}
           <div style={{ flex: 1 }} />
           {error && <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 600, color: VX.danger, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{error}</span>}
           {hasResult && <>

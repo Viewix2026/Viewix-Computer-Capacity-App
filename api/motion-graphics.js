@@ -26,12 +26,17 @@
 //   · Deactivated users are already blocked by requireRole's revocation check
 //     (verifyIdToken(token, true) + revokeRefreshTokens on deactivate).
 
+import dns from "dns";
+import net from "net";
+import http from "http";
+import https from "https";
 import { adminGet, adminPatch, getAdmin, runRtdbTransaction } from "./_fb-admin.js";
 import { actorFrom, handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 import { normalizeRole } from "./_roles.js";
 
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-opus-4-7";
+const ENHANCE_MODEL = "claude-sonnet-4-6"; // cheap/fast prompt-expansion, not the heavy generation
 
 // Per-MTok rates for the cost ledger. Verified against the claude-api skill
 // 2026-06-23 (Opus 4.7: $5 input / $25 output per MTok; ephemeral cache write
@@ -44,6 +49,15 @@ const PRICE = {
   cacheReadPerMTok: 0.5,
   pricedAt: "2026-06-23",
   model: MODEL,
+};
+// Sonnet 4.6 rates for the cheap "enhance" call (claude-api skill: $3/$15 per MTok).
+const ENHANCE_PRICE = {
+  inPerMTok: 3.0,
+  outPerMTok: 15.0,
+  cacheWritePerMTok: 3.75,
+  cacheReadPerMTok: 0.3,
+  pricedAt: "2026-06-24",
+  model: ENHANCE_MODEL,
 };
 
 // Roles allowed to spend Opus money. `trial` is intentionally excluded; `closer`
@@ -64,6 +78,9 @@ const LIMITS = {
   previousFragment: 100 * 1024, // 100KB
   outputHtml: 200 * 1024,       // 200KB guarded doc ceiling
   dailyPerUser: 100,            // runaway-loop circuit breaker, not a budget
+  brandUrl: 2000,
+  brandHtml: 1024 * 1024,       // cap the fetched site HTML at 1MB
+  brandFetchMs: 8000,
 };
 
 // Strict CSP injected into every rendered/saved doc. No connect-src (falls back
@@ -162,15 +179,123 @@ export function injectGuard(raw, { width, height }) {
   return html;
 }
 
-function buildSystemPrompt(width, height, durationSec) {
+// ─── Brand pull from a client website (SSRF-guarded) ──────────────────────────
+// Reject anything that resolves to a private/reserved address so an editor can't
+// point this at internal services or cloud metadata. The fetched HTML is parsed
+// for og:image / theme-color only; the image URL is later handed to Anthropic
+// (its fetch, not ours) for the vision reference.
+const PRIVATE_V4 = [
+  /^0\./, /^10\./, /^127\./, /^169\.254\./, /^192\.168\./, /^192\.0\.0\./, /^192\.0\.2\./,
+  /^172\.(1[6-9]|2[0-9]|3[0-1])\./, /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,
+  /^198\.1[89]\./, /^198\.51\.100\./, /^203\.0\.113\./, /^(22[4-9]|23\d|24\d|25[0-5])\./,
+];
+function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) return PRIVATE_V4.some(re => re.test(ip));
+  if (net.isIPv6(ip)) {
+    const x = ip.toLowerCase();
+    if (x === "::1" || x === "::") return true;
+    if (x.startsWith("fc") || x.startsWith("fd")) return true; // fc00::/7 ULA
+    const first = parseInt(x.split(":")[0] || "0", 16);
+    if (!Number.isNaN(first) && (first & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local (fe80–febf)
+    if (x.startsWith("::ffff:")) { const v4 = x.split(":").pop(); if (net.isIPv4(v4)) return isPrivateIp(v4); return true; }
+    return false;
+  }
+  return true;
+}
+function safeHostname(h) {
+  const x = (h || "").toLowerCase();
+  if (!x) return false;
+  if (x === "localhost" || x.endsWith(".localhost") || x.endsWith(".local") || x.endsWith(".internal") || x.endsWith(".lan")) return false;
+  return true;
+}
+// Pin the connection to a vetted PUBLIC ip: the http/https `lookup` option runs
+// at CONNECT time and only ever hands back a public address, so DNS rebinding
+// (public at check time, private at connect time) can't reach an internal host.
+function vettedLookup(hostname, options, cb) {
+  dns.lookup(hostname, { all: true }, (err, addrs) => {
+    if (err) return cb(err);
+    const safe = (addrs || []).filter(a => !isPrivateIp(a.address));
+    if (!safe.length) return cb(new Error("blocked private address"));
+    if (options && options.all) return cb(null, safe); // Node may request the array form
+    cb(null, safe[0].address, safe[0].family);
+  });
+}
+// GET with the ip pinned + a hard byte cap + a timeout. Resolves { html, base }
+// on 2xx or { redirect } on 3xx; throws our own (safe) error otherwise.
+function httpGetCapped(u, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const mod = u.protocol === "https:" ? https : http;
+    let settled = false;
+    const fail = (msg) => { if (!settled) { settled = true; reject(new Error(msg)); } };
+    const req = mod.request(u, { method: "GET", lookup: vettedLookup, timeout: Math.max(500, timeoutMs || LIMITS.brandFetchMs),
+      headers: { "User-Agent": "ViewixMotionGraphics/1.0 (brand-extract)", "Accept": "text/html" } }, (resp) => {
+      const status = resp.statusCode || 0;
+      if (status >= 300 && status < 400 && resp.headers.location) { resp.destroy(); if (!settled) { settled = true; resolve({ redirect: resp.headers.location }); } return; }
+      if (status < 200 || status >= 300) { resp.destroy(); return fail(`site returned ${status}`); }
+      const cl = Number(resp.headers["content-length"] || 0);
+      if (cl && cl > LIMITS.brandHtml * 4) { resp.destroy(); return fail("site response too large"); }
+      const chunks = []; let received = 0; let capped = false;
+      const finish = () => { if (!settled) { settled = true; resolve({ html: Buffer.concat(chunks).toString("utf8").slice(0, LIMITS.brandHtml), base: u.toString() }); } };
+      resp.on("data", (c) => { if (capped) return; received += c.length; chunks.push(c); if (received > LIMITS.brandHtml) { capped = true; resp.destroy(); } });
+      resp.on("end", finish);
+      resp.on("close", () => { if (capped) finish(); });
+      resp.on("error", () => fail("couldn't read the site"));
+    });
+    req.on("timeout", () => req.destroy(new Error("timed out")));
+    req.on("error", (e) => {
+      const msg = String((e && e.message) || "");
+      if (/blocked private address/.test(msg)) fail("that host resolves to a private address");
+      else if (/timed out/.test(msg)) fail("site timed out");
+      else fail("couldn't reach the site");
+    });
+    req.end();
+  });
+}
+async function safeFetchHtml(rawUrl, depth = 0, deadline = Date.now() + LIMITS.brandFetchMs) {
+  if (depth > 2) throw new Error("too many redirects");
+  let u;
+  try { u = new URL(rawUrl); } catch { throw new Error("invalid URL"); }
+  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("must be an http(s) URL");
+  if (!safeHostname(u.hostname)) throw new Error("that host isn't allowed");
+  // IP literals skip the lookup (Node connects to them directly), so vet them here.
+  // URL.hostname keeps IPv6 brackets ("[::1]"), so strip them before net.isIP.
+  const hostLiteral = u.hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(hostLiteral) && isPrivateIp(hostLiteral)) throw new Error("that host resolves to a private address");
+  const r = await httpGetCapped(u, deadline - Date.now());
+  if (r.redirect) return safeFetchHtml(new URL(r.redirect, u).toString(), depth + 1, deadline); // re-validate + share the deadline
+  return r;
+}
+function metaContent(html, key) {
+  const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${key}["'][^>]*>`, "i"));
+  if (!m) return null;
+  const c = m[0].match(/content=["']([^"']*)["']/i);
+  return c ? c[1].trim() : null;
+}
+async function fetchBrand(rawUrl) {
+  const { html, base } = await safeFetchHtml(rawUrl);
+  let imageUrl = metaContent(html, "og:image") || metaContent(html, "og:image:url") || metaContent(html, "twitter:image") || metaContent(html, "twitter:image:src");
+  if (imageUrl) { try { imageUrl = new URL(imageUrl, base).toString(); } catch { imageUrl = null; } }
+  if (imageUrl && !/^https?:\/\//i.test(imageUrl)) imageUrl = null;
+  const themeColor = metaContent(html, "theme-color");
+  const siteName = metaContent(html, "og:site_name") || (html.match(/<title[^>]*>([^<]{1,120})<\/title>/i)?.[1] || "").trim() || null;
+  if (!imageUrl && !themeColor) throw new Error("no brand image or colour found on that site");
+  return { imageUrl, themeColor, siteName, sourceUrl: base };
+}
+
+function buildSystemPrompt(width, height, durationSec, brand) {
+  const brandBlock = brand
+    ? `BRAND — match the CLIENT'S brand${brand.siteName ? ` (${brand.siteName})` : ""}, not Viewix:
+${brand.imageUrl ? "- A reference image of the client's brand is attached as the first message item. Pull the colour palette, type feel, and overall visual style from it.\n" : ""}${brand.themeColor ? `- Their primary brand colour is approximately ${brand.themeColor}.\n` : ""}- Use the client's colours and visual feel throughout. Do NOT use Viewix blue/orange unless they genuinely match the client. 'DM Sans' and 'JetBrains Mono' are available for clean type.`
+    : `VIEWIX BRAND:
+- Primary blue #0082FA, bright blue #3DA2FF, orange #F87700, near-black #0A0E17, off-white #EAEEF6.
+- Fonts: 'DM Sans' (headings/body), 'JetBrains Mono' (numbers/labels). Both are available — use them.`;
   return `You generate motion graphics for Viewix Video Production, a Sydney video agency. Output a single self-contained animated graphic that will be rendered at exactly ${width}x${height} pixels and screen-recorded into a video.
 
-VIEWIX BRAND:
-- Primary blue #0082FA, bright blue #3DA2FF, orange #F87700, near-black #0A0E17, off-white #EAEEF6.
-- Fonts: 'DM Sans' (headings/body), 'JetBrains Mono' (numbers/labels). Both are available — use them.
+${brandBlock}
 
 HARD OUTPUT RULES (a wrapper enforces the exact size, a transparent background, fonts, and security — follow these so it renders correctly):
 - Return ONLY an HTML fragment: a <style> block, the markup, and a <script> block. Do NOT include <!DOCTYPE>, <html>, <head>, or <body> tags. Do NOT wrap the output in markdown code fences.
+- NO visible code comments, TODOs, or placeholder chrome in the rendered output. Never render text like "// END CARD", an HTML comment, "PLACEHOLDER", or section labels — only the finished graphic the viewer should see.
 - Transparent background — do not paint a full-bleed opaque background unless the user explicitly asks. The graphic composites over video.
 - Design to exactly ${width}x${height}. Keep important content inside a ~8% safe margin.
 - Animate with CSS animations and/or inline JS (requestAnimationFrame). The animation MUST loop cleanly about every ${durationSec} seconds.
@@ -178,17 +303,17 @@ HARD OUTPUT RULES (a wrapper enforces the exact size, a transparent background, 
 - Self-contained and running immediately on load.`;
 }
 
-function computeCost(usage) {
+function computeCost(usage, price = PRICE) {
   const u = usage || {};
   const inTok = u.input_tokens || 0;
   const outTok = u.output_tokens || 0;
   const cacheWrite = u.cache_creation_input_tokens || 0;
   const cacheRead = u.cache_read_input_tokens || 0;
   const cost =
-    (inTok * PRICE.inPerMTok +
-      outTok * PRICE.outPerMTok +
-      cacheWrite * PRICE.cacheWritePerMTok +
-      cacheRead * PRICE.cacheReadPerMTok) /
+    (inTok * price.inPerMTok +
+      outTok * price.outPerMTok +
+      cacheWrite * price.cacheWritePerMTok +
+      cacheRead * price.cacheReadPerMTok) /
     1_000_000;
   return {
     inputTokens: inTok,
@@ -199,44 +324,73 @@ function computeCost(usage) {
   };
 }
 
+const CLAUDE_TIMEOUT_MS = 150_000; // own timeout so we return JSON before Vercel kills the function
+
 // Raw-fetch Anthropic call (no SDK in this repo). Returns { text, usage,
-// stopReason }. Own timeout so we return JSON before Vercel kills the function.
-async function callClaude(systemPrompt, userContent, apiKey) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 100_000);
-  let resp;
-  try {
-    resp = await fetch(ANTHROPIC_API, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 12000,
-        system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: userContent }],
-      }),
-      signal: controller.signal,
-    });
-  } catch (e) {
-    if (e.name === "AbortError") throw new Error("Generation timed out — try a simpler prompt");
-    throw e;
-  } finally {
-    clearTimeout(timeout);
+// stopReason }. Retries ONCE on a transient failure (429/529/5xx/network) with a
+// short backoff, and throws errors tagged with `.kind` (timeout/ratelimit/
+// overloaded/api) so the handler can give a clear, cause-specific message — the
+// old version surfaced any failure as a single opaque "service unavailable".
+async function callClaude(systemPrompt, userContent, apiKey, opts = {}) {
+  const model = opts.model || MODEL;
+  const maxTokens = opts.maxTokens || 8000;
+  const payload = JSON.stringify({
+    model,
+    max_tokens: maxTokens,
+    system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
+    messages: [{ role: "user", content: userContent }],
+  });
+  const overallDeadline = Date.now() + 150_000; // bound the whole call (incl. retry) so we return before the client/Vercel give up
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const remaining = overallDeadline - Date.now();
+    if (remaining < 3000) break;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(CLAUDE_TIMEOUT_MS, remaining));
+    try {
+      let resp;
+      try {
+        resp = await fetch(ANTHROPIC_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+          body: payload,
+          signal: controller.signal,
+        });
+      } catch (e) {
+        if (e.name === "AbortError") throw Object.assign(new Error("timed out"), { kind: "timeout" });
+        lastErr = Object.assign(new Error("network error"), { kind: "overloaded" });
+        if (attempt === 0 && overallDeadline - Date.now() > 5000) { await new Promise(r => setTimeout(r, 1500)); continue; }
+        throw lastErr;
+      }
+      if (resp.ok) {
+        let data;
+        try { data = await resp.json(); } // timer stays armed — a stalled body aborts
+        catch (e) {
+          if (e.name === "AbortError") throw Object.assign(new Error("timed out"), { kind: "timeout" });
+          throw Object.assign(new Error("bad response from model"), { kind: "api" });
+        }
+        return { text: data.content?.[0]?.text || "", usage: data.usage || {}, stopReason: data.stop_reason || null };
+      }
+      const status = resp.status;
+      let bodyText = ""; try { bodyText = (await resp.text()).slice(0, 200); } catch { /* ignore */ }
+      const transient = status === 429 || status === 529 || status >= 500;
+      lastErr = Object.assign(new Error(`Anthropic ${status}: ${bodyText}`), { kind: status === 429 ? "ratelimit" : transient ? "overloaded" : "api" });
+      if (transient && attempt === 0 && overallDeadline - Date.now() > 5000) { await new Promise(r => setTimeout(r, 1500)); continue; }
+      throw lastErr;
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  if (!resp.ok) {
-    const err = await resp.text();
-    throw new Error(`Anthropic API error ${resp.status}: ${err.slice(0, 300)}`);
-  }
-  const data = await resp.json();
-  return {
-    text: data.content?.[0]?.text || "",
-    usage: data.usage || {},
-    stopReason: data.stop_reason || null,
-  };
+  throw lastErr || Object.assign(new Error("Generation failed"), { kind: "api" });
+}
+
+// Map a callClaude error to a clear, cause-specific client message + status.
+function claudeErrorResponse(res, e, label) {
+  console.error(`motion-graphics ${label} failed:`, e.kind, e.message);
+  if (e.kind === "timeout") return res.status(504).json({ error: "That took too long — try a simpler prompt or a shorter loop." });
+  if (e.kind === "ratelimit") return res.status(429).json({ error: "Too many generations right now — wait a few seconds and try again." });
+  if (e.kind === "overloaded") return res.status(503).json({ error: "The model is busy right now — try again in a moment." });
+  return res.status(502).json({ error: "Generation failed — try again." });
 }
 
 function genId() {
@@ -284,6 +438,7 @@ export default async function handler(req, res) {
 
   try {
     if (action === "generate") return await handleGenerate(req, res, body);
+    if (action === "enhance") return await handleEnhance(req, res, body);
     if (action === "save") return await handleSave(req, res, body);
     if (action === "archive") return await handleArchive(req, res, body);
     if (action === "assign") return await handleAssign(req, res, body);
@@ -320,6 +475,16 @@ async function handleGenerate(req, res, body) {
     return res.status(400).json({ error: "Previous graphic too large to refine" });
   }
 
+  // Optional: pull the client's brand from their website (SSRF-guarded). Done
+  // BEFORE the cap/Opus call so a bad URL doesn't burn quota or money.
+  const brandUrl = typeof body.brandUrl === "string" ? body.brandUrl.trim() : "";
+  if (brandUrl.length > LIMITS.brandUrl) return res.status(400).json({ error: "Brand URL too long" });
+  let brand = null;
+  if (brandUrl) {
+    try { brand = await fetchBrand(brandUrl); }
+    catch (e) { return res.status(422).json({ error: `Couldn't use that website's branding — ${e.message}` }); }
+  }
+
   // Daily circuit breaker (atomic — aborts at the cap, no read-then-write race).
   const day = new Date().toISOString().slice(0, 10);
   const capPath = `/aiUsage/dailyCount/${req._actor.uid}/${day}`;
@@ -332,13 +497,17 @@ async function handleGenerate(req, res, body) {
     return res.status(429).json({ error: "Daily generation limit reached — try again tomorrow" });
   }
 
-  const systemPrompt = buildSystemPrompt(dims.width, dims.height, dur);
-  let userContent;
+  const systemPrompt = buildSystemPrompt(dims.width, dims.height, dur, brand);
+  let userText;
   if (refineInstruction && previousFragment) {
-    userContent = `Here is the current motion graphic fragment:\n\n${previousFragment}\n\nAdjust it as follows: ${refineInstruction}\n\nReturn the full updated fragment (same rules — fragment only, no <html>/<head>/<body>, no code fences).`;
+    userText = `Here is the current motion graphic fragment:\n\n${previousFragment}\n\nAdjust it as follows: ${refineInstruction}\n\nReturn the full updated fragment (same rules — fragment only, no <html>/<head>/<body>, no code fences).`;
   } else {
-    userContent = prompt.trim();
+    userText = prompt.trim();
   }
+  // Attach the brand reference image (vision) when matching a client's site.
+  const userContent = (brand && brand.imageUrl)
+    ? [{ type: "image", source: { type: "url", url: brand.imageUrl } }, { type: "text", text: userText }]
+    : userText;
 
   // Call Claude. A failure here means Anthropic may or may not have billed us,
   // but we have no usage to ledger — return an opaque error.
@@ -346,8 +515,7 @@ async function handleGenerate(req, res, body) {
   try {
     claude = await callClaude(systemPrompt, userContent, apiKey);
   } catch (e) {
-    console.error("motion-graphics Claude call failed:", e);
-    return res.status(502).json({ error: "The generation service is unavailable — try again" });
+    return claudeErrorResponse(res, e, "generate");
   }
 
   // From here Anthropic HAS billed us (usage is present), so we ALWAYS write the
@@ -374,12 +542,14 @@ async function handleGenerate(req, res, body) {
 
   await writeLedgerSafe(id, {
     id,
+    type: "generate",
     model: MODEL,
     rate: PRICE,
     dimension,
     durationSec: dur,
     refined: !!(refineInstruction && previousFragment),
     status,
+    brand: brand ? (brand.siteName || brand.sourceUrl) : null,
     ...cost,
     createdBy: req._actor,
     createdAt: new Date().toISOString(),
@@ -396,7 +566,49 @@ async function handleGenerate(req, res, body) {
     usage: cost,
     cost: cost.costUsd,
     model: MODEL,
+    brand: brand ? { siteName: brand.siteName, sourceUrl: brand.sourceUrl } : null,
   });
+}
+
+function buildEnhanceSystemPrompt(width, height, durationSec) {
+  return `You turn a short, rough idea for a motion graphic into one vivid, specific prompt for an animation generator. The graphic will render at ${width}x${height} and loop about every ${durationSec} seconds.
+
+Rewrite the user's idea into 2 to 4 sentences describing:
+- WHAT animates and HOW it moves (the motion beats and timing),
+- the LOOK (colours, style, type), and
+- the key on-screen elements.
+
+Stay true to the user's intent — sharpen it, don't replace it. Assume Viewix brand (blue #0082FA, orange #F87700, DM Sans) unless the idea implies otherwise. Keep it concrete and producible as a clean looping animation.
+
+Output ONLY the improved prompt text — no preamble, no quotes, no markdown, no code.`;
+}
+
+// Expand a rough prompt into a vivid one (cheap Sonnet call). Returns { prompt }.
+async function handleEnhance(req, res, body) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "Generation is not configured" });
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  if (!prompt) return res.status(400).json({ error: "Nothing to enhance — describe a graphic first" });
+  if (prompt.length > LIMITS.prompt) return res.status(400).json({ error: `Prompt too long (max ${LIMITS.prompt} chars)` });
+  const dims = DIMENSIONS[body.dimension] || DIMENSIONS["1080x1920"];
+  const dur = Math.max(2, Math.min(20, Number(body.durationSec) || 5));
+
+  let claude;
+  try {
+    claude = await callClaude(buildEnhanceSystemPrompt(dims.width, dims.height, dur), prompt, apiKey, { model: ENHANCE_MODEL, maxTokens: 700 });
+  } catch (e) {
+    return claudeErrorResponse(res, e, "enhance");
+  }
+  let out = (claude.text || "").trim().replace(/^```[a-z]*\s*/i, "").replace(/\s*```$/i, "").replace(/^["']|["']$/g, "").trim();
+  if (!out) return res.status(502).json({ error: "Couldn't enhance that — try again." });
+  if (out.length > LIMITS.prompt) out = out.slice(0, LIMITS.prompt);
+
+  // Light cost ledger (Sonnet rates) so the stats tab captures enhance spend too.
+  const cost = computeCost(claude.usage, ENHANCE_PRICE);
+  const id = genId();
+  await writeLedgerSafe(id, { id, type: "enhance", model: ENHANCE_MODEL, rate: ENHANCE_PRICE, status: "ok", ...cost, createdBy: req._actor, createdAt: new Date().toISOString() });
+
+  return res.status(200).json({ prompt: out });
 }
 
 async function handleSave(req, res, body) {
