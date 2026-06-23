@@ -50,10 +50,20 @@ const VX = {
   shadow1: "0 1px 2px rgba(0,0,0,0.4)",
 };
 
-// Plus Jakarta Sans is the default — the closest freely-licensable lookalike to
-// Instagram's (proprietary, un-embeddable) Instagram Sans. Web fonts first, then
-// the system fonts.
-const CG_FONTS = ["Plus Jakarta Sans", "Poppins", "Arial", "Helvetica", "Impact", "Verdana", "Georgia", "Courier New", "DM Sans"];
+// "Instagram Sans" is the default — referenced from the editor's LOCAL install
+// (it's used in Premiere all the time), never uploaded or embedded by Viewix, so
+// there's no font redistribution. It falls back to Plus Jakarta Sans (the
+// embeddable lookalike) on any machine that doesn't have it. Display fonts first,
+// then the system fonts.
+const CG_FONTS = ["Instagram Sans", "Plus Jakarta Sans", "Poppins", "Arial", "Helvetica", "Impact", "Verdana", "Georgia", "Courier New", "DM Sans"];
+
+// CSS font stack for a picker choice. Instagram Sans is local-only with a Plus
+// Jakarta Sans fallback (which the preview loads and the export embeds), so it
+// degrades to the lookalike rather than a generic sans when the font is absent.
+function fontStack(family) {
+  if (family === "Instagram Sans") return "'Instagram Sans', 'Plus Jakarta Sans', sans-serif";
+  return `'${family}', sans-serif`;
+}
 
 // Google-Fonts web fonts (display name → css2 family slug). Loaded for the live
 // preview via the <link> injected on mount, AND embedded into the export SVG —
@@ -215,7 +225,7 @@ function CGSegment({ options, value, onChange }) {
 // `useFilter` is false when notch === 0 → a clean rounded-rect passthrough.
 function CaptionBox({ text, font, bold, italic, size, textColor, boxColor, opacity, pad, radius, align, gooId, useFilter }) {
   const span = (color, bg, filtered) => ({
-    display: "inline", fontFamily: `'${font}', sans-serif`, fontWeight: bold ? 800 : 500, fontStyle: italic ? "italic" : "normal",
+    display: "inline", fontFamily: fontStack(font), fontWeight: bold ? 800 : 500, fontStyle: italic ? "italic" : "normal",
     fontSize: size, lineHeight: 1.52, letterSpacing: "-0.01em", whiteSpace: "pre",
     WebkitBoxDecorationBreak: "clone", boxDecorationBreak: "clone",
     padding: `${Math.round(pad * 0.34)}px ${pad}px`, borderRadius: radius, color, background: bg,
@@ -234,7 +244,7 @@ function CaptionBox({ text, font, bold, italic, size, textColor, boxColor, opaci
 
 export function TextGenerator() {
   const [text, setText] = useState("Behind every great\nvideo is a great\nstory.");
-  const [font, setFont] = useState("Plus Jakarta Sans");
+  const [font, setFont] = useState("Instagram Sans");
   const [bold, setBold] = useState(true);
   const [italic, setItalic] = useState(false);
   const [size, setSize] = useState(56);
@@ -292,9 +302,14 @@ export function TextGenerator() {
         try { await document.fonts.ready; } catch { /* non-fatal */ }
       }
       // Embed the selected web font so the rasteriser doesn't fall back ("" for
-      // system fonts).
+      // system / local fonts). For Instagram Sans (rendered from the user's local
+      // install) also embed the Plus Jakarta Sans fallback, so a machine without
+      // the font still exports the lookalike instead of a generic sans.
       const fontFaceCss = await webFontFaceCss(snapFont, snapBold ? 800 : 500, snapItalic);
-      const styleTag = fontFaceCss ? `<style>${fontFaceCss}</style>` : "";
+      const fallbackCss = snapFont === "Instagram Sans"
+        ? await webFontFaceCss("Plus Jakarta Sans", snapBold ? 800 : 500, snapItalic)
+        : "";
+      const styleTag = (fontFaceCss || fallbackCss) ? `<style>${fontFaceCss}${fallbackCss}</style>` : "";
 
       // The goo blur paints beyond the content box; without bleed the SVG
       // viewport / foreignObject clips the notch and outer corners.
