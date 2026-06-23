@@ -185,7 +185,7 @@ function LibraryThumb({ item, loadHtml }) {
   const boxRef = useRef(null);
   const [visible, setVisible] = useState(false);
   const [html, setHtml] = useState(null);
-  const BW = 148, BH = 84;
+  const BW = 160, BH = 116;
   const scale = Math.min(BW / F.w, BH / F.h);
   useEffect(() => {
     const el = boxRef.current;
@@ -474,7 +474,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
         )}
 
         {/* library strip */}
-        <div style={{ flex: "0 0 auto", borderTop: "1px solid " + VX.border, background: VX.rail, padding: "13px 22px 16px", maxHeight: 240, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: "0 0 auto", borderTop: "1px solid " + VX.border, background: VX.rail, padding: "14px 22px 18px", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: VX.accent }} />
             <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: VX.fg2, whiteSpace: "nowrap" }}>Shared Library</span>
@@ -502,7 +502,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
           ) : (
             <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
               {visible.map(item => (
-                <div key={item.id} style={{ flex: "0 0 auto", width: 172, background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r3, overflow: "hidden", position: "relative" }}>
+                <div key={item.id} style={{ flex: "0 0 auto", width: 184, background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r3, overflow: "hidden", position: "relative" }}>
                   <div style={{ cursor: "pointer", position: "relative" }} onClick={() => loadFromLibrary(item)}>
                     <LibraryThumb item={item} loadHtml={loadHtml} />
                     {item.client && <span style={{ position: "absolute", top: 6, left: 6, display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 6px", borderRadius: 99, background: "rgba(8,12,20,0.78)", border: "1px solid " + VX.border }}>
