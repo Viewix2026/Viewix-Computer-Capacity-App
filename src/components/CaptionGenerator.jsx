@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════
-// Editors · Caption Generator — interactive subtab.
+// Editors · Text Generator — interactive subtab.
 // Produces a transparent-PNG Instagram-Reels caption box. The signature
 // per-line NOTCH (convex outer / concave inner corners) is rendered with
 // an SVG "goo" filter over a two-layer text stack (crisp glyphs on top).
@@ -338,7 +338,7 @@ export function CaptionGenerator() {
         {/* ── LEFT: controls ── */}
         <div style={{ width: 348, flex: "0 0 auto", borderRight: "1px solid " + VX.border, background: VX.rail, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid " + VX.borderSoft }}>
-            <div style={{ fontFamily: VX.sans, fontSize: 16, fontWeight: 800, color: VX.fg, letterSpacing: "-0.01em" }}>Caption Generator</div>
+            <div style={{ fontFamily: VX.sans, fontSize: 16, fontWeight: 800, color: VX.fg, letterSpacing: "-0.01em" }}>Text Generator</div>
             <div style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, marginTop: 3 }}>Style it, export a transparent PNG overlay.</div>
           </div>
           <div style={{ flex: 1, overflow: "auto", padding: "20px 22px", display: "flex", flexDirection: "column", gap: 24 }}>
