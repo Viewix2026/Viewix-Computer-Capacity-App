@@ -243,6 +243,11 @@ function genId() {
   return `mg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Client-supplied ids become RTDB path segments, so a "/" (or RTDB-illegal char)
+// could patch inside another record. Only our own genId shape is allowed.
+const ID_RE = /^mg_[a-z0-9_]+$/i;
+const validId = s => typeof s === "string" && s.length <= 64 && ID_RE.test(s);
+
 // ─── Handler ───────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
@@ -260,6 +265,20 @@ export default async function handler(req, res) {
   const { err: adminErr } = getAdmin();
   if (adminErr) return res.status(500).json({ error: "Server storage not configured" });
 
+  // Fresh authority check for EVERY action (generate spends Opus; save/assign/
+  // archive mutate the shared library). The token's role claim lags up to ~1h
+  // after a demotion (setRole doesn't revokeRefreshTokens), so re-check the
+  // synchronously-updated RTDB record rather than trust requireRole's claim alone.
+  try {
+    const rec = await fbGet(`/users/${req._actor.uid}`);
+    if (!rec || rec.active === false || !GENERATE_ROLES.includes(normalizeRole(rec.role))) {
+      return res.status(403).json({ error: "Your account can't use motion graphics" });
+    }
+  } catch (e) {
+    console.error("motion-graphics role check failed:", e);
+    return res.status(500).json({ error: "Request failed" });
+  }
+
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const action = body.action;
 
@@ -267,6 +286,7 @@ export default async function handler(req, res) {
     if (action === "generate") return await handleGenerate(req, res, body);
     if (action === "save") return await handleSave(req, res, body);
     if (action === "archive") return await handleArchive(req, res, body);
+    if (action === "assign") return await handleAssign(req, res, body);
     return res.status(400).json({ error: `Unknown action: ${action || "(none)"}` });
   } catch (e) {
     // Don't leak Anthropic/Firebase internals to the client — log + opaque message.
@@ -298,15 +318,6 @@ async function handleGenerate(req, res, body) {
   }
   if (previousFragment && String(previousFragment).length > LIMITS.previousFragment) {
     return res.status(400).json({ error: "Previous graphic too large to refine" });
-  }
-
-  // Authoritative role/active check against the RTDB user record, which setRole
-  // updates synchronously. The token's role claim lags up to ~1h after a
-  // demotion (revokeRefreshTokens only fires on deactivate/delete, not setRole),
-  // so this closes the demotion-window spend gap that requireRole alone misses.
-  const rec = await fbGet(`/users/${req._actor.uid}`);
-  if (!rec || rec.active === false || !GENERATE_ROLES.includes(normalizeRole(rec.role))) {
-    return res.status(403).json({ error: "Your account can't generate motion graphics" });
   }
 
   // Daily circuit breaker (atomic — aborts at the cap, no read-then-write race).
@@ -390,8 +401,8 @@ async function handleGenerate(req, res, body) {
 
 async function handleSave(req, res, body) {
   const { generationId, html, fragment, name } = body;
-  if (!generationId || typeof generationId !== "string") {
-    return res.status(400).json({ error: "Missing generationId" });
+  if (!validId(generationId)) {
+    return res.status(400).json({ error: "Missing or invalid generationId" });
   }
 
   // Authoritative cost + dims come from the ledger, never the client.
@@ -420,6 +431,7 @@ async function handleSave(req, res, body) {
     typeof name === "string" && name.trim()
       ? name.trim().slice(0, 80)
       : `Motion graphic ${now.slice(0, 10)}`;
+  const client = typeof body.client === "string" && body.client.trim() ? body.client.trim().slice(0, 80) : null;
 
   // Atomic multi-path write: meta + html together (no orphaned-meta state).
   await fbPatchMulti("/motionGraphicsLibrary", {
@@ -430,6 +442,7 @@ async function handleSave(req, res, body) {
       durationSec: ledger.durationSec || null,
       generationId,
       costUsd: ledger.costUsd || 0,
+      client,
       createdBy: req._actor,
       createdAt: now,
       archived: false,
@@ -437,12 +450,28 @@ async function handleSave(req, res, body) {
     [`html/${id}`]: guarded,
   });
 
-  return res.status(200).json({ id, name: cleanName });
+  return res.status(200).json({ id, name: cleanName, client });
+}
+
+// Assign (or clear) the client a saved graphic belongs to. Client is a free
+// label sanitised to <=80 chars; null clears it. Server-only write.
+async function handleAssign(req, res, body) {
+  const { id } = body;
+  if (!validId(id)) return res.status(400).json({ error: "Missing or invalid id" });
+  const client = typeof body.client === "string" && body.client.trim() ? body.client.trim().slice(0, 80) : null;
+  const meta = await fbGet(`/motionGraphicsLibrary/meta/${id}`);
+  if (!meta) return res.status(404).json({ error: "Library item not found" });
+  await fbPatchMulti(`/motionGraphicsLibrary/meta/${id}`, {
+    client,
+    assignedBy: req._actor,
+    assignedAt: new Date().toISOString(),
+  });
+  return res.status(200).json({ ok: true, client });
 }
 
 async function handleArchive(req, res, body) {
   const { id } = body;
-  if (!id || typeof id !== "string") return res.status(400).json({ error: "Missing id" });
+  if (!validId(id)) return res.status(400).json({ error: "Missing or invalid id" });
   const meta = await fbGet(`/motionGraphicsLibrary/meta/${id}`);
   if (!meta) return res.status(404).json({ error: "Library item not found" });
   await fbPatchMulti(`/motionGraphicsLibrary/meta/${id}`, {
