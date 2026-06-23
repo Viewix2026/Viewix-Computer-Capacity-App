@@ -14,6 +14,7 @@
 // ════════════════════════════════════════════════════════════════════
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { Icon } from "./Icon";
+import { ViewixLoader } from "./shared/ViewixLoader";
 import { authFetch, fbListenSafe, fbGet, getCurrentUserEmail } from "../firebase";
 
 const VX = {
@@ -51,7 +52,7 @@ const MG_CHECKER = `repeating-conic-gradient(#2a3242 0% 25%, #222a38 0% 50%) 50%
 const PRESETS = [
   { key: "stier", label: "S-tier ranking", icon: "founders", fmt: "Portrait", prompt: "An S tier ranking board: rows labelled S, A, B, C stacked top to bottom, each a coloured band (S gold, A green, B Viewix blue, C grey), with placeholder item chips sliding into the S and A rows one at a time. Bold DM Sans labels, clean tier-list style. Loops seamlessly." },
   { key: "thisorthat", label: "This or That", icon: "socials", fmt: "Portrait", prompt: "A 'this or that' split screen: two option panels side by side divided by a bold VS badge in the centre, each panel with a placeholder label, one side pulses and highlights in Viewix blue as the pick. Energetic and modern, transparent background. Loops seamlessly." },
-  { key: "bubbles", label: "Bubbles in", icon: "socials", fmt: "Portrait", prompt: "Soft rounded bubbles in Viewix blue and bright blue drifting up from the bottom of the frame, varying sizes with gentle bobbing and fading, a few orange accent bubbles, calm and modern, transparent background. Loops seamlessly." },
+  { key: "roadmap", label: "Roadmap", icon: "link2", fmt: "Portrait", prompt: "A roadmap journey like a treasure map: a winding dotted trail connects 4 to 5 numbered milestone markers down the frame, a glowing pin travels along the trail step by step, and each milestone's label pops in as the pin reaches it. Viewix blue trail with orange milestone pins, a clean modern take on a treasure map, placeholder step labels that are easy to swap. Transparent background, loops seamlessly." },
   { key: "stat", label: "Stat pop", icon: "analytics", fmt: "Square", prompt: "A bold stat reveal: a large number counts up from 0 to 320 percent in JetBrains Mono, a label beneath in DM Sans, an orange underline wipes in as it lands with a subtle glow, transparent background. Plays once then holds." },
   { key: "particle", label: "Particle V", icon: "spark", fmt: "Square", prompt: "A glowing particle network in Viewix blue: around 80 dots drifting on a transparent background with thin connecting lines, slowly converging to trace a bold letter V, holding a beat, then dispersing. A few orange accent sparks and a soft glow. Loops over about 6 seconds." },
   { key: "eq", label: "Equalizer", icon: "capacity", fmt: "Landscape", prompt: "An audio equalizer: a row of about 24 vertical bars bouncing to a smooth rhythm, each a vertical gradient from Viewix blue to bright blue with the tallest peaks tipping orange, rounded tops and a soft reflection beneath, transparent background. Seamless loop." },
@@ -133,23 +134,6 @@ function MGChroma({ value, onChange }) {
     </div>
   );
 }
-function MGLoader({ label = "Generating…" }) {
-  return (
-    <div style={{ textAlign: "center" }}>
-      <style>{`@keyframes mgpulse{0%,100%{transform:scale(.9);opacity:.55}50%{transform:scale(1.08);opacity:1}}@keyframes mgspin{to{transform:rotate(360deg)}}`}</style>
-      <div style={{ position: "relative", width: 78, height: 78, margin: "0 auto 16px" }}>
-        <div style={{ position: "absolute", inset: 0, borderRadius: "50%", border: "3px solid " + VX.border, borderTopColor: VX.accent, animation: "mgspin 0.9s linear infinite" }} />
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", animation: "mgpulse 1.4s ease infinite" }}>
-          <span style={{ fontFamily: VX.sans, fontWeight: 800, fontSize: 30, color: VX.accent, letterSpacing: "-0.03em" }}>V</span>
-          <span style={{ width: 5, height: 5, borderRadius: "50%", background: VX.orange, alignSelf: "flex-end", marginBottom: 16, marginLeft: 1 }} />
-        </div>
-      </div>
-      <div style={{ fontFamily: VX.sans, fontSize: 13.5, fontWeight: 700, color: VX.fg2 }}>{label}</div>
-      <div style={{ fontFamily: VX.mono, fontSize: 11, color: VX.muted, marginTop: 5 }}>branding · timing · motion</div>
-    </div>
-  );
-}
-
 // framed, scaled, SANDBOXED animation viewport
 function MGFrame({ fmt, chroma, docKey, html, maxW, maxH }) {
   const f = MG_FORMATS[fmt];
@@ -185,7 +169,7 @@ function LibraryThumb({ item, loadHtml }) {
   const boxRef = useRef(null);
   const [visible, setVisible] = useState(false);
   const [html, setHtml] = useState(null);
-  const BW = 148, BH = 84;
+  const BW = 160, BH = 116;
   const scale = Math.min(BW / F.w, BH / F.h);
   useEffect(() => {
     const el = boxRef.current;
@@ -448,7 +432,13 @@ export function MotionGraphicsGenerator({ clients = [] }) {
 
         {/* stage */}
         <div ref={stageRef} style={{ flex: 1, minHeight: 0, position: "relative", background: VX.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 32, backgroundImage: "radial-gradient(circle at 50% 40%, rgba(255,255,255,0.025), transparent 60%)" }}>
-          {generating && <MGLoader />}
+          {generating && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <ViewixLoader size={72} />
+              <div style={{ fontFamily: VX.sans, fontSize: 13.5, fontWeight: 700, color: VX.fg2, marginTop: 14 }}>Generating…</div>
+              <div style={{ fontFamily: VX.mono, fontSize: 11, color: VX.muted, marginTop: 5 }}>branding · timing · motion</div>
+            </div>
+          )}
           {!generating && !hasResult && (
             <div style={{ textAlign: "center", color: VX.muted }}>
               <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(255,255,255,0.04)", border: "1px dashed " + VX.line2, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
@@ -474,7 +464,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
         )}
 
         {/* library strip */}
-        <div style={{ flex: "0 0 auto", borderTop: "1px solid " + VX.border, background: VX.rail, padding: "13px 22px 16px", maxHeight: 240, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: "0 0 auto", borderTop: "1px solid " + VX.border, background: VX.rail, padding: "14px 22px 18px", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: VX.accent }} />
             <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: VX.fg2, whiteSpace: "nowrap" }}>Shared Library</span>
@@ -502,7 +492,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
           ) : (
             <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
               {visible.map(item => (
-                <div key={item.id} style={{ flex: "0 0 auto", width: 172, background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r3, overflow: "hidden", position: "relative" }}>
+                <div key={item.id} style={{ flex: "0 0 auto", width: 184, background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r3, overflow: "hidden", position: "relative" }}>
                   <div style={{ cursor: "pointer", position: "relative" }} onClick={() => loadFromLibrary(item)}>
                     <LibraryThumb item={item} loadHtml={loadHtml} />
                     {item.client && <span style={{ position: "absolute", top: 6, left: 6, display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 6px", borderRadius: 99, background: "rgba(8,12,20,0.78)", border: "1px solid " + VX.border }}>
