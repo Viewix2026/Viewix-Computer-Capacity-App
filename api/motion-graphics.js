@@ -243,6 +243,11 @@ function genId() {
   return `mg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Client-supplied ids become RTDB path segments, so a "/" (or RTDB-illegal char)
+// could patch inside another record. Only our own genId shape is allowed.
+const ID_RE = /^mg_[a-z0-9_]+$/i;
+const validId = s => typeof s === "string" && s.length <= 64 && ID_RE.test(s);
+
 // ─── Handler ───────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
@@ -267,6 +272,7 @@ export default async function handler(req, res) {
     if (action === "generate") return await handleGenerate(req, res, body);
     if (action === "save") return await handleSave(req, res, body);
     if (action === "archive") return await handleArchive(req, res, body);
+    if (action === "assign") return await handleAssign(req, res, body);
     return res.status(400).json({ error: `Unknown action: ${action || "(none)"}` });
   } catch (e) {
     // Don't leak Anthropic/Firebase internals to the client — log + opaque message.
@@ -390,8 +396,8 @@ async function handleGenerate(req, res, body) {
 
 async function handleSave(req, res, body) {
   const { generationId, html, fragment, name } = body;
-  if (!generationId || typeof generationId !== "string") {
-    return res.status(400).json({ error: "Missing generationId" });
+  if (!validId(generationId)) {
+    return res.status(400).json({ error: "Missing or invalid generationId" });
   }
 
   // Authoritative cost + dims come from the ledger, never the client.
@@ -420,6 +426,7 @@ async function handleSave(req, res, body) {
     typeof name === "string" && name.trim()
       ? name.trim().slice(0, 80)
       : `Motion graphic ${now.slice(0, 10)}`;
+  const client = typeof body.client === "string" && body.client.trim() ? body.client.trim().slice(0, 80) : null;
 
   // Atomic multi-path write: meta + html together (no orphaned-meta state).
   await fbPatchMulti("/motionGraphicsLibrary", {
@@ -430,6 +437,7 @@ async function handleSave(req, res, body) {
       durationSec: ledger.durationSec || null,
       generationId,
       costUsd: ledger.costUsd || 0,
+      client,
       createdBy: req._actor,
       createdAt: now,
       archived: false,
@@ -437,12 +445,28 @@ async function handleSave(req, res, body) {
     [`html/${id}`]: guarded,
   });
 
-  return res.status(200).json({ id, name: cleanName });
+  return res.status(200).json({ id, name: cleanName, client });
+}
+
+// Assign (or clear) the client a saved graphic belongs to. Client is a free
+// label sanitised to <=80 chars; null clears it. Server-only write.
+async function handleAssign(req, res, body) {
+  const { id } = body;
+  if (!validId(id)) return res.status(400).json({ error: "Missing or invalid id" });
+  const client = typeof body.client === "string" && body.client.trim() ? body.client.trim().slice(0, 80) : null;
+  const meta = await fbGet(`/motionGraphicsLibrary/meta/${id}`);
+  if (!meta) return res.status(404).json({ error: "Library item not found" });
+  await fbPatchMulti(`/motionGraphicsLibrary/meta/${id}`, {
+    client,
+    assignedBy: req._actor,
+    assignedAt: new Date().toISOString(),
+  });
+  return res.status(200).json({ ok: true, client });
 }
 
 async function handleArchive(req, res, body) {
   const { id } = body;
-  if (!id || typeof id !== "string") return res.status(400).json({ error: "Missing id" });
+  if (!validId(id)) return res.status(400).json({ error: "Missing or invalid id" });
   const meta = await fbGet(`/motionGraphicsLibrary/meta/${id}`);
   if (!meta) return res.status(404).json({ error: "Library item not found" });
   await fbPatchMulti(`/motionGraphicsLibrary/meta/${id}`, {
