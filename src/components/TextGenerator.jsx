@@ -214,7 +214,7 @@ function CaptionBox({ text, font, bold, italic, size, textColor, boxColor, opaci
   );
 }
 
-export function CaptionGenerator() {
+export function TextGenerator() {
   const [text, setText] = useState("Behind every great\nvideo is a great\nstory.");
   const [font, setFont] = useState("Arial");
   const [bold, setBold] = useState(true);
@@ -312,7 +312,7 @@ export function CaptionGenerator() {
     } catch (e) {
       setExportErr("Export failed in this browser. Try Chrome, or reduce the size.");
       // eslint-disable-next-line no-console
-      console.error("[CaptionGenerator] export failed:", e);
+      console.error("[TextGenerator] export failed:", e);
     } finally {
       setExporting(false);
       exportLock.current = false;
