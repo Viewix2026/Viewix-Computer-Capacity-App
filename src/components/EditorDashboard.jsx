@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { EditorDashboardViewix } from "./EditorDashboardViewix";
-import { CaptionGenerator } from "./CaptionGenerator";
+import { TextGenerator } from "./TextGenerator";
 import { Segmented } from "./kit";
 
 export function EditorDashboard({ embedded, projects = [], setProjects = null, editors = [], clients = [], deliveries = [], setDeliveries = null, accounts = {}, viewerRole = null, currentUserEmail = null, currentUserName = null }) {
@@ -16,7 +16,7 @@ export function EditorDashboard({ embedded, projects = [], setProjects = null, e
         <EditorDashboardViewix projects={projects} setProjects={setProjects} editors={editors} clients={clients} deliveries={deliveries} setDeliveries={setDeliveries} accounts={accounts} viewerRole={viewerRole} currentUserEmail={currentUserEmail} currentUserName={currentUserName} />
       </div>
       <div style={{ display: sub === "Text Generator" ? "block" : "none" }}>
-        <CaptionGenerator />
+        <TextGenerator />
       </div>
     </div>
   );
