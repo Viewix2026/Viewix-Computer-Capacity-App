@@ -267,8 +267,13 @@ function CaptionBox({ text, font, bold, italic, size, textColor, boxColor, opaci
 }
 
 export function TextGenerator() {
+  // Detect synchronously (canvas metrics — local fonts resolve immediately, no
+  // async load) so there's no flash: if Instagram Sans isn't installed we default
+  // to Plus Jakarta Sans and disable the option, instead of silently rendering the
+  // fallback under an "Instagram Sans" label.
+  const [igInstalled] = useState(() => isFontInstalled("Instagram Sans"));
   const [text, setText] = useState("Behind every great\nvideo is a great\nstory.");
-  const [font, setFont] = useState("Instagram Sans");
+  const [font, setFont] = useState(() => (igInstalled ? "Instagram Sans" : "Plus Jakarta Sans"));
   const [bold, setBold] = useState(true);
   const [italic, setItalic] = useState(false);
   const [size, setSize] = useState(56);
@@ -281,14 +286,8 @@ export function TextGenerator() {
   const [align, setAlign] = useState("Center");
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState("");
-  const [igInstalled, setIgInstalled] = useState(true);   // assume present until proven missing (no warning flash)
   const previewRef = useRef(null);
   const exportLock = useRef(false);   // synchronous guard against double-click races
-
-  // Detect whether Instagram Sans is actually installed on this machine, so we
-  // can warn (and point to the download) when it's selected but missing — both
-  // preview and export silently use the Plus Jakarta Sans fallback otherwise.
-  useEffect(() => { setIgInstalled(isFontInstalled("Instagram Sans")); }, []);
 
   // Load the picker's web fonts for the live preview (export embeds them
   // separately). Scoped to this tab — injected once, not in the global chrome.
@@ -425,18 +424,21 @@ export function TextGenerator() {
               <div style={{ position: "relative" }}>
                 <select value={font} onChange={e => setFont(e.target.value)} style={{ width: "100%", appearance: "none", fontFamily: VX.sans, fontSize: 13, fontWeight: 600, color: VX.fg,
                   background: VX.inset, border: "1px solid " + VX.border, borderRadius: VX.r2, padding: "10px 36px 10px 13px", cursor: "pointer", outline: "none" }}>
-                  {CG_FONTS.map(f => <option key={f} value={f} style={{ background: "#141A29" }}>{f}</option>)}
+                  {CG_FONTS.map(f => {
+                    const off = f === "Instagram Sans" && !igInstalled;
+                    return <option key={f} value={f} disabled={off} style={{ background: "#141A29", color: off ? VX.muted : VX.fg }}>{f}{off ? " — not installed" : ""}</option>;
+                  })}
                 </select>
                 <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: VX.muted }}><Icon name="chevdown" size={15} sw={2} /></span>
               </div>
               <CGToggle label="Bold" on={bold} onChange={setBold} />
               <CGToggle label="Italic" on={italic} onChange={setItalic} />
-              {font === "Instagram Sans" && !igInstalled && (
+              {!igInstalled && (
                 <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "9px 11px", borderRadius: VX.r2,
                   background: "rgba(245,166,35,0.10)", border: "1px solid rgba(245,166,35,0.30)" }}>
                   <Icon name="bell" size={14} sw={1.9} stroke={VX.amber} style={{ flexShrink: 0, marginTop: 1 }} />
                   <div style={{ fontFamily: VX.sans, fontSize: 11.5, lineHeight: 1.45, color: VX.fg2 }}>
-                    Instagram Sans isn't installed on this computer — preview and export use Plus Jakarta Sans instead.{" "}
+                    Instagram Sans isn't installed on this computer, so it's disabled — defaulting to Plus Jakarta Sans.{" "}
                     <a href={IG_SANS_DOWNLOAD} target="_blank" rel="noopener noreferrer"
                       style={{ color: VX.accentBright, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Download Instagram Sans →</a>
                   </div>
