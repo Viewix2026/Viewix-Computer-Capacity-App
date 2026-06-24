@@ -250,7 +250,7 @@ function CGSegment({ options, value, onChange }) {
 function CaptionBox({ text, font, bold, italic, size, textColor, boxColor, opacity, pad, radius, align, gooId, useFilter }) {
   const span = (color, bg, filtered) => ({
     display: "inline", fontFamily: fontStack(font), fontWeight: bold ? 800 : 500, fontStyle: italic ? "italic" : "normal",
-    fontSize: size, lineHeight: 1.52, letterSpacing: "-0.01em", whiteSpace: "pre",
+    fontSize: size, lineHeight: 1.2, letterSpacing: "-0.01em", whiteSpace: "pre",
     WebkitBoxDecorationBreak: "clone", boxDecorationBreak: "clone",
     padding: `${Math.round(pad * 0.34)}px ${pad}px`, borderRadius: radius, color, background: bg,
     filter: filtered ? `url(#${gooId})` : "none",
