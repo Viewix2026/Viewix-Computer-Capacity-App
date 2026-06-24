@@ -13,6 +13,11 @@
 //   save     — persist a generation to the shared library (server-stamped
 //              creator + authoritative cost looked up by generationId).
 //   archive  — soft-delete a library item.
+//   assign   — set/clear the client a saved graphic belongs to.
+//   enhance  — expand a rough prompt into a vivid one (cheap Sonnet call).
+//   templateSave / templateDelete / templateFeedback / templateFeedbackDelete
+//            — team-editable "Start from a preset" rail: override built-ins, add
+//              custom templates, and leave feedback (server-only write).
 //
 // Security model (hardened via two Codex adversarial review rounds — see
 // docs/plans/motion-graphics-generator-scope-packet.md):
@@ -402,6 +407,20 @@ function genId() {
 const ID_RE = /^mg_[a-z0-9_]+$/i;
 const validId = s => typeof s === "string" && s.length <= 64 && ID_RE.test(s);
 
+// Preset templates ("Start from a preset" rail). Built-in overrides are keyed
+// `mgt_<presetKey>`; customs are `mgt_<ts>_<rand>`. Same path-injection guard as
+// validId, distinct prefix so a template id can't address a library/ledger node.
+const TEMPLATE_ID_RE = /^mgt_[a-z0-9_]+$/i;
+const validTemplateId = s => typeof s === "string" && s.length <= 64 && TEMPLATE_ID_RE.test(s);
+function genTemplateId() {
+  return `mgt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+// Icons the picker offers — every name MUST exist in src/components/Icon.jsx, so a
+// stored icon always renders. Format must be a real preview dimension.
+const TEMPLATE_ICONS = new Set(["spark", "play", "analytics", "socials", "founders", "link2", "capacity", "editors", "sale", "nurture", "calendar", "bell"]);
+const TEMPLATE_FMTS = new Set(["Portrait", "Landscape", "Square"]);
+const TEMPLATE_LIMITS = { label: 60, feedback: 500 };
+
 // ─── Handler ───────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (handleOptions(req, res)) return;
@@ -442,6 +461,10 @@ export default async function handler(req, res) {
     if (action === "save") return await handleSave(req, res, body);
     if (action === "archive") return await handleArchive(req, res, body);
     if (action === "assign") return await handleAssign(req, res, body);
+    if (action === "templateSave") return await handleTemplateSave(req, res, body);
+    if (action === "templateDelete") return await handleTemplateDelete(req, res, body);
+    if (action === "templateFeedback") return await handleTemplateFeedback(req, res, body);
+    if (action === "templateFeedbackDelete") return await handleTemplateFeedbackDelete(req, res, body);
     return res.status(400).json({ error: `Unknown action: ${action || "(none)"}` });
   } catch (e) {
     // Don't leak Anthropic/Firebase internals to the client — log + opaque message.
@@ -691,5 +714,83 @@ async function handleArchive(req, res, body) {
     archivedBy: req._actor,
     archivedAt: new Date().toISOString(),
   });
+  return res.status(200).json({ ok: true });
+}
+
+// ─── Team-editable preset templates (the "Start from a preset" rail) ───────────
+// Built-in presets live in the frontend as code defaults; these actions let the
+// whole editing team override a built-in, add their own templates, remove/reset
+// them, and leave feedback. Stored at /motionGraphicsTemplates/{id} (+ feedback
+// at /motionGraphicsTemplateFeedback/{id}/*). Server-only write (rule write:false).
+// The UI decides which ids are built-in (from its own PRESETS), so the server
+// treats every template uniformly — no trusted "builtin" flag.
+
+// Create a new custom template (no templateId) or update an existing one
+// (templateId present — a built-in override or a custom). Last-writer-wins.
+async function handleTemplateSave(req, res, body) {
+  const incomingId = body.templateId;
+  const isUpdate = incomingId != null && incomingId !== "";
+  if (isUpdate && !validTemplateId(incomingId)) {
+    return res.status(400).json({ error: "Invalid templateId" });
+  }
+  const label = typeof body.label === "string" ? body.label.trim() : "";
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  const icon = typeof body.icon === "string" ? body.icon.trim() : "";
+  const fmt = typeof body.fmt === "string" ? body.fmt.trim() : "";
+  if (!label) return res.status(400).json({ error: "Template needs a label" });
+  if (label.length > TEMPLATE_LIMITS.label) return res.status(400).json({ error: `Label too long (max ${TEMPLATE_LIMITS.label})` });
+  if (!prompt) return res.status(400).json({ error: "Template needs a prompt" });
+  if (prompt.length > LIMITS.prompt) return res.status(400).json({ error: `Prompt too long (max ${LIMITS.prompt})` });
+  if (!TEMPLATE_ICONS.has(icon)) return res.status(400).json({ error: "Pick a valid icon" });
+  if (!TEMPLATE_FMTS.has(fmt)) return res.status(400).json({ error: "Pick a valid format" });
+  const order = Number.isFinite(Number(body.order)) ? Math.max(0, Math.min(99999, Math.round(Number(body.order)))) : 1000;
+
+  const id = isUpdate ? incomingId : genTemplateId();
+  const now = new Date().toISOString();
+  const existing = await fbGet(`/motionGraphicsTemplates/${id}`);
+  const record = {
+    id, label, prompt, icon, fmt, order,
+    createdBy: (existing && existing.createdBy) || req._actor,
+    createdAt: (existing && existing.createdAt) || now,
+    updatedBy: req._actor,
+    updatedAt: now,
+  };
+  await fbPatchMulti("/motionGraphicsTemplates", { [id]: record });
+  return res.status(200).json({ id, template: record });
+}
+
+// Hard-remove the override doc. A built-in id reverts to the code default in the
+// UI ("Reset"); a custom id disappears ("Delete"). Idempotent — deleting an id
+// with no doc is a harmless no-op. Feedback is left in place (cheap; a re-created
+// custom gets a fresh id anyway).
+async function handleTemplateDelete(req, res, body) {
+  const { templateId } = body;
+  if (!validTemplateId(templateId)) return res.status(400).json({ error: "Invalid templateId" });
+  await fbPatchMulti("/motionGraphicsTemplates", { [templateId]: null });
+  return res.status(200).json({ ok: true });
+}
+
+// Append a feedback note to a template (built-in or custom). Stored under a
+// separate node so a built-in with no override still has an attach point.
+async function handleTemplateFeedback(req, res, body) {
+  const { templateId } = body;
+  if (!validTemplateId(templateId)) return res.status(400).json({ error: "Invalid templateId" });
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if (!note) return res.status(400).json({ error: "Write a note first" });
+  if (note.length > TEMPLATE_LIMITS.feedback) return res.status(400).json({ error: `Note too long (max ${TEMPLATE_LIMITS.feedback})` });
+  const fbId = genTemplateId();
+  await fbPatchMulti(`/motionGraphicsTemplateFeedback/${templateId}`, {
+    [fbId]: { id: fbId, note, by: req._actor, at: new Date().toISOString() },
+  });
+  return res.status(200).json({ ok: true, id: fbId });
+}
+
+// Remove a feedback note (e.g. once addressed). Both ids share the mgt_ shape.
+async function handleTemplateFeedbackDelete(req, res, body) {
+  const { templateId, feedbackId } = body;
+  if (!validTemplateId(templateId) || !validTemplateId(feedbackId)) {
+    return res.status(400).json({ error: "Invalid id" });
+  }
+  await fbPatchMulti(`/motionGraphicsTemplateFeedback/${templateId}`, { [feedbackId]: null });
   return res.status(200).json({ ok: true });
 }

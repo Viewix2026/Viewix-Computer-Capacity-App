@@ -12,7 +12,7 @@
 // (no allow-same-origin) carrying the strict CSP the server injects. Pairs with
 // api/motion-graphics.js (generate / save / archive / assign).
 // ════════════════════════════════════════════════════════════════════
-import { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
+import { useState, useRef, useEffect, useCallback, useLayoutEffect, useMemo } from "react";
 import { Icon } from "./Icon";
 import { ViewixLoader } from "./shared/ViewixLoader";
 import { authFetch, fbListenSafe, fbGet, getCurrentUserEmail } from "../firebase";
@@ -60,6 +60,18 @@ const PRESETS = [
   { key: "outro", label: "Reel outro", icon: "play", fmt: "Portrait", prompt: "A reel outro end card: a bold 'Follow for more' call to action with a handle placeholder, a Viewix blue button that gently pulses, and a subtle particle drift behind. Clean and punchy, transparent background. Loops seamlessly." },
 ];
 
+// The preset rail is team-editable: built-ins below are the code defaults, and
+// /motionGraphicsTemplates holds overrides (keyed mgt_<presetKey>) + custom
+// templates (mgt_<id>). The UI merges them by id; the server treats all templates
+// uniformly. builtin-ness is derived here, from this list, never trusted from data.
+const BUILTIN_TEMPLATES = PRESETS.map((p, i) => ({ id: "mgt_" + p.key, label: p.label, icon: p.icon, prompt: p.prompt, fmt: p.fmt, order: i }));
+const BUILTIN_TPL_IDS = new Set(BUILTIN_TEMPLATES.map(t => t.id));
+const BUILTIN_TPL_BY_ID = Object.fromEntries(BUILTIN_TEMPLATES.map(t => [t.id, t]));
+// Icon choices for the template editor — every name exists in Icon.jsx and is
+// mirrored by the server's TEMPLATE_ICONS whitelist.
+const TPL_ICON_CHOICES = ["spark", "play", "analytics", "socials", "founders", "link2", "capacity", "editors", "sale", "nurture", "calendar", "bell"];
+const TPL_LABEL_MAX = 60;
+
 // derive client display names from the real /clients records (array of objects)
 function clientNamesFrom(clients) {
   const arr = Array.isArray(clients) ? clients : Object.values(clients || {});
@@ -84,12 +96,13 @@ async function readJsonResponse(r) {
 }
 
 // ── control primitives (mirror the Text Generator set) ──────────────
-function MGGroup({ n, label, children }) {
+function MGGroup({ n, label, right, children }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
         <span style={{ width: 19, height: 19, borderRadius: 6, background: VX.accentSoft, color: VX.accentBright, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: VX.mono, fontSize: 10.5, fontWeight: 700, flex: "0 0 auto" }}>{n}</span>
         <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 800, letterSpacing: "0.07em", textTransform: "uppercase", color: VX.fg2 }}>{label}</span>
+        {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingLeft: 1 }}>{children}</div>
     </div>
@@ -160,6 +173,49 @@ function MGToolBtn({ icon, label, onClick, active, accent, disabled }) {
   );
 }
 
+// Template editor — module-level so its inputs keep focus across parent re-renders.
+const TPL_LBL = { fontFamily: VX.sans, fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: VX.muted };
+const TPL_INP = { width: "100%", fontFamily: VX.sans, fontSize: 13, color: VX.fg, background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r2, padding: "9px 12px", outline: "none", boxSizing: "border-box" };
+function TplEditor({ draft, onChange, onSave, onCancel, busy, isNew }) {
+  return (
+    <div style={{ background: VX.inset, border: "1px solid " + VX.accentSoft, borderRadius: VX.r3, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 200px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={TPL_LBL}>Label</span>
+          <input value={draft.label} maxLength={TPL_LABEL_MAX} onChange={e => onChange({ label: e.target.value })} placeholder="e.g. Countdown timer" style={TPL_INP} />
+        </div>
+        <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={TPL_LBL}>Format</span>
+          <MGSegment options={["Portrait", "Landscape", "Square"]} value={draft.fmt} onChange={f => onChange({ fmt: f })} />
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <span style={TPL_LBL}>Icon</span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {TPL_ICON_CHOICES.map(ic => {
+            const on = draft.icon === ic;
+            return (
+              <button key={ic} onClick={() => onChange({ icon: ic })} title={ic} style={{ width: 32, height: 32, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                background: on ? VX.accentSoft : VX.card, border: "1px solid " + (on ? "rgba(0,130,250,0.4)" : VX.border) }}>
+                <Icon name={ic} size={15} sw={1.9} stroke={on ? VX.accentBright : VX.fg2} />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <span style={TPL_LBL}>Prompt</span>
+        <textarea value={draft.prompt} maxLength={2000} rows={4} onChange={e => onChange({ prompt: e.target.value })} placeholder="Describe the graphic this template should generate…"
+          style={{ ...TPL_INP, resize: "vertical", lineHeight: 1.5 }} />
+      </div>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <MGToolBtn icon="plus" label="Cancel" onClick={onCancel} disabled={busy} />
+        <MGToolBtn icon="check" label={busy ? "Saving…" : (isNew ? "Create template" : "Save changes")} accent onClick={onSave} disabled={busy} />
+      </div>
+    </div>
+  );
+}
+
 // Library thumbnail: live looping animation, lazy-mounted only while visible so a
 // long library doesn't run dozens of animations at once. Renders the saved
 // graphic in the same sandbox+CSP iframe; off-screen it shows a static placeholder.
@@ -224,6 +280,16 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [libLoaded, setLibLoaded] = useState(false);
   const [clientFilter, setClientFilter] = useState("All");
 
+  // Team-editable preset templates + their feedback.
+  const [templates, setTemplates] = useState({});       // /motionGraphicsTemplates
+  const [tplFeedback, setTplFeedback] = useState({});    // /motionGraphicsTemplateFeedback
+  const [manageOpen, setManageOpen] = useState(false);
+  const [editing, setEditing] = useState(null);          // draft template being edited/created
+  const [feedbackFor, setFeedbackFor] = useState("");    // templateId whose feedback panel is open
+  const [noteDraft, setNoteDraft] = useState("");
+  const [tplBusy, setTplBusy] = useState(false);
+  const [tplError, setTplError] = useState("");
+
   const abortRef = useRef(null);
   const savingRef = useRef(false);
   const stageRef = useRef(null);
@@ -233,6 +299,14 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   useEffect(() => {
     const off = fbListenSafe("/motionGraphicsLibrary/meta", d => { setLibLoaded(true); setLibrary(d || {}); });
     return off;
+  }, []);
+
+  useEffect(() => {
+    // allowNull: these roots go genuinely null when the last template/note is
+    // deleted, so the UI must clear (built-ins still render from code).
+    const off1 = fbListenSafe("/motionGraphicsTemplates", d => setTemplates(d || {}), undefined, { allowNull: true });
+    const off2 = fbListenSafe("/motionGraphicsTemplateFeedback", d => setTplFeedback(d || {}), undefined, { allowNull: true });
+    return () => { off1 && off1(); off2 && off2(); };
   }, []);
 
   useLayoutEffect(() => {
@@ -256,10 +330,73 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     return htmlCache.current[id];
   }, []);
 
-  function applyPreset(p) {
-    setPrompt(p.prompt); setFmt(p.fmt); setActivePreset(p.key); setPresetLabel(p.label);
+  function applyTemplate(t) {
+    setPrompt(t.prompt); setFmt(MG_FORMATS[t.fmt] ? t.fmt : "Portrait"); setActivePreset(t.id); setPresetLabel(t.label);
   }
   function onPromptChange(v) { setPrompt(v); if (activePreset) { setActivePreset(""); setPresetLabel(""); } }
+
+  // Merge code defaults with stored overrides/customs by id → the rail.
+  const rail = useMemo(() => {
+    const map = new Map();
+    BUILTIN_TEMPLATES.forEach(t => map.set(t.id, { ...t, builtin: true, edited: false }));
+    Object.values(templates || {}).forEach(t => {
+      if (!t || !t.id || !MG_FORMATS[t.fmt]) return; // skip malformed
+      const builtin = BUILTIN_TPL_IDS.has(t.id);
+      const fallbackOrder = builtin ? (BUILTIN_TPL_BY_ID[t.id]?.order ?? 1000) : 1000;
+      map.set(t.id, {
+        id: t.id, label: String(t.label || "Untitled"), icon: t.icon || "spark", prompt: String(t.prompt || ""), fmt: t.fmt,
+        order: typeof t.order === "number" ? t.order : fallbackOrder,
+        builtin, edited: true, updatedBy: t.updatedBy || null, updatedAt: t.updatedAt || null,
+      });
+    });
+    return [...map.values()].sort((a, b) => (a.order - b.order) || a.label.localeCompare(b.label));
+  }, [templates]);
+
+  const feedbackList = useCallback((id) => Object.values((tplFeedback && tplFeedback[id]) || {}).filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at))), [tplFeedback]);
+  const feedbackCount = useCallback((id) => Object.keys((tplFeedback && tplFeedback[id]) || {}).length, [tplFeedback]);
+
+  async function tplPost(payload) {
+    const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const d = await readJsonResponse(r);
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+  function startNewTemplate() { setFeedbackFor(""); setTplError(""); setEditing({ id: null, label: "", icon: "spark", prompt: "", fmt: "Portrait", order: 1000 }); }
+  function startEditTemplate(t) { setFeedbackFor(""); setTplError(""); setEditing({ id: t.id, label: t.label, icon: t.icon, prompt: t.prompt, fmt: t.fmt, order: t.order }); }
+  async function saveTemplate() {
+    if (tplBusy || !editing) return;
+    const label = (editing.label || "").trim(), prompt = (editing.prompt || "").trim();
+    if (!label) { setTplError("Give the template a label"); return; }
+    if (!prompt) { setTplError("Write the template prompt"); return; }
+    setTplBusy(true); setTplError("");
+    try {
+      await tplPost({ action: "templateSave", templateId: editing.id || undefined, label, prompt, icon: editing.icon, fmt: editing.fmt, order: editing.order });
+      setEditing(null);
+    } catch (e) { setTplError(e.message || "Save failed"); }
+    finally { setTplBusy(false); }
+  }
+  async function removeTemplate(t) {
+    if (tplBusy) return;
+    setTplBusy(true); setTplError("");
+    try { await tplPost({ action: "templateDelete", templateId: t.id }); if (editing && editing.id === t.id) setEditing(null); }
+    catch (e) { setTplError(e.message || "Delete failed"); }
+    finally { setTplBusy(false); }
+  }
+  async function addFeedback(templateId) {
+    const note = (noteDraft || "").trim();
+    if (!note || tplBusy) return;
+    setTplBusy(true); setTplError("");
+    try { await tplPost({ action: "templateFeedback", templateId, note }); setNoteDraft(""); }
+    catch (e) { setTplError(e.message || "Couldn't add note"); }
+    finally { setTplBusy(false); }
+  }
+  async function removeFeedback(templateId, feedbackId) {
+    if (tplBusy) return;
+    setTplBusy(true); setTplError("");
+    try { await tplPost({ action: "templateFeedbackDelete", templateId, feedbackId }); }
+    catch (e) { setTplError(e.message || "Couldn't remove note"); }
+    finally { setTplBusy(false); }
+  }
 
   async function enhancePrompt() {
     if (!prompt.trim() || enhancing || generating) return;
@@ -386,15 +523,22 @@ export function MotionGraphicsGenerator({ clients = [] }) {
           <div style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, marginTop: 3 }}>Describe it · generate a branded animation · screen-record.</div>
         </div>
         <div style={{ flex: 1, overflow: "auto", padding: "20px 22px", display: "flex", flexDirection: "column", gap: 24 }}>
-          <MGGroup n="1" label="Start from a preset">
+          <MGGroup n="1" label="Start from a preset" right={
+            <button onClick={() => { setManageOpen(true); setEditing(null); setFeedbackFor(""); setTplError(""); }} title="Edit presets, add team templates, leave feedback"
+              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 9px", borderRadius: 99, cursor: "pointer", fontFamily: VX.sans, fontSize: 10.5, fontWeight: 700, background: "transparent", color: VX.fg2, border: "1px solid " + VX.border }}>
+              <Icon name="editors" size={12} sw={1.9} />Manage
+            </button>
+          }>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-              {PRESETS.map(p => {
-                const on = activePreset === p.key;
+              {rail.map(t => {
+                const on = activePreset === t.id;
+                const fc = feedbackCount(t.id);
                 return (
-                  <button key={p.key} onClick={() => applyPreset(p)} title={p.prompt} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 11px", borderRadius: 99, cursor: "pointer",
+                  <button key={t.id} onClick={() => applyTemplate(t)} title={t.prompt} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 11px", borderRadius: 99, cursor: "pointer",
                     fontFamily: VX.sans, fontSize: 11.5, fontWeight: 700, background: on ? VX.accentSoft : VX.inset, color: on ? VX.accentBright : VX.fg2,
                     border: "1px solid " + (on ? "rgba(0,130,250,0.32)" : VX.border) }}>
-                    <Icon name={p.icon} size={13} sw={1.9} />{p.label}
+                    <Icon name={t.icon} size={13} sw={1.9} />{t.label}
+                    {fc > 0 && <span title={`${fc} note${fc > 1 ? "s" : ""}`} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontFamily: VX.mono, fontSize: 9, color: on ? VX.accentBright : VX.muted }}><Icon name="bell" size={9} sw={2} stroke={on ? VX.accentBright : VX.muted} />{fc}</span>}
                   </button>
                 );
               })}
@@ -595,6 +739,89 @@ export function MotionGraphicsGenerator({ clients = [] }) {
               <MGToolBtn icon="plus" label="Close" onClick={() => setShowSource(false)} />
             </div>
             <pre style={{ margin: 0, flex: 1, overflow: "auto", padding: "18px 20px", background: VX.inset, fontFamily: VX.mono, fontSize: 11.5, lineHeight: 1.6, color: "#9FE0C4", whiteSpace: "pre-wrap" }}>{result.html}</pre>
+          </div>
+        </div>
+      )}
+
+      {/* ── MANAGE TEMPLATES modal ── */}
+      {manageOpen && (
+        <div onClick={() => { if (!tplBusy) { setManageOpen(false); setEditing(null); setFeedbackFor(""); } }} style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(5,8,14,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 780, maxHeight: "88%", display: "flex", flexDirection: "column", background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r4, overflow: "hidden", boxShadow: VX.shadow3 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "15px 20px", borderBottom: "1px solid " + VX.border }}>
+              <span style={{ fontFamily: VX.sans, fontSize: 14, fontWeight: 800, color: VX.fg }}>Preset templates</span>
+              <span style={{ fontFamily: VX.sans, fontSize: 11, color: VX.muted }}>Shared with the team · edits are live</span>
+              <div style={{ flex: 1 }} />
+              {tplError && <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 600, color: VX.danger, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tplError}</span>}
+              {!editing && <MGToolBtn icon="plus" label="New template" accent onClick={startNewTemplate} />}
+              <MGToolBtn icon="plus" label="Close" onClick={() => { if (!tplBusy) { setManageOpen(false); setEditing(null); setFeedbackFor(""); } }} />
+            </div>
+            <div style={{ flex: 1, overflow: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {editing && editing.id === null && (
+                <TplEditor draft={editing} onChange={patch => setEditing(d => ({ ...d, ...patch }))} onSave={saveTemplate} onCancel={() => setEditing(null)} busy={tplBusy} isNew />
+              )}
+              {rail.map(t => {
+                const fc = feedbackCount(t.id);
+                const isEditingThis = editing && editing.id === t.id;
+                const isFeedbackThis = feedbackFor === t.id;
+                const canReset = t.builtin && t.edited;   // built-in with override → revert to code default
+                const canDelete = !t.builtin;             // custom → remove entirely
+                return (
+                  <div key={t.id} style={{ background: VX.inset, border: "1px solid " + VX.border, borderRadius: VX.r3, overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "11px 13px" }}>
+                      <span style={{ width: 30, height: 30, flex: "0 0 auto", borderRadius: 8, background: VX.card, border: "1px solid " + VX.border, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Icon name={t.icon} size={15} sw={1.9} stroke={VX.fg2} /></span>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontFamily: VX.sans, fontSize: 13, fontWeight: 700, color: VX.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.label}</span>
+                          <span style={{ fontFamily: VX.mono, fontSize: 9.5, fontWeight: 700, color: VX.muted, padding: "1px 6px", borderRadius: 5, background: VX.card, border: "1px solid " + VX.border, flex: "0 0 auto" }}>{t.fmt}</span>
+                          <span style={{ fontFamily: VX.sans, fontSize: 9.5, fontWeight: 700, color: t.builtin ? (t.edited ? VX.amber : VX.muted) : VX.accentBright, flex: "0 0 auto" }}>{t.builtin ? (t.edited ? "edited" : "default") : "custom"}</span>
+                        </div>
+                        <div style={{ fontFamily: VX.sans, fontSize: 11, color: VX.muted, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.prompt}</div>
+                      </div>
+                      <button onClick={() => { const open = isFeedbackThis; setFeedbackFor(open ? "" : t.id); setNoteDraft(""); if (!open) setEditing(null); }} title="Feedback"
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5, flex: "0 0 auto", padding: "6px 10px", borderRadius: VX.r2, cursor: "pointer", fontFamily: VX.sans, fontSize: 11.5, fontWeight: 700,
+                          background: isFeedbackThis ? VX.accentSoft : "transparent", color: isFeedbackThis ? VX.accentBright : VX.fg2, border: "1px solid " + (isFeedbackThis ? "rgba(0,130,250,0.32)" : VX.border) }}>
+                        <Icon name="bell" size={13} sw={1.9} stroke={isFeedbackThis ? VX.accentBright : VX.fg2} />{fc > 0 ? fc : ""}</button>
+                      <button onClick={() => startEditTemplate(t)} title="Edit"
+                        style={{ display: "inline-flex", alignItems: "center", flex: "0 0 auto", padding: "6px 10px", borderRadius: VX.r2, cursor: "pointer", fontFamily: VX.sans, fontSize: 11.5, fontWeight: 700, background: isEditingThis ? VX.accentSoft : "transparent", color: isEditingThis ? VX.accentBright : VX.fg2, border: "1px solid " + (isEditingThis ? "rgba(0,130,250,0.32)" : VX.border) }}>
+                        <Icon name="editors" size={13} sw={1.9} stroke={isEditingThis ? VX.accentBright : VX.fg2} /></button>
+                      {(canReset || canDelete) && (
+                        <button onClick={() => removeTemplate(t)} disabled={tplBusy} title={canReset ? "Reset to default" : "Delete template"}
+                          style={{ display: "inline-flex", alignItems: "center", flex: "0 0 auto", padding: "6px 10px", borderRadius: VX.r2, cursor: tplBusy ? "default" : "pointer", fontFamily: VX.sans, fontSize: 11.5, fontWeight: 700, background: "transparent", color: VX.danger, border: "1px solid " + VX.border, opacity: tplBusy ? 0.6 : 1 }}>
+                          {canReset ? "Reset" : "Delete"}</button>
+                      )}
+                    </div>
+                    {isEditingThis && (
+                      <div style={{ padding: "0 13px 13px" }}>
+                        <TplEditor draft={editing} onChange={patch => setEditing(d => ({ ...d, ...patch }))} onSave={saveTemplate} onCancel={() => setEditing(null)} busy={tplBusy} isNew={false} />
+                      </div>
+                    )}
+                    {isFeedbackThis && (
+                      <div style={{ padding: "0 13px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
+                        {feedbackList(t.id).length === 0 ? (
+                          <div style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, padding: "2px 0" }}>No feedback yet — leave the first note for the team.</div>
+                        ) : feedbackList(t.id).map(f => (
+                          <div key={f.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, background: VX.card, border: "1px solid " + VX.borderSoft, borderRadius: VX.r2, padding: "8px 10px" }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontFamily: VX.sans, fontSize: 12, color: VX.fg, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{f.note}</div>
+                              <div style={{ fontFamily: VX.mono, fontSize: 9.5, color: VX.muted, marginTop: 4 }}>{(f.by && (f.by.name || f.by.email)) || "—"} · {String(f.at || "").slice(0, 10)}</div>
+                            </div>
+                            <button onClick={() => removeFeedback(t.id, f.id)} disabled={tplBusy} title="Remove note" style={{ flex: "0 0 auto", width: 20, height: 20, borderRadius: 5, border: "none", cursor: tplBusy ? "default" : "pointer", background: "transparent", color: VX.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <Icon name="plus" size={12} sw={2} style={{ transform: "rotate(45deg)" }} /></button>
+                          </div>
+                        ))}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <input value={noteDraft} onChange={e => setNoteDraft(e.target.value)} maxLength={500} placeholder="Add a note for the team…"
+                            onKeyDown={e => { if (e.key === "Enter" && noteDraft.trim() && !tplBusy) addFeedback(t.id); }}
+                            style={{ ...TPL_INP, flex: 1 }} />
+                          <MGToolBtn icon="plus" label="Post" accent onClick={() => addFeedback(t.id)} disabled={!noteDraft.trim() || tplBusy} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

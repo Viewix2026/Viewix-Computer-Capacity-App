@@ -263,7 +263,14 @@ export function fbListen(p, cb, onError) {
 // The caller still chooses how to coerce null → empty (via `d || {}` or
 // whatever default makes sense). The wrapper just makes sure transient
 // nulls after a successful load don't wipe live state.
-export function fbListenSafe(path, cb, onError) {
+// opts.allowNull — pass post-load nulls through to `cb` too. Use for a
+// DELETABLE collection ROOT (e.g. /motionGraphicsTemplates): when the last child
+// is deleted the node legitimately becomes null and the caller must clear its
+// state. Leave it off (default) for nodes that should ignore Firebase's spurious
+// token-refresh/reconnect nulls. Safe to enable only when a stale null can't blank
+// something important (the motion-graphics rail still renders built-ins from code).
+export function fbListenSafe(path, cb, onError, opts = {}) {
+  const allowNull = !!(opts && opts.allowNull);
   let off = () => {};
   let hasLoaded = false;
   // `cancelled` guards the auth-deferred path: if the caller unmounts
@@ -282,6 +289,9 @@ export function fbListenSafe(path, cb, onError) {
       } else if (!hasLoaded) {
         // First response genuinely empty (or still unauthed) — pass the
         // null through so the caller can show the empty state.
+        cb(null);
+      } else if (allowNull) {
+        // Deletable collection root emptied (last child removed) — clear it.
         cb(null);
       }
       // else: stale null after real data — ignore. Firebase will re-fire
