@@ -236,9 +236,9 @@ function LibraryThumb({ item, loadHtml }) {
   }, []);
   useEffect(() => {
     let on = true;
-    if (visible && html === null) loadHtml(item.id).then(h => { if (on) setHtml(h || ""); }).catch(() => { if (on) setHtml(""); });
+    if (visible && html === null) loadHtml(item.id, item.generationId).then(h => { if (on) setHtml(h || ""); }).catch(() => { if (on) setHtml(""); });
     return () => { on = false; };
-  }, [visible, item.id, html, loadHtml]);
+  }, [visible, item.id, item.generationId, html, loadHtml]);
   return (
     <div ref={boxRef} style={{ height: BH, background: VX.inset, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", borderBottom: "1px solid " + VX.borderSoft }}>
       {visible && html ? (
@@ -275,6 +275,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
   const [savedGenId, setSavedGenId] = useState(""); // generationId that was saved — compared to result.id so a late save response can't mislabel a newer generation
+  const [updatedGenId, setUpdatedGenId] = useState(""); // generationId whose revision was written back over its origin library item
 
   const [library, setLibrary] = useState({});
   const [libLoaded, setLibLoaded] = useState(false);
@@ -292,6 +293,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
 
   const abortRef = useRef(null);
   const savingRef = useRef(false);
+  const updatingRef = useRef(false);
   const stageRef = useRef(null);
   const [stage, setStage] = useState({ w: 760, h: 520 });
   const htmlCache = useRef({});
@@ -323,11 +325,16 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const F = MG_FORMATS[fmt];
   const dim = result ? fmtFromDim(result.dimension) : fmt;
 
-  const loadHtml = useCallback(async (id) => {
-    if (htmlCache.current[id] !== undefined) return htmlCache.current[id];
+  // Cache keyed by id:generationId — "Update original" bumps the item's
+  // generationId, so the next load is a cache MISS and re-fetches the fresh
+  // content instead of serving the pre-revision HTML (which would silently make
+  // a later revise operate on, and overwrite with, stale content).
+  const loadHtml = useCallback(async (id, gen) => {
+    const key = `${id}:${gen || ""}`;
+    if (htmlCache.current[key] !== undefined) return htmlCache.current[key];
     const h = await fbGet(`/motionGraphicsLibrary/html/${id}`);
-    htmlCache.current[id] = h || "";
-    return htmlCache.current[id];
+    htmlCache.current[key] = h || "";
+    return htmlCache.current[key];
   }, []);
 
   function applyTemplate(t) {
@@ -425,7 +432,14 @@ export function MotionGraphicsGenerator({ clients = [] }) {
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: controller.signal });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      setResult({ id: d.id, html: d.html, fragment: d.fragment, dimension: d.dimension, cost: d.cost, brand: d.brand || null, fromLibrary: false });
+      // Carry the library origin (reviseOf + name/client) forward ONLY on a
+      // refine, so a revision of a saved graphic (or a chain of revisions) can
+      // write back over its origin item. A fresh generation must NOT inherit it,
+      // or "Update original" would overwrite an unrelated library item.
+      setResult({ id: d.id, html: d.html, fragment: d.fragment, dimension: d.dimension, cost: d.cost, brand: d.brand || null, fromLibrary: false,
+        reviseOf: isRefine ? (result?.reviseOf || null) : null,
+        name: isRefine ? (result?.name || null) : null,
+        client: isRefine ? (result?.client || null) : null });
       setRefine(""); setPreviewKey(k => k + 1);
     } catch (e) {
       if (e.name === "AbortError") setError("Generation cancelled or timed out.");
@@ -442,10 +456,11 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     savingRef.current = true;
     const gid = result.id; // capture so a late response can't mislabel a newer generation
     setError("");
-    const client = allClientNames.includes(clientFilter) ? clientFilter : null; // stamp the active client chip (incl. a stale one)
+    // stamp the active client chip; for a revision, fall back to the source item's client so Save-as-new doesn't drop it
+    const client = allClientNames.includes(clientFilter) ? clientFilter : (result?.reviseOf ? result.client || null : null);
     try {
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save", generationId: gid, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || undefined), client }) });
+        body: JSON.stringify({ action: "save", generationId: gid, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || result?.name || undefined), client }) });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setSavedGenId(gid);
@@ -453,13 +468,35 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     finally { savingRef.current = false; }
   }
 
+  // "Update original" — write a revision back over the library item it came from.
+  async function updateOriginal() {
+    if (!result?.id || result.fromLibrary || !result.reviseOf || updatingRef.current || updatedGenId === result.id) return;
+    updatingRef.current = true;
+    const gid = result.id;          // authoritative cost is read server-side from this generation's ledger
+    const libId = result.reviseOf;  // the library item to overwrite
+    setError("");
+    try {
+      const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update", id: libId, generationId: gid, fragment: result.fragment, html: result.html }) });
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      // The server set the item's generationId to gid; seed the cache under the
+      // new key so the refreshed thumb/load shows this content with no refetch.
+      htmlCache.current[`${libId}:${gid}`] = result.html;
+      setUpdatedGenId(gid);
+    } catch (e) { setError(e.message || "Update failed"); }
+    finally { updatingRef.current = false; }
+  }
+
   async function loadFromLibrary(item) {
     setError("");
     try {
-      const html = await loadHtml(item.id);
+      const html = await loadHtml(item.id, item.generationId);
       if (!html) { setError("This graphic's content is missing — archive it."); return; }
       setFmt(fmtFromDim(item.dimension));
-      setResult({ id: null, html, fragment: html, dimension: item.dimension, cost: item.costUsd, fromLibrary: true });
+      setRefine(""); // don't carry an unsent refine instruction onto the newly loaded item
+      // reviseOf = this item's id so a follow-up revision can update it in place.
+      setResult({ id: null, html, fragment: html, dimension: item.dimension, cost: item.costUsd, fromLibrary: true, reviseOf: item.id, name: item.name, client: item.client || null });
       setPreviewKey(k => k + 1);
     } catch (e) { setError(e.message || "Could not load graphic"); }
   }
@@ -512,6 +549,8 @@ export function MotionGraphicsGenerator({ clients = [] }) {
 
   const hasResult = !!result;
   const isSaved = !!result && !result.fromLibrary && savedGenId === result.id;
+  const isRevision = !!result && !result.fromLibrary && !!result.reviseOf; // a revision of a saved item → offer Update original
+  const isUpdated = isRevision && updatedGenId === result.id;
   const cf = MG_CHROMA.find(c => c.key === chroma);
 
   return (
@@ -607,7 +646,14 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <MGToolBtn icon="play" label="Replay" onClick={() => setPreviewKey(k => k + 1)} />
             <MGToolBtn icon="external" label="Present" onClick={() => setPresent(true)} />
             <MGToolBtn icon="editors" label="Source" onClick={() => setShowSource(true)} />
-            {!result.fromLibrary && <MGToolBtn icon={isSaved ? "check" : "plus"} label={isSaved ? "Saved" : "Save"} accent={!isSaved} active={isSaved} onClick={saveToLibrary} />}
+            {isRevision ? (
+              <>
+                <MGToolBtn icon={isUpdated ? "check" : "arrowup"} label={isUpdated ? "Updated" : "Update original"} accent={!isUpdated} active={isUpdated} onClick={updateOriginal} />
+                <MGToolBtn icon={isSaved ? "check" : "plus"} label={isSaved ? "Saved" : "Save as new"} active={isSaved} onClick={saveToLibrary} />
+              </>
+            ) : !result.fromLibrary ? (
+              <MGToolBtn icon={isSaved ? "check" : "plus"} label={isSaved ? "Saved" : "Save"} accent={!isSaved} active={isSaved} onClick={saveToLibrary} />
+            ) : null}
           </>}
         </div>
 
@@ -631,16 +677,17 @@ export function MotionGraphicsGenerator({ clients = [] }) {
           {!generating && hasResult && <MGFrame fmt={dim} chroma={chroma} docKey={previewKey} html={result.html} maxW={stage.w} maxH={stage.h - 8} />}
         </div>
 
-        {/* refine bar */}
-        {hasResult && !result.fromLibrary && (
+        {/* refine bar — also the "revise a saved graphic" entry point (result.reviseOf) */}
+        {hasResult && (
           <div style={{ flex: "0 0 auto", borderTop: "1px solid " + VX.border, padding: "12px 22px", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 9, height: 42, padding: "0 14px", borderRadius: VX.r2, border: "1px solid " + VX.border, background: VX.inset }}>
               <Icon name="spark" size={15} sw={1.8} stroke={VX.muted} />
-              <input value={refine} onChange={e => setRefine(e.target.value)} maxLength={1000} placeholder="Refine in plain language — “make the wipe orange, slow the rise-in”…"
+              <input value={refine} onChange={e => setRefine(e.target.value)} maxLength={1000}
+                placeholder={result.reviseOf ? "Revise this saved graphic — describe what to change…" : "Refine in plain language — “make the wipe orange, slow the rise-in”…"}
                 onKeyDown={e => { if (e.key === "Enter" && refine.trim() && !generating) callGenerate(true); }}
                 style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontFamily: VX.sans, fontSize: 13, color: VX.fg }} />
             </div>
-            <button onClick={() => callGenerate(true)} disabled={!refine.trim() || generating} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: VX.sans, fontSize: 13, fontWeight: 700, padding: "10px 18px", borderRadius: VX.r2, border: "1px solid " + (refine.trim() && !generating ? "transparent" : VX.border), cursor: refine.trim() && !generating ? "pointer" : "not-allowed", background: refine.trim() && !generating ? VX.accent : "transparent", color: refine.trim() && !generating ? "#fff" : VX.faint }}>Refine</button>
+            <button onClick={() => callGenerate(true)} disabled={!refine.trim() || generating} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: VX.sans, fontSize: 13, fontWeight: 700, padding: "10px 18px", borderRadius: VX.r2, border: "1px solid " + (refine.trim() && !generating ? "transparent" : VX.border), cursor: refine.trim() && !generating ? "pointer" : "not-allowed", background: refine.trim() && !generating ? VX.accent : "transparent", color: refine.trim() && !generating ? "#fff" : VX.faint }}>{result.reviseOf ? "Revise" : "Refine"}</button>
           </div>
         )}
 
@@ -675,7 +722,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
               {visible.map(item => (
                 <div key={item.id} style={{ flex: "0 0 auto", width: 184, background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r3, overflow: "hidden", position: "relative" }}>
                   <div style={{ cursor: "pointer", position: "relative" }} onClick={() => loadFromLibrary(item)}>
-                    <LibraryThumb item={item} loadHtml={loadHtml} />
+                    <LibraryThumb key={item.generationId || item.id} item={item} loadHtml={loadHtml} />
                     {item.client && <span style={{ position: "absolute", top: 6, left: 6, display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 6px", borderRadius: 99, background: "rgba(8,12,20,0.78)", border: "1px solid " + VX.border }}>
                       <ClientDot name={item.client} size={6} />
                       <span style={{ fontFamily: VX.sans, fontSize: 9.5, fontWeight: 700, color: VX.fg2 }}>{shortClient(item.client)}</span>
