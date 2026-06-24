@@ -12,6 +12,8 @@
 //              Writes an authoritative cost ledger at /aiUsage/motionGraphics/*.
 //   save     — persist a generation to the shared library (server-stamped
 //              creator + authoritative cost looked up by generationId).
+//   update   — overwrite an existing library item's content with a revision
+//              ("Update original"); same trust boundary, content leaves only.
 //   archive  — soft-delete a library item.
 //   assign   — set/clear the client a saved graphic belongs to.
 //   enhance  — expand a rough prompt into a vivid one (cheap Sonnet call).
@@ -80,7 +82,7 @@ const DIMENSIONS = {
 const LIMITS = {
   prompt: 2000,
   refineInstruction: 1000,
-  previousFragment: 100 * 1024, // 100KB
+  previousFragment: 200 * 1024, // 200KB — match outputHtml so any saved graphic (guarded ≤200KB) can be revised
   outputHtml: 200 * 1024,       // 200KB guarded doc ceiling
   dailyPerUser: 100,            // runaway-loop circuit breaker, not a budget
   brandUrl: 2000,
@@ -459,6 +461,7 @@ export default async function handler(req, res) {
     if (action === "generate") return await handleGenerate(req, res, body);
     if (action === "enhance") return await handleEnhance(req, res, body);
     if (action === "save") return await handleSave(req, res, body);
+    if (action === "update") return await handleUpdate(req, res, body);
     if (action === "archive") return await handleArchive(req, res, body);
     if (action === "assign") return await handleAssign(req, res, body);
     if (action === "templateSave") return await handleTemplateSave(req, res, body);
@@ -480,10 +483,13 @@ async function handleGenerate(req, res, body) {
 
   const { prompt, dimension, durationSec, previousFragment, refineInstruction } = body;
 
-  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+  // A refine is driven by the previous fragment + instruction, so the prompt is
+  // optional there — revising a saved library graphic has no prompt to re-type.
+  const isRefine = !!(refineInstruction && String(refineInstruction).trim() && previousFragment && String(previousFragment).trim());
+  if (!isRefine && (!prompt || typeof prompt !== "string" || !prompt.trim())) {
     return res.status(400).json({ error: "Missing prompt" });
   }
-  if (prompt.length > LIMITS.prompt) {
+  if (typeof prompt === "string" && prompt.length > LIMITS.prompt) {
     return res.status(400).json({ error: `Prompt too long (max ${LIMITS.prompt} chars)` });
   }
   const dims = DIMENSIONS[dimension];
@@ -521,12 +527,9 @@ async function handleGenerate(req, res, body) {
   }
 
   const systemPrompt = buildSystemPrompt(dims.width, dims.height, dur, brand);
-  let userText;
-  if (refineInstruction && previousFragment) {
-    userText = `Here is the current motion graphic fragment:\n\n${previousFragment}\n\nAdjust it as follows: ${refineInstruction}\n\nReturn the full updated fragment (same rules — fragment only, no <html>/<head>/<body>, no code fences).`;
-  } else {
-    userText = prompt.trim();
-  }
+  const userText = isRefine
+    ? `Here is the current motion graphic fragment:\n\n${previousFragment}\n\nAdjust it as follows: ${refineInstruction}\n\nReturn the full updated fragment (same rules — fragment only, no <html>/<head>/<body>, no code fences).`
+    : prompt.trim();
   // Attach the brand reference image (vision) when matching a client's site.
   const userContent = (brand && brand.imageUrl)
     ? [{ type: "image", source: { type: "url", url: brand.imageUrl } }, { type: "text", text: userText }]
@@ -570,7 +573,7 @@ async function handleGenerate(req, res, body) {
     rate: PRICE,
     dimension,
     durationSec: dur,
-    refined: !!(refineInstruction && previousFragment),
+    refined: isRefine,
     status,
     brand: brand ? (brand.siteName || brand.sourceUrl) : null,
     ...cost,
@@ -686,6 +689,49 @@ async function handleSave(req, res, body) {
   });
 
   return res.status(200).json({ id, name: cleanName, client });
+}
+
+// Overwrite an existing library item's CONTENT in place with a revision (the
+// "Update original" path). Same trust boundary + authoritative-cost rules as
+// save, but keyed to an existing library id: only the content leaves change
+// (html, dimension, durationSec, costUsd, generationId + an update stamp); name,
+// client, createdBy/At are preserved by writing leaf paths, not the whole record.
+async function handleUpdate(req, res, body) {
+  const { id, generationId, html, fragment } = body;
+  if (!validId(id)) return res.status(400).json({ error: "Missing or invalid id" });
+  if (!validId(generationId)) return res.status(400).json({ error: "Missing or invalid generationId" });
+
+  const meta = await fbGet(`/motionGraphicsLibrary/meta/${id}`);
+  if (!meta) return res.status(404).json({ error: "Library item not found" });
+
+  // Authoritative cost + dims come from the ledger, never the client.
+  const ledger = await fbGet(`/aiUsage/motionGraphics/${generationId}`);
+  if (!ledger) return res.status(404).json({ error: "Unknown generation — regenerate before updating" });
+  if (ledger.status && ledger.status !== "ok") {
+    return res.status(400).json({ error: "That generation didn't produce a usable graphic" });
+  }
+  const dims = DIMENSIONS[ledger.dimension];
+  if (!dims) return res.status(400).json({ error: "Ledger record has invalid dimensions" });
+
+  let guarded;
+  try {
+    guarded = injectGuard(typeof fragment === "string" && fragment ? fragment : html, dims);
+  } catch (e) {
+    return res.status(422).json({ error: e.message });
+  }
+
+  const now = new Date().toISOString();
+  await fbPatchMulti("/motionGraphicsLibrary", {
+    [`meta/${id}/dimension`]: ledger.dimension,
+    [`meta/${id}/durationSec`]: ledger.durationSec || null,
+    [`meta/${id}/generationId`]: generationId,
+    [`meta/${id}/costUsd`]: ledger.costUsd || 0,
+    [`meta/${id}/updatedBy`]: req._actor,
+    [`meta/${id}/updatedAt`]: now,
+    [`html/${id}`]: guarded,
+  });
+
+  return res.status(200).json({ id, ok: true });
 }
 
 // Assign (or clear) the client a saved graphic belongs to. Client is a free
