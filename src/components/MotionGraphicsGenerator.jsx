@@ -312,6 +312,9 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [present, setPresent] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [importOpen, setImportOpen] = useState(false); // paste-code → port modal
+  const [sourceCode, setSourceCode] = useState("");
+  const [porting, setPorting] = useState(false);
   const [savedGenId, setSavedGenId] = useState(""); // generationId that was saved — compared to result.id so a late save response can't mislabel a newer generation
   const [updatedGenId, setUpdatedGenId] = useState(""); // generationId whose revision was written back over its origin library item
 
@@ -331,6 +334,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [tplError, setTplError] = useState("");
 
   const abortRef = useRef(null);
+  const portAbortRef = useRef(null);
   const savingRef = useRef(false);
   const updatingRef = useRef(false);
   const stageRef = useRef(null);
@@ -359,7 +363,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
+  useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); if (portAbortRef.current) portAbortRef.current.abort(); }, []);
 
   const F = MG_FORMATS[fmt];
   const dim = result ? fmtFromDim(result.dimension) : fmt;
@@ -457,6 +461,29 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     finally { setEnhancing(false); }
   }
 
+  // Import flow: paste a component → Opus ports it to a recordable fragment that
+  // loads into the preview exactly like a generation (refine/save/record after).
+  async function portCode() {
+    const code = sourceCode.trim();
+    if (!code || porting || generating || abortRef.current) return; // don't race a generate/refine
+    setPorting(true); setError("");
+    const controller = new AbortController();
+    portAbortRef.current = controller;
+    const timer = setTimeout(() => controller.abort(), 170_000);
+    try {
+      const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "port", sourceCode: code, dimension: MG_FORMATS[fmt].dim, durationSec: loop }), signal: controller.signal });
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      setResult({ id: d.id, html: d.html, fragment: d.fragment, dimension: d.dimension, cost: d.cost, brand: null, fromLibrary: false, reviseOf: null, name: null, client: null, type: null });
+      setImportOpen(false); setPreviewKey(k => k + 1);
+    } catch (e) {
+      setError(e.name === "AbortError" ? "Import timed out — try a smaller snippet." : (e.message || "Import failed"));
+    } finally {
+      clearTimeout(timer); portAbortRef.current = null; setPorting(false);
+    }
+  }
+
   async function onPickReference(file) {
     if (!file) return;
     setError("");
@@ -470,7 +497,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   }
 
   const callGenerate = useCallback(async (isRefine) => {
-    if (abortRef.current) return;
+    if (abortRef.current || porting) return; // don't race an in-flight import/port
     const controller = new AbortController();
     abortRef.current = controller;
     setError(""); setGenerating(true);
@@ -500,7 +527,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     } finally {
       clearTimeout(timer); abortRef.current = null; setGenerating(false);
     }
-  }, [prompt, fmt, loop, refine, result, brandMode, brandUrl, refImage]);
+  }, [prompt, fmt, loop, refine, result, brandMode, brandUrl, refImage, porting]);
 
   function cancel() { if (abortRef.current) abortRef.current.abort(); }
 
@@ -638,17 +665,23 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const isRevision = !!result && !result.fromLibrary && !!result.reviseOf; // a revision of a saved item → offer Update original
   const isUpdated = isRevision && updatedGenId === result.id;
   const refMissing = brandMode === "Reference" && !refImage; // Reference mode chosen but nothing uploaded → block (don't silently fall back to Viewix + burn a generation)
-  const canGen = !!prompt.trim() && !refMissing;
-  const canRefine = !!refine.trim() && !generating && !refMissing;
+  const canGen = !!prompt.trim() && !refMissing && !porting;
+  const canRefine = !!refine.trim() && !generating && !refMissing && !porting;
   const cf = MG_CHROMA.find(c => c.key === chroma);
 
   return (
     <div style={{ height: "calc(100vh - 104px)", overflow: "hidden", background: VX.bg, color: VX.fg, fontFamily: VX.sans, display: "flex" }}>
       {/* ── LEFT: controls ── */}
       <div style={{ width: 348, flex: "0 0 auto", borderRight: "1px solid " + VX.border, background: VX.rail, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid " + VX.borderSoft }}>
-          <div style={{ fontFamily: VX.sans, fontSize: 16, fontWeight: 800, color: VX.fg, letterSpacing: "-0.01em" }}>Motion Graphics</div>
-          <div style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, marginTop: 3 }}>Describe it · generate a branded animation · screen-record.</div>
+        <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid " + VX.borderSoft, display: "flex", alignItems: "flex-start", gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: VX.sans, fontSize: 16, fontWeight: 800, color: VX.fg, letterSpacing: "-0.01em" }}>Motion Graphics</div>
+            <div style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, marginTop: 3 }}>Describe it · generate a branded animation · screen-record.</div>
+          </div>
+          <button onClick={() => { if (!generating && !porting) { setError(""); setImportOpen(true); } }} disabled={generating || porting} title="Paste a component or code snippet — we port it to a recordable fragment"
+            style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 6, fontFamily: VX.sans, fontSize: 12, fontWeight: 700, padding: "7px 11px", borderRadius: VX.r2, cursor: (generating || porting) ? "not-allowed" : "pointer", border: "1px solid " + VX.border, background: VX.card, color: (generating || porting) ? VX.faint : VX.accentBright, opacity: (generating || porting) ? 0.6 : 1 }}>
+            <Icon name="external" size={14} sw={2} stroke={(generating || porting) ? VX.faint : VX.accentBright} />Import
+          </button>
         </div>
         <div style={{ flex: 1, overflow: "auto", padding: "20px 22px", display: "flex", flexDirection: "column", gap: 24 }}>
           <MGGroup n="1" label="Start from a preset" right={
@@ -921,6 +954,34 @@ export function MotionGraphicsGenerator({ clients = [] }) {
               <MGToolBtn icon="plus" label="Close" onClick={() => setShowSource(false)} />
             </div>
             <pre style={{ margin: 0, flex: 1, overflow: "auto", padding: "18px 20px", background: VX.inset, fontFamily: VX.mono, fontSize: 11.5, lineHeight: 1.6, color: "#9FE0C4", whiteSpace: "pre-wrap" }}>{result.html}</pre>
+          </div>
+        </div>
+      )}
+
+      {/* ── IMPORT (paste code → port) modal ── */}
+      {importOpen && (
+        <div onClick={() => { if (!porting) setImportOpen(false); }} style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(5,8,14,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: 760, maxHeight: "88%", display: "flex", flexDirection: "column", background: VX.card, border: "1px solid " + VX.border, borderRadius: VX.r4, overflow: "hidden", boxShadow: VX.shadow3 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "15px 20px", borderBottom: "1px solid " + VX.border }}>
+              <span style={{ fontFamily: VX.sans, fontSize: 14, fontWeight: 800, color: VX.fg }}>Import a component</span>
+              <span style={{ fontFamily: VX.sans, fontSize: 11, color: VX.muted }}>Paste React / HTML / CSS — we port it to a recordable fragment</span>
+              <div style={{ flex: 1 }} />
+              {error && <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 600, color: VX.danger, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{error}</span>}
+              <MGToolBtn icon="plus" label="Close" onClick={() => { if (!porting) setImportOpen(false); }} />
+            </div>
+            <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+              <textarea value={sourceCode} onChange={e => setSourceCode(e.target.value)} maxLength={51200} spellCheck={false} disabled={porting}
+                placeholder={"Paste a component or code snippet…\n\nimport CurvedLoop from './CurvedLoop';\n<CurvedLoop marqueeText=\"Viewix\" speed={2.6} />"}
+                style={{ width: "100%", height: 300, resize: "vertical", fontFamily: VX.mono, fontSize: 12, lineHeight: 1.5, color: VX.fg, background: VX.inset, border: "1px solid " + VX.border, borderRadius: VX.r3, padding: "12px 14px", outline: "none", boxSizing: "border-box", whiteSpace: "pre", opacity: porting ? 0.6 : 1 }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontFamily: VX.mono, fontSize: 10.5, color: VX.muted, flex: "0 0 auto" }}>{(sourceCode.length / 1024).toFixed(1)}KB / 50KB · {MG_FORMATS[fmt].sub} · ~{loop}s</span>
+                <span style={{ fontFamily: VX.sans, fontSize: 11, color: VX.muted, flex: 1, lineHeight: 1.45 }}>Keeps the component's own look; drops drag/scroll, page shells, and opaque backgrounds.</span>
+                <button onClick={portCode} disabled={!sourceCode.trim() || porting} style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 7, fontFamily: VX.sans, fontSize: 13, fontWeight: 700, padding: "10px 20px", borderRadius: VX.r2, border: "none",
+                  cursor: (!sourceCode.trim() || porting) ? "not-allowed" : "pointer", background: (!sourceCode.trim() || porting) ? "#1b2436" : VX.accent, color: (!sourceCode.trim() || porting) ? VX.faint : "#fff" }}>
+                  <Icon name={porting ? "clock" : "spark"} size={15} sw={2} stroke={(!sourceCode.trim() || porting) ? VX.faint : "#fff"} />{porting ? "Porting…" : "Port"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

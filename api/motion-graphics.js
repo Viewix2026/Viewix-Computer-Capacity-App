@@ -10,6 +10,8 @@
 // Actions (POST body { action }):
 //   generate — prompt -> Opus -> guarded HTML + usage + per-generation cost.
 //              Writes an authoritative cost ledger at /aiUsage/motionGraphics/*.
+//   port     — paste a component/code snippet -> Opus ports it to a guarded,
+//              self-contained recordable fragment (ledger type "port").
 //   save     — persist a generation to the shared library (server-stamped
 //              creator + authoritative cost looked up by generationId).
 //   update   — overwrite an existing library item's content with a revision
@@ -89,6 +91,7 @@ const LIMITS = {
   brandHtml: 1024 * 1024,       // cap the fetched site HTML at 1MB
   brandFetchMs: 8000,
   referenceImageBytes: 2 * 1024 * 1024, // decoded cap — kept well under Vercel's 4.5MB body limit even alongside a near-cap previousFragment; the client downscales to ~tiny anyway
+  sourceCode: 50 * 1024,        // 50KB — pasted component/code to port (plenty for a single component, far under the body limit)
 };
 
 // Strict CSP injected into every rendered/saved doc. No connect-src (falls back
@@ -506,6 +509,7 @@ export default async function handler(req, res) {
 
   try {
     if (action === "generate") return await handleGenerate(req, res, body);
+    if (action === "port") return await handlePort(req, res, body);
     if (action === "enhance") return await handleEnhance(req, res, body);
     if (action === "save") return await handleSave(req, res, body);
     if (action === "update") return await handleUpdate(req, res, body);
@@ -654,6 +658,84 @@ async function handleGenerate(req, res, body) {
     model: MODEL,
     brand: brand ? { siteName: brand.siteName, sourceUrl: brand.sourceUrl } : null,
   });
+}
+
+// System prompt for the "Import" flow: turn pasted component/app code into a
+// self-contained recordable fragment. Same OUTPUT RULES as a generation, plus
+// explicit instructions to shed everything that belongs to a web app.
+function buildPortSystemPrompt(width, height, durationSec) {
+  return `You convert a pasted UI component or code snippet into a single self-contained animated graphic for Viewix Video Production, rendered at exactly ${width}x${height} pixels and screen-recorded into a video.
+
+The pasted code may be a React/JSX component, plain HTML+CSS, or vanilla JS (e.g. from a components library). Reproduce its VISUAL OUTPUT and ANIMATION faithfully, then strip everything that belongs to a web app rather than a recorded graphic:
+- Framework wiring: React/Vue/Svelte imports, hooks, props, state, exports, and JSX — re-express the result as plain HTML/SVG markup + a <style> block + an inline vanilla-JS <script> (use requestAnimationFrame / CSS animations).
+- Interactivity meant for a user: drag/scroll/pointer/hover handlers, controls, buttons — keep only the autonomous animation.
+- Page-shell baggage: full-viewport jackets (min-height:100vh), centering wrappers, and opaque page backgrounds.
+
+Keep the component's OWN colours, type, and visual style — do NOT re-skin it to Viewix unless the code already uses Viewix colours. 'DM Sans' and 'JetBrains Mono' are available if the code needs a fallback font.
+
+HARD OUTPUT RULES (a wrapper enforces the exact size, a transparent background, fonts, and security — follow these so it renders correctly):
+- Return ONLY an HTML fragment: a <style> block, the markup, and a <script> block. Do NOT include <!DOCTYPE>, <html>, <head>, or <body> tags. Do NOT wrap the output in markdown code fences.
+- NO visible code comments, TODOs, or placeholder chrome in the rendered output.
+- Transparent background — do not paint a full-bleed opaque background. The graphic composites over video.
+- Design to exactly ${width}x${height}. Keep important content inside a ~8% safe margin.
+- The animation MUST loop cleanly about every ${durationSec} seconds.
+- Everything inline: CSS, SVG, data: URIs. NO network calls, NO external scripts, NO external images, NO imports. (Google Fonts is already loaded for you.)
+- Self-contained and running immediately on load.`;
+}
+
+// Import flow — port pasted code into a guarded fragment. Mirrors handleGenerate's
+// cap + ledger + trust-boundary machinery; kept separate so the generate hot path
+// is untouched. Ledger type "port".
+async function handlePort(req, res, body) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "Generation is not configured" });
+
+  const sourceCode = typeof body.sourceCode === "string" ? body.sourceCode : "";
+  if (!sourceCode.trim()) return res.status(400).json({ error: "Paste some component code to import" });
+  if (sourceCode.length > LIMITS.sourceCode) return res.status(400).json({ error: `That's too long to import (max ${Math.floor(LIMITS.sourceCode / 1024)}KB)` });
+  const dims = DIMENSIONS[body.dimension];
+  if (!dims) return res.status(400).json({ error: "Invalid dimension (use 1080x1920, 1920x1080, or 1080x1080)" });
+  const dur = Math.max(2, Math.min(20, Number(body.durationSec) || 6));
+
+  // Daily circuit breaker (atomic — shared with generate; counts toward the cap).
+  const day = new Date().toISOString().slice(0, 10);
+  const capResult = await runRtdbTransaction(`/aiUsage/dailyCount/${req._actor.uid}/${day}`, (n) => {
+    const cur = n || 0;
+    return cur >= LIMITS.dailyPerUser ? undefined : cur + 1;
+  });
+  if (!capResult.committed) return res.status(429).json({ error: "Daily generation limit reached — try again tomorrow" });
+
+  const systemPrompt = buildPortSystemPrompt(dims.width, dims.height, dur);
+  const userText = `Port this component/code into a self-contained, transparent, looping fragment (same rules — fragment only, no <html>/<head>/<body>, no code fences):\n\n${sourceCode}`;
+
+  let claude;
+  try {
+    claude = await callClaude(systemPrompt, userText, apiKey);
+  } catch (e) {
+    return claudeErrorResponse(res, e, "port");
+  }
+
+  const { text, usage, stopReason } = claude;
+  const cost = computeCost(usage);
+  const id = genId();
+
+  let html = null, status = "ok", clientErr = null;
+  if (stopReason === "max_tokens") {
+    status = "truncated";
+    clientErr = { code: 422, msg: "That component was too complex to port in one pass — try a smaller snippet" };
+  } else {
+    try { html = injectGuard(text, dims); }
+    catch (e) { status = "rejected"; clientErr = { code: 422, msg: e.message }; }
+  }
+
+  await writeLedgerSafe(id, {
+    id, type: "port", model: MODEL, rate: PRICE, dimension: body.dimension, durationSec: dur, status,
+    ...cost, createdBy: req._actor, createdAt: new Date().toISOString(),
+  });
+
+  if (clientErr) return res.status(clientErr.code).json({ error: clientErr.msg });
+
+  return res.status(200).json({ id, html, fragment: text, dimension: body.dimension, durationSec: dur, usage: cost, cost: cost.costUsd, model: MODEL });
 }
 
 function buildEnhanceSystemPrompt(width, height, durationSec) {
