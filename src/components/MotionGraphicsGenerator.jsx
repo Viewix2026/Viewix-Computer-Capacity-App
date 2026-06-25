@@ -50,8 +50,8 @@ const MG_CHECKER = `repeating-conic-gradient(#2a3242 0% 25%, #222a38 0% 50%) 50%
 // Preset starting points — popular social formats + custom graphics. Each fills
 // the prompt and a sensible format; one click to a starting point you refine.
 const PRESETS = [
-  { key: "stier", label: "S-tier ranking", icon: "founders", fmt: "Portrait", prompt: "An S tier ranking board: rows labelled S, A, B, C stacked top to bottom, each a coloured band (S gold, A green, B Viewix blue, C grey), with placeholder item chips sliding into the S and A rows one at a time. Bold DM Sans labels, clean tier-list style. Loops seamlessly." },
-  { key: "thisorthat", label: "This or That", icon: "socials", fmt: "Portrait", prompt: "A 'this or that' split screen: two option panels side by side divided by a bold VS badge in the centre, each panel with a placeholder label, one side pulses and highlights in Viewix blue as the pick. Energetic and modern, transparent background. Loops seamlessly." },
+  { key: "stier", label: "S-tier ranking", icon: "founders", fmt: "Portrait", slots: true, prompt: "An S tier ranking board: rows labelled S, A, B, C stacked top to bottom, each a coloured band (S gold, A green, B Viewix blue, C grey), with a placeholder image box in each row that items drop into one at a time. Bold DM Sans labels, clean tier-list style. Loops seamlessly." },
+  { key: "thisorthat", label: "This or That", icon: "socials", fmt: "Portrait", slots: true, prompt: "A 'this or that' split screen: two option panels side by side divided by a bold VS badge in the centre, each panel with a placeholder image box and a label, one side pulses and highlights in Viewix blue as the pick. Energetic and modern, transparent background. Loops seamlessly." },
   { key: "roadmap", label: "Roadmap", icon: "link2", fmt: "Portrait", prompt: "A roadmap journey like a treasure map: a winding dotted trail connects 4 to 5 numbered milestone markers down the frame, a glowing pin travels along the trail step by step, and each milestone's label pops in as the pin reaches it. Viewix blue trail with orange milestone pins, a clean modern take on a treasure map, placeholder step labels that are easy to swap. Transparent background, loops seamlessly." },
   { key: "stat", label: "Stat pop", icon: "analytics", fmt: "Square", prompt: "A bold stat reveal: a large number counts up from 0 to 320 percent in JetBrains Mono, a label beneath in DM Sans, an orange underline wipes in as it lands with a subtle glow, transparent background. Plays once then holds." },
   { key: "particle", label: "Particle V", icon: "spark", fmt: "Square", prompt: "A glowing particle network in Viewix blue: around 80 dots drifting on a transparent background with thin connecting lines, slowly converging to trace a bold letter V, holding a beat, then dispersing. A few orange accent sparks and a soft glow. Loops over about 6 seconds." },
@@ -64,7 +64,7 @@ const PRESETS = [
 // /motionGraphicsTemplates holds overrides (keyed mgt_<presetKey>) + custom
 // templates (mgt_<id>). The UI merges them by id; the server treats all templates
 // uniformly. builtin-ness is derived here, from this list, never trusted from data.
-const BUILTIN_TEMPLATES = PRESETS.map((p, i) => ({ id: "mgt_" + p.key, label: p.label, icon: p.icon, prompt: p.prompt, fmt: p.fmt, order: i }));
+const BUILTIN_TEMPLATES = PRESETS.map((p, i) => ({ id: "mgt_" + p.key, label: p.label, icon: p.icon, prompt: p.prompt, fmt: p.fmt, slots: !!p.slots, order: i }));
 const BUILTIN_TPL_IDS = new Set(BUILTIN_TEMPLATES.map(t => t.id));
 const BUILTIN_TPL_BY_ID = Object.fromEntries(BUILTIN_TEMPLATES.map(t => [t.id, t]));
 // Icon choices for the template editor — every name exists in Icon.jsx and is
@@ -129,6 +129,37 @@ function downscaleToDataUrl(file, maxEdge = REF_MAX_EDGE, quality = 0.85) {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
     img.src = url;
   });
+}
+
+// ── image slots ──────────────────────────────────────────────────────
+const SLOT_MAX_EDGE = 640; // slot thumbnails sit inside a box — small is plenty
+// distinct slot ids declared by the generated graphic (data-mg-slot="sN")
+function detectSlots(html) {
+  if (!html) return [];
+  const ids = new Set();
+  const re = /data-mg-slot\s*=\s*["']([a-z0-9_]{1,16})["']/gi;
+  let m;
+  while ((m = re.exec(html))) ids.add(m[1]);
+  return [...ids].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+// inject the editor's images into the server doc's slot island for the live
+// preview (the server bakes them for real on save). No-op when there's no island.
+function composeSlots(html, slotImages) {
+  if (!html || !slotImages) return html;
+  const map = {};
+  for (const k of Object.keys(slotImages)) if (slotImages[k]) map[k] = slotImages[k];
+  if (!Object.keys(map).length && !/__mg_slots/.test(html)) return html;
+  const json = JSON.stringify(map).replace(/</g, "\\u003c");
+  return html.replace(/(<script id="__mg_slots" type="application\/json">)[\s\S]*?(<\/script>)/, (_m, a, b) => a + json + b);
+}
+// read images already baked into a saved doc's island, so a loaded graphic's
+// slots are pre-filled and editable.
+function parseSlotIsland(html) {
+  if (!html) return {};
+  const m = html.match(/<script id="__mg_slots" type="application\/json">([\s\S]*?)<\/script>/);
+  if (!m) return {};
+  try { const o = JSON.parse(m[1].replace(/\\u003c/g, "<")); return o && typeof o === "object" ? o : {}; }
+  catch { return {}; }
 }
 
 // ── control primitives (mirror the Text Generator set) ──────────────
@@ -302,6 +333,10 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [brandUrl, setBrandUrl] = useState("");
   const [refImage, setRefImage] = useState(null); // { dataUrl, name } — uploaded reference, downscaled
   const refInputRef = useRef(null);
+  const [imageSlots, setImageSlots] = useState(false); // ask Opus to emit image boxes (data-mg-slot)
+  const [slotImages, setSlotImages] = useState({});    // { slotId: dataUrl } — the editor's uploads, composited into the boxes
+  const slotInputRef = useRef(null);
+  const activeSlotRef = useRef(null);
 
   const [generating, setGenerating] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
@@ -382,7 +417,25 @@ export function MotionGraphicsGenerator({ clients = [] }) {
 
   function applyTemplate(t) {
     setPrompt(t.prompt); setFmt(MG_FORMATS[t.fmt] ? t.fmt : "Portrait"); setActivePreset(t.id); setPresetLabel(t.label);
+    setImageSlots(!!t.slots); // sync both ways: slot presets on, others off
+    setSlotImages({});        // don't carry one graphic's uploads onto a different template
   }
+
+  // ── image-slot upload handlers ──
+  function pickSlotImage(slotId) { activeSlotRef.current = slotId; slotInputRef.current?.click(); }
+  async function onSlotFile(file) {
+    const slotId = activeSlotRef.current;
+    if (!file || !slotId) return;
+    setError("");
+    if (!REF_TYPES.includes(file.type)) { setError("Pick a JPEG, PNG, GIF, or WebP image."); return; }
+    if (file.size > 15 * 1024 * 1024) { setError("That image is too big — pick one under 15MB."); return; }
+    try {
+      const dataUrl = await downscaleToDataUrl(file, SLOT_MAX_EDGE, 0.82);
+      if (dataUrlBytes(dataUrl) > 400 * 1024) { setError("That image is too detailed — try a simpler one."); return; }
+      setSlotImages(s => ({ ...s, [slotId]: dataUrl }));
+    } catch { setError("Couldn't read that image — try another file."); }
+  }
+  function clearSlot(slotId) { setSlotImages(s => { const n = { ...s }; delete n[slotId]; return n; }); }
   function onPromptChange(v) { setPrompt(v); if (activePreset) { setActivePreset(""); setPresetLabel(""); } }
 
   // Merge code defaults with stored overrides/customs by id → the rail.
@@ -396,6 +449,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
       map.set(t.id, {
         id: t.id, label: String(t.label || "Untitled"), icon: t.icon || "spark", prompt: String(t.prompt || ""), fmt: t.fmt,
         order: typeof t.order === "number" ? t.order : fallbackOrder,
+        slots: !!BUILTIN_TPL_BY_ID[t.id]?.slots, // slots is a code property of built-ins, never stored — so an edit can't drop it
         builtin, edited: true, updatedBy: t.updatedBy || null, updatedAt: t.updatedAt || null,
       });
     });
@@ -476,7 +530,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setResult({ id: d.id, html: d.html, fragment: d.fragment, dimension: d.dimension, cost: d.cost, brand: null, fromLibrary: false, reviseOf: null, name: null, client: null, type: null });
-      setImportOpen(false); setPreviewKey(k => k + 1);
+      setSlotImages({}); setImportOpen(false); setPreviewKey(k => k + 1);
     } catch (e) {
       setError(e.name === "AbortError" ? "Import timed out — try a smaller snippet." : (e.message || "Import failed"));
     } finally {
@@ -506,8 +560,8 @@ export function MotionGraphicsGenerator({ clients = [] }) {
       const brandUrlArg = brandMode === "Client site" && brandUrl.trim() ? brandUrl.trim() : undefined;
       const refArg = brandMode === "Reference" && refImage?.dataUrl ? refImage.dataUrl : undefined; // re-sent on a refine too, so revisions stay on-style
       const payload = isRefine
-        ? { action: "generate", prompt, dimension: result?.dimension || MG_FORMATS[fmt].dim, durationSec: loop, refineInstruction: refine.trim(), previousFragment: result?.fragment || result?.html, brandUrl: brandUrlArg, referenceImage: refArg }
-        : { action: "generate", prompt: prompt.trim(), dimension: MG_FORMATS[fmt].dim, durationSec: loop, brandUrl: brandUrlArg, referenceImage: refArg };
+        ? { action: "generate", prompt, dimension: result?.dimension || MG_FORMATS[fmt].dim, durationSec: loop, refineInstruction: refine.trim(), previousFragment: result?.fragment || result?.html, brandUrl: brandUrlArg, referenceImage: refArg, imageSlots }
+        : { action: "generate", prompt: prompt.trim(), dimension: MG_FORMATS[fmt].dim, durationSec: loop, brandUrl: brandUrlArg, referenceImage: refArg, imageSlots };
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: controller.signal });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
@@ -520,6 +574,9 @@ export function MotionGraphicsGenerator({ clients = [] }) {
         name: isRefine ? (result?.name || null) : null,
         client: isRefine ? (result?.client || null) : null,
         type: isRefine ? (result?.type || null) : null });
+      // a fresh generation has brand-new boxes → clear slot uploads; a refine keeps
+      // them so they re-apply to the same slot ids on the new fragment.
+      if (!isRefine) setSlotImages({});
       setRefine(""); setPreviewKey(k => k + 1);
     } catch (e) {
       if (e.name === "AbortError") setError("Generation cancelled or timed out.");
@@ -527,7 +584,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     } finally {
       clearTimeout(timer); abortRef.current = null; setGenerating(false);
     }
-  }, [prompt, fmt, loop, refine, result, brandMode, brandUrl, refImage, porting]);
+  }, [prompt, fmt, loop, refine, result, brandMode, brandUrl, refImage, porting, imageSlots]);
 
   function cancel() { if (abortRef.current) abortRef.current.abort(); }
 
@@ -545,7 +602,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     const type = result?.reviseOf ? (result?.type || "Other") : (presetLabel || "Other");
     try {
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save", generationId: gid, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || result?.name || undefined), client, type }) });
+        body: JSON.stringify({ action: "save", generationId: gid, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || result?.name || undefined), client, type, slots: slotImages }) });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setSavedGenId(gid);
@@ -562,12 +619,13 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     setError("");
     try {
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update", id: libId, generationId: gid, fragment: result.fragment, html: result.html }) });
+        body: JSON.stringify({ action: "update", id: libId, generationId: gid, fragment: result.fragment, html: result.html, slots: slotImages }) });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       // The server set the item's generationId to gid; seed the cache under the
-      // new key so the refreshed thumb/load shows this content with no refetch.
-      htmlCache.current[`${libId}:${gid}`] = result.html;
+      // new key so the refreshed thumb/load shows this content with no refetch
+      // (composed with the current slot images).
+      htmlCache.current[`${libId}:${gid}`] = composeSlots(result.html, slotImages);
       setUpdatedGenId(gid);
     } catch (e) { setError(e.message || "Update failed"); }
     finally { updatingRef.current = false; }
@@ -580,6 +638,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
       if (!html) { setError("This graphic's content is missing — archive it."); return; }
       setFmt(fmtFromDim(item.dimension));
       setRefine(""); // don't carry an unsent refine instruction onto the newly loaded item
+      setSlotImages(parseSlotIsland(html)); // pre-fill any baked slot images so they're editable
       // reviseOf = this item's id so a follow-up revision can update it in place.
       setResult({ id: null, html, fragment: html, dimension: item.dimension, cost: item.costUsd, fromLibrary: true, reviseOf: item.id, name: item.name, client: item.client || null, type: item.type || null });
       setPreviewKey(k => k + 1);
@@ -630,7 +689,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     const f = w.document.createElement("iframe");
     f.setAttribute("sandbox", "allow-scripts");
     f.style.border = "0"; f.style.width = rf.w + "px"; f.style.height = rf.h + "px"; f.style.maxWidth = "100vw"; f.style.maxHeight = "100vh";
-    f.srcdoc = result.html;
+    f.srcdoc = composeSlots(result.html, slotImages);
     b.appendChild(f);
   }
 
@@ -668,6 +727,8 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const canGen = !!prompt.trim() && !refMissing && !porting;
   const canRefine = !!refine.trim() && !generating && !refMissing && !porting;
   const cf = MG_CHROMA.find(c => c.key === chroma);
+  const slots = hasResult ? detectSlots(result.html) : [];           // image boxes the graphic declared
+  const composedHtml = hasResult ? composeSlots(result.html, slotImages) : ""; // live preview with images injected
 
   return (
     <div style={{ height: "calc(100vh - 104px)", overflow: "hidden", background: VX.bg, color: VX.fg, fontFamily: VX.sans, display: "flex" }}>
@@ -722,6 +783,15 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <MGSegment options={["Portrait", "Landscape", "Square"]} value={fmt} onChange={setFmt} />
             <div style={{ fontFamily: VX.mono, fontSize: 10.5, color: VX.muted, marginTop: -4 }}>{F.sub}</div>
             <MGSlider label="Loop length" value={loop} min={2} max={20} unit="s" onChange={setLoop} />
+            <button onClick={() => setImageSlots(v => !v)} title="Generate boxes you can drop your own images into (tier lists, this-or-that, etc.)"
+              style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 10px", borderRadius: VX.r2, cursor: "pointer", background: imageSlots ? VX.accentSoft : VX.inset, border: "1px solid " + (imageSlots ? "rgba(0,130,250,0.32)" : VX.border) }}>
+              <span style={{ width: 30, height: 18, borderRadius: 99, background: imageSlots ? VX.accent : VX.line2, position: "relative", flex: "0 0 auto", transition: "background .15s" }}>
+                <span style={{ position: "absolute", top: 2, left: imageSlots ? 14 : 2, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .15s" }} /></span>
+              <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                <span style={{ fontFamily: VX.sans, fontSize: 12.5, fontWeight: 700, color: imageSlots ? VX.accentBright : VX.fg2 }}>Image boxes</span>
+                <span style={{ fontFamily: VX.sans, fontSize: 10.5, color: VX.muted }}>Boxes you fill with your own images</span>
+              </span>
+            </button>
           </MGGroup>
 
           <MGGroup n="4" label="Background to key out">
@@ -822,7 +892,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
               <div style={{ fontFamily: VX.sans, fontSize: 12, color: VX.muted, marginTop: 4 }}>Your branded animation plays here, looping, ready to screen-record.</div>
             </div>
           )}
-          {!generating && hasResult && <MGFrame fmt={dim} chroma={chroma} docKey={previewKey} html={result.html} maxW={stage.w} maxH={stage.h - 8} />}
+          {!generating && hasResult && <MGFrame fmt={dim} chroma={chroma} docKey={previewKey} html={composedHtml} maxW={stage.w} maxH={stage.h - 8} />}
         </div>
 
         {/* refine bar — also the "revise a saved graphic" entry point (result.reviseOf) */}
@@ -836,6 +906,36 @@ export function MotionGraphicsGenerator({ clients = [] }) {
                 style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontFamily: VX.sans, fontSize: 13, color: VX.fg }} />
             </div>
             <button onClick={() => callGenerate(true)} disabled={!canRefine} title={refMissing ? "Upload a reference image first" : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: VX.sans, fontSize: 13, fontWeight: 700, padding: "10px 18px", borderRadius: VX.r2, border: "1px solid " + (canRefine ? "transparent" : VX.border), cursor: canRefine ? "pointer" : "not-allowed", background: canRefine ? VX.accent : "transparent", color: canRefine ? "#fff" : VX.faint }}>{result.reviseOf ? "Revise" : "Refine"}</button>
+          </div>
+        )}
+
+        {/* image-slot fill panel — one tile per box the graphic declared */}
+        <input ref={slotInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" style={{ display: "none" }}
+          onChange={e => { onSlotFile(e.target.files?.[0]); e.target.value = ""; }} />
+        {hasResult && slots.length > 0 && (
+          <div style={{ flex: "0 0 auto", borderTop: "1px solid " + VX.border, background: VX.rail, padding: "12px 22px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <Icon name="founders" size={14} sw={2} stroke={VX.accentBright} />
+              <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: VX.fg2, whiteSpace: "nowrap" }}>Images</span>
+              <span style={{ fontFamily: VX.sans, fontSize: 11, color: VX.muted }}>{slots.filter(s => slotImages[s]).length}/{slots.length} filled · drop a picture into each box</span>
+            </div>
+            <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
+              {slots.map((sid, idx) => {
+                const img = slotImages[sid];
+                return (
+                  <div key={sid} style={{ flex: "0 0 auto", width: 104 }}>
+                    <div onClick={() => pickSlotImage(sid)} title={img ? "Replace image" : "Add image"}
+                      style={{ position: "relative", height: 78, borderRadius: VX.r2, cursor: "pointer", overflow: "hidden", border: "1px solid " + (img ? VX.accentBright : VX.border), background: img ? "#0b0f18" : VX.inset, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {img ? <img src={img} alt={sid} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        : <Icon name="plus" size={18} sw={2} stroke={VX.muted} />}
+                      {img && <button onClick={e => { e.stopPropagation(); clearSlot(sid); }} title="Remove" style={{ position: "absolute", top: 4, right: 4, width: 20, height: 20, borderRadius: 5, border: "none", cursor: "pointer", background: "rgba(8,12,20,0.78)", color: VX.fg2, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Icon name="plus" size={11} sw={2} style={{ transform: "rotate(45deg)" }} /></button>}
+                    </div>
+                    <div style={{ fontFamily: VX.mono, fontSize: 9.5, color: VX.muted, marginTop: 4, textAlign: "center" }}>Box {idx + 1}</div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -937,7 +1037,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <MGToolBtn icon="plus" label="Close" onClick={() => setPresent(false)} />
           </div>
           <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 28 }}>
-            <MGFrame fmt={dim} chroma={chroma} docKey={"present-" + previewKey} html={result.html} maxW={1100} maxH={760} />
+            <MGFrame fmt={dim} chroma={chroma} docKey={"present-" + previewKey} html={composedHtml} maxW={1100} maxH={760} />
           </div>
         </div>
       )}
