@@ -92,7 +92,16 @@ const LIMITS = {
   brandFetchMs: 8000,
   referenceImageBytes: 2 * 1024 * 1024, // decoded cap — kept well under Vercel's 4.5MB body limit even alongside a near-cap previousFragment; the client downscales to ~tiny anyway
   sourceCode: 50 * 1024,        // 50KB — pasted component/code to port (plenty for a single component, far under the body limit)
+  slotImageBytes: 400 * 1024,   // per uploaded slot image, decoded (client downscales to ≤640px JPEG so real ones are far smaller)
+  slotsTotalBytes: 1.5 * 1024 * 1024, // all slot images for one graphic, decoded (~2MB once base64-encoded in the doc)
+  outputHtmlSlots: 3 * 1024 * 1024,   // raised guarded-doc ceiling when slot images are baked in — headroom over the base64-inflated slots total (RTDB string, fine)
 };
+
+// Allowed slot ids (also the data-mg-slot attribute values) — kept to a safe,
+// short token so the applier selector + the JSON island can't be abused.
+const SLOT_ID_RE = /^[a-z0-9_]{1,16}$/i;
+const RESERVED_KEY = /^(?:__proto__|constructor|prototype)$/i; // never accept as a slot id
+const MAX_SLOTS = 24;
 
 // Strict CSP injected into every rendered/saved doc. No connect-src (falls back
 // to default-src 'none') kills fetch/XHR/beacon/WebSocket exfiltration. Inline
@@ -144,7 +153,18 @@ async function writeLedgerSafe(id, payload) {
 // document (against instructions); a genuine fragment passes through untouched,
 // so content that merely *mentions* "</body>" or "<head>" in a JS string or CSS
 // value is never corrupted.
-export function injectGuard(raw, { width, height }) {
+// Applier for image SLOTS — runs INSIDE the sandboxed iframe (part of OUR shell,
+// never Opus output). Reads a JSON island of { slotId: dataUrl } and fills each
+// [data-mg-slot] box: an <img> gets its src, anything else gets a cover
+// background. Re-runs a few frames so a fragment that builds boxes via its own
+// inline script is still covered. data: URIs are allowed by the CSP's img-src.
+const SLOT_APPLIER =
+  "<script>(function(){var s=document.currentScript,n=s&&s.previousElementSibling;if(!n||n.id!=='__mg_slots')return;var m;try{m=JSON.parse(n.textContent||'{}')}catch(e){return}var H=Object.prototype.hasOwnProperty;" +
+  "function ap(){document.querySelectorAll('[data-mg-slot]').forEach(function(el){var k=el.getAttribute('data-mg-slot');if(!H.call(m,k))return;var u=m[k];if(!u||typeof u!=='string')return;" +
+  "if(el.tagName==='IMG'){if(el.src!==u)el.src=u;}else{el.style.backgroundImage=\"url('\"+u+\"')\";if(!el.style.backgroundSize)el.style.backgroundSize='cover';if(!el.style.backgroundPosition)el.style.backgroundPosition='center';el.style.backgroundRepeat='no-repeat';}})}" +
+  "ap();var i=0,t=setInterval(function(){ap();if(++i>20)clearInterval(t)},120);})();</script>";
+
+export function injectGuard(raw, { width, height, slots } = {}) {
   if (typeof raw !== "string") throw new Error("No HTML returned");
   let s = raw.trim();
 
@@ -172,8 +192,28 @@ export function injectGuard(raw, { width, height }) {
     s = s.replace(/<meta[^>]*http-equiv\s*=\s*["']?(content-security-policy|refresh)["']?[^>]*>/gi, "");
   }
 
-  const fragment = s.trim();
+  let fragment = s.trim();
   if (!fragment) throw new Error("Model returned an empty graphic");
+
+  // The model controls the fragment, so it could emit its OWN id="__mg_slots"
+  // island that would shadow ours. Strip any so there is exactly one island
+  // (ours). The applier also binds to its island by DOM adjacency, not by id.
+  fragment = fragment.replace(/<script\b[^>]*\bid\s*=\s*(?:["']__mg_slots["']|__mg_slots\b)[^>]*>[\s\S]*?<\/script>/gi, "");
+
+  // Image slots: when the fragment declares [data-mg-slot] boxes, append OUR
+  // data island + applier. The island holds an already-validated { id: dataUrl }
+  // map (empty at generate time; baked at save time). base64 data URLs can't
+  // contain "</script>", and we escape "<" defensively so the island can't be
+  // broken out of.
+  const hasSlots = /data-mg-slot\s*=/i.test(fragment);
+  let slotBlock = "";
+  let hasImages = false;
+  if (hasSlots) {
+    const map = slots && typeof slots === "object" ? slots : {};
+    hasImages = Object.keys(map).length > 0;
+    const json = JSON.stringify(map).replace(/</g, "\\u003c");
+    slotBlock = `<script id="__mg_slots" type="application/json">${json}</script>` + SLOT_APPLIER;
+  }
 
   const html =
     "<!DOCTYPE html><html><head>" +
@@ -182,10 +222,14 @@ export function injectGuard(raw, { width, height }) {
     `<style>${FONTS_IMPORT}html,body{margin:0;padding:0;background:transparent;overflow:hidden;width:${width}px;height:${height}px}</style>` +
     "</head><body>" +
     fragment +
+    slotBlock +
     "</body></html>";
 
-  if (Buffer.byteLength(html, "utf8") > LIMITS.outputHtml) {
-    throw new Error("Generated graphic is too large (over 200KB)");
+  // Raised ceiling only when slot images are actually baked in; everything else
+  // keeps the tight 200KB cap.
+  const cap = hasImages ? LIMITS.outputHtmlSlots : LIMITS.outputHtml;
+  if (Buffer.byteLength(html, "utf8") > cap) {
+    throw new Error(hasImages ? "Graphic + images are too large — use fewer / smaller images" : "Generated graphic is too large (over 200KB)");
   }
   return html;
 }
@@ -335,7 +379,41 @@ function parseReferenceImage(body) {
   return { mediaType, data };
 }
 
-function buildSystemPrompt(width, height, durationSec, brand, hasUploadedReference) {
+// Validate the editor's slot images: { slotId: "data:image/...;base64,..." }.
+// Returns a clean { slotId: dataUrl } map (only real, in-bounds images), or
+// throws a user-facing error. Reused by save to bake images into the doc.
+function parseSlots(raw) {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object") throw new Error("Invalid slot images");
+  const out = {};
+  let total = 0;
+  for (const key of Object.keys(raw)) {
+    if (!SLOT_ID_RE.test(key) || RESERVED_KEY.test(key)) throw new Error("Invalid slot id");
+    const v = raw[key];
+    if (typeof v !== "string" || !v) continue; // an empty slot is just skipped
+    const m = v.match(/^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i);
+    if (!m) throw new Error(`Slot ${key}: must be a base64 image data URL`);
+    const mediaType = m[1].toLowerCase();
+    const b64 = m[2];
+    if (!ALLOWED_IMAGE_TYPES.has(mediaType)) throw new Error(`Slot ${key}: must be a JPEG, PNG, GIF, or WebP`);
+    if (b64.length % 4 === 1) throw new Error(`Slot ${key}: isn't valid base64`);
+    // Exact decoded size from the base64 length (no decode needed) — reject the
+    // cumulative overflow BEFORE decoding, so a flood of near-max images can't
+    // all decode. Exact (not an overestimate) so a legit near-cap set isn't rejected.
+    const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+    total += (b64.length / 4) * 3 - pad;
+    if (total > LIMITS.slotsTotalBytes) throw new Error("Slot images add up to too much — use fewer / smaller images");
+    const buf = Buffer.from(b64, "base64");
+    if (buf.length < 100) throw new Error(`Slot ${key}: image is empty`);
+    if (buf.length > LIMITS.slotImageBytes) throw new Error(`Slot ${key}: image is too large`);
+    if (!imageMagicOk(mediaType, buf)) throw new Error(`Slot ${key}: isn't a real image`);
+    out[key] = `data:${mediaType};base64,${b64}`; // normalised
+    if (Object.keys(out).length > MAX_SLOTS) throw new Error("Too many slot images");
+  }
+  return out;
+}
+
+function buildSystemPrompt(width, height, durationSec, brand, hasUploadedReference, imageSlots) {
   const brandBlock = brand
     ? `BRAND — match the CLIENT'S brand${brand.siteName ? ` (${brand.siteName})` : ""}, not Viewix:
 ${brand.imageUrl ? "- A reference image of the client's brand is attached as the first message item. Pull the colour palette, type feel, and overall visual style from it.\n" : ""}${brand.themeColor ? `- Their primary brand colour is approximately ${brand.themeColor}.\n` : ""}- Use the client's colours and visual feel throughout. Do NOT use Viewix blue/orange unless they genuinely match the client. 'DM Sans' and 'JetBrains Mono' are available for clean type.`
@@ -346,9 +424,19 @@ ${brand.imageUrl ? "- A reference image of the client's brand is attached as the
     : `VIEWIX BRAND:
 - Primary blue #0082FA, bright blue #3DA2FF, orange #F87700, near-black #0A0E17, off-white #EAEEF6.
 - Fonts: 'DM Sans' (headings/body), 'JetBrains Mono' (numbers/labels). Both are available — use them.`;
+  const slotsBlock = imageSlots
+    ? `
+
+IMAGE SLOTS — this graphic must hold the user's OWN images (e.g. each tier-list row, each option, each card):
+- For every box/item that should contain an image, add a dedicated empty element with a data-mg-slot attribute: <div data-mg-slot="s1"></div>. Number them s1, s2, s3, … in visual (top-to-bottom / left-to-right) order.
+- Each slot element must be sized to FULLY fill its box (position it, give it width/height/inset:0). The user's image is dropped in later as a cover background — do NOT put your own image, emoji, icon, photo, or text inside a slot element.
+- Give each slot a subtle neutral placeholder (e.g. a soft grey fill with a faint border) so an empty slot still looks intentional.
+- Keep each item's text LABEL visible next to or below its slot (the label is yours; the image is the user's).
+- Make these image boxes the focus of the layout and of the stack/reveal animation.`
+    : "";
   return `You generate motion graphics for Viewix Video Production, a Sydney video agency. Output a single self-contained animated graphic that will be rendered at exactly ${width}x${height} pixels and screen-recorded into a video.
 
-${brandBlock}
+${brandBlock}${slotsBlock}
 
 HARD OUTPUT RULES (a wrapper enforces the exact size, a transparent background, fonts, and security — follow these so it renders correctly):
 - Return ONLY an HTML fragment: a <style> block, the markup, and a <script> block. Do NOT include <!DOCTYPE>, <html>, <head>, or <body> tags. Do NOT wrap the output in markdown code fences.
@@ -586,7 +674,7 @@ async function handleGenerate(req, res, body) {
     return res.status(429).json({ error: "Daily generation limit reached — try again tomorrow" });
   }
 
-  const systemPrompt = buildSystemPrompt(dims.width, dims.height, dur, brand, !!referenceImage);
+  const systemPrompt = buildSystemPrompt(dims.width, dims.height, dur, brand, !!referenceImage, !!body.imageSlots);
   const userText = isRefine
     ? `Here is the current motion graphic fragment:\n\n${previousFragment}\n\nAdjust it as follows: ${refineInstruction}\n\nReturn the full updated fragment (same rules — fragment only, no <html>/<head>/<body>, no code fences).`
     : prompt.trim();
@@ -796,11 +884,16 @@ async function handleSave(req, res, body) {
   const dims = DIMENSIONS[ledger.dimension];
   if (!dims) return res.status(400).json({ error: "Ledger record has invalid dimensions" });
 
-  // Re-run the trust boundary on whatever HTML the client sends. Prefer the raw
-  // fragment if provided (re-wrap), else re-guard the full doc.
+  // Validate the editor's slot images (if any) before baking them into the doc.
+  let slots;
+  try { slots = parseSlots(body.slots); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+
+  // Re-run the trust boundary on whatever HTML the client sends, baking validated
+  // slot images into our island. Prefer the raw fragment (re-wrap), else the doc.
   let guarded;
   try {
-    guarded = injectGuard(typeof fragment === "string" && fragment ? fragment : html, dims);
+    guarded = injectGuard(typeof fragment === "string" && fragment ? fragment : html, { ...dims, slots });
   } catch (e) {
     return res.status(422).json({ error: e.message });
   }
@@ -859,9 +952,13 @@ async function handleUpdate(req, res, body) {
   const dims = DIMENSIONS[ledger.dimension];
   if (!dims) return res.status(400).json({ error: "Ledger record has invalid dimensions" });
 
+  let slots;
+  try { slots = parseSlots(body.slots); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+
   let guarded;
   try {
-    guarded = injectGuard(typeof fragment === "string" && fragment ? fragment : html, dims);
+    guarded = injectGuard(typeof fragment === "string" && fragment ? fragment : html, { ...dims, slots });
   } catch (e) {
     return res.status(422).json({ error: e.message });
   }
