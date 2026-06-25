@@ -95,6 +95,42 @@ async function readJsonResponse(r) {
   }
 }
 
+// Downscale a picked image to a small JPEG data URL (≤maxEdge long edge) before
+// it's sent as a vision reference: keeps the request body well under Vercel's
+// 4.5MB limit, hits Anthropic's optimal vision size, and normalises any input
+// format to one the API accepts. Style reference only, so dropping transparency
+// is fine. Rejects files that aren't decodable images.
+const REF_MAX_EDGE = 1568;
+const REF_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"]; // mirror the server whitelist
+const REF_MAX_BYTES = 2 * 1024 * 1024; // mirror the server cap (well under Vercel's 4.5MB body limit)
+// approx decoded bytes of a base64 data URL (for a pre-send size guard)
+function dataUrlBytes(dataUrl) {
+  const i = (dataUrl || "").indexOf(",");
+  const b64 = i >= 0 ? dataUrl.slice(i + 1) : "";
+  return Math.floor((b64.length * 3) / 4);
+}
+function downscaleToDataUrl(file, maxEdge = REF_MAX_EDGE, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+      if (!w0 || !h0) { reject(new Error("bad image")); return; }
+      const scale = Math.min(1, maxEdge / Math.max(w0, h0));
+      const w = Math.max(1, Math.round(w0 * scale)), h = Math.max(1, Math.round(h0 * scale));
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
+    img.src = url;
+  });
+}
+
 // ── control primitives (mirror the Text Generator set) ──────────────
 function MGGroup({ n, label, right, children }) {
   return (
@@ -262,8 +298,10 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const [fmt, setFmt] = useState("Portrait");
   const [loop, setLoop] = useState(6);
   const [chroma, setChroma] = useState("Transparent");
-  const [brandMode, setBrandMode] = useState("Viewix"); // "Viewix" | "Client site"
+  const [brandMode, setBrandMode] = useState("Viewix"); // "Viewix" | "Client site" | "Reference"
   const [brandUrl, setBrandUrl] = useState("");
+  const [refImage, setRefImage] = useState(null); // { dataUrl, name } — uploaded reference, downscaled
+  const refInputRef = useRef(null);
 
   const [generating, setGenerating] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
@@ -418,6 +456,18 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     finally { setEnhancing(false); }
   }
 
+  async function onPickReference(file) {
+    if (!file) return;
+    setError("");
+    if (!REF_TYPES.includes(file.type)) { setError("Pick a JPEG, PNG, GIF, or WebP image."); return; }
+    if (file.size > 15 * 1024 * 1024) { setError("That image is too big — pick one under 15MB."); return; }
+    try {
+      const dataUrl = await downscaleToDataUrl(file);
+      if (dataUrlBytes(dataUrl) > REF_MAX_BYTES) { setError("That image is too detailed to use as a reference — try a simpler one."); return; }
+      setRefImage({ dataUrl, name: file.name || "reference" });
+    } catch { setError("Couldn't read that image — try another file."); }
+  }
+
   const callGenerate = useCallback(async (isRefine) => {
     if (abortRef.current) return;
     const controller = new AbortController();
@@ -426,9 +476,10 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     const timer = setTimeout(() => controller.abort(), 170_000);
     try {
       const brandUrlArg = brandMode === "Client site" && brandUrl.trim() ? brandUrl.trim() : undefined;
+      const refArg = brandMode === "Reference" && refImage?.dataUrl ? refImage.dataUrl : undefined; // re-sent on a refine too, so revisions stay on-style
       const payload = isRefine
-        ? { action: "generate", prompt, dimension: result?.dimension || MG_FORMATS[fmt].dim, durationSec: loop, refineInstruction: refine.trim(), previousFragment: result?.fragment || result?.html, brandUrl: brandUrlArg }
-        : { action: "generate", prompt: prompt.trim(), dimension: MG_FORMATS[fmt].dim, durationSec: loop, brandUrl: brandUrlArg };
+        ? { action: "generate", prompt, dimension: result?.dimension || MG_FORMATS[fmt].dim, durationSec: loop, refineInstruction: refine.trim(), previousFragment: result?.fragment || result?.html, brandUrl: brandUrlArg, referenceImage: refArg }
+        : { action: "generate", prompt: prompt.trim(), dimension: MG_FORMATS[fmt].dim, durationSec: loop, brandUrl: brandUrlArg, referenceImage: refArg };
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: controller.signal });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
@@ -447,7 +498,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     } finally {
       clearTimeout(timer); abortRef.current = null; setGenerating(false);
     }
-  }, [prompt, fmt, loop, refine, result, brandMode, brandUrl]);
+  }, [prompt, fmt, loop, refine, result, brandMode, brandUrl, refImage]);
 
   function cancel() { if (abortRef.current) abortRef.current.abort(); }
 
@@ -551,6 +602,9 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   const isSaved = !!result && !result.fromLibrary && savedGenId === result.id;
   const isRevision = !!result && !result.fromLibrary && !!result.reviseOf; // a revision of a saved item → offer Update original
   const isUpdated = isRevision && updatedGenId === result.id;
+  const refMissing = brandMode === "Reference" && !refImage; // Reference mode chosen but nothing uploaded → block (don't silently fall back to Viewix + burn a generation)
+  const canGen = !!prompt.trim() && !refMissing;
+  const canRefine = !!refine.trim() && !generating && !refMissing;
   const cf = MG_CHROMA.find(c => c.key === chroma);
 
   return (
@@ -609,14 +663,40 @@ export function MotionGraphicsGenerator({ clients = [] }) {
           </MGGroup>
 
           <MGGroup n="5" label="Brand">
-            <MGSegment options={["Viewix", "Client site"]} value={brandMode} onChange={setBrandMode} />
+            <MGSegment options={["Viewix", "Client site", "Reference"]} value={brandMode} onChange={setBrandMode} />
             {brandMode === "Client site" && (
               <input value={brandUrl} onChange={e => setBrandUrl(e.target.value)} maxLength={2000} placeholder="https://clientsite.com" spellCheck={false}
                 style={{ width: "100%", fontFamily: VX.sans, fontSize: 13, color: VX.fg, background: VX.inset, border: "1px solid " + VX.border, borderRadius: VX.r2, padding: "9px 12px", outline: "none", boxSizing: "border-box" }} />
             )}
+            {brandMode === "Reference" && (
+              <div>
+                <input ref={refInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" style={{ display: "none" }}
+                  onChange={e => { onPickReference(e.target.files?.[0]); e.target.value = ""; }} />
+                {refImage ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 8, borderRadius: VX.r2, border: "1px solid " + VX.border, background: VX.inset }}>
+                    <img src={refImage.dataUrl} alt="reference" style={{ width: 46, height: 46, objectFit: "cover", borderRadius: 6, flex: "0 0 auto", border: "1px solid " + VX.borderSoft }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: VX.sans, fontSize: 12, fontWeight: 700, color: VX.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{refImage.name}</div>
+                      <button onClick={() => refInputRef.current?.click()} style={{ marginTop: 3, padding: 0, background: "none", border: "none", cursor: "pointer", fontFamily: VX.sans, fontSize: 11, fontWeight: 700, color: VX.accentBright }}>Replace</button>
+                    </div>
+                    <button onClick={() => setRefImage(null)} title="Remove" style={{ width: 24, height: 24, borderRadius: 6, border: "none", cursor: "pointer", background: "rgba(8,12,20,0.7)", color: VX.muted, display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto" }}>
+                      <Icon name="plus" size={14} sw={2} style={{ transform: "rotate(45deg)" }} /></button>
+                  </div>
+                ) : (
+                  <button onClick={() => refInputRef.current?.click()}
+                    style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 7, padding: "16px 12px", borderRadius: VX.r2, border: "1.5px dashed " + VX.line2, background: VX.inset, cursor: "pointer", color: VX.fg2 }}>
+                    <Icon name="external" size={18} sw={1.8} stroke={VX.accentBright} />
+                    <span style={{ fontFamily: VX.sans, fontSize: 12.5, fontWeight: 700, color: VX.fg2 }}>Upload a reference image</span>
+                    <span style={{ fontFamily: VX.sans, fontSize: 10.5, color: VX.muted }}>PNG, JPG, GIF or WebP</span>
+                  </button>
+                )}
+              </div>
+            )}
             <span style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, lineHeight: 1.5 }}>
               {brandMode === "Client site"
                 ? "We read the client site's share image + theme colour and match the graphic to their brand."
+                : brandMode === "Reference"
+                ? "We match the graphic's look — palette, type, mood — to your reference image."
                 : "Graphics use the Viewix brand."}</span>
           </MGGroup>
         </div>
@@ -626,8 +706,8 @@ export function MotionGraphicsGenerator({ clients = [] }) {
               <Icon name="clock" size={16} sw={2} />Cancel
             </button>
           ) : (
-            <button onClick={() => callGenerate(false)} disabled={!prompt.trim()} style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontFamily: VX.sans, fontSize: 14, fontWeight: 700, padding: "12px 0", borderRadius: VX.r2, border: "none",
-              cursor: prompt.trim() ? "pointer" : "not-allowed", background: prompt.trim() ? VX.accent : "#1b2436", color: prompt.trim() ? "#fff" : VX.faint, boxShadow: prompt.trim() ? "0 8px 22px -10px rgba(0,130,250,0.9)" : "none" }}>
+            <button onClick={() => callGenerate(false)} disabled={!canGen} title={refMissing ? "Upload a reference image first" : undefined} style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontFamily: VX.sans, fontSize: 14, fontWeight: 700, padding: "12px 0", borderRadius: VX.r2, border: "none",
+              cursor: canGen ? "pointer" : "not-allowed", background: canGen ? VX.accent : "#1b2436", color: canGen ? "#fff" : VX.faint, boxShadow: canGen ? "0 8px 22px -10px rgba(0,130,250,0.9)" : "none" }}>
               <Icon name="spark" size={16} sw={2} />Generate
             </button>
           )}
@@ -684,10 +764,10 @@ export function MotionGraphicsGenerator({ clients = [] }) {
               <Icon name="spark" size={15} sw={1.8} stroke={VX.muted} />
               <input value={refine} onChange={e => setRefine(e.target.value)} maxLength={1000}
                 placeholder={result.reviseOf ? "Revise this saved graphic — describe what to change…" : "Refine in plain language — “make the wipe orange, slow the rise-in”…"}
-                onKeyDown={e => { if (e.key === "Enter" && refine.trim() && !generating) callGenerate(true); }}
+                onKeyDown={e => { if (e.key === "Enter" && canRefine) callGenerate(true); }}
                 style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontFamily: VX.sans, fontSize: 13, color: VX.fg }} />
             </div>
-            <button onClick={() => callGenerate(true)} disabled={!refine.trim() || generating} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: VX.sans, fontSize: 13, fontWeight: 700, padding: "10px 18px", borderRadius: VX.r2, border: "1px solid " + (refine.trim() && !generating ? "transparent" : VX.border), cursor: refine.trim() && !generating ? "pointer" : "not-allowed", background: refine.trim() && !generating ? VX.accent : "transparent", color: refine.trim() && !generating ? "#fff" : VX.faint }}>{result.reviseOf ? "Revise" : "Refine"}</button>
+            <button onClick={() => callGenerate(true)} disabled={!canRefine} title={refMissing ? "Upload a reference image first" : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: VX.sans, fontSize: 13, fontWeight: 700, padding: "10px 18px", borderRadius: VX.r2, border: "1px solid " + (canRefine ? "transparent" : VX.border), cursor: canRefine ? "pointer" : "not-allowed", background: canRefine ? VX.accent : "transparent", color: canRefine ? "#fff" : VX.faint }}>{result.reviseOf ? "Revise" : "Refine"}</button>
           </div>
         )}
 

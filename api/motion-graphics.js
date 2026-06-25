@@ -88,6 +88,7 @@ const LIMITS = {
   brandUrl: 2000,
   brandHtml: 1024 * 1024,       // cap the fetched site HTML at 1MB
   brandFetchMs: 8000,
+  referenceImageBytes: 2 * 1024 * 1024, // decoded cap — kept well under Vercel's 4.5MB body limit even alongside a near-cap previousFragment; the client downscales to ~tiny anyway
 };
 
 // Strict CSP injected into every rendered/saved doc. No connect-src (falls back
@@ -289,10 +290,56 @@ async function fetchBrand(rawUrl) {
   return { imageUrl, themeColor, siteName, sourceUrl: base };
 }
 
-function buildSystemPrompt(width, height, durationSec, brand) {
+// ─── Uploaded reference image (vision) ────────────────────────────────────────
+// An editor can upload their own image (style frame, logo, moodboard) instead of
+// a website; it's handed to Anthropic as a base64 vision block and never stored.
+// The client downscales to a small JPEG, but we still validate hard here: a
+// whitelisted media type, a clean base64 charset, and a decoded-size cap so a
+// malformed/huge body can't slip through to Anthropic.
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+// Magic-byte sniff: confirm the decoded bytes actually ARE the declared type, so
+// a mis-declared or garbage payload is rejected here (clean 400) instead of
+// burning an Opus call that Anthropic would reject.
+function imageMagicOk(mediaType, buf) {
+  if (mediaType === "image/jpeg") return buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  if (mediaType === "image/png")  return buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  if (mediaType === "image/gif")  return buf.length >= 6 && (buf.toString("ascii", 0, 6) === "GIF87a" || buf.toString("ascii", 0, 6) === "GIF89a");
+  if (mediaType === "image/webp") return buf.length >= 12 && buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WEBP";
+  return false;
+}
+function parseReferenceImage(body) {
+  const ri = body.referenceImage;
+  if (ri === undefined || ri === null || ri === "") return null;
+  let mediaType, data;
+  if (typeof ri === "string") {
+    const m = ri.match(/^data:(image\/[a-z0-9.+-]+);base64,(.*)$/i);
+    if (!m) throw new Error("must be a base64 data URL");
+    mediaType = m[1].toLowerCase();
+    data = m[2];
+  } else if (typeof ri === "object" && typeof ri.data === "string") {
+    mediaType = String(ri.mediaType || ri.media_type || "").toLowerCase();
+    data = ri.data.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+  } else {
+    throw new Error("invalid reference image");
+  }
+  data = data.replace(/\s/g, "");
+  if (!ALLOWED_IMAGE_TYPES.has(mediaType)) throw new Error("must be a JPEG, PNG, GIF, or WebP");
+  if (!data || data.length % 4 === 1 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error("isn't valid base64");
+  const buf = Buffer.from(data, "base64");
+  if (buf.length < 100) throw new Error("is empty");
+  if (buf.length > LIMITS.referenceImageBytes) throw new Error("is too large — pick a smaller image");
+  if (!imageMagicOk(mediaType, buf)) throw new Error(`doesn't look like a real ${mediaType.split("/")[1].toUpperCase()} image`);
+  return { mediaType, data };
+}
+
+function buildSystemPrompt(width, height, durationSec, brand, hasUploadedReference) {
   const brandBlock = brand
     ? `BRAND — match the CLIENT'S brand${brand.siteName ? ` (${brand.siteName})` : ""}, not Viewix:
 ${brand.imageUrl ? "- A reference image of the client's brand is attached as the first message item. Pull the colour palette, type feel, and overall visual style from it.\n" : ""}${brand.themeColor ? `- Their primary brand colour is approximately ${brand.themeColor}.\n` : ""}- Use the client's colours and visual feel throughout. Do NOT use Viewix blue/orange unless they genuinely match the client. 'DM Sans' and 'JetBrains Mono' are available for clean type.`
+    : hasUploadedReference
+    ? `REFERENCE IMAGE — a reference image is attached as the first message item:
+- Match its visual style: colour palette, typography feel, shapes, and overall mood. Build the graphic to look like it belongs with that reference.
+- Do NOT default to Viewix blue/orange unless the reference actually uses them. 'DM Sans' and 'JetBrains Mono' are available for clean type.`
     : `VIEWIX BRAND:
 - Primary blue #0082FA, bright blue #3DA2FF, orange #F87700, near-black #0A0E17, off-white #EAEEF6.
 - Fonts: 'DM Sans' (headings/body), 'JetBrains Mono' (numbers/labels). Both are available — use them.`;
@@ -514,6 +561,14 @@ async function handleGenerate(req, res, body) {
     catch (e) { return res.status(422).json({ error: `Couldn't use that website's branding — ${e.message}` }); }
   }
 
+  // Optional: an uploaded reference image (base64 vision). Website brand wins if
+  // both somehow arrive (the UI only sends one). Validated, never stored.
+  let referenceImage = null;
+  if (!brand) {
+    try { referenceImage = parseReferenceImage(body); }
+    catch (e) { return res.status(400).json({ error: `Reference image ${e.message}` }); }
+  }
+
   // Daily circuit breaker (atomic — aborts at the cap, no read-then-write race).
   const day = new Date().toISOString().slice(0, 10);
   const capPath = `/aiUsage/dailyCount/${req._actor.uid}/${day}`;
@@ -526,14 +581,18 @@ async function handleGenerate(req, res, body) {
     return res.status(429).json({ error: "Daily generation limit reached — try again tomorrow" });
   }
 
-  const systemPrompt = buildSystemPrompt(dims.width, dims.height, dur, brand);
+  const systemPrompt = buildSystemPrompt(dims.width, dims.height, dur, brand, !!referenceImage);
   const userText = isRefine
     ? `Here is the current motion graphic fragment:\n\n${previousFragment}\n\nAdjust it as follows: ${refineInstruction}\n\nReturn the full updated fragment (same rules — fragment only, no <html>/<head>/<body>, no code fences).`
     : prompt.trim();
-  // Attach the brand reference image (vision) when matching a client's site.
-  const userContent = (brand && brand.imageUrl)
-    ? [{ type: "image", source: { type: "url", url: brand.imageUrl } }, { type: "text", text: userText }]
-    : userText;
+  // Attach a vision reference: the website's brand image (URL) or the editor's
+  // uploaded image (base64) — as the FIRST content item, then the text.
+  const imageBlock = (brand && brand.imageUrl)
+    ? { type: "image", source: { type: "url", url: brand.imageUrl } }
+    : referenceImage
+    ? { type: "image", source: { type: "base64", media_type: referenceImage.mediaType, data: referenceImage.data } }
+    : null;
+  const userContent = imageBlock ? [imageBlock, { type: "text", text: userText }] : userText;
 
   // Call Claude. A failure here means Anthropic may or may not have billed us,
   // but we have no usage to ledger — return an opaque error.
@@ -575,7 +634,7 @@ async function handleGenerate(req, res, body) {
     durationSec: dur,
     refined: isRefine,
     status,
-    brand: brand ? (brand.siteName || brand.sourceUrl) : null,
+    brand: brand ? (brand.siteName || brand.sourceUrl) : (referenceImage ? "reference-image" : null),
     ...cost,
     createdBy: req._actor,
     createdAt: new Date().toISOString(),
