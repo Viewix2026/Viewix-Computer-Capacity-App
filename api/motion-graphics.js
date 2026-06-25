@@ -511,6 +511,7 @@ export default async function handler(req, res) {
     if (action === "update") return await handleUpdate(req, res, body);
     if (action === "archive") return await handleArchive(req, res, body);
     if (action === "assign") return await handleAssign(req, res, body);
+    if (action === "setType") return await handleSetType(req, res, body);
     if (action === "templateSave") return await handleTemplateSave(req, res, body);
     if (action === "templateDelete") return await handleTemplateDelete(req, res, body);
     if (action === "templateFeedback") return await handleTemplateFeedback(req, res, body);
@@ -729,6 +730,9 @@ async function handleSave(req, res, body) {
       ? name.trim().slice(0, 80)
       : `Motion graphic ${now.slice(0, 10)}`;
   const client = typeof body.client === "string" && body.client.trim() ? body.client.trim().slice(0, 80) : null;
+  // Animation type (the library's primary split). Defaults to "Other" so an
+  // untyped item always lands in a real bucket.
+  const type = typeof body.type === "string" && body.type.trim() ? body.type.trim().slice(0, 80) : "Other";
 
   // Atomic multi-path write: meta + html together (no orphaned-meta state).
   await fbPatchMulti("/motionGraphicsLibrary", {
@@ -740,6 +744,7 @@ async function handleSave(req, res, body) {
       generationId,
       costUsd: ledger.costUsd || 0,
       client,
+      type,
       createdBy: req._actor,
       createdAt: now,
       archived: false,
@@ -747,7 +752,7 @@ async function handleSave(req, res, body) {
     [`html/${id}`]: guarded,
   });
 
-  return res.status(200).json({ id, name: cleanName, client });
+  return res.status(200).json({ id, name: cleanName, client, type });
 }
 
 // Overwrite an existing library item's CONTENT in place with a revision (the
@@ -807,6 +812,22 @@ async function handleAssign(req, res, body) {
     assignedAt: new Date().toISOString(),
   });
   return res.status(200).json({ ok: true, client });
+}
+
+// Set the animation type a saved graphic is filed under (the library's primary
+// split). Free label sanitised to <=80 chars; empty/blank falls back to "Other".
+async function handleSetType(req, res, body) {
+  const { id } = body;
+  if (!validId(id)) return res.status(400).json({ error: "Missing or invalid id" });
+  const type = typeof body.type === "string" && body.type.trim() ? body.type.trim().slice(0, 80) : "Other";
+  const meta = await fbGet(`/motionGraphicsLibrary/meta/${id}`);
+  if (!meta) return res.status(404).json({ error: "Library item not found" });
+  await fbPatchMulti(`/motionGraphicsLibrary/meta/${id}`, {
+    type,
+    typedBy: req._actor,
+    typedAt: new Date().toISOString(),
+  });
+  return res.status(200).json({ ok: true, type });
 }
 
 async function handleArchive(req, res, body) {
