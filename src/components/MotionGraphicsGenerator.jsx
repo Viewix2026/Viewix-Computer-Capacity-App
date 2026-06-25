@@ -317,7 +317,8 @@ export function MotionGraphicsGenerator({ clients = [] }) {
 
   const [library, setLibrary] = useState({});
   const [libLoaded, setLibLoaded] = useState(false);
-  const [clientFilter, setClientFilter] = useState("All");
+  const [typeFilter, setTypeFilter] = useState("All"); // library splits by animation type now
+  const [clientSearch, setClientSearch] = useState(""); // client is a tag + search, not the primary split
 
   // Team-editable preset templates + their feedback.
   const [templates, setTemplates] = useState({});       // /motionGraphicsTemplates
@@ -490,7 +491,8 @@ export function MotionGraphicsGenerator({ clients = [] }) {
       setResult({ id: d.id, html: d.html, fragment: d.fragment, dimension: d.dimension, cost: d.cost, brand: d.brand || null, fromLibrary: false,
         reviseOf: isRefine ? (result?.reviseOf || null) : null,
         name: isRefine ? (result?.name || null) : null,
-        client: isRefine ? (result?.client || null) : null });
+        client: isRefine ? (result?.client || null) : null,
+        type: isRefine ? (result?.type || null) : null });
       setRefine(""); setPreviewKey(k => k + 1);
     } catch (e) {
       if (e.name === "AbortError") setError("Generation cancelled or timed out.");
@@ -507,11 +509,16 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     savingRef.current = true;
     const gid = result.id; // capture so a late response can't mislabel a newer generation
     setError("");
-    // stamp the active client chip; for a revision, fall back to the source item's client so Save-as-new doesn't drop it
-    const client = allClientNames.includes(clientFilter) ? clientFilter : (result?.reviseOf ? result.client || null : null);
+    // a revision inherits the source item's client; a fresh save starts unassigned (set later via the card tag)
+    const client = result?.reviseOf ? result.client || null : null;
+    // a revision keeps the source item's type (kept live on result.type — stamped on
+    // load, carried through refines, and updated optimistically by assignType — so a
+    // retype-then-save is race-free). A stray active preset must NOT override it.
+    // Fresh save → the preset it was made from, else Other.
+    const type = result?.reviseOf ? (result?.type || "Other") : (presetLabel || "Other");
     try {
       const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save", generationId: gid, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || result?.name || undefined), client }) });
+        body: JSON.stringify({ action: "save", generationId: gid, fragment: result.fragment, html: result.html, name: (presetLabel || prompt.trim().slice(0, 48) || result?.name || undefined), client, type }) });
       const d = await readJsonResponse(r);
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setSavedGenId(gid);
@@ -547,7 +554,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
       setFmt(fmtFromDim(item.dimension));
       setRefine(""); // don't carry an unsent refine instruction onto the newly loaded item
       // reviseOf = this item's id so a follow-up revision can update it in place.
-      setResult({ id: null, html, fragment: html, dimension: item.dimension, cost: item.costUsd, fromLibrary: true, reviseOf: item.id, name: item.name, client: item.client || null });
+      setResult({ id: null, html, fragment: html, dimension: item.dimension, cost: item.costUsd, fromLibrary: true, reviseOf: item.id, name: item.name, client: item.client || null, type: item.type || null });
       setPreviewKey(k => k + 1);
     } catch (e) { setError(e.message || "Could not load graphic"); }
   }
@@ -570,6 +577,19 @@ export function MotionGraphicsGenerator({ clients = [] }) {
     } catch (e) { setError(e.message || "Assign failed"); }
   }
 
+  async function assignType(id, type) {
+    setError("");
+    const t = type || "Other";
+    // keep a loaded revision's type live so Save-as-new uses the just-set value
+    // immediately, without waiting on the RTDB round-trip.
+    if (result?.reviseOf === id) setResult(r => r ? { ...r, type: t } : r);
+    try {
+      const r = await authFetch("/api/motion-graphics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "setType", id, type: t }) });
+      const d = await readJsonResponse(r);
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    } catch (e) { setError(e.message || "Couldn't set type"); }
+  }
+
   function popOut() {
     if (!result?.html) return;
     const rf = MG_FORMATS[fmtFromDim(result.dimension)]; // size from the GENERATED dim, not the live control
@@ -590,13 +610,28 @@ export function MotionGraphicsGenerator({ clients = [] }) {
   function copySource() { if (result?.html) { navigator.clipboard?.writeText(result.html); setCopied(true); setTimeout(() => setCopied(false), 1500); } }
 
   const items = Object.values(library || {}).filter(g => g && g.id && !g.archived).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-  // union current clients with any client already stamped on an item, so a
-  // removed/renamed client still has a filter chip + select option.
+  const typeOf = i => (typeof i.type === "string" && i.type.trim()) ? i.type.trim() : "Other"; // untyped → Other
+  // clients still feed the per-card assign dropdown (client is a tag now, not the split).
   const itemClients = [...new Set(items.map(i => (typeof i.client === "string" ? i.client.trim() : "")).filter(Boolean))];
   const allClientNames = [...new Set([...names, ...itemClients])].sort((a, b) => a.localeCompare(b));
-  const filterChips = ["All", ...allClientNames, "Unassigned"];
-  const countFor = c => c === "All" ? items.length : c === "Unassigned" ? items.filter(i => !i.client).length : items.filter(i => i.client === c).length;
-  const visible = clientFilter === "All" ? items : clientFilter === "Unassigned" ? items.filter(i => !i.client) : items.filter(i => i.client === clientFilter);
+  // PRIMARY split = animation type. Chips = All + types in use (Other always last).
+  const otherLast = (a, b) => a === b ? 0 : a === "Other" ? 1 : b === "Other" ? -1 : String(a).localeCompare(String(b));
+  const usedTypes = [...new Set(items.map(typeOf))].sort(otherLast);
+  const typeChips = ["All", ...usedTypes];
+  const countForType = t => t === "All" ? items.length : items.filter(i => typeOf(i) === t).length;
+  // type options on a card = template/preset labels ∪ types already used ∪ Other.
+  const allTypeNames = [...new Set([...rail.map(t => t.label), ...usedTypes, "Other"])].sort(otherLast);
+  // SECONDARY filter = client search (substring), applied within the selected type.
+  const cs = clientSearch.trim().toLowerCase();
+  const visible = items.filter(i =>
+    (typeFilter === "All" || typeOf(i) === typeFilter) &&
+    (!cs || (typeof i.client === "string" && i.client.toLowerCase().includes(cs))));
+
+  // if the active type filter no longer has any items (e.g. every item of that
+  // type was retyped or archived), fall back to All so the grid can't get stuck empty.
+  useEffect(() => {
+    if (typeFilter !== "All" && !usedTypes.includes(typeFilter)) setTypeFilter("All");
+  }, [typeFilter, JSON.stringify(usedTypes)]);
 
   const hasResult = !!result;
   const isSaved = !!result && !result.fromLibrary && savedGenId === result.id;
@@ -778,16 +813,24 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <span style={{ fontFamily: VX.sans, fontSize: 11.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: VX.fg2, whiteSpace: "nowrap" }}>Shared Library</span>
             <span style={{ width: 1, height: 16, background: VX.border, flex: "0 0 auto" }} />
             <div style={{ display: "flex", gap: 6, overflowX: "auto", flex: 1, paddingBottom: 2 }}>
-              {filterChips.map(c => {
-                const on = clientFilter === c;
+              {typeChips.map(c => {
+                const on = typeFilter === c;
                 return (
-                  <button key={c} onClick={() => setClientFilter(c)} style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "0 0 auto", cursor: "pointer", fontFamily: VX.sans, fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 99,
+                  <button key={c} onClick={() => setTypeFilter(c)} title={c} style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: "0 0 auto", cursor: "pointer", fontFamily: VX.sans, fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 99, whiteSpace: "nowrap",
                     background: on ? VX.accentSoft : "transparent", color: on ? VX.accentBright : VX.muted, border: "1px solid " + (on ? "rgba(0,130,250,0.32)" : VX.border) }}>
-                    {c !== "All" && c !== "Unassigned" && <ClientDot name={c} size={7} />}{shortClient(c)}
-                    <span style={{ fontFamily: VX.mono, fontSize: 10, color: on ? VX.accentBright : VX.faint }}>{countFor(c)}</span>
+                    {c}
+                    <span style={{ fontFamily: VX.mono, fontSize: 10, color: on ? VX.accentBright : VX.faint }}>{countForType(c)}</span>
                   </button>
                 );
               })}
+            </div>
+            {/* client is a tag now — find a client's work by searching, not by a chip per client */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto", height: 28, padding: "0 4px 0 10px", borderRadius: 99, border: "1px solid " + VX.border, background: VX.inset }}>
+              <Icon name="search" size={13} sw={1.9} stroke={VX.muted} />
+              <input value={clientSearch} onChange={e => setClientSearch(e.target.value)} placeholder="Search client…" spellCheck={false}
+                style={{ width: 104, background: "transparent", border: "none", outline: "none", fontFamily: VX.sans, fontSize: 11.5, color: VX.fg }} />
+              {clientSearch && <button onClick={() => setClientSearch("")} title="Clear" style={{ width: 18, height: 18, borderRadius: 5, border: "none", cursor: "pointer", background: "transparent", color: VX.muted, display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto" }}>
+                <Icon name="plus" size={11} sw={2} style={{ transform: "rotate(45deg)" }} /></button>}
             </div>
           </div>
           {!libLoaded ? (
@@ -796,7 +839,7 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <div style={{ fontFamily: VX.sans, fontSize: 12.5, color: VX.muted, padding: "10px 0" }}>No saved graphics yet — Save a generation to share it with the team.</div>
           ) : visible.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: VX.sans, fontSize: 12.5, color: VX.muted, padding: "10px 0" }}>
-              <ClientDot name={clientFilter === "Unassigned" ? null : clientFilter} size={8} />No graphics for <strong style={{ color: VX.fg2 }}>{clientFilter}</strong> yet — open one and assign a client.</div>
+              No graphics{typeFilter !== "All" ? <> of type <strong style={{ color: VX.fg2 }}>{typeFilter}</strong></> : ""}{cs ? <> for a client matching <strong style={{ color: VX.fg2 }}>{clientSearch.trim()}</strong></> : ""} yet.</div>
           ) : (
             <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 4 }}>
               {visible.map(item => (
@@ -812,6 +855,18 @@ export function MotionGraphicsGenerator({ clients = [] }) {
                   </div>
                   <div style={{ padding: "9px 11px" }}>
                     <div style={{ fontFamily: VX.sans, fontSize: 12, fontWeight: 700, color: VX.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
+                    {/* animation type — the library's primary split */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, position: "relative" }}>
+                      <Icon name="filter" size={12} sw={2} stroke={VX.accentBright} />
+                      <div style={{ position: "relative", flex: 1 }}>
+                        <select value={allTypeNames.includes(typeOf(item)) ? typeOf(item) : "Other"} onChange={e => assignType(item.id, e.target.value)} title="Animation type"
+                          style={{ width: "100%", appearance: "none", fontFamily: VX.sans, fontSize: 11, fontWeight: 700, color: VX.accentBright, background: VX.inset, border: "1px solid " + VX.border, borderRadius: VX.r1, padding: "5px 24px 5px 9px", cursor: "pointer", outline: "none" }}>
+                          {allTypeNames.map(n => <option key={n} value={n} style={{ background: "#141A29", color: VX.fg }}>{n}</option>)}
+                        </select>
+                        <span style={{ position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: VX.muted }}><Icon name="chevdown" size={12} sw={2} /></span>
+                      </div>
+                    </div>
+                    {/* client — a tag, still assignable */}
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, position: "relative" }}>
                       <ClientDot name={item.client} size={8} />
                       <div style={{ position: "relative", flex: 1 }}>
