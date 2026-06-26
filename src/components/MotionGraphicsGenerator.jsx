@@ -739,10 +739,16 @@ export function MotionGraphicsGenerator({ clients = [] }) {
             <div style={{ fontFamily: VX.sans, fontSize: 16, fontWeight: 800, color: VX.fg, letterSpacing: "-0.01em" }}>Motion Graphics</div>
             <div style={{ fontFamily: VX.sans, fontSize: 11.5, color: VX.muted, marginTop: 3 }}>Describe it · generate a branded animation · screen-record.</div>
           </div>
-          <button onClick={() => { if (!generating && !porting) { setError(""); setImportOpen(true); } }} disabled={generating || porting} title="Paste a component or code snippet — we port it to a recordable fragment"
-            style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 6, fontFamily: VX.sans, fontSize: 12, fontWeight: 700, padding: "7px 11px", borderRadius: VX.r2, cursor: (generating || porting) ? "not-allowed" : "pointer", border: "1px solid " + VX.border, background: VX.card, color: (generating || porting) ? VX.faint : VX.accentBright, opacity: (generating || porting) ? 0.6 : 1 }}>
-            <Icon name="external" size={14} sw={2} stroke={(generating || porting) ? VX.faint : VX.accentBright} />Import
-          </button>
+          <div style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>
+            <button onClick={() => { if (!generating && !porting) { setError(""); setImportOpen(true); } }} disabled={generating || porting} title="Paste a component or code snippet — we port it to a recordable fragment"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: VX.sans, fontSize: 12, fontWeight: 700, padding: "7px 11px", borderRadius: VX.r2, cursor: (generating || porting) ? "not-allowed" : "pointer", border: "1px solid " + VX.border, background: VX.card, color: (generating || porting) ? VX.faint : VX.accentBright, opacity: (generating || porting) ? 0.6 : 1 }}>
+              <Icon name="external" size={14} sw={2} stroke={(generating || porting) ? VX.faint : VX.accentBright} />Import
+            </button>
+            <a href="https://reactbits.dev/" target="_blank" rel="noopener noreferrer" title="Browse pre-made animated components to import"
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: VX.sans, fontSize: 10.5, fontWeight: 600, color: VX.muted, textDecoration: "none", whiteSpace: "nowrap" }}>
+              External library<Icon name="link2" size={10} sw={2} stroke={VX.muted} />
+            </a>
+          </div>
         </div>
         <div style={{ flex: 1, overflow: "auto", padding: "20px 22px", display: "flex", flexDirection: "column", gap: 24 }}>
           <MGGroup n="1" label="Start from a preset" right={
