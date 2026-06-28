@@ -216,6 +216,31 @@ export function dealRecordId(d) {
   return "";
 }
 
+// The deal owner's workspace-member id (actor-reference cell:
+// values.owner[0].referenced_actor_id). Used to attribute commission to the
+// salesperson who closed the deal. The cache carries ONLY this UUID — no name
+// or email — so the UUID->person bridge lives in shared/commissionDerive.js
+// (resolved once from the Attio workspace-members API). Returns the raw id or
+// null.
+export function dealOwnerActorId(d) {
+  const v = d?.values || {};
+  const cell = Array.isArray(v.owner) ? v.owner[0] : v.owner;
+  return cell?.referenced_actor_id || null;
+}
+
+// The deal's lead-source channel (select cell: values.source[0].option.title).
+// Drives BOTH deal-type ("Repeat Business" => repeat) and the provided/
+// self-sourced lead-source split in commissionDerive.js. Falls through a
+// status title / plain value so a future re-typing of the attribute still
+// reads. Returns the channel string or null.
+export function dealSource(d) {
+  const v = d?.values || {};
+  const cell = Array.isArray(v.source) ? v.source[0] : v.source;
+  if (!cell) return null;
+  const t = cell.option?.title || cell.status?.title || (typeof cell.value === "string" ? cell.value : null);
+  return t || null;
+}
+
 // Stage is already lowercased by extractStage. Viewix's Attio deal pipeline
 // has exactly ONE won state: "Won". Verified 2026-06-01 against the live
 // `stage` attribute; the six stages are Lead, Meeting Booked, Quoted, On
