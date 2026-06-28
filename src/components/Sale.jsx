@@ -44,6 +44,9 @@ export function Sale({
 }) {
   const [form, setForm] = useState({ creating: false, ...newSale() });
   const [copyFlash, setCopyFlash] = useState(null);
+  // Separate flash so "Copy Sale ID" (for the Attio → Xero reconciliation
+  // link) doesn't collide with the "Copy Link" flash on the same row.
+  const [copyIdFlash, setCopyIdFlash] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   // Charge Balance flow state — modal open on a specific sale, result copy,
   // loading flag, error. Only one sale can be mid-charge at a time so we
@@ -219,6 +222,17 @@ export function Sale({
     try { navigator.clipboard.writeText(url); } catch {}
     setCopyFlash(s.id);
     setTimeout(() => setCopyFlash(null), 1500);
+  };
+
+  // Copy the raw sale id for the Stripe→Xero reconciliation bridge. The
+  // salesperson pastes it into the Attio deal's "Dashboard Sale ID" field
+  // when marking the deal Won; the Attio→Xero zap maps it onto the invoice
+  // Reference, and the daily reconciler matches payments by it. Exact paste
+  // (no typing) keeps the match key clean.
+  const copySaleId = (s) => {
+    try { navigator.clipboard.writeText(s.id); } catch {}
+    setCopyIdFlash(s.id);
+    setTimeout(() => setCopyIdFlash(null), 1500);
   };
 
   const packagesFor = (vt) => SALE_VIDEO_TYPES.find(t => t.key === vt)?.packages || [];
@@ -627,6 +641,7 @@ export function Sale({
                     </button>
                   )}
                   <button onClick={()=>copyLink(s)} style={{...BTN,background:copyFlash===s.id?"#10B981":"var(--bg)",color:copyFlash===s.id?"white":"var(--accent)",border:"1px solid var(--border)"}}>{copyFlash===s.id?"Copied!":"Copy Link"}</button>
+                  <button onClick={()=>copySaleId(s)} title="Copy this sale's ID to paste into the Attio deal's 'Dashboard Sale ID' field at Won — links the payment to its Xero invoice for auto-reconciliation." style={{...BTN,background:copyIdFlash===s.id?"#10B981":"var(--bg)",color:copyIdFlash===s.id?"white":"var(--muted)",border:"1px solid var(--border)"}}>{copyIdFlash===s.id?"Copied!":"Copy Sale ID"}</button>
                   <a href={url} target="_blank" rel="noopener noreferrer" style={{...BTN,background:"var(--bg)",color:"var(--accent)",border:"1px solid var(--border)",textDecoration:"none",display:"inline-flex",alignItems:"center"}}>Preview ↗</a>
                   {confirmDelete===s.id?(
                     <>

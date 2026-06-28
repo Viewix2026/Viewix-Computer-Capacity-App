@@ -110,9 +110,16 @@
     },
     "api/cron/reviews-sync.js": {
       "maxDuration": 300
+    },
+    "api/cron/xero-reconcile.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
+    {
+      "path": "/api/cron/xero-reconcile",
+      "schedule": "30 20 * * *"
+    },
     {
       "path": "/api/check-contacts",
       "schedule": "0 22 * * *"
