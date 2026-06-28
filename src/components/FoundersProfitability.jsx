@@ -20,6 +20,8 @@ import { fbListenSafe, fbSet } from "../firebase";
 import { pct, fmtCur } from "../utils";
 import { DEF_EDS } from "../config";
 import { recomputeRow, buildRollups, keepProjectRow, isInternalProject, WARNINGS } from "../../shared/profitability.js";
+import { buildDealIndex, resolveDeal, dealRecordId, dealOwnerActorId, dealSource } from "../../shared/attio-extract.js";
+import { deriveCommissionSuggestion, suggestionInputs } from "../../shared/commissionDerive.js";
 
 const PL_LABEL = {
   metaAds: "Meta Ads",
@@ -28,6 +30,16 @@ const PL_LABEL = {
   oneOff: "One-off / Live Action",
 };
 const plLabel = (k) => PL_LABEL[k] || k || "(unspecified)";
+
+// Human label for an auto-derived commission suggestion, e.g.
+// "New business · Brandon · self-sourced (15%)".
+function suggestionLabel(sug, plans) {
+  const dt = sug.dealType === "repeat" ? "Repeat" : sug.dealType === "new" ? "New business" : "—";
+  const payeeId = sug.closerId || sug.accountManagerId;
+  const payee = payeeId ? (plans[payeeId]?.name || "?") : null;
+  const ls = sug.leadSource === "provided" ? "company-provided (10%)" : sug.leadSource === "selfSourced" ? "self-sourced (15%)" : null;
+  return [dt, payee, ls].filter(Boolean).join(" · ");
+}
 
 const WARN_LABEL = {
   [WARNINGS.MISSING_LABOUR_RATE]: "Labour rate missing for a logged person",
@@ -165,6 +177,9 @@ export function FoundersProfitability() {
   const [commissionPlans, setCommissionPlans] = useState({});
   const [costInputs, setCostInputs] = useState({});
   const [commissionInputs, setCommissionInputs] = useState({});
+  // raw Attio deals + projects — read-only, for the commission auto-suggest layer
+  const [attioCache, setAttioCache] = useState(null);
+  const [projects, setProjects] = useState({});
   // optimistic drafts so edits recompute instantly (draft wins per id)
   const [rateDraft, setRateDraft] = useState({});
   const [planDraft, setPlanDraft] = useState({});
@@ -188,6 +203,8 @@ export function FoundersProfitability() {
       fbListenSafe("/commissionPlans", (d) => setCommissionPlans(obj(d))),
       fbListenSafe("/projectCostInputs", (d) => setCostInputs(obj(d))),
       fbListenSafe("/projectCommissionInputs", (d) => setCommissionInputs(obj(d))),
+      fbListenSafe("/attioCache", (d) => setAttioCache(d && typeof d === "object" ? d : null)),
+      fbListenSafe("/projects", (d) => setProjects(obj(d))),
     ];
     return () => unsubs.forEach((u) => typeof u === "function" && u());
   }, []);
@@ -230,6 +247,55 @@ export function FoundersProfitability() {
   const incompleteRows = useMemo(
     () => rows.filter((r) => !r.complete).sort((a, b) => b.warnings.length - a.warnings.length || String(a.clientName).localeCompare(String(b.clientName))),
     [rows]
+  );
+
+  // ── commission auto-suggest (client-side; reads /attioCache + /projects) ──
+  // Derive a SUGGESTED attribution for each Incomplete row blocked on commission,
+  // from its matched Attio deal's owner (→ payee) + source (→ deal type & lead
+  // source). Pure logic lives in shared/commissionDerive.js; this just joins rows
+  // to raw deals and calls it. Nothing is written until the founder accepts.
+  // Positive-value Won deals only (buildDealIndex default). Broadening to
+  // zero-value deals rescued 0 rows against live data — a commission-blocked row
+  // always carries a positive deal value — while it risked new $0-sibling
+  // name-match ambiguity, so the safer default wins (Codex code-review F2/F3).
+  const dealIndex = useMemo(() => buildDealIndex(attioCache), [attioCache]);
+  const rawDealById = useMemo(() => {
+    const m = new Map();
+    const deals = Array.isArray(attioCache?.data) ? attioCache.data : [];
+    for (const d of deals) { const id = dealRecordId(d); if (id && !m.has(id)) m.set(id, d); }
+    return m;
+  }, [attioCache]);
+
+  const commissionSuggestions = useMemo(() => {
+    const out = {};
+    for (const r of incompleteRows) {
+      const w = r.warnings || [];
+      if (!w.includes(WARNINGS.COMMISSION_UNASSIGNED) && !w.includes(WARNINGS.LEAD_SOURCE_UNSET)) continue;
+      if (commissionInputsM[r.projectId]?.dealType) continue; // human/accepted already — never re-suggest
+      const project = projects[r.projectId];
+      if (!project) continue;
+      const m = resolveDeal(project, dealIndex);
+      if (!m || m.ambiguous || !m.entry) continue; // no confident deal → no guess
+      const raw = rawDealById.get(m.entry.recordId);
+      if (!raw) continue;
+      const sug = deriveCommissionSuggestion({
+        source: dealSource(raw),
+        ownerActorId: dealOwnerActorId(raw),
+        dealValue: r.dealValue,
+        commissionPlans: commissionPlansM,
+      });
+      if (!sug.dealType && !sug.closerId && !sug.accountManagerId && !sug.leadSource) continue; // nothing actionable
+      // A name-only deal match is too weak to bulk-auto (could be a different
+      // client's same-named deal): downgrade to review so only fk matches auto-clear.
+      const confidence = sug._meta.confidence === "high" && m.via === "fk" ? "high" : "review";
+      out[r.projectId] = { ...sug, _meta: { ...sug._meta, confidence, via: m.via } };
+    }
+    return out;
+  }, [incompleteRows, projects, dealIndex, rawDealById, commissionInputsM, commissionPlansM]);
+
+  const highConfidenceIds = useMemo(
+    () => Object.keys(commissionSuggestions).filter((id) => commissionSuggestions[id]._meta.confidence === "high"),
+    [commissionSuggestions]
   );
 
   // every person with labour on a row — logged OR scheduled shoot crew — so
@@ -297,6 +363,22 @@ export function FoundersProfitability() {
     const next = { ...(commissionInputsM[id] || {}), ...patch, updatedAt: Date.now() };
     setCommDraft((d) => ({ ...d, [id]: next }));
     fbSet(`/projectCommissionInputs/${id}`, next);
+  };
+  // Accept an auto-suggestion: writes it as a normal commission input (a leaf
+  // write, merged onto any existing value) tagged commissionSource:"auto" so the
+  // row badges it and re-derive skips it. The founder can still override after.
+  const acceptSuggestion = (id) => {
+    const sug = commissionSuggestions[id];
+    if (!sug) return;
+    saveComm(id, { ...suggestionInputs(sug), commissionSource: "auto", acceptedAt: Date.now() });
+  };
+  const acceptAllHighConfidence = () => {
+    for (const id of highConfidenceIds) {
+      const sug = commissionSuggestions[id];
+      if (sug && !commissionInputsM[id]?.dealType) {
+        saveComm(id, { ...suggestionInputs(sug), commissionSource: "auto", acceptedAt: Date.now() });
+      }
+    }
   };
   const addPlan = () => {
     const id = "pl-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
@@ -389,6 +471,20 @@ export function FoundersProfitability() {
       {/* projects */}
       <section>
         <SectionHeader dot={ACCENT.green} title={`Projects · ${completeRows.length + incompleteRows.length}`} note="worst contribution % first · click a row to edit costs & commission" />
+        {Object.keys(commissionSuggestions).length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", margin: "2px 0 10px", padding: "8px 12px", background: "rgba(0,130,250,0.07)", border: "1px solid rgba(0,130,250,0.3)", borderRadius: 8 }}>
+            <span style={{ fontSize: 12, color: C.fg }}>
+              ✨ <strong>{Object.keys(commissionSuggestions).length}</strong> commission {Object.keys(commissionSuggestions).length === 1 ? "suggestion" : "suggestions"} from Attio
+              {highConfidenceIds.length > 0 && <> · <span style={{ color: ACCENT.green }}>{highConfidenceIds.length} high-confidence</span></>}
+              {Object.keys(commissionSuggestions).length - highConfidenceIds.length > 0 && <> · <span style={{ color: "#F59E0B" }}>{Object.keys(commissionSuggestions).length - highConfidenceIds.length} need review</span></>}
+            </span>
+            {highConfidenceIds.length > 0 && (
+              <button onClick={acceptAllHighConfidence} style={{ background: ACCENT.blue, color: "#fff", border: "none", borderRadius: 7, padding: "7px 12px", fontFamily: SANS, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                Accept all high-confidence ({highConfidenceIds.length})
+              </button>
+            )}
+          </div>
+        )}
         <div style={{ overflowX: "auto", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12 }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
@@ -474,6 +570,7 @@ export function FoundersProfitability() {
     const open = expandedId === r.projectId;
     const ci = commissionInputsM[r.projectId] || {};
     const co = costInputsM[r.projectId];
+    const sug = commissionSuggestions[r.projectId];
     return (
       <Fragment key={r.projectId}>
         <tr onClick={() => setExpandedId(open ? null : r.projectId)} style={{ cursor: "pointer", background: open ? "rgba(0,130,250,0.07)" : "transparent" }}>
@@ -493,7 +590,10 @@ export function FoundersProfitability() {
           <td style={td}><MoneyCell v={r.commission} /></td>
           <td style={{ ...td, fontWeight: 700, color: r.contribution < 0 ? ACCENT.coral : C.fg }}>{money(r.contribution)}</td>
           <td style={td}><ContribBar value={r.contributionPct} /></td>
-          <td style={td}>{r.complete ? <Pill text="Complete" color={ACCENT.green} /> : <Pill text="Incomplete" color={ACCENT.amber} />}</td>
+          <td style={td}>
+            {r.complete ? <Pill text="Complete" color={ACCENT.green} /> : <Pill text="Incomplete" color={ACCENT.amber} />}
+            {!r.complete && sug && <span style={{ marginLeft: 6 }} title="Has an auto commission suggestion"><Pill text={sug._meta.confidence === "high" ? "✨ suggested" : "✨ review"} color={ACCENT.blue} /></span>}
+          </td>
         </tr>
         {open && (
           <tr>
@@ -525,6 +625,18 @@ export function FoundersProfitability() {
                 {/* commission */}
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Commission</div>
+                  {sug && (
+                    <div style={{ background: "rgba(0,130,250,0.08)", border: "1px solid rgba(0,130,250,0.35)", borderRadius: 8, padding: "8px 10px", marginBottom: 10, maxWidth: 280 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: C.fg }}>✨ {suggestionLabel(sug, commissionPlansM)}</span>
+                        <Pill text={sug._meta.confidence === "high" ? "high confidence" : "needs review"} color={sug._meta.confidence === "high" ? ACCENT.green : ACCENT.amber} />
+                      </div>
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>{sug._meta.basis.join(" · ")}</div>
+                      <button onClick={() => acceptSuggestion(r.projectId)} style={{ marginTop: 8, background: ACCENT.blue, color: "#fff", border: "none", borderRadius: 6, padding: "5px 11px", fontFamily: SANS, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        {sug._meta.confidence === "high" ? "Accept" : "Apply & finish below"}
+                      </button>
+                    </div>
+                  )}
                   <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 280 }}>
                     <label style={{ fontSize: 12, color: C.fg }}>Deal type
                       <div style={{ marginTop: 3 }}><Sel value={ci.dealType} onChange={(v) => saveComm(r.projectId, { dealType: v })} options={[{ value: "new", label: "New business" }, { value: "repeat", label: "Repeat / managed" }]} placeholder="— choose —" /></div>
