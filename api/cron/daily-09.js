@@ -51,7 +51,15 @@
 //                             gate Pass 2 — only the email send.
 
 import { adminGet, adminPatch, adminSet } from "../_fb-admin.js";
-import { send, newCounters, postCronSummary, postCronPassError } from "../_email/send.js";
+import { send, newCounters, noteOffender, postCronSummary, postCronPassError } from "../_email/send.js";
+
+// Human-readable label for a project, used in the "did not go to plan"
+// Slack nags so a producer knows exactly which record to fix.
+function projectLabel(project, projectId) {
+  const client = (project?.clientName || "").trim() || "(unknown client)";
+  const name = (project?.projectName || "").trim() || "(untitled project)";
+  return `${client} / ${name} (${projectId})`;
+}
 import { getProjectContext, buildShootContext, resolveProjectEmailRecipients } from "../_email/getProjectContext.js";
 import { isAuthorizedCron } from "../_cronAuth.js";
 import { reconcileDeliveryStatus, maybePingAccountManager } from "../_deliveryReconcile.js";
@@ -188,6 +196,7 @@ async function passShootTomorrow({ projects, editors, accounts, today, tomorrow 
         evaluated++;
         if (!SHOOT_OK_STATUS.has(st.status)) {
           counters.skipped_bad_status++;
+          noteOffender(counters, "skipped_bad_status", projectLabel(project, projectId));
           continue;
         }
         // Resolve { to, cc } via the shared helper. Primary missing
@@ -197,10 +206,12 @@ async function passShootTomorrow({ projects, editors, accounts, today, tomorrow 
         const { to: clientEmail, cc } = resolveProjectEmailRecipients(project, accounts);
         if (!clientEmail) {
           counters.skipped_no_email++;
+          noteOffender(counters, "skipped_no_email", projectLabel(project, projectId));
           continue;
         }
         if (!st.id) {
           counters.skipped_no_subtask_id++;
+          noteOffender(counters, "skipped_no_subtask_id", projectLabel(project, projectId));
           continue;
         }
         const shoot = buildShootContext({ subtask: st, editors });
@@ -343,6 +354,7 @@ async function passInEditSuite({ projects, editors, accounts }) {
     const { to: clientEmail, cc } = resolveProjectEmailRecipients(fresh, accounts);
     if (!clientEmail) {
       counters.skipped_no_email++;
+      noteOffender(counters, "skipped_no_email", projectLabel(fresh, projectId));
       continue;
     }
 
