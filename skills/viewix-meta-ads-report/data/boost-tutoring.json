@@ -1,0 +1,109 @@
+{
+  "client": "Boost Tutoring Australia",
+  "report_title": "Meta Ads Performance Report",
+  "generated_at": "2026-06-29T08:00:00+10:00",
+  "generated_label": "Generated Monday 29 June 2026, 8:00 AM AEST",
+  "period_label": "Lifetime to date — through 29 June 2026",
+  "currency": "AUD",
+  "summary": {
+    "spend": "A$22,867.22",
+    "impressions": "1,419,141",
+    "clicks": "18,416",
+    "leads": "537",
+    "ctr": "1.30%",
+    "cpc": "A$1.24",
+    "cpm": "A$16.11",
+    "cost_per_lead": "A$42.58",
+    "accounts": "2",
+    "campaigns": "17"
+  },
+  "accounts": [
+    {
+      "name": "Castle Hill",
+      "account_id": "4506267433028603",
+      "totals": {
+        "spend": "A$10,834.83",
+        "impressions": "652,137",
+        "clicks": "9,093",
+        "leads": "196",
+        "ctr": "1.39%",
+        "cpc": "A$1.19",
+        "cpm": "A$16.62",
+        "cost_per_lead": "A$55.28"
+      },
+      "viewix": {
+        "name": "Viewix Campaign (Leads)",
+        "spend": "A$508.97",
+        "impressions": "14,716",
+        "clicks": "335",
+        "leads": "4",
+        "ctr": "2.28%",
+        "cpc": "A$1.52",
+        "cpm": "A$34.57",
+        "cost_per_lead": "A$127.24",
+        "note": "Highest CTR in the account (2.28%) — leads still maturing; cost-per-lead above the account average while the creative test settles."
+      },
+      "campaigns": [
+        { "name": "Boost Tutoring | TOF (Primary) | Leads", "spend": "A$4,618.27", "impressions": "226,704", "clicks": "4,184", "ctr": "1.85%", "cpc": "A$1.10", "leads": "102", "cost_per_lead": "A$45.28" },
+        { "name": "Castle Hill - Lead Capture - 29 May", "spend": "A$3,776.37", "impressions": "313,812", "clicks": "3,585", "ctr": "1.14%", "cpc": "A$1.05", "leads": "56", "cost_per_lead": "A$67.44" },
+        { "name": "Boost Tutoring | TOF (Ad Testing) | Leads", "spend": "A$1,448.28", "impressions": "64,518", "clicks": "691", "ctr": "1.07%", "cpc": "A$2.10", "leads": "26", "cost_per_lead": "A$55.70" },
+        { "name": "Viewix Campaign (Leads)", "spend": "A$508.97", "impressions": "14,716", "clicks": "335", "ctr": "2.28%", "cpc": "A$1.52", "leads": "4", "cost_per_lead": "A$127.24" },
+        { "name": "Boost Tutoring | MOF/BOF | Retargeting", "spend": "A$219.51", "impressions": "14,254", "clicks": "99", "ctr": "0.69%", "cpc": "A$2.22", "leads": "3", "cost_per_lead": "A$73.17" },
+        { "name": "Job Applications | Applicants", "spend": "A$191.02", "impressions": "15,270", "clicks": "156", "ctr": "1.02%", "cpc": "A$1.22", "leads": "4", "cost_per_lead": "A$47.76" },
+        { "name": "DOM | TOF | Leads | May 26", "spend": "A$72.41", "impressions": "2,863", "clicks": "43", "ctr": "1.50%", "cpc": "A$1.68", "leads": "1", "cost_per_lead": "A$72.41" }
+      ],
+      "creative": [
+        { "name": "01_AF_Chance_PA", "status": "PAUSED", "spend": "A$315.84", "impressions": "9,228", "clicks": "203", "ctr": "2.20%", "cpc": "A$1.56", "leads": "3", "cost_per_lead": "A$105.28" },
+        { "name": "03_CH_NotPrivateTutor_PA", "status": "ACTIVE", "spend": "A$47.12", "impressions": "1,518", "clicks": "38", "ctr": "2.50%", "cpc": "A$1.24", "leads": "0", "cost_per_lead": "—" },
+        { "name": "22_CH_NotMotivation_PA", "status": "ACTIVE", "spend": "A$35.42", "impressions": "962", "clicks": "35", "ctr": "3.64%", "cpc": "A$1.01", "leads": "1", "cost_per_lead": "A$35.42" },
+        { "name": "21_CH_NotPatience_PA", "status": "ACTIVE", "spend": "A$27.67", "impressions": "808", "clicks": "10", "ctr": "1.24%", "cpc": "A$2.77", "leads": "0", "cost_per_lead": "—" },
+        { "name": "01_AF_Chance_PU", "status": "ACTIVE", "spend": "A$22.41", "impressions": "712", "clicks": "18", "ctr": "2.53%", "cpc": "A$1.25", "leads": "0", "cost_per_lead": "—" }
+      ]
+    },
+    {
+      "name": "Beaumont Hills",
+      "account_id": "1701110510860042",
+      "totals": {
+        "spend": "A$12,032.39",
+        "impressions": "767,004",
+        "clicks": "9,323",
+        "leads": "341",
+        "ctr": "1.22%",
+        "cpc": "A$1.29",
+        "cpm": "A$15.69",
+        "cost_per_lead": "A$35.29"
+      },
+      "viewix": {
+        "name": "Viewix Campaign (Leads)",
+        "spend": "A$527.44",
+        "impressions": "15,695",
+        "clicks": "190",
+        "leads": "3",
+        "ctr": "1.21%",
+        "cpc": "A$2.78",
+        "cpm": "A$33.61",
+        "cost_per_lead": "A$175.81",
+        "note": "Early-stage creative test — cost-per-lead well above account average; recommend pausing the lowest-CTR ads and shifting budget to top performers."
+      },
+      "campaigns": [
+        { "name": "Boost Tutoring | TOF | Pre-sale Leads | Apr (Updated)", "spend": "A$3,921.15", "impressions": "251,492", "clicks": "3,711", "ctr": "1.48%", "cpc": "A$1.06", "leads": "163", "cost_per_lead": "A$24.06" },
+        { "name": "Boost Tutoring | TOF (Primary) | Leads", "spend": "A$3,872.48", "impressions": "282,851", "clicks": "2,744", "ctr": "0.97%", "cpc": "A$1.41", "leads": "103", "cost_per_lead": "A$37.60" },
+        { "name": "Boost Tutoring | TOF (Ad Testing) | Leads", "spend": "A$1,160.76", "impressions": "73,838", "clicks": "568", "ctr": "0.77%", "cpc": "A$2.04", "leads": "21", "cost_per_lead": "A$55.27" },
+        { "name": "Boost Tutoring | TOF (Ad Testing) | Leads (2)", "spend": "A$847.04", "impressions": "67,877", "clicks": "814", "ctr": "1.20%", "cpc": "A$1.04", "leads": "37", "cost_per_lead": "A$22.89" },
+        { "name": "Beaumont Hills | Leads | June 2026", "spend": "A$619.71", "impressions": "24,819", "clicks": "770", "ctr": "3.10%", "cpc": "A$0.80", "leads": "2", "cost_per_lead": "A$309.86" },
+        { "name": "Viewix Campaign (Leads)", "spend": "A$527.44", "impressions": "15,695", "clicks": "190", "ctr": "1.21%", "cpc": "A$2.78", "leads": "3", "cost_per_lead": "A$175.81" },
+        { "name": "Boost Tutoring | MOF/BOF | Retargeting", "spend": "A$377.11", "impressions": "13,580", "clicks": "130", "ctr": "0.96%", "cpc": "A$2.90", "leads": "1", "cost_per_lead": "A$377.11" },
+        { "name": "DOM | Leads | Member Signups", "spend": "A$372.05", "impressions": "23,353", "clicks": "222", "ctr": "0.95%", "cpc": "A$1.68", "leads": "7", "cost_per_lead": "A$53.15" },
+        { "name": "Boost Tutoring | TOF (Primary) | Leads CBO", "spend": "A$195.03", "impressions": "7,331", "clicks": "88", "ctr": "1.20%", "cpc": "A$2.22", "leads": "1", "cost_per_lead": "A$195.03" },
+        { "name": "Foundation Offer | Leads | Beaumont Hills | April 2026", "spend": "A$139.62", "impressions": "6,168", "clicks": "86", "ctr": "1.39%", "cpc": "A$1.62", "leads": "3", "cost_per_lead": "A$46.54" }
+      ],
+      "creative": [
+        { "name": "01_AF_Chance_PA", "status": "PAUSED", "spend": "A$178.33", "impressions": "5,261", "clicks": "57", "ctr": "1.08%", "cpc": "A$3.13", "leads": "0", "cost_per_lead": "—" },
+        { "name": "20_CH_NotConvenience_PA", "status": "ACTIVE", "spend": "A$86.71", "impressions": "3,013", "clicks": "38", "ctr": "1.26%", "cpc": "A$2.28", "leads": "0", "cost_per_lead": "—" },
+        { "name": "19_CH_NotMoreTutors_PA", "status": "ACTIVE", "spend": "A$48.77", "impressions": "1,323", "clicks": "20", "ctr": "1.51%", "cpc": "A$2.44", "leads": "0", "cost_per_lead": "—" },
+        { "name": "01_AF_Chance_PU", "status": "ACTIVE", "spend": "A$40.99", "impressions": "1,281", "clicks": "12", "ctr": "0.94%", "cpc": "A$3.42", "leads": "0", "cost_per_lead": "—" },
+        { "name": "04_CH_NotHarderStudy_PA", "status": "ACTIVE", "spend": "A$32.64", "impressions": "903", "clicks": "10", "ctr": "1.11%", "cpc": "A$3.26", "leads": "0", "cost_per_lead": "—" }
+      ]
+    }
+  ]
+}
