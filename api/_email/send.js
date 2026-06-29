@@ -92,7 +92,22 @@ function newCounters() {
     skipped_bad_status: 0,    // shoot subtask not in a schedulable status
     skipped_no_subtask_id: 0, // shoot subtask has no id — data repair needed
     failed: 0,
+    // Per-reason list of human-readable project labels for every problem
+    // counter, so the Slack nag can name the exact offending record
+    // ("which project?") instead of just a count. Keyed by counter name;
+    // populated via noteOffender() at each increment site.
+    offenders: {},
   };
+}
+
+// Record which project tripped a problem counter, so postCronSummary can
+// list it under the matching reason line. No-op when counters or label is
+// missing. label should identify the record a producer must fix, e.g.
+// "gemIQ / Walkthrough (-Nabc123)".
+function noteOffender(counters, reason, label) {
+  if (!counters || !label) return;
+  const o = counters.offenders || (counters.offenders = {});
+  (o[reason] || (o[reason] = [])).push(label);
 }
 
 let _resend = null;
@@ -222,7 +237,10 @@ export async function send({ template, idempotencyKey, to, cc, subject, props, p
   // primary means we don't have a clearly addressed recipient, so we
   // skip rather than send a touchpoint to additional clients only.
   if (!to) {
-    if (c) c.skipped_no_email++;
+    if (c) {
+      c.skipped_no_email++;
+      noteOffender(c, "skipped_no_email", `${props?.project?.projectName || "(untitled project)"}${projectId ? ` (${projectId})` : ""}`);
+    }
     return { state: "skipped", reason: "missing_to" };
   }
   if (!subject) {
@@ -483,7 +501,13 @@ export async function postCronSummary(label, counters, channelId) {
     .filter(([, v]) => v > 0)
     .map(([k, v]) => `${k}=${v}`)
     .join(" · ");
-  const detail = present.map(([, msg]) => `> ${msg}`).join("\n");
+  const detail = present.map(([k, msg]) => {
+    const items = counters?.offenders?.[k] || [];
+    const list = items.length
+      ? "\n" + items.map(p => `>     • ${p}`).join("\n")
+      : "";
+    return `> ${msg}${list}`;
+  }).join("\n");
   const text =
     `:warning: *${label}* did not go to plan — ${problems.join(" · ")}\n` +
     `> full: ${fullBreakdown}\n` +
@@ -502,4 +526,4 @@ export async function postCronPassError(label, errorMessage) {
   );
 }
 
-export { newCounters, FROM, REPLY_TO };
+export { newCounters, noteOffender, FROM, REPLY_TO };
