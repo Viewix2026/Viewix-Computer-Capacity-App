@@ -1,0 +1,7 @@
+# Generated render artifacts and run logs — never commit PDFs or logs
+out/
+# Transient render files from generate.mjs
+template/.render.*.html
+template/.dbg.html
+
+data/*.tmp

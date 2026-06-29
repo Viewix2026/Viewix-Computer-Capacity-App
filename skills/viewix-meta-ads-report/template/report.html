@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Viewix Meta Ads Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --orange:#F87700; --blue:#0082FA; --blue-d:#004F99; --navy:#013b73;
+    --navy-d:#012038; --ink:#1A1A2E; --mut:#5b6472; --line:#e2e8f1;
+    --bg:#F4F5F9; --card:#ffffff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{font-family:'Montserrat',-apple-system,Segoe UI,sans-serif;color:var(--ink);background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .page{width:210mm;min-height:296mm;padding:18mm 16mm 14mm;page-break-after:always;position:relative;background:#fff}
+  .page:last-child{page-break-after:auto}
+  @page{size:A4;margin:0}
+
+  /* ---- shared ---- */
+  .eyebrow{font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--orange);font-weight:700}
+  h1{font-size:34px;font-weight:800;line-height:1.08;letter-spacing:-.01em}
+  h2{font-size:21px;font-weight:800;letter-spacing:-.01em}
+  h3{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--navy)}
+  .mut{color:var(--mut)}
+  .foot{position:absolute;bottom:8mm;left:16mm;right:16mm;display:flex;justify-content:space-between;
+    font-size:9px;color:#9aa3b2;letter-spacing:.04em;border-top:1px solid var(--line);padding-top:6px}
+  .bar{height:4px;width:54px;background:linear-gradient(90deg,var(--orange),var(--blue));border-radius:3px;margin:10px 0 0}
+
+  /* ---- cover ---- */
+  .cover{background:radial-gradient(120% 120% at 80% -10%,#08203b 0%,var(--navy-d) 55%,#000812 100%);color:#fff;
+    display:flex;flex-direction:column;justify-content:space-between}
+  .cover .eyebrow{color:#ffb877}
+  .cover h1{font-size:48px;margin-top:14px;max-width:15ch}
+  .logo{font-size:22px;font-weight:800;letter-spacing:.02em}
+  .logo b{color:var(--orange)}
+  .cover-meta{font-size:13px;color:#aeb9c9;line-height:1.7}
+  .cover-meta b{color:#fff}
+  .stamp{display:inline-block;margin-top:8px;font-size:11px;color:#0b1220;background:#ffb877;
+    padding:6px 12px;border-radius:999px;font-weight:700}
+  .hero-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:6px}
+  .hs{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:14px 14px 12px}
+  .hs .v{font-size:26px;font-weight:800;color:#fff;letter-spacing:-.01em}
+  .hs .k{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#9fb0c6;margin-top:4px}
+
+  /* ---- stat tiles (body) ---- */
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .tile .v{font-size:22px;font-weight:800;color:var(--navy)}
+  .tile .k{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);margin-top:3px}
+
+  /* ---- account overview cards ---- */
+  .acards{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  .acard{border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .acard .top{background:linear-gradient(135deg,var(--navy),var(--blue-d));color:#fff;padding:14px 16px}
+  .acard .top .nm{font-size:16px;font-weight:800}
+  .acard .top .id{font-size:9.5px;color:#bcd0ea;letter-spacing:.06em;margin-top:2px}
+  .acard .grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}
+  .acard .cell{background:#fff;padding:11px 14px}
+  .acard .cell .v{font-size:17px;font-weight:800;color:var(--ink)}
+  .acard .cell .k{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut);margin-top:2px}
+
+  /* ---- viewix highlight ---- */
+  .vx{margin-top:14px;border:1.5px solid var(--orange);border-radius:14px;overflow:hidden}
+  .vx .hd{background:linear-gradient(135deg,var(--orange),#ff9d3d);color:#1b1206;padding:10px 16px;display:flex;
+    justify-content:space-between;align-items:center}
+  .vx .hd .t{font-weight:800;font-size:14px}
+  .vx .hd .t small{font-weight:700;text-transform:uppercase;letter-spacing:.1em;font-size:9px;opacity:.8;display:block}
+  .vx .row{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line)}
+  .vx .c{background:#fff;padding:10px 8px;text-align:center}
+  .vx .c .v{font-size:15px;font-weight:800;color:var(--navy)}
+  .vx .c .k{font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin-top:3px}
+  .vx .note{padding:10px 16px;font-size:11px;color:var(--mut);background:#fff8f1;border-top:1px solid #ffe4cb;line-height:1.5}
+
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:10.5px}
+  thead th{text-align:right;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);
+    font-weight:700;padding:7px 8px;border-bottom:1.5px solid var(--navy)}
+  thead th:first-child{text-align:left}
+  tbody td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  tbody td:first-child{text-align:left;font-weight:600;color:var(--ink)}
+  tbody tr:nth-child(even) td{background:#fafbfe}
+  tbody tr.is-vx td{background:#fff5ec}
+  tbody tr.is-vx td:first-child{color:var(--orange);font-weight:800}
+  .pill{display:inline-block;font-size:8px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+    padding:2px 7px;border-radius:999px;background:#e6f7ec;color:#10833a}
+  .pill[data-state="paused"]{background:#fdeaea;color:#c0392b}
+  .secttl{display:flex;align-items:baseline;gap:10px;margin-top:18px}
+  .secttl h3{margin:0}
+  .secttl .sub{font-size:10px;color:var(--mut)}
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<section class="page cover">
+  <div>
+    <div class="logo"><b>V</b>IEWIX</div>
+  </div>
+  <div>
+    <div class="eyebrow" data-field="report_title">Meta Ads Performance Report</div>
+    <h1 data-field="client">Boost Tutoring Australia</h1>
+    <div class="bar"></div>
+    <div class="stamp" data-field="generated_label">Generated Monday 29 June 2026, 8:00 AM AEST</div>
+    <div class="cover-meta" style="margin-top:18px">
+      Reporting period: <b data-field="period_label">Lifetime to date</b><br>
+      Accounts: <b data-field="summary.accounts">2</b> &nbsp;·&nbsp; Campaigns: <b data-field="summary.campaigns">17</b> &nbsp;·&nbsp; Currency: <b data-field="currency">AUD</b>
+    </div>
+  </div>
+  <div>
+    <div class="eyebrow" style="margin-bottom:10px">Combined performance</div>
+    <div class="hero-stats">
+      <div class="hs"><div class="v" data-field="summary.spend">—</div><div class="k">Total spend</div></div>
+      <div class="hs"><div class="v" data-field="summary.leads">—</div><div class="k">Leads</div></div>
+      <div class="hs"><div class="v" data-field="summary.cost_per_lead">—</div><div class="k">Cost / lead</div></div>
+      <div class="hs"><div class="v" data-field="summary.ctr">—</div><div class="k">CTR</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SUMMARY ============ -->
+<section class="page">
+  <div class="eyebrow">Executive summary</div>
+  <h2 style="margin-top:6px">Combined account performance</h2>
+  <div class="bar"></div>
+
+  <div class="tiles">
+    <div class="tile"><div class="v" data-field="summary.spend">—</div><div class="k">Total spend</div></div>
+    <div class="tile"><div class="v" data-field="summary.impressions">—</div><div class="k">Impressions</div></div>
+    <div class="tile"><div class="v" data-field="summary.clicks">—</div><div class="k">Clicks</div></div>
+    <div class="tile"><div class="v" data-field="summary.leads">—</div><div class="k">Leads</div></div>
+    <div class="tile"><div class="v" data-field="summary.ctr">—</div><div class="k">CTR</div></div>
+    <div class="tile"><div class="v" data-field="summary.cpc">—</div><div class="k">Cost / click</div></div>
+    <div class="tile"><div class="v" data-field="summary.cpm">—</div><div class="k">CPM</div></div>
+    <div class="tile"><div class="v" data-field="summary.cost_per_lead">—</div><div class="k">Cost / lead</div></div>
+  </div>
+
+  <div class="secttl"><h3>Accounts at a glance</h3></div>
+  <div class="acards" data-repeat="accounts">
+    <div class="acard">
+      <div class="top"><div class="nm" data-field="name">Account</div><div class="id">Ad account <span data-field="account_id"></span></div></div>
+      <div class="grid">
+        <div class="cell"><div class="v" data-field="totals.spend"></div><div class="k">Spend</div></div>
+        <div class="cell"><div class="v" data-field="totals.leads"></div><div class="k">Leads</div></div>
+        <div class="cell"><div class="v" data-field="totals.cost_per_lead"></div><div class="k">Cost / lead</div></div>
+        <div class="cell"><div class="v" data-field="totals.ctr"></div><div class="k">CTR</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot"><span>VIEWIX · Meta Ads Performance</span><span data-field="client"></span></div>
+</section>
+
+<!-- ============ PER-ACCOUNT ============ -->
+<div data-repeat="accounts">
+  <section class="page">
+    <div class="eyebrow">Account breakdown</div>
+    <h2 style="margin-top:6px"><span data-field="name">Account</span></h2>
+    <div class="bar"></div>
+
+    <div class="tiles" style="grid-template-columns:repeat(4,1fr)">
+      <div class="tile"><div class="v" data-field="totals.spend"></div><div class="k">Spend</div></div>
+      <div class="tile"><div class="v" data-field="totals.leads"></div><div class="k">Leads</div></div>
+      <div class="tile"><div class="v" data-field="totals.cost_per_lead"></div><div class="k">Cost / lead</div></div>
+      <div class="tile"><div class="v" data-field="totals.ctr"></div><div class="k">CTR</div></div>
+    </div>
+
+    <!-- Viewix-managed campaign highlight -->
+    <div class="vx">
+      <div class="hd"><div class="t"><small>Viewix-managed campaign</small><span data-field="viewix.name">Viewix Campaign (Leads)</span></div></div>
+      <div class="row">
+        <div class="c"><div class="v" data-field="viewix.spend"></div><div class="k">Spend</div></div>
+        <div class="c"><div class="v" data-field="viewix.leads"></div><div class="k">Leads</div></div>
+        <div class="c"><div class="v" data-field="viewix.cost_per_lead"></div><div class="k">Cost / lead</div></div>
+        <div class="c"><div class="v" data-field="viewix.ctr"></div><div class="k">CTR</div></div>
+        <div class="c"><div class="v" data-field="viewix.cpc"></div><div class="k">CPC</div></div>
+        <div class="c"><div class="v" data-field="viewix.impressions"></div><div class="k">Impressions</div></div>
+      </div>
+      <div class="note" data-field="viewix.note"></div>
+    </div>
+
+    <div class="secttl"><h3>All campaigns</h3><span class="sub">Lifetime, sorted by spend</span></div>
+    <table>
+      <thead><tr><th>Campaign</th><th>Spend</th><th>Impr.</th><th>Clicks</th><th>CTR</th><th>CPC</th><th>Leads</th><th>Cost/Lead</th></tr></thead>
+      <tbody data-repeat="campaigns">
+        <tr>
+          <td data-field="name"></td><td data-field="spend"></td><td data-field="impressions"></td>
+          <td data-field="clicks"></td><td data-field="ctr"></td><td data-field="cpc"></td>
+          <td data-field="leads"></td><td data-field="cost_per_lead"></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="secttl"><h3>Active creative</h3><span class="sub">Current ads in the Viewix campaign · recent activity</span></div>
+    <table>
+      <thead><tr><th>Ad</th><th>Status</th><th>Spend</th><th>Impr.</th><th>Clicks</th><th>CTR</th><th>CPC</th><th>Leads</th></tr></thead>
+      <tbody data-repeat="creative">
+        <tr>
+          <td data-field="name"></td>
+          <td style="text-align:right"><span class="pill" data-status="status" data-field="status"></span></td>
+          <td data-field="spend"></td><td data-field="impressions"></td><td data-field="clicks"></td>
+          <td data-field="ctr"></td><td data-field="cpc"></td><td data-field="leads"></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="foot"><span>VIEWIX · Meta Ads Performance</span><span data-field="name"></span></div>
+  </section>
+</div>
+
+<script src="fill.js"></script>
+</body>
+</html>
