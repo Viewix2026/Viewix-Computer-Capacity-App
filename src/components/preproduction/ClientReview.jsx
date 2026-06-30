@@ -15,6 +15,7 @@ import {
 import { ClientReviewHero } from "./ClientReviewHero";
 import { ClientReviewNav } from "./ClientReviewNav";
 import { FormatGroupHeader, ScriptRow } from "./ClientReviewScripts";
+import { formatBlurb } from "./blurbText";
 
 const BRAND_TRUTH_DEFINITIONS = [
   { key: "brandTruths",             heading: "Brand Truths" },
@@ -45,23 +46,6 @@ function linesFrom(value) {
     .split(/\r?\n/)
     .map((l) => l.replace(/^\s*[•\-*•–]\s*/, "").trim())
     .filter(Boolean);
-}
-
-// Reduce a format blurb to one brief, client-facing sentence. Collapses
-// any multi-line internal text to a single line, then returns up to and
-// including the first sentence terminator that is followed by whitespace
-// or end-of-string — the trailing-whitespace check keeps decimals/version
-// numbers like "1.5" intact (an abbreviation like "a.m." would still cut
-// early, but that's a rare, acceptable shortening, not a broken render).
-// Falls back to the whole collapsed string when there's no terminator,
-// capped so a terminator-less run-on can't slip through as a paragraph.
-function firstSentence(value) {
-  const flat = String(value || "").replace(/\s+/g, " ").trim();
-  if (!flat) return "";
-  const m = flat.match(/^.*?[.!?](?=\s|$)/);
-  let out = (m ? m[0] : flat).trim();
-  if (out.length > 200) out = out.slice(0, 197).trimEnd() + "…";
-  return out;
 }
 
 // Pull an @handle out of an Instagram or TikTok URL when no
@@ -117,16 +101,13 @@ export function ClientReview({ project, projectId, accountLogo, accountLogoBg })
       const ref = first?.sourceAccount
         ? (first.sourceAccount.startsWith("@") ? first.sourceAccount : `@${first.sourceAccount}`)
         : handleFromUrl(first?.url) || "@reference";
-      // Prefer the short, client-facing description when the producer wrote
-      // one; otherwise fall back to the internal videoAnalysis. Either way
-      // we collapse it to a single brief sentence so the card shows a tidy
-      // one-liner instead of the long AI-generated paragraph (works on
-      // already-generated docs too). .trim() guards a whitespace-only value.
-      const clientDesc = (f.clientDescription || "").trim();
       return {
         n: String(i + 1).padStart(2, "0"),
         title: f.name || `Format ${i + 1}`,
-        blurb: firstSentence(clientDesc || f.videoAnalysis) || "—",
+        // One tidy client-facing sentence from the best available source
+        // (producer description → AI analysis → filming/structure notes),
+        // instead of the long AI paragraph. See blurbText.js.
+        blurb: formatBlurb(f),
         ref,
         refUrl: first?.url || null,
       };
