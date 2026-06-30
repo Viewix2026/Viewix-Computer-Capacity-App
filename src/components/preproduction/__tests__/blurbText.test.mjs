@@ -117,13 +117,25 @@ t("cuts at an early word boundary rather than mid-word (lastSpace <= 40)", () =>
 });
 
 // ── formatBlurb: source preference + Finding 1 (no false "—") ───────────
-t("prefers producer clientDescription over videoAnalysis", () => {
-  const f = { clientDescription: "Short client blurb here for them.", videoAnalysis: "Long AI text. More." };
-  assert.equal(formatBlurb(f), "Short client blurb here for them.");
+t("shows the client-facing description IN FULL (not just the first sentence)", () => {
+  const f = {
+    clientDescription:
+      "A cinematic spotlight on one team member, introducing who they are and how they help. " +
+      "Personal, polished, and perfect for putting a specific doctor or nurse in the spotlight.",
+    videoAnalysis: "Long AI text. More.",
+  };
+  assert.equal(formatBlurb(f),
+    "A cinematic spotlight on one team member, introducing who they are and how they help. " +
+    "Personal, polished, and perfect for putting a specific doctor or nurse in the spotlight.");
 });
 
-t("falls back to videoAnalysis when no clientDescription", () => {
-  const f = { videoAnalysis: "AI describes the format clearly. Extra detail." };
+t("tidies whitespace/newlines in the client description but keeps all content", () => {
+  const f = { clientDescription: "  Line one of the blurb.\n\nLine two of the blurb.  " };
+  assert.equal(formatBlurb(f), "Line one of the blurb. Line two of the blurb.");
+});
+
+t("falls back to the FIRST SENTENCE of videoAnalysis when no clientDescription", () => {
+  const f = { videoAnalysis: "AI describes the format clearly. Extra detail we drop." };
   assert.equal(formatBlurb(f), "AI describes the format clearly.");
 });
 

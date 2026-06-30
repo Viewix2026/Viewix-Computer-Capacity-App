@@ -465,7 +465,7 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
             </div>
           </FieldRow>
 
-          <FieldRow label="Client-facing description" hint="What the client sees on pre-production review. Short and tailored. Blank = show the full video analysis.">
+          <FieldRow label="Client-facing description" hint="What the client sees on pre-production review. Short and tailored, shown in full. Blank = show the first line of the video analysis.">
             <textarea value={clientDescription} onChange={e => setClientDescription(e.target.value)} rows={4}
               placeholder="A short, plain-language explanation of this format for the client…"
               style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />
@@ -682,7 +682,7 @@ function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }
             style={{ ...inputSt, resize: "vertical", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }} />
         </FieldRow>
 
-        <FieldRow label="Client-facing description" hint="What the client sees on pre-production review. Short and tailored. Blank = show the full video analysis.">
+        <FieldRow label="Client-facing description" hint="What the client sees on pre-production review. Short and tailored, shown in full. Blank = show the first line of the video analysis.">
           <textarea value={clientDescription} onChange={e => setClientDescription(e.target.value)} rows={3}
             placeholder="A short, plain-language explanation of this format for the client…"
             style={{ ...inputSt, resize: "vertical", fontFamily: "inherit" }} />

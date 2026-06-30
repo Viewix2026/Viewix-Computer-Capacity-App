@@ -66,21 +66,22 @@ export function firstSentence(value) {
   return out;
 }
 
-// Pick the first usable source for a format's blurb and collapse it to one
-// sentence. Order of preference: the producer's client-facing description,
-// then the AI video analysis, then filming / structure notes as a last
-// resort so a format carrying only production notes still shows something
-// (never "—" when any text exists). Each candidate is reduced
-// independently; the first that yields a non-empty sentence wins.
+// Pick the format's client-facing blurb.
+// - When the producer wrote a client-facing description, show it IN FULL
+//   (only whitespace tidied) — that field is authored to be short and
+//   tailored, so truncating it would drop intentional copy. The card's
+//   CSS line-clamp handles any overflow.
+// - Otherwise fall back to internal text (video analysis, then filming /
+//   structure notes), each collapsed to a single sentence so the long AI
+//   paragraph never becomes a wall of text. First non-empty wins; "—"
+//   only when nothing usable exists.
 export function formatBlurb(f) {
   if (!f || typeof f !== "object") return "—";
-  const sources = [
-    f.clientDescription,
-    f.videoAnalysis,
-    f.filmingInstructions,
-    f.structureInstructions,
-  ];
-  for (const src of sources) {
+  if (typeof f.clientDescription === "string" && f.clientDescription.trim()) {
+    return f.clientDescription.replace(/\s+/g, " ").trim();
+  }
+  const fallbacks = [f.videoAnalysis, f.filmingInstructions, f.structureInstructions];
+  for (const src of fallbacks) {
     const s = firstSentence(src);
     if (s) return s;
   }
