@@ -75,15 +75,21 @@ export function Grid({wk,weekData,onUpdate,masterEds,inputs,projects,onUpdateSui
   const[noteEdit,setNoteEdit]=useState(null); // {editorId, day}
   const[noteText,setNoteText]=useState("");
   const addRef=useRef(null);const editRef=useRef(null);const noteRef=useRef(null);
-  const sv=patch=>onUpdate(wk,{editors:eds,...data,...patch});
+  // Persist the SINGLE week leaf directly on every mutation (toggle / add /
+  // remove / rename / note) AND optimistically update local state. Writing
+  // /weekData/<wk> — not the whole /weekData blob — is what stops cross-week
+  // and cross-tab clobber: App.jsx no longer bulk-writes the entire object,
+  // so a stale tab can't overwrite another week's edits. The leaf write also
+  // stamps recentlyWroteTo("/weekData"), arming the listener echo guard.
+  const sv=patch=>{const payload={editors:eds,...data,...patch};onUpdate(wk,payload);fbSet(`/weekData/${wk}`,payload);};
   const tog=(eid,day)=>sv({editors:eds.map(e=>e.id===eid?{...e,days:{...e.days,[day]:nextState(e.days[day])}}:e)});
   const doAdd=()=>{if(!newName.trim())return;sv({editors:[...eds,{id:`ed-${Date.now()}`,name:newName.trim(),days:{mon:"in",tue:"in",wed:"in",thu:"in",fri:"in"},notes:{}}]});setNewName("");setAdding(false);};
   const rmEd=id=>sv({editors:eds.filter(e=>e.id!==id)});
   const startEdit=ed=>{setEditingId(ed.id);setEditName(ed.name);};
   const doRename=()=>{if(!editName.trim()){setEditingId(null);return;}sv({editors:eds.map(e=>e.id===editingId?{...e,name:editName.trim()}:e)});setEditingId(null);};
   const openNote=(edId,day)=>{const ed=eds.find(e=>e.id===edId);setNoteEdit({editorId:edId,day});setNoteText(ed?.notes?.[day]||"");};
-  const saveNote=()=>{if(!noteEdit)return;const txt=noteText.trim();const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};if(txt){newNotes[noteEdit.day]=txt;}else{newNotes[noteEdit.day]=null;}return{...e,notes:newNotes};});sv({editors:updated});fbSet(`/weekData/${wk}`,{...data,editors:updated});setNoteEdit(null);setNoteText("");};
-  const clearNote=()=>{if(!noteEdit)return;const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};newNotes[noteEdit.day]=null;return{...e,notes:newNotes};});sv({editors:updated});fbSet(`/weekData/${wk}`,{...data,editors:updated});setNoteEdit(null);setNoteText("");};
+  const saveNote=()=>{if(!noteEdit)return;const txt=noteText.trim();const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};if(txt){newNotes[noteEdit.day]=txt;}else{newNotes[noteEdit.day]=null;}return{...e,notes:newNotes};});sv({editors:updated});setNoteEdit(null);setNoteText("");};
+  const clearNote=()=>{if(!noteEdit)return;const updated=eds.map(e=>{if(e.id!==noteEdit.editorId)return e;const newNotes={...e.notes};newNotes[noteEdit.day]=null;return{...e,notes:newNotes};});sv({editors:updated});setNoteEdit(null);setNoteText("");};
 
   // Subtask overlay map: lets us merge Team Board shoot assignments
   // into the manual schedule. Memoised so we don't rebuild it per
