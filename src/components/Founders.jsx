@@ -938,7 +938,7 @@ export function Founders({
           <FoundersTrendGrid metrics={foundersMetrics} />
         </>)}
 
-        {foundersTab === "goals" && <FoundersGoals foundersGoals={foundersGoals} setFoundersGoals={setFoundersGoals} foundersData={foundersData} />}
+        {foundersTab === "goals" && <FoundersGoals foundersGoals={foundersGoals} setFoundersGoals={setFoundersGoals} foundersData={foundersData} setFoundersData={setFoundersData} />}
         {foundersTab === "advisor" && <FoundersAdvisor foundersData={foundersData} foundersMetrics={foundersMetrics} attioDeals={attioDeals} />}
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
         {foundersTab === "learnings" && <FoundersLearnings />}
