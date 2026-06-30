@@ -65,17 +65,18 @@ export function extractStage(d) {
   return "";
 }
 
-export function extractCompany(d) {
-  const v = d?.values || {};
-  const candidates = [v.company, v.client, v.account, v.organisation, v.name, v.deal_name];
-  for (const c of candidates) {
-    const t = c?.[0]?.value;
-    if (t) {
-      if (typeof t === "string") return t;
-      if (t?.name) return t.name;
-    }
-  }
-  return null;
+// The linked company's record_id, NOT a display name. In Attio a deal's
+// client is the `associated_company` record-reference (target_record_id);
+// the company NAME is not present in the deal payload. The old extractor
+// fell through a candidate list to `values.name`, which is the DEAL TITLE,
+// so every deal looked like a brand-new client and activeClients counted
+// deal titles instead of clients. Mirrors shared/attio-extract.js
+// extractDealCompanyId so the manual sync, webhook and this calculator all
+// agree on what "one client" is. Returns null when no company is linked.
+export function extractCompanyId(d) {
+  const ref = d?.values?.associated_company;
+  const cell = Array.isArray(ref) ? ref[0] : ref;
+  return cell?.target_record_id || cell?.record_id || null;
 }
 
 const WON_KEYWORDS  = ["won", "closed won", "closed", "completed", "signed"];
@@ -89,7 +90,12 @@ export function computeFoundersMetrics(deals, now = new Date()) {
 
   let ytdRevenue = 0;
   let currentMonthRevenue = 0;
-  const activeCompanies = new Set();
+  // Active clients = DISTINCT companies (by linked company id) with a Won
+  // deal in the last 90 days. Deduped by company so two deals from the same
+  // client count once, and scoped to recent wins so this tracks paying
+  // clients, not the whole pipeline. A Won deal with no linked company is
+  // skipped rather than counted under its (unique) deal title.
+  const activeClientCompanies = new Set();
   let pipelineValue = 0;
   let wonCount = 0;
   let totalClosed = 0;
@@ -102,7 +108,6 @@ export function computeFoundersMetrics(deals, now = new Date()) {
     const val = extractVal(d);
     const dateStr = extractDate(d);
     const stage = extractStage(d);
-    const company = extractCompany(d);
     const isWon = WON_KEYWORDS.some(k => stage.includes(k));
     const isLost = LOST_KEYWORDS.some(k => stage.includes(k));
     const isOpen = !isWon && !isLost;
@@ -114,7 +119,11 @@ export function computeFoundersMetrics(deals, now = new Date()) {
       const dt = new Date(dateStr);
       if (!isNaN(dt) && dt >= threeMonthsAgo) {
         recentClosed++;
-        if (isWon) recentWon++;
+        if (isWon) {
+          recentWon++;
+          const companyId = extractCompanyId(d);
+          if (companyId) activeClientCompanies.add(companyId);
+        }
       }
     }
 
@@ -127,7 +136,6 @@ export function computeFoundersMetrics(deals, now = new Date()) {
     }
     if (isOpen) {
       pipelineValue += val;
-      if (company) activeCompanies.add(company);
     }
     if (isWon && val > 0) { activeRetainerTotal += val; activeRetainerCount++; }
   }
@@ -138,7 +146,7 @@ export function computeFoundersMetrics(deals, now = new Date()) {
   return {
     ytdRevenue,
     monthlyRevenue: currentMonthRevenue,
-    activeClients: activeCompanies.size,
+    activeClients: activeClientCompanies.size,
     avgRetainerValue,
     leadPipelineValue: pipelineValue,
     closingRate,
