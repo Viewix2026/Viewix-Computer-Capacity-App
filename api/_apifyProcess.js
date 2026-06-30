@@ -39,6 +39,49 @@ async function fetchDatasetItems(datasetId, token) {
   return await r.json();
 }
 
+// Webhook callback URL for fallback runs we fire from here. Mirrors
+// apifyWebhookBase() in social-organic.js — kept local so this module
+// stays HTTP-free and doesn't import (and circular-depend on) that file.
+function apifyWebhookBase() {
+  const fromEnv = process.env.APIFY_WEBHOOK_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  const vercelUrl = process.env.VERCEL_URL;
+  if (vercelUrl) return `https://${vercelUrl}`;
+  return "https://planner.viewix.com.au";
+}
+
+// Fire an async Apify run + write a sidecar so the webhook can route the
+// callback back to this project + purpose. Minimal twin of social-organic.js's
+// startApifyRun, used only for the in-process IG follower fallback below.
+// Returns the runId, or throws.
+async function startApifyRunFallback({ actorId, input, token, projectId, purpose, extraSidecar = {} }) {
+  const SECRET = process.env.APIFY_WEBHOOK_SECRET;
+  if (!SECRET) throw new Error("APIFY_WEBHOOK_SECRET not configured");
+  const webhookUrl = `${apifyWebhookBase()}/api/apify-webhook?secret=${encodeURIComponent(SECRET)}`;
+  const webhooks = [{
+    eventTypes: ["ACTOR.RUN.SUCCEEDED", "ACTOR.RUN.FAILED", "ACTOR.RUN.TIMED_OUT", "ACTOR.RUN.ABORTED"],
+    requestUrl: webhookUrl,
+    payloadTemplate: `{"runId":"{{resource.id}}","status":"{{resource.status}}","datasetId":"{{resource.defaultDatasetId}}"}`,
+  }];
+  const webhooksB64 = Buffer.from(JSON.stringify(webhooks)).toString("base64");
+  const url = `${APIFY_BASE}/acts/${actorId}/runs?token=${encodeURIComponent(token)}&webhooks=${encodeURIComponent(webhooksB64)}`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Apify run start ${r.status}: ${JSON.stringify(data).slice(0, 300)}`);
+  const runId = data.data?.id;
+  if (!runId) throw new Error("Apify didn't return a run id");
+  await fbSet(`/preproduction/socialOrganic/_apifyRuns/${runId}`, {
+    projectId, purpose, actorId,
+    startedAt: new Date().toISOString(),
+    ...extraSidecar,
+  });
+  return runId;
+}
+
 // Recursively replace every `undefined` with `null` — Firebase rejects
 // undefined values, but accepts null. Saves us from having to remember
 // `?? null` on every single field.
@@ -205,6 +248,14 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
       await fbSet(`/preproduction/socialOrganic/_apifyRuns/${runId}`, null);
       return { outcome: "verify_failed", status };
     }
+    // Profile scrapes (IG follower fallback + TT/YT) are nice-to-haves —
+    // a failed one must NOT clobber the posts bundle's "done" status (the
+    // posts run owns clientScrape.status). Just drop the sidecar and bail.
+    const PROFILE_PURPOSES = new Set(["clientProfileIG", "clientProfileTT", "clientProfileYT"]);
+    if (PROFILE_PURPOSES.has(purpose)) {
+      await fbSet(`/preproduction/socialOrganic/_apifyRuns/${runId}`, null);
+      return { outcome: "profile_scrape_failed", purpose, status };
+    }
     const errField = purpose.startsWith("client") && purpose !== "competitorPosts" ? "clientScrape" : "competitorScrape";
     await fbPatch(`/preproduction/socialOrganic/${projectId}/${errField}`, {
       status: "error",
@@ -241,6 +292,29 @@ export async function processApifyRun({ runId, status, datasetId, apifyToken }) 
     await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile`, cleanUndefined({ avgViews, medianViews }));
     if (igFollowers != null) {
       await fbPatch(`/preproduction/socialOrganic/${projectId}/clientScrape/profile/followers`, { instagram: igFollowers });
+    } else if (handle) {
+      // The posts actor often omits ownerFollowersCount on newer / smaller
+      // accounts, leaving the IG follower number blank. Fire a dedicated
+      // profile scrape as a fallback so the count fills in. Fires at most
+      // once per posts run (this branch only runs while the sidecar exists,
+      // and the sidecar is deleted before this function returns). The
+      // clientProfileIG result lands via the branch below — no loop back here.
+      // Best-effort: a fallback failure must never break posts processing.
+      try {
+        const cleanHandle = handle.replace(/^@+/, "").trim();
+        if (cleanHandle) {
+          await startApifyRunFallback({
+            actorId: "apify~instagram-profile-scraper",
+            input: { usernames: [cleanHandle], resultsLimit: 1 },
+            token: apifyToken,
+            projectId,
+            purpose: "clientProfileIG",
+            extraSidecar: { handle: cleanHandle },
+          });
+        }
+      } catch (e) {
+        console.warn(`[apify-process] IG follower fallback failed for ${projectId}:`, e.message);
+      }
     }
   } else if (purpose === "clientProfileIG") {
     const followers = extractFollowerCount(items, purpose);
