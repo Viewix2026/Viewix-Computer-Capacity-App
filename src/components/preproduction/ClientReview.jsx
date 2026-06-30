@@ -15,6 +15,7 @@ import {
 import { ClientReviewHero } from "./ClientReviewHero";
 import { ClientReviewNav } from "./ClientReviewNav";
 import { FormatGroupHeader, ScriptRow } from "./ClientReviewScripts";
+import { formatBlurb } from "./blurbText";
 
 const BRAND_TRUTH_DEFINITIONS = [
   { key: "brandTruths",             heading: "Brand Truths" },
@@ -103,16 +104,13 @@ export function ClientReview({ project, projectId, accountLogo, accountLogoBg })
       const ref = first?.sourceAccount
         ? (first.sourceAccount.startsWith("@") ? first.sourceAccount : `@${first.sourceAccount}`)
         : handleFromUrl(first?.url) || "@reference";
-      // Prefer the short, client-facing description when the producer wrote one;
-      // otherwise fall back to the full internal videoAnalysis composite so
-      // formats without a client description (and already-generated docs) look
-      // exactly as they did before. .trim() guards a whitespace-only value.
-      const clientDesc = (f.clientDescription || "").trim();
       return {
         n: String(i + 1).padStart(2, "0"),
         title: f.name || `Format ${i + 1}`,
-        blurb: clientDesc || ([f.videoAnalysis, f.filmingInstructions && `\nFilming: ${f.filmingInstructions}`, f.structureInstructions && `\nStructure: ${f.structureInstructions}`]
-          .filter(Boolean).join("\n").trim() || "—"),
+        // One tidy client-facing sentence from the best available source
+        // (producer description → AI analysis → filming/structure notes),
+        // instead of the long AI paragraph. See blurbText.js.
+        blurb: formatBlurb(f),
         ref,
         refUrl: first?.url || null,
       };
