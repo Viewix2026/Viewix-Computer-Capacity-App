@@ -45,8 +45,12 @@ function project(startMonthly, g, count) {
 //   now            Date
 //   horizonYear    selected chart end year (>= targetYear)
 //   customGrowthPct user growth % for the Custom scenario (e.g. 5 => +5%/mo)
+//   forwardBaseline cumulative $ at "today" the forward lines extend from — the
+//                   ALL-TIME total (prior years' won + this year's headline YTD).
+//                   Defaults to currentRevenue so the annual-only math is unchanged.
 export function computeForecast({
   byKey = {}, currentRevenue = 0, projectedFlat = 0, target = 0,
+  forwardBaseline = currentRevenue,
   now, horizonYear, customGrowthPct = 0,
 }) {
   const targetYear = now.getFullYear();
@@ -102,7 +106,7 @@ export function computeForecast({
     return {
       g,
       forwardMonthly: forward,
-      landing: currentRevenue + sumTo(horizonMonths),          // at chosen horizon
+      landing: forwardBaseline + sumTo(horizonMonths),         // all-time cumulative at chosen horizon
       // gap is only meaningful with a real target; null hides the UI (Codex #3)
       gapToTarget: target > 0 ? (currentRevenue + sumTo(monthsRemaining)) - target : null, // always at end-of-target-year
     };
@@ -116,7 +120,7 @@ export function computeForecast({
   return {
     available: true,
     targetYear, horizonYear, horizonMonths, monthsRemaining, cm,
-    currentRevenue, projectedFlat, target, startMonthly, customG,
+    currentRevenue, projectedFlat, target, startMonthly, customG, forwardBaseline,
     requiredMonthly: target > 0 ? Math.max(0, (target - currentRevenue) / monthsRemaining) : null,
     trend,
     scenarios: { flat, trend: trendScenario, custom },
