@@ -147,6 +147,23 @@ function buildContext({ foundersData = {}, foundersGoals = {}, foundersMetrics =
   const lines = [];
   const now = new Date();
   const ymKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const currentMonthLabel = now.toLocaleString("en-AU", { month: "long", year: "numeric", timeZone: "Australia/Sydney" });
+  const todayLabel = now.toLocaleString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Australia/Sydney" });
+
+  // ── Reporting context (anchors the briefing to TODAY, not to whichever
+  // manual metrics month happens to be the freshest) ──
+  lines.push("## Reporting context");
+  lines.push(`- Today's date: ${todayLabel}`);
+  lines.push(`- This briefing reports on: ${currentMonthLabel} (the current month). Title the briefing for this month.`);
+  // Flag when the manually-entered /foundersMetrics node lags the current
+  // month, so the model leans on the live YTD/Attio numbers instead of
+  // treating a stale month as "latest".
+  const metricKeys = Object.keys(foundersMetrics).sort();
+  const latestMetricKey = metricKeys[metricKeys.length - 1];
+  if (latestMetricKey && latestMetricKey < ymKey) {
+    lines.push(`- NOTE: the manually-entered monthly metrics below only run through ${latestMetricKey}, which is BEHIND the current month (${ymKey}). They are stale. Do NOT headline the briefing on that month. Use the live YTD/north-star and Attio numbers as your current picture, and treat the monthly-metrics block as trailing history only.`);
+  }
+  lines.push("");
 
   // ── Headline numbers ──
   lines.push("## Headline numbers (now)");
@@ -253,6 +270,7 @@ const ADVISOR_SYSTEM_PROMPT = `You are a senior strategy consultant briefing the
 OUTPUT FORMAT (markdown, no preamble, no fences):
 
 # Weekly Briefing — <month + year>
+(Use the month and year from "This briefing reports on" in the Reporting context block. This is the CURRENT month. Never date the briefing for whichever month has the freshest manual metrics — those lag.)
 
 ## 1. Executive summary
 2-4 punchy lines summarising the state of the business this week. The kind of thing that can be pasted into Slack and instantly orient the founders.
@@ -278,7 +296,8 @@ WRITING RULES:
 - Write like a McKinsey associate who has 10 minutes to brief the CEO. Compress, don't pad.
 - Never use em dashes. Use commas or full stops.
 - Don't restate the prompt. Don't say "based on the data". Just analyse.
-- If a metric is missing or unclear, say so and recommend what to start tracking.`;
+- If a metric is missing or unclear, say so and recommend what to start tracking.
+- Anchor every claim to the current month. If the Reporting context flags the monthly metrics as stale, lead with the live YTD/north-star/Attio numbers and explicitly note the manual metrics are lagging rather than presenting an old month as the present.`;
 
 // ─── Run the analysis ─────────────────────────────────────────────
 async function runAnalysis() {
