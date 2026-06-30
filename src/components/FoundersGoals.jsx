@@ -55,7 +55,15 @@ const newGoal = () => ({
   updatedAt: new Date().toISOString(),
 });
 
-export function FoundersGoals({ foundersGoals, setFoundersGoals, foundersData }) {
+// Notes shown on the auto-created revenue goal. OLD_REVENUE_NOTES is the
+// pre-sync copy (when the goal and the dashboard were decoupled) — we
+// migrate it to REVENUE_NOTES in place so long as the founder hasn't
+// edited it, so the card never keeps claiming edits "won't move the
+// dashboard" after we wired them together.
+const OLD_REVENUE_NOTES = "Auto-created from the dashboard's Revenue Target. Editable like any other goal — the dashboard's right-hand number keeps reading the original /foundersData.revenueTarget field, so updating this goal's target also won't move the dashboard. Update the dashboard target separately if needed.";
+const REVENUE_NOTES = "Synced with the dashboard's Revenue Target — editing the target here updates the dashboard headline (and vice versa). Current is the live YTD figure from Attio and is read-only.";
+
+export function FoundersGoals({ foundersGoals, setFoundersGoals, foundersData, setFoundersData }) {
   const goals = foundersGoals || {};
   const goalsList = useMemo(() =>
     Object.values(goals).filter(Boolean).sort((a, b) =>
@@ -90,12 +98,43 @@ export function FoundersGoals({ foundersGoals, setFoundersGoals, foundersData })
       unit: "$",
       current: foundersData.currentRevenue || 0,
       deadline: `${year}-12-31`,
-      notes: "Auto-created from the dashboard's Revenue Target. Editable like any other goal — the dashboard's right-hand number keeps reading the original /foundersData.revenueTarget field, so updating this goal's target also won't move the dashboard. Update the dashboard target separately if needed.",
+      notes: REVENUE_NOTES,
       source: "revenueTarget",
     };
     setFoundersGoals(p => ({ ...(p || {}), [auto.id]: auto }));
     fbSet("/foundersGoals/" + auto.id, auto);
   }, [foundersData, goalsList, setFoundersGoals]);
+
+  // Keep the canonical revenue figures flowing from /foundersData INTO
+  // the stored revenue goal: target + current always mirror the
+  // dashboard, so the Goals card, the dashboard headline, and the
+  // Advisor (which reads both foundersData.revenueTarget and each
+  // /foundersGoals target) can never disagree. foundersData is the
+  // single source of truth — edits to the card's target write back to
+  // it (see onRevenueTargetChange) and return through here next render.
+  // Guarded by an equality check so it writes only on a real change (no
+  // loop); also migrates the stale pre-sync note if untouched.
+  useEffect(() => {
+    if (!foundersData) return;
+    const g = goalsList.find(x => x.source === "revenueTarget");
+    if (!g) return;
+    const liveTarget = foundersData.revenueTarget;
+    if (liveTarget == null) return;
+    const liveCurrent = foundersData.currentRevenue || 0;
+    const notes = g.notes === OLD_REVENUE_NOTES ? REVENUE_NOTES : g.notes;
+    if (Number(g.target) === Number(liveTarget) &&
+        Number(g.current) === Number(liveCurrent) &&
+        notes === g.notes) return;
+    const next = { ...g, target: liveTarget, current: liveCurrent, notes, updatedAt: new Date().toISOString() };
+    setFoundersGoals(p => ({ ...(p || {}), [g.id]: next }));
+    fbSet("/foundersGoals/" + g.id, next);
+  }, [foundersData, goalsList, setFoundersGoals]);
+
+  // Canonical write-back: editing the revenue goal's target updates the
+  // dashboard field (which auto-persists via App.jsx's /foundersData
+  // write loop). The mirror effect above then reconciles the stored goal.
+  const setRevenueTarget = (val) =>
+    setFoundersData(p => ({ ...(p || {}), revenueTarget: val === "" ? 0 : Number(val) }));
 
   const upsert = (goal) => {
     const next = { ...goal, updatedAt: new Date().toISOString() };
@@ -149,7 +188,10 @@ export function FoundersGoals({ foundersGoals, setFoundersGoals, foundersData })
       ) : (
         <div style={{ display: "grid", gap: 14 }}>
           {goalsList.map(g => (
-            <GoalCard key={g.id} goal={g} onChange={upsert} onDelete={() => remove(g.id)} />
+            <GoalCard key={g.id} goal={g} onChange={upsert} onDelete={() => remove(g.id)}
+              liveTarget={foundersData?.revenueTarget}
+              liveCurrent={foundersData?.currentRevenue || 0}
+              onRevenueTargetChange={setRevenueTarget} />
           ))}
         </div>
       )}
@@ -157,7 +199,7 @@ export function FoundersGoals({ foundersGoals, setFoundersGoals, foundersData })
   );
 }
 
-function GoalCard({ goal, onChange, onDelete }) {
+function GoalCard({ goal, onChange, onDelete, liveTarget, liveCurrent, onRevenueTargetChange }) {
   const [draft, setDraft] = useState(goal);
   // Keep local draft in sync with upstream changes (e.g. another tab edited).
   useEffect(() => { setDraft(goal); }, [goal.id, goal.updatedAt]);
@@ -168,7 +210,13 @@ function GoalCard({ goal, onChange, onDelete }) {
     onChange(next);
   };
 
-  const pct = progressPct(draft.current, draft.target);
+  const isAutoRevenue = draft.source === "revenueTarget";
+  // The revenue goal is a live mirror of the dashboard: its target and
+  // current come straight from /foundersData, not the local draft, so
+  // the card, the headline, and the Advisor stay locked together.
+  const effTarget = isAutoRevenue ? (liveTarget ?? draft.target) : draft.target;
+  const effCurrent = isAutoRevenue ? liveCurrent : draft.current;
+  const pct = progressPct(effCurrent, effTarget);
   const deadlineColour = (() => {
     if (!draft.deadline) return "var(--muted)";
     const days = Math.round((new Date(draft.deadline) - new Date()) / 86400000);
@@ -176,7 +224,6 @@ function GoalCard({ goal, onChange, onDelete }) {
     if (days < 30) return "#F59E0B";
     return "var(--muted)";
   })();
-  const isAutoRevenue = draft.source === "revenueTarget";
 
   return (
     <div style={{
@@ -217,24 +264,28 @@ function GoalCard({ goal, onChange, onDelete }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 12 }}>
-        <Field label="Target">
+        <Field label={isAutoRevenue ? "Target (syncs to dashboard)" : "Target"}>
           <input type="number" step="any"
-            value={draft.target}
-            onChange={e => update("target", e.target.value)}
+            value={isAutoRevenue ? (effTarget ?? "") : draft.target}
+            onChange={e => isAutoRevenue ? onRevenueTargetChange(e.target.value) : update("target", e.target.value)}
             placeholder="0"
             style={inputStyle} />
         </Field>
         <Field label="Unit">
-          <select value={draft.unit} onChange={e => update("unit", e.target.value)} style={inputStyle}>
+          <select value={draft.unit} onChange={e => update("unit", e.target.value)}
+            disabled={isAutoRevenue}
+            style={{ ...inputStyle, opacity: isAutoRevenue ? 0.6 : 1 }}>
             {UNIT_OPTIONS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
           </select>
         </Field>
-        <Field label="Current">
+        <Field label={isAutoRevenue ? "Current (live YTD)" : "Current"}>
           <input type="number" step="any"
-            value={draft.current}
+            value={isAutoRevenue ? effCurrent : draft.current}
             onChange={e => update("current", e.target.value)}
+            readOnly={isAutoRevenue}
+            title={isAutoRevenue ? "Live YTD revenue from Attio — edit on the dashboard" : undefined}
             placeholder="0"
-            style={inputStyle} />
+            style={{ ...inputStyle, ...(isAutoRevenue ? { opacity: 0.6, cursor: "not-allowed" } : {}) }} />
         </Field>
         <Field label="Deadline">
           <input type="date"
@@ -258,9 +309,9 @@ function GoalCard({ goal, onChange, onDelete }) {
       <div style={{ marginTop: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 11, color: "var(--muted)" }}>
           <span>
-            <strong style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{fmtValue(draft.current, draft.unit)}</strong>
+            <strong style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{fmtValue(effCurrent, draft.unit)}</strong>
             <span> of </span>
-            <strong style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{fmtValue(draft.target, draft.unit)}</strong>
+            <strong style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono',monospace" }}>{fmtValue(effTarget, draft.unit)}</strong>
           </span>
           <span style={{ fontFamily: "'JetBrains Mono',monospace", color: pct >= 100 ? "#10B981" : "var(--muted)", fontWeight: 700 }}>
             {pct.toFixed(0)}%
