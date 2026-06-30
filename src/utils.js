@@ -573,7 +573,7 @@ export function newVideoId() {
 }
 
 export function newVideo() {
-  return { id: `v-${Date.now()}`, videoId: newVideoId(), name: "", link: "", viewixStatus: "In Development", revision1: "", revision2: "", notes: "" };
+  return { id: `v-${Date.now()}`, videoId: newVideoId(), name: "", link: "", viewixStatus: "Ready for Review", revision1: "", revision2: "", notes: "" };
 }
 
 // Resolve the /accounts entry that owns a given project. Used by the
