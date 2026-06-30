@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeFoundersMetrics, extractCompanyId } from "../_attio-metrics.js";
+import { computeFoundersMetrics, extractCompanyId, monthsAgo } from "../_attio-metrics.js";
 
 const NOW = new Date("2026-06-30T00:00:00Z"); // fixed clock; 90d ago ~ 2026-03-31
 
@@ -94,6 +94,26 @@ test("F4: same company on a Won AND an Open deal counts once", () => {
     deal({ title: "Upsell pitch", companyId: "co-dup", stage: "Quoted" }),
   ];
   assert.equal(computeFoundersMetrics(deals, NOW).activeClients, 1);
+});
+
+test("R2: month-end overflow - a Feb-28 win counts when now is May 31", () => {
+  // Pre-fix: setMonth(May 31 -> Feb 31) rolled to Mar 3, dropping the Feb 28
+  // win. The clamped monthsAgo pins the cutoff to Feb 28.
+  const may31 = new Date("2026-05-31T00:00:00Z");
+  const deals = [deal({ title: "Late Feb win", companyId: "co-feb", date: "2026-02-28" })];
+  const m = computeFoundersMetrics(deals, may31);
+  assert.equal(m.activeClients, 1);
+  assert.equal(m.closingRate, 100);
+});
+
+test("R2: monthsAgo clamps day to the target month length", () => {
+  // May 31 minus 3 months = Feb, clamped to Feb 28 (2026 is not a leap year).
+  // Constructed and asserted in local time (monthsAgo's basis) so the result
+  // is tz-independent.
+  const c = monthsAgo(new Date(2026, 4, 31), 3);
+  assert.equal(c.getFullYear(), 2026);
+  assert.equal(c.getMonth(), 1); // February
+  assert.equal(c.getDate(), 28);
 });
 
 test("F4: window wraps the year correctly when now is in February", () => {

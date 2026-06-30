@@ -85,11 +85,26 @@ export function extractCompanyId(d) {
 const WON_KEYWORDS  = ["won", "closed won", "completed", "signed"];
 const LOST_KEYWORDS = ["lost", "closed lost", "rejected", "cancelled"];
 
+// `n` calendar months before `now`, clamped against month-end overflow.
+// A naive setMonth(getMonth()-n) rolls e.g. (May 31 -> Feb 31) forward to
+// Mar 3, which would drop late-February wins from a "last 3 months" window
+// on ~6 month-end days a year. Pin to day 1 before subtracting, then restore
+// the day clamped to the target month's length. Time-of-day is preserved.
+export function monthsAgo(now, n) {
+  const day = now.getDate();
+  const d = new Date(now);
+  d.setDate(1);
+  d.setMonth(d.getMonth() - n);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return d;
+}
+
 export function computeFoundersMetrics(deals, now = new Date()) {
   const dealList = Array.isArray(deals) ? deals : [];
   const thisYear = now.getFullYear();
   const thisMonth = now.getMonth();
-  const threeMonthsAgo = new Date(now); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+  const threeMonthsAgo = monthsAgo(now, 3);
 
   let ytdRevenue = 0;
   let currentMonthRevenue = 0;
