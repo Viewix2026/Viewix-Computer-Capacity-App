@@ -865,8 +865,27 @@ export function Founders({
               const monthlyTarget = (foundersData?.revenueTarget || 0) / 12;
               const chartMax = Math.max(maxRev, monthlyTarget, 1);
 
+              // Current calendar month figures (same keying as the monthly map).
+              const curKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+              const curMonth = monthly[curKey] || { revenue: 0, count: 0 };
+              const curLabel = now.toLocaleDateString("en-AU", { month: "long", year: "numeric" });
+
               return (
                 <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>This Month · {curLabel}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+                    <NeonCard label="Revenue" tone="green">
+                      <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981", textShadow: "0 0 12px rgba(16,185,129,0.4)" }}>{fmtCur(curMonth.revenue)}</div>
+                    </NeonCard>
+                    <NeonCard label="Deals" tone="blue">
+                      <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{curMonth.count}</div>
+                    </NeonCard>
+                    <NeonCard label="Avg Deal Size" tone="amber">
+                      <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{curMonth.count > 0 ? fmtCur(curMonth.revenue / curMonth.count) : "$0"}</div>
+                    </NeonCard>
+                  </div>
+
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>All Time</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
                     <NeonCard label="All Time Revenue" tone="green">
                       <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981", textShadow: "0 0 12px rgba(16,185,129,0.4)" }}>{fmtCur(allTimeTotal)}</div>
