@@ -79,7 +79,10 @@ export function extractCompanyId(d) {
   return cell?.target_record_id || cell?.record_id || null;
 }
 
-const WON_KEYWORDS  = ["won", "closed won", "closed", "completed", "signed"];
+// NB: no bare "closed" keyword. "closed".includes-matching a stage named
+// "Closed Lost" would flag a LOST deal as won and inflate activeClients,
+// ytdRevenue and closingRate. "Closed Won" is still caught by "won".
+const WON_KEYWORDS  = ["won", "closed won", "completed", "signed"];
 const LOST_KEYWORDS = ["lost", "closed lost", "rejected", "cancelled"];
 
 export function computeFoundersMetrics(deals, now = new Date()) {
@@ -91,10 +94,12 @@ export function computeFoundersMetrics(deals, now = new Date()) {
   let ytdRevenue = 0;
   let currentMonthRevenue = 0;
   // Active clients = DISTINCT companies (by linked company id) with a Won
-  // deal in the last 90 days. Deduped by company so two deals from the same
-  // client count once, and scoped to recent wins so this tracks paying
-  // clients, not the whole pipeline. A Won deal with no linked company is
-  // skipped rather than counted under its (unique) deal title.
+  // deal in the last 3 calendar months (the same `threeMonthsAgo` cutoff
+  // closingRate uses). Deduped by company so two deals from the same client
+  // count once, and scoped to recent wins so this tracks paying clients, not
+  // the whole pipeline. A Won deal with no linked company is skipped rather
+  // than counted under its (unique) deal title; with ~5% of deals unlinked
+  // in Attio this makes activeClients a slight undercount, not an overcount.
   const activeClientCompanies = new Set();
   let pipelineValue = 0;
   let wonCount = 0;
