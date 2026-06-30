@@ -65,31 +65,61 @@ export function extractStage(d) {
   return "";
 }
 
-export function extractCompany(d) {
-  const v = d?.values || {};
-  const candidates = [v.company, v.client, v.account, v.organisation, v.name, v.deal_name];
-  for (const c of candidates) {
-    const t = c?.[0]?.value;
-    if (t) {
-      if (typeof t === "string") return t;
-      if (t?.name) return t.name;
-    }
-  }
-  return null;
+// The linked company's record_id, NOT a display name. In Attio a deal's
+// client is the `associated_company` record-reference (target_record_id);
+// the company NAME is not present in the deal payload. The old extractor
+// fell through a candidate list to `values.name`, which is the DEAL TITLE,
+// so every deal looked like a brand-new client and activeClients counted
+// deal titles instead of clients. Mirrors shared/attio-extract.js
+// extractDealCompanyId so the manual sync, webhook and this calculator all
+// agree on what "one client" is. Returns null when no company is linked.
+export function extractCompanyId(d) {
+  const ref = d?.values?.associated_company;
+  const cell = Array.isArray(ref) ? ref[0] : ref;
+  return cell?.target_record_id || cell?.record_id || null;
 }
 
-const WON_KEYWORDS  = ["won", "closed won", "closed", "completed", "signed"];
+// NB: no bare "closed" keyword. "closed".includes-matching a stage named
+// "Closed Lost" would flag a LOST deal as won and inflate activeClients,
+// ytdRevenue and closingRate. "Closed Won" is still caught by "won".
+const WON_KEYWORDS  = ["won", "closed won", "completed", "signed"];
 const LOST_KEYWORDS = ["lost", "closed lost", "rejected", "cancelled"];
+
+// Start-of-day (UTC) `n` calendar months before `now`, clamped against
+// month-end overflow. Computed entirely in UTC because this runs on Vercel
+// (UTC) and Attio deal dates are date-only strings that parse to UTC
+// midnight, so the window boundary must be UTC-midnight to be calendar-day
+// inclusive: a deal dated exactly on the cutoff date must be IN the window.
+// A naive setMonth(getMonth()-n) also rolls (May 31 -> Feb 31) forward to
+// Mar 3, dropping late-February wins on ~6 month-end days a year; pin to day
+// 1 before subtracting, then restore the day clamped to the month's length.
+export function monthsAgo(now, n) {
+  const day = now.getUTCDate();
+  const d = new Date(now);
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() - n);
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDay));
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
 
 export function computeFoundersMetrics(deals, now = new Date()) {
   const dealList = Array.isArray(deals) ? deals : [];
   const thisYear = now.getFullYear();
   const thisMonth = now.getMonth();
-  const threeMonthsAgo = new Date(now); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+  const threeMonthsAgo = monthsAgo(now, 3);
 
   let ytdRevenue = 0;
   let currentMonthRevenue = 0;
-  const activeCompanies = new Set();
+  // Active clients = DISTINCT companies (by linked company id) with a Won
+  // deal in the last 3 calendar months (the same `threeMonthsAgo` cutoff
+  // closingRate uses). Deduped by company so two deals from the same client
+  // count once, and scoped to recent wins so this tracks paying clients, not
+  // the whole pipeline. A Won deal with no linked company is skipped rather
+  // than counted under its (unique) deal title; with ~5% of deals unlinked
+  // in Attio this makes activeClients a slight undercount, not an overcount.
+  const activeClientCompanies = new Set();
   let pipelineValue = 0;
   let wonCount = 0;
   let totalClosed = 0;
@@ -102,7 +132,6 @@ export function computeFoundersMetrics(deals, now = new Date()) {
     const val = extractVal(d);
     const dateStr = extractDate(d);
     const stage = extractStage(d);
-    const company = extractCompany(d);
     const isWon = WON_KEYWORDS.some(k => stage.includes(k));
     const isLost = LOST_KEYWORDS.some(k => stage.includes(k));
     const isOpen = !isWon && !isLost;
@@ -114,7 +143,11 @@ export function computeFoundersMetrics(deals, now = new Date()) {
       const dt = new Date(dateStr);
       if (!isNaN(dt) && dt >= threeMonthsAgo) {
         recentClosed++;
-        if (isWon) recentWon++;
+        if (isWon) {
+          recentWon++;
+          const companyId = extractCompanyId(d);
+          if (companyId) activeClientCompanies.add(companyId);
+        }
       }
     }
 
@@ -127,7 +160,6 @@ export function computeFoundersMetrics(deals, now = new Date()) {
     }
     if (isOpen) {
       pipelineValue += val;
-      if (company) activeCompanies.add(company);
     }
     if (isWon && val > 0) { activeRetainerTotal += val; activeRetainerCount++; }
   }
@@ -138,7 +170,7 @@ export function computeFoundersMetrics(deals, now = new Date()) {
   return {
     ytdRevenue,
     monthlyRevenue: currentMonthRevenue,
-    activeClients: activeCompanies.size,
+    activeClients: activeClientCompanies.size,
     avgRetainerValue,
     leadPipelineValue: pipelineValue,
     closingRate,
