@@ -351,11 +351,22 @@ export default function App(){
       // skipRead only covered the App.jsx debounce window; this
       // catches the gap between rapid leaf writes too. First-fire
       // exemption stays so initial load isn't blocked.
-      const listen=(path,apply)=>{
+      const listen=(path,apply,opts)=>{
+        // bypassGuards: skip the skipRead + recentlyWroteTo echo guards and
+        // ALWAYS apply server state on every fire. Those guards exist to
+        // swallow echoes of our own whole-blob bulk-writes. For paths that
+        // persist via per-leaf direct writes + optimistic local state (e.g.
+        // /weekData written as /weekData/<wk> leaves by Grid.jsx), the guards
+        // are not just unnecessary — they're harmful: the stamp is top-level
+        // (/weekData), so after Tab A writes one week, A would drop a DIFFERENT
+        // week's real update pushed by Tab B for 1.5s, going stale and later
+        // re-clobbering it. Always applying server truth closes that; the
+        // optimistic local update already keeps the editing tab responsive.
+        const bypassGuards=!!(opts&&opts.bypassGuards);
         const off=fbListen(path,(data)=>{
         const isInitial=!firstFireSeen.has(path);
         if(isInitial)firstFireSeen.add(path);
-        if(!isInitial){
+        if(!isInitial&&!bypassGuards){
           if(skipRead.current)return;
           if(recentlyWroteTo(path))return;
         }
@@ -368,7 +379,7 @@ export default function App(){
       };
       listen("/inputs",data=>{if(data)setInputs(prev=>({...prev,...data}));});
       listen("/editors",data=>{if(data&&Array.isArray(data))setEditors(data);});
-      listen("/weekData",data=>{if(data)setWeekData(data);});
+      listen("/weekData",data=>{if(data)setWeekData(data);},{bypassGuards:true});
       listen("/quotes",data=>{
         if(data){
           const qArr=Object.values(data).filter(q=>q&&q.id&&q.items);
@@ -427,7 +438,12 @@ export default function App(){
    delivered this session. skipWrite unlocks 500ms after the FIRST
    path's fire (or the 3s fallback) — without this gate, any state
    change in that window bulk-wrote in-memory DEFAULTS over paths
-   whose server data hadn't arrived yet, destroying it. */const ready=p=>loadedPaths.current.has(p);if(ready("/editors"))fbSet("/editors",editors);if(ready("/weekData"))fbSet("/weekData",weekData);if(ready("/quotes")){const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);}if(ready("/clientRateCards")){const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);}if(ready("/clients"))clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
+   whose server data hadn't arrived yet, destroying it. */const ready=p=>loadedPaths.current.has(p);if(ready("/editors"))fbSet("/editors",editors);/* /weekData intentionally NOT written from the bulk-write loop.
+   Grid.jsx's sv() now writes /weekData/<wk> leaves directly at edit time
+   (matching the /inputs precedent above). A whole-blob fbSet("/weekData",
+   weekData) here let any tab with a stale week clobber another tab's edit,
+   making capacity-planner changes revert on their own. Per-week leaf writes
+   scope each save so concurrent edits to different weeks no longer race. */if(ready("/quotes")){const qObj={};quotes.forEach(q=>{if(q&&q.id)qObj[q.id]=q;});fbSet("/quotes",qObj);}if(ready("/clientRateCards")){const rcObj={};rcArr.forEach(r=>{if(r&&r.id)rcObj[r.id]=r;});fbSet("/clientRateCards",rcObj);}if(ready("/clients"))clients.forEach(c=>{if(c&&c.id)fbSet("/clients/"+c.id,c);});/* /deliveries intentionally NOT written from the bulk-write loop.
    Same reasoning as /accounts and /sales above: Deliveries.jsx writes
    leaf paths directly per edit (videos[i].link, status, revision1,
    etc.), and server endpoints write leaves too (notify-revision).
@@ -464,7 +480,7 @@ export default function App(){
    fbSetAsync(null), updated only by the server (Stripe webhook
    adminPatch). Bulk-writing them would clobber server-owned fields
    (schedule slice status, stripePaymentMethodId, etc.) any time
-   the dashboard's listener missed an update due to skipRead window. */if(salePricing&&ready("/salePricing"))fbSet("/salePricing",salePricing);if(saleThankYou&&ready("/saleThankYou"))fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,weekData,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,salePricing,saleThankYou]);
+   the dashboard's listener missed an update due to skipRead window. */if(salePricing&&ready("/salePricing"))fbSet("/salePricing",salePricing);if(saleThankYou&&ready("/saleThankYou"))fbSet("/saleThankYou",saleThankYou);}catch(e){console.error("Firebase write error:",e);}setTimeout(()=>{skipRead.current=false;},500);},400);return()=>{if(wt.current){clearTimeout(wt.current);wt.current=null;}};},[inputs,editors,quotes,clientRateCards,clients,trainingData,trainingSuggestions,todos,teamLunch,foundersData,buyerJourney,turnaround,foundersMetrics,isFounder,isFounders,salePricing,saleThankYou]);/* weekData intentionally NOT a dep: it's persisted via /weekData/<wk> leaf writes in Grid.jsx, so a capacity edit must not wake this whole-blob bulk-writer (which would re-clobber other paths like /quotes via skipRead). */
 
   // shortId backfill moved into useDeliveriesSync — same logic, same trigger.
 
