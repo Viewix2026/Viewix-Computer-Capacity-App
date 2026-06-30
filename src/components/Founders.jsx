@@ -2,7 +2,7 @@
 // per-month revenue chart, plus Data + AI Learnings sub-tabs (which are their
 // own components). Only the dual-founder role (password "Sanpel") sees this tab.
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { BTN, SALE_VIDEO_TYPES, DEFAULT_SALE_PRICING, DEFAULT_SALE_THANKYOU } from "../config";
 import { pct, fmtCur } from "../utils";
 import { authFetch, fbSet } from "../firebase";
@@ -16,6 +16,8 @@ import { FoundersProfitability } from "./FoundersProfitability";
 import { TimeLogAnalytics } from "./TimeLogAnalytics";
 import { FoundersRequests } from "./FoundersRequests";
 import { computeFoundersMetrics } from "../../api/_attio-metrics";
+import { buildMonthlyWonSeries } from "../lib/revenueSeries";
+import { computeForecast } from "../lib/revenueForecast";
 import {
   CATEGORIES, CATEGORY_COLORS, ALL_FIELDS, formatValue,
 } from "./foundersShared";
@@ -231,6 +233,261 @@ function NeonCard({ label, children, tone = "green", style = {} }) {
         {label}
       </div>
       {children}
+    </div>
+  );
+}
+
+// ─── Forecast subtab ───────────────────────────────────────────────
+// Interactive revenue scenario modelling. Pure math lives in
+// src/lib/revenueForecast.js; this is the founder-only surface.
+const SCENARIO_META = {
+  flat:   { label: "Flat run-rate",   color: "#F59E0B" },
+  trend:  { label: "Trend continues", color: "#10B981" },
+  custom: { label: "Custom",          color: "#0082FA" },
+};
+const fmtPctSigned = g => `${g >= 0 ? "+" : ""}${(g * 100).toFixed(1)}%/mo`;
+
+function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
+  const W = 820, H = 340, P = { t: 20, r: 16, b: 30, l: 64 };
+  const cw = W - P.l - P.r, ch = H - P.t - P.b;
+  const { targetYear, horizonYear, monthsRemaining, currentRevenue, target } = fc;
+  const now = new Date();
+  const curMonth = now.getMonth();
+  const totalMonths = (horizonYear - targetYear + 1) * 12;
+  const daysInYear = 365;
+  const dayOfYear = Math.floor((now - new Date(targetYear, 0, 0)) / 86400000);
+  const todayX = (dayOfYear / daysInYear) * 12; // fractional month within target year
+
+  // Historical cumulative (this year), scaled to end at the headline YTD.
+  // ytdDealSum includes the current partial month (matches currentRevenue's
+  // basis); the plotted line covers COMPLETED months only (x <= todayX) and the
+  // current month is absorbed into the headline-YTD anchor — so the path never
+  // doubles back at the seam.
+  let ytdDealSum = 0;
+  for (let m = 0; m <= curMonth; m++) ytdDealSum += monthly[`${targetYear}-${String(m + 1).padStart(2, "0")}`]?.revenue || 0;
+  const k = ytdDealSum > 0 ? currentRevenue / ytdDealSum : null;
+  const scaled = k != null && Math.abs(k - 1) > 0.02;
+  const histPts = [{ x: 0, y: 0 }];
+  if (k != null) {
+    let cum = 0;
+    for (let m = 0; m < curMonth; m++) {        // completed months only
+      const actual = monthly[`${targetYear}-${String(m + 1).padStart(2, "0")}`]?.revenue || 0;
+      cum += actual;
+      histPts.push({ x: m + 1, y: cum * k, actualCum: cum, shown: cum * k });
+    }
+  }
+  histPts.push({ x: todayX, y: currentRevenue }); // anchor exactly at headline YTD
+
+  // Forward cumulative per active scenario.
+  const fwdLines = Object.keys(SCENARIO_META).filter(key => active[key] && fc.scenarios[key]).map(key => {
+    const sc = fc.scenarios[key];
+    const pts = [{ x: todayX, y: currentRevenue }];
+    let cum = currentRevenue;
+    sc.forwardMonthly.forEach((v, i) => { cum += v; pts.push({ x: curMonth + 1 + i, y: cum }); });
+    return { key, color: SCENARIO_META[key].color, pts };
+  });
+
+  const yMax = Math.max(
+    target || 0, currentRevenue,
+    ...fwdLines.flatMap(l => l.pts.map(p => p.y)),
+    ...histPts.map(p => p.y), 1
+  ) * 1.08;
+  const X = mx => P.l + (mx / totalMonths) * cw;
+  const Y = v => P.t + ch - (v / yMax) * ch;
+  const path = pts => pts.map((p, i) => `${i ? "L" : "M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+
+  // Y gridlines
+  const ticks = 4;
+  const gridVals = Array.from({ length: ticks + 1 }, (_, i) => (yMax / ticks) * i);
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
+        {gridVals.map((v, i) => (
+          <g key={i}>
+            <line x1={P.l} y1={Y(v)} x2={W - P.r} y2={Y(v)} stroke="var(--border)" strokeWidth="1" opacity="0.5" />
+            <text x={P.l - 8} y={Y(v) + 4} textAnchor="end" fontSize="10" fill="var(--muted)" fontFamily="'JetBrains Mono',monospace">
+              {v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : `$${Math.round(v / 1000)}k`}
+            </text>
+          </g>
+        ))}
+        {/* Month axis labels */}
+        {Array.from({ length: totalMonths }, (_, m) => m).filter(m => m % 2 === 0).map(m => (
+          <text key={m} x={X(m + 0.5)} y={H - 10} textAnchor="middle" fontSize="9" fill="var(--muted)">
+            {MONTH_NAMES[m % 12]}{m >= 12 ? "'" + String(targetYear + Math.floor(m / 12)).slice(2) : ""}
+          </text>
+        ))}
+        {/* Target line (at Dec of target year) */}
+        {target > 0 && (
+          <g>
+            <line x1={P.l} y1={Y(target)} x2={W - P.r} y2={Y(target)} stroke="#EF4444" strokeWidth="1.5" strokeDasharray="5 4" opacity="0.8" />
+            <text x={W - P.r} y={Y(target) - 6} textAnchor="end" fontSize="10" fill="#EF4444" fontWeight="700">
+              {fmtCur(target)} target · Dec {targetYear}
+            </text>
+          </g>
+        )}
+        {/* Today marker */}
+        <line x1={X(todayX)} y1={P.t} x2={X(todayX)} y2={P.t + ch} stroke="#F59E0B" strokeWidth="1" opacity="0.6" />
+        <text x={X(todayX)} y={P.t - 6} textAnchor="middle" fontSize="9" fill="#F59E0B" fontWeight="700">today</text>
+        {/* Historical line */}
+        <path d={path(histPts)} fill="none" stroke="var(--fg)" strokeWidth="2.5" opacity="0.85" />
+        {/* hover dots discloses scaled vs actual */}
+        {scaled && histPts.filter(p => p.actualCum != null).map((p, i) => (
+          <circle key={i} cx={X(p.x)} cy={Y(p.y)} r="6" fill="transparent">
+            <title>{`Actual won cumulative ${fmtCur(p.actualCum)} → shown ${fmtCur(p.shown)} (scaled ×${k.toFixed(2)} to match headline YTD)`}</title>
+          </circle>
+        ))}
+        {/* Forward scenario lines */}
+        {fwdLines.map(l => (
+          <path key={l.key} d={path(l.pts)} fill="none" stroke={l.color} strokeWidth="2.5"
+            strokeDasharray="6 3" style={{ filter: `drop-shadow(0 0 4px ${l.color}88)` }} />
+        ))}
+      </svg>
+      {scaled && (
+        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+          History scaled ×{k.toFixed(2)} to match the headline YTD ({fmtCur(currentRevenue)} vs {fmtCur(ytdDealSum)} of dated won deals). Hover a point for both.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ForecastTab({ attioDeals, foundersData }) {
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const now = useMemo(() => new Date(), []); // stable per mount so memos don't thrash
+  const targetYear = now.getFullYear();
+  const currentRevenue = foundersData?.currentRevenue || 0;
+  const target = foundersData?.revenueTarget || 0;
+  const dayOfYear = Math.floor((now - new Date(targetYear, 0, 0)) / 86400000);
+  const yearProgress = dayOfYear / 365; // kept identical to the dashboard card (Codex #4 deferred)
+  const projectedFlat = yearProgress > 0 ? currentRevenue / yearProgress : 0;
+
+  // Recompute the won-deal series only when the deals change, not on slider drags.
+  const monthly = useMemo(() => buildMonthlyWonSeries(attioDeals?.data || []).byKey, [attioDeals?.data]);
+
+  const [horizonYear, setHorizonYear] = useState(targetYear);
+  const [customGrowthPct, setCustomGrowthPct] = useState(null); // null → seed from trend
+  const [customTouched, setCustomTouched] = useState(false);
+  const [active, setActive] = useState({ flat: true, trend: true, custom: true });
+
+  const fc = useMemo(() => computeForecast({
+    byKey: monthly, currentRevenue, projectedFlat, target,
+    now, horizonYear, customGrowthPct: customGrowthPct ?? 0,
+  }), [monthly, currentRevenue, projectedFlat, target, now, horizonYear, customGrowthPct]);
+
+  // Seed the custom slider to the detected trend rate until the founder drags it.
+  // Re-seeds if a later Attio sync changes the trend (Codex #6: no stale value).
+  useEffect(() => {
+    if (!customTouched && fc.available && fc.trend.enabled) {
+      setCustomGrowthPct(Math.round(fc.trend.projectedG * 1000) / 10);
+    }
+  }, [customTouched, fc.available, fc.trend?.enabled, fc.trend?.projectedG]);
+
+  if (!fc.available) {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px dashed var(--border)", borderRadius: 12, fontSize: 13 }}>
+        {fc.reason}
+      </div>
+    );
+  }
+
+  const customPctVal = customGrowthPct ?? 0;
+  const scenarioCard = (key) => {
+    const sc = fc.scenarios[key];
+    if (!sc || !active[key]) return null;
+    const meta = SCENARIO_META[key];
+    const gOut = key === "flat" ? 0 : key === "custom" ? fc.customG : fc.trend.projectedG;
+    const capped = key === "trend" && fc.trend.isCapped;
+    return (
+      <NeonCard key={key} label={meta.label} tone={key === "flat" ? "amber" : key === "trend" ? "green" : "blue"}>
+        <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: meta.color }}>{fmtCur(sc.landing)}</div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+          {fmtPctSigned(gOut)}{capped ? ` (raw ${fmtPctSigned(fc.trend.rawG)})` : ""}
+        </div>
+        {sc.gapToTarget != null && (
+          <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6, color: sc.gapToTarget >= 0 ? "#10B981" : "#F472B6" }}>
+            {sc.gapToTarget >= 0 ? "+" : ""}{fmtCur(sc.gapToTarget)}
+            <span style={{ color: "var(--muted)", fontWeight: 500 }}> vs target{horizonYear !== targetYear ? ` (Dec ${targetYear})` : ""}</span>
+          </div>
+        )}
+      </NeonCard>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Revenue Forecast</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+            Where the year lands under different growth assumptions. Flat = current pace; Trend = your actual recent growth continued.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 4, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
+          {[targetYear, targetYear + 1, targetYear + 2].map(y => (
+            <button key={y} onClick={() => setHorizonYear(y)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: horizonYear === y ? "var(--card)" : "transparent", color: horizonYear === y ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+              {y === targetYear ? `End ${y}` : y}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, marginBottom: 16 }}>
+        <ForecastChart fc={fc} active={active} monthly={monthly} MONTH_NAMES={MONTH_NAMES} />
+        {/* Scenario toggles */}
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
+          {Object.keys(SCENARIO_META).map(key => {
+            const disabled = key === "trend" && !fc.trend.enabled;
+            return (
+              <label key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: disabled ? "var(--muted)" : "var(--fg)", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1 }}>
+                <input type="checkbox" checked={active[key] && !disabled} disabled={disabled} onChange={e => setActive(a => ({ ...a, [key]: e.target.checked }))} />
+                <span style={{ width: 12, height: 3, background: SCENARIO_META[key].color, borderRadius: 2, display: "inline-block" }} />
+                {SCENARIO_META[key].label}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+        {Object.keys(SCENARIO_META).map(scenarioCard)}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+        <NeonCard label="Required / month to hit target" tone="pink">
+          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{fc.requiredMonthly != null ? fmtCur(fc.requiredMonthly) : "—"}</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fc.requiredMonthly != null ? `over the remaining ${fc.monthsRemaining} month${fc.monthsRemaining === 1 ? "" : "s"} of ${targetYear}` : "set a revenue target to see this"}</div>
+        </NeonCard>
+        <NeonCard label="Detected trend" tone="green">
+          {fc.trend.enabled ? (
+            <>
+              <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "#10B981" }}>
+                {fmtPctSigned(fc.trend.rawG)}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                from {fc.trend.windowLabel}{fc.trend.isCapped ? ` · projected capped at ${fmtPctSigned(fc.trend.projectedG)}` : ""}
+                {fc.trend.outlierHeavy ? " · ⚠ one big month is driving this" : ""}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>{fc.trend.reason}</div>
+          )}
+        </NeonCard>
+      </div>
+
+      {/* Custom growth control */}
+      <div style={{ padding: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--fg)" }}>Custom growth rate</span>
+          <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: SCENARIO_META.custom.color }}>{fmtPctSigned(fc.customG)}</span>
+        </div>
+        <input type="range" min={-30} max={30} step={0.5} value={customPctVal}
+          onChange={e => { setCustomGrowthPct(parseFloat(e.target.value)); setCustomTouched(true); }}
+          style={{ width: "100%", accentColor: SCENARIO_META.custom.color }} />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+          <span>−30%/mo</span><span>0</span><span>+30%/mo</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -646,8 +903,12 @@ export function Founders({
 
   const currentRevenue = foundersData.currentRevenue || 0;
   const revenueProgress = REVENUE_TARGET > 0 ? currentRevenue / REVENUE_TARGET : 0;
-  const onTrackRevenue = REVENUE_TARGET * yearProgress;
-  const revenueDelta = currentRevenue - onTrackRevenue;
+  // Projected full-year revenue if the YTD pace holds (linear
+  // annualisation — YTD divided by the fraction of the year elapsed).
+  const projectedRevenue = yearProgress > 0 ? currentRevenue / yearProgress : 0;
+  // Gap between that projection and the target. Negative = on pace to
+  // miss the goal; positive = on pace to beat it.
+  const revenueDelta = projectedRevenue - REVENUE_TARGET;
 
   const updateMetric = (key, val) => setFoundersData(p => ({ ...p, [key]: val }));
 
@@ -692,7 +953,7 @@ export function Founders({
       <div style={{ padding: "12px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--card)" }}>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>Founders Dashboard</span>
         <div style={{ display: "flex", gap: 3, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[{ key: "dashboard", label: "Dashboard" }, { key: "goals", label: "Goals" }, { key: "advisor", label: "Advisor" }, { key: "data", label: "Data" }, { key: "profitability", label: "Profitability" }, { key: "learnings", label: "AI Learnings" }, { key: "insightsLab", label: "Transcript Insights Lab" }, { key: "timeLogAnalytics", label: "Time Log Analytics" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }, { key: "requests", label: "Requests" }].map(t => (
+          {[{ key: "dashboard", label: "Dashboard" }, { key: "forecast", label: "Forecast" }, { key: "goals", label: "Goals" }, { key: "advisor", label: "Advisor" }, { key: "data", label: "Data" }, { key: "profitability", label: "Profitability" }, { key: "learnings", label: "AI Learnings" }, { key: "insightsLab", label: "Transcript Insights Lab" }, { key: "timeLogAnalytics", label: "Time Log Analytics" }, { key: "thankyou", label: "Thank-You Pages" }, { key: "buyerJourney", label: "Buyer Journey" }, { key: "requests", label: "Requests" }].map(t => (
             <button key={t.key} onClick={() => setFoundersTab(t.key)} style={{ padding: "7px 14px", borderRadius: 6, border: "none", background: foundersTab === t.key ? "var(--card)" : "transparent", color: foundersTab === t.key ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{t.label}</button>
           ))}
         </div>
@@ -751,6 +1012,14 @@ export function Founders({
                 </div>
               </div>
             </div>
+            {/* Projected full-year revenue — pulled out of the bottom
+                grid and centered above the progress bar as the headline
+                "where we'll land at this pace" figure. */}
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+              <NeonCard label="Projected (Full Year)" tone="amber" style={{ textAlign: "center", minWidth: 220 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{fmtCur(projectedRevenue)}</div>
+              </NeonCard>
+            </div>
             {/* Progress bar */}
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
@@ -770,11 +1039,8 @@ export function Founders({
                 <div style={{ position: "absolute", left: `${yearProgress * 100}%`, top: 0, bottom: 0, width: 2, background: "#F59E0B", boxShadow: "0 0 6px rgba(245,158,11,0.8)" }} title="Where you should be" />
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-              <NeonCard label="On Track Amount" tone="amber">
-                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{fmtCur(onTrackRevenue)}</div>
-              </NeonCard>
-              <NeonCard label="Delta" tone={revenueDelta >= 0 ? "green" : "pink"}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <NeonCard label="Gap to Target" tone={revenueDelta >= 0 ? "green" : "pink"}>
                 <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: revenueDelta >= 0 ? "#10B981" : "#F472B6", textShadow: revenueDelta >= 0 ? "0 0 10px rgba(16,185,129,0.4)" : "0 0 10px rgba(244,114,182,0.4)" }}>{revenueDelta >= 0 ? "+" : ""}{fmtCur(revenueDelta)}</div>
               </NeonCard>
               <NeonCard label="Monthly Run Rate Needed" tone="blue">
@@ -833,34 +1099,9 @@ export function Founders({
               <button onClick={syncAttio} style={{ ...BTN, background: "var(--accent)", color: "white", padding: "8px 16px" }}>{attioLoading ? "Syncing..." : "Sync from Attio"}</button>
             </div>
             {attioDeals?.data ? (() => {
-              // Extract value and date from deals, trying multiple field name patterns
-              const extractVal = d => { const v = d.values; const candidates = [v?.deal_value, v?.amount, v?.value, v?.revenue, v?.contract_value]; for (const c of candidates) { if (c?.[0] != null) { const n = c[0].currency_value ?? c[0].value; if (n != null) return typeof n === "number" ? n : parseFloat(n) || 0; } } return 0; };
-              const extractDate = d => { const v = d.values; const candidates = [v?.close_date, v?.closed_at, v?.won_date, v?.created_at]; for (const c of candidates) { if (c?.[0]?.value) return c[0].value; } return d.created_at || null; };
-              const extractStage2 = d => { const v = d.values; const candidates = [v?.stage, v?.status, v?.deal_stage, v?.pipeline_stage]; for (const c of candidates) { const t = c?.[0]?.status?.title || c?.[0]?.value; if (t) return (typeof t === "string" ? t : "").toLowerCase(); } return ""; };
-              const wonKw = ["won", "closed won", "closed-won", "completed", "signed", "active"];
-
-              // Build monthly totals (won deals only)
-              const monthly = {};
-              let allTimeTotal = 0;
-              let dealCount = 0;
-              attioDeals.data.forEach(d => {
-                const val = extractVal(d);
-                const dateStr = extractDate(d);
-                const stage = extractStage2(d);
-                const isWon = wonKw.some(k => stage.includes(k));
-                if (val > 0 && dateStr && isWon) {
-                  const dt = new Date(dateStr);
-                  if (!isNaN(dt)) {
-                    const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
-                    if (!monthly[key]) monthly[key] = { revenue: 0, count: 0, label: dt.toLocaleDateString("en-AU", { month: "short", year: "numeric" }) };
-                    monthly[key].revenue += val;
-                    monthly[key].count += 1;
-                    allTimeTotal += val;
-                    dealCount += 1;
-                  }
-                }
-              });
-              const sorted = Object.entries(monthly).sort((a, b) => b[0].localeCompare(a[0]));
+              // Monthly won-deal series — shared with the Forecast tab so the two
+              // can't drift on "what counts as won revenue" (see src/lib/revenueSeries).
+              const { byKey: monthly, sortedDesc: sorted, allTimeTotal, dealCount } = buildMonthlyWonSeries(attioDeals.data);
               const maxRev = Math.max(...sorted.map(([_, m]) => m.revenue), 1);
               const monthlyTarget = (foundersData?.revenueTarget || 0) / 12;
               const chartMax = Math.max(maxRev, monthlyTarget, 1);
@@ -957,6 +1198,7 @@ export function Founders({
           <FoundersTrendGrid metrics={foundersMetrics} />
         </>)}
 
+        {foundersTab === "forecast" && <ForecastTab attioDeals={attioDeals} foundersData={foundersData} />}
         {foundersTab === "goals" && <FoundersGoals foundersGoals={foundersGoals} setFoundersGoals={setFoundersGoals} foundersData={foundersData} />}
         {foundersTab === "advisor" && <FoundersAdvisor foundersData={foundersData} foundersMetrics={foundersMetrics} attioDeals={attioDeals} />}
         {foundersTab === "data" && <FoundersData metrics={foundersMetrics} setMetrics={setFoundersMetrics} />}
