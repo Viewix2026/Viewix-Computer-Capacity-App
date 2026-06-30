@@ -85,18 +85,22 @@ export function extractCompanyId(d) {
 const WON_KEYWORDS  = ["won", "closed won", "completed", "signed"];
 const LOST_KEYWORDS = ["lost", "closed lost", "rejected", "cancelled"];
 
-// `n` calendar months before `now`, clamped against month-end overflow.
-// A naive setMonth(getMonth()-n) rolls e.g. (May 31 -> Feb 31) forward to
-// Mar 3, which would drop late-February wins from a "last 3 months" window
-// on ~6 month-end days a year. Pin to day 1 before subtracting, then restore
-// the day clamped to the target month's length. Time-of-day is preserved.
+// Start-of-day (UTC) `n` calendar months before `now`, clamped against
+// month-end overflow. Computed entirely in UTC because this runs on Vercel
+// (UTC) and Attio deal dates are date-only strings that parse to UTC
+// midnight, so the window boundary must be UTC-midnight to be calendar-day
+// inclusive: a deal dated exactly on the cutoff date must be IN the window.
+// A naive setMonth(getMonth()-n) also rolls (May 31 -> Feb 31) forward to
+// Mar 3, dropping late-February wins on ~6 month-end days a year; pin to day
+// 1 before subtracting, then restore the day clamped to the month's length.
 export function monthsAgo(now, n) {
-  const day = now.getDate();
+  const day = now.getUTCDate();
   const d = new Date(now);
-  d.setDate(1);
-  d.setMonth(d.getMonth() - n);
-  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-  d.setDate(Math.min(day, lastDay));
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() - n);
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDay));
+  d.setUTCHours(0, 0, 0, 0);
   return d;
 }
 

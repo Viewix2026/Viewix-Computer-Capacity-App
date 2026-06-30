@@ -106,14 +106,26 @@ test("R2: month-end overflow - a Feb-28 win counts when now is May 31", () => {
   assert.equal(m.closingRate, 100);
 });
 
-test("R2: monthsAgo clamps day to the target month length", () => {
+test("R2: monthsAgo clamps day to the target month length (UTC)", () => {
   // May 31 minus 3 months = Feb, clamped to Feb 28 (2026 is not a leap year).
-  // Constructed and asserted in local time (monthsAgo's basis) so the result
-  // is tz-independent.
-  const c = monthsAgo(new Date(2026, 4, 31), 3);
-  assert.equal(c.getFullYear(), 2026);
-  assert.equal(c.getMonth(), 1); // February
-  assert.equal(c.getDate(), 28);
+  const c = monthsAgo(new Date("2026-05-31T00:00:00Z"), 3);
+  assert.equal(c.toISOString(), "2026-02-28T00:00:00.000Z");
+});
+
+test("R2b: leap year clamps to Feb 29", () => {
+  const c = monthsAgo(new Date("2024-05-31T00:00:00Z"), 3);
+  assert.equal(c.toISOString(), "2024-02-29T00:00:00.000Z");
+});
+
+test("R3: cutoff is floored to UTC midnight, so a same-day boundary win counts", () => {
+  // now has a real time-of-day (production cron never runs at exactly 00:00Z).
+  // Pre-fix the cutoff kept 10:30 and excluded a Feb-28 date-only win.
+  const now = new Date("2026-05-31T10:30:00Z");
+  assert.equal(monthsAgo(now, 3).toISOString(), "2026-02-28T00:00:00.000Z");
+  const deals = [deal({ title: "Boundary win", companyId: "co-boundary", date: "2026-02-28" })];
+  const m = computeFoundersMetrics(deals, now);
+  assert.equal(m.activeClients, 1);
+  assert.equal(m.closingRate, 100);
 });
 
 test("F4: window wraps the year correctly when now is in February", () => {
