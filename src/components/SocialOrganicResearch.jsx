@@ -17,6 +17,7 @@ import { CellRewriteModal, Clickable, EditableField } from "./shared/CellRewrite
 import { DescriptionField } from "./shared/DescriptionField";
 import { ReelPreview } from "./shared/ReelPreview";
 import { SherpaStatusRow } from "./shared/SherpaStatusRow";
+import { captureThumbnails } from "../lib/thumbCache";
 import { parseIgHandle, igHandleProblemText, splitCompetitorsByValidity, describeBadHandles } from "../../shared/igHandle.js";
 
 // Read a fetch Response as JSON, but fall back gracefully when the
@@ -2330,6 +2331,9 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
           fbSet(`/formatLibrary/${libraryId}/examples`, newExamples);
           // Bump usageCount best-effort (read-modify-write; fine for cosmetic counter).
           fbSet(`/formatLibrary/${libraryId}/usageCount`, (existingFmt.usageCount || 0) + 1);
+          // Snapshot a permanent still now, while the scraped thumbnail is still
+          // fresh (passing it as knownStill avoids an Apify refresh).
+          captureThumbnails([{ url: video.url, knownStill: video.thumbnail || null }]);
         }
       } else {
         // Create or update a library entry scoped to this shortlist. If the
@@ -2373,6 +2377,8 @@ function ShortlistForm({ video, project, library, existing, onSaved }) {
           archived: false,
         };
         fbSet(`/formatLibrary/${libraryId}`, libEntry);
+        // Snapshot a permanent still now, while the scraped thumbnail is fresh.
+        captureThumbnails([{ url: video.url, knownStill: video.thumbnail || null }]);
       }
 
       // Write the project-side shortlist record. We copy the video's own

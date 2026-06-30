@@ -23,6 +23,7 @@ import { processApifyRun } from "./_apifyProcess.js";
 import { handleOptions, requireRole, sendAuthError, setCors } from "./_requireAuth.js";
 import { parseIgHandle, igHandleProblemText, splitCompetitorsByValidity, describeBadHandles } from "../shared/igHandle.js";
 import { loadSherpaContext, buildSherpaPromptBlock } from "./_sherpa.js";
+import { thumbKeyFromUrl, youTubeIdFromUrl, persistThumb, getCachedThumb, resolveTikTokStillUrl } from "./_thumbCache.js";
 import crypto from "crypto";
 
 const FIREBASE_URL = "https://viewix-capacity-tracker-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -382,6 +383,172 @@ async function apifyScrape({ handles, postsPerHandle, from, to, token }) {
   }
   const items = await resp.json();
   return Array.isArray(items) ? items : [];
+}
+
+// ─── Thumbnail capture (permanent stills) ───────────────────────────────────
+// Storage model + rationale live in api/_thumbCache.js. These helpers download
+// a still while a provider URL is valid and self-host it as base64 in
+// /thumbCache, so format/reel cards stop going blank when IG/TikTok CDN URLs
+// expire (~hours). YouTube is never cached — hqdefault is permanent and free.
+
+// Recover a fresh displayUrl for direct IG post/reel URLs (not profiles) via one
+// batched scraper run. Returns Map<shortCode, freshStillUrl>. Costs Apify credit
+// (~$0.0026/url), so callers batch and gate it.
+const IG_REFRESH_BATCH = 25; // directUrls per Apify run — keep inputs sane + bounded
+async function apifyRefreshIgStills({ urls, token }) {
+  const map = new Map();
+  if (!Array.isArray(urls) || urls.length === 0 || !token) return map;
+  const api = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`;
+  // Chunk so one call never sends hundreds of directUrls. resultsLimit is set to
+  // the batch size (not 1) — with direct post URLs a limit of 1 can cap the
+  // whole run to a single item rather than one-per-URL.
+  for (let off = 0; off < urls.length; off += IG_REFRESH_BATCH) {
+    const batch = urls.slice(off, off + IG_REFRESH_BATCH);
+    const input = { directUrls: batch, resultsType: "posts", resultsLimit: batch.length, addParentData: false };
+    let items = [];
+    try {
+      const resp = await fetch(api, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!resp.ok) {
+        console.warn(`[thumb refresh] Apify ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+        continue;
+      }
+      items = await resp.json();
+    } catch (e) {
+      console.warn(`[thumb refresh] fetch failed: ${e.message}`);
+      continue;
+    }
+    for (const raw of Array.isArray(items) ? items : []) {
+      const n = normaliseInstagramPost(raw);
+      if (n.shortCode && n.thumbnail) map.set(n.shortCode, n.thumbnail);
+    }
+  }
+  return map;
+}
+
+// Bounded-concurrency map (keeps us from hammering IG's CDN / RTDB).
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
+}
+
+/**
+ * Persist a permanent still for each cacheable url in `entries`
+ * ([{ url, knownStill? }]). YouTube urls are skipped (permanent hqdefault).
+ * Uses a supplied fresh still when available (scrape/import time); otherwise
+ * resolves one (TikTok oEmbed; IG via a single batched Apify refresh). Idempotent
+ * — already-cached keys are left untouched. Returns an audit object.
+ */
+async function captureStills(entries, { token, allowApifyRefresh = true } = {}) {
+  const audit = { cached: 0, alreadyHad: 0, skippedYouTube: 0, skipped: [] };
+  const work = [];
+  for (const e of Array.isArray(entries) ? entries : []) {
+    const url = e?.url;
+    if (!url) continue;
+    if (youTubeIdFromUrl(url)) { audit.skippedYouTube++; continue; }
+    const key = thumbKeyFromUrl(url);
+    if (!key) { audit.skipped.push({ url, reason: "unsupported-source" }); continue; }
+    work.push({ url, key, knownStill: e.knownStill || null });
+  }
+  // Dedupe by cache key — several examples can point at the same reel.
+  const byKey = new Map();
+  for (const w of work) {
+    const k = `${w.key.platform}/${w.key.videoId}`;
+    if (!byKey.has(k)) byKey.set(k, w);
+  }
+  const items = [...byKey.values()];
+
+  // Pass 1: skip already-cached; try the known still (and TikTok oEmbed).
+  const needIgRefresh = [];
+  await mapPool(items, 6, async (w) => {
+    const existing = await getCachedThumb(w.key.platform, w.key.videoId);
+    if (existing && existing.data) { w._done = "alreadyHad"; return; }
+    let stillUrl = w.knownStill;
+    if (!stillUrl && w.key.platform === "tiktok") stillUrl = await resolveTikTokStillUrl(w.url);
+    if (stillUrl) {
+      const r = await persistThumb({ platform: w.key.platform, videoId: w.key.videoId, sourceUrl: w.url, stillUrl });
+      if (r.cached) { w._done = "cached"; return; }
+      if (r.alreadyHad) { w._done = "alreadyHad"; return; }
+      // download failed (URL likely expired) — fall through to an IG refresh
+    }
+    if (w.key.platform === "ig") needIgRefresh.push(w);
+    else w._fail = stillUrl ? "download-failed" : "no-still";
+  });
+
+  // Pass 2: one batched Apify run to recover fresh IG stills, then persist.
+  if (needIgRefresh.length && allowApifyRefresh && token) {
+    const fresh = await apifyRefreshIgStills({ urls: needIgRefresh.map(w => w.url), token });
+    await mapPool(needIgRefresh, 6, async (w) => {
+      const stillUrl = fresh.get(w.key.videoId);
+      if (!stillUrl) { w._fail = "refresh-miss"; return; }
+      const r = await persistThumb({ platform: "ig", videoId: w.key.videoId, sourceUrl: w.url, stillUrl });
+      if (r.cached) w._done = "cached";
+      else if (r.alreadyHad) w._done = "alreadyHad";
+      else w._fail = r.reason || "download-failed";
+    });
+  } else if (needIgRefresh.length) {
+    for (const w of needIgRefresh) w._fail = "needs-refresh";
+  }
+
+  for (const w of items) {
+    if (w._done === "cached") audit.cached++;
+    else if (w._done === "alreadyHad") audit.alreadyHad++;
+    else audit.skipped.push({ url: w.url, reason: w._fail || "unknown" });
+  }
+  return audit;
+}
+
+// action: captureThumbnails — persist stills for an explicit set of urls/entries.
+// Called after examples are added (manual or research import) so freshly-added
+// reels get a permanent still immediately.
+async function handleCaptureThumbnails(req, res) {
+  const token = process.env.APIFY_API_TOKEN;
+  const body = req.body || {};
+  const entries = Array.isArray(body.entries) ? body.entries
+    : Array.isArray(body.urls) ? body.urls.map(u => ({ url: u }))
+    : [];
+  if (!entries.length) return res.status(400).json({ error: "No urls/entries provided" });
+  if (entries.length > 60) return res.status(400).json({ error: "Too many entries (max 60 per call)" });
+  const audit = await captureStills(entries, { token, allowApifyRefresh: body.allowApifyRefresh !== false });
+  return res.status(200).json({ ok: true, audit });
+}
+
+// action: backfillFormatThumbnails — one-time/idempotent pass over the Format
+// Library (or one formatId). Stored thumbnails are usually expired, so this
+// mostly Apify-refreshes IG stills; cost scales with uncached IG examples.
+async function handleBackfillFormatThumbnails(req, res) {
+  const token = process.env.APIFY_API_TOKEN;
+  const body = req.body || {};
+  const library = (await fbGet("/formatLibrary")) || {};
+  const formats = body.formatId ? { [body.formatId]: library[body.formatId] } : library;
+  const MAX_PER_CALL = 150; // bound Apify fan-out per request; page if larger
+  const entries = [];
+  let formatCount = 0;
+  let totalExamples = 0;
+  for (const fmt of Object.values(formats)) {
+    if (!fmt || !Array.isArray(fmt.examples)) continue;
+    formatCount++;
+    for (const ex of fmt.examples) {
+      if (ex && ex.url) { totalExamples++; if (entries.length < MAX_PER_CALL) entries.push({ url: ex.url, knownStill: ex.thumbnail || null }); }
+    }
+  }
+  if (!entries.length) {
+    return res.status(200).json({ ok: true, formatCount, examples: 0, audit: { cached: 0, alreadyHad: 0, skippedYouTube: 0, skipped: [] } });
+  }
+  const audit = await captureStills(entries, { token, allowApifyRefresh: body.allowApifyRefresh !== false });
+  const truncated = totalExamples > entries.length;
+  return res.status(200).json({ ok: true, formatCount, examples: entries.length, totalExamples, truncated, audit });
 }
 
 // ─── Classification helpers (Slice 4) ───
@@ -1613,6 +1780,33 @@ async function handleGenerateScript(req, res) {
       })),
     };
   });
+
+  // Bake a permanent poster still into each format so the anonymous public
+  // review (which can't read /thumbCache) shows a real frame. YouTube → the
+  // permanent hqdefault URL (a tiny string); IG/TikTok → ensure a cached base64
+  // still exists (capture now if missing) and inline its data URI. Bounded to
+  // the handful of selected formats, so the capture cost is negligible.
+  // Non-fatal: a failure just leaves the card on its gradient fallback.
+  try {
+    const primaries = formatsSection.map(fs => {
+      const primary = fs.displayExample || (fs.examples && fs.examples[0]) || null;
+      return primary && primary.url ? { url: primary.url, knownStill: primary.thumbnail || null } : null;
+    });
+    await captureStills(primaries.filter(Boolean), { token: process.env.APIFY_API_TOKEN });
+    for (let i = 0; i < formatsSection.length; i++) {
+      const p = primaries[i];
+      if (!p) continue;
+      const ytId = youTubeIdFromUrl(p.url);
+      if (ytId) { formatsSection[i].posterStill = `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`; continue; }
+      const key = thumbKeyFromUrl(p.url);
+      if (key) {
+        const c = await getCachedThumb(key.platform, key.videoId);
+        if (c && c.data) formatsSection[i].posterStill = c.data;
+      }
+    }
+  } catch (e) {
+    console.warn("[proposal posterStill] bake failed (non-fatal):", e.message);
+  }
 
   // New 7-tab schema: clientContext / socialSnapshot / targetViewer are all
   // owned by Tab 1 (project.brandTruth.fields). Tab 7's preproductionDoc is
@@ -3779,6 +3973,10 @@ export default async function handler(req, res) {
         return await handleFlagClaimsForReview(req, res);
       case "actionFlags":
         return await handleActionFlags(req, res);
+      case "captureThumbnails":
+        return await handleCaptureThumbnails(req, res);
+      case "backfillFormatThumbnails":
+        return await handleBackfillFormatThumbnails(req, res);
       default:
         return res.status(400).json({ error: `Unknown action: ${action}` });
     }

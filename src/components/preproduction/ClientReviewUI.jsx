@@ -6,6 +6,7 @@
 // shape assumptions — the higher-level components hand these
 // primitives whatever they need to render.
 import { useState } from "react";
+import { useCachedPoster } from "../../lib/thumbCache";
 
 export const C = {
   bg:        "#F4F5F9",
@@ -200,6 +201,9 @@ export function BrandCard({ heading, items, accent, icon }) {
 }
 
 export function FormatCard({ f, color, scriptCount, onJump }) {
+  // Real frame on top of the branded gradient: YouTube hqdefault > cached
+  // permanent still > the baked/scraped fallback > nothing (gradient shows).
+  const posterSrc = useCachedPoster(f.refUrl, f.poster || null);
   return (
     <article
       style={{ background: C.card, border: `1px solid ${C.rule}`, borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", transition: "border-color .15s, transform .15s", cursor: "pointer" }}
@@ -209,6 +213,17 @@ export function FormatCard({ f, color, scriptCount, onJump }) {
     >
       <div style={{ aspectRatio: "9 / 16", width: "100%", background: `linear-gradient(135deg, ${color.bg} 0%, ${C.bgDim} 100%)`, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
         <div style={{ position: "absolute", inset: 0, opacity: 0.4, background: `repeating-linear-gradient(45deg, transparent 0 14px, ${color.fg}10 14px 15px)` }} />
+        {posterSrc && (
+          // YouTube's i.ytimg.com returns a 120×90 grey placeholder at HTTP 200
+          // for dead videos — catch the tell-tale tiny dimensions and hide so the
+          // gradient shows through. A real hqdefault is 480 wide; IG/TikTok wider.
+          <img
+            src={posterSrc} alt="" loading="lazy" key={posterSrc}
+            onLoad={(e) => { if (e.target.naturalWidth && e.target.naturalWidth <= 120) e.target.style.display = "none"; }}
+            onError={(e) => { e.target.style.display = "none"; }}
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        )}
         {f.ref && (
           <div style={{ position: "absolute", top: 14, left: 14, right: 14, display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ width: 26, height: 26, borderRadius: 999, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: color.fg, border: `1px solid ${C.rule}`, boxShadow: "0 2px 6px rgba(11,18,32,0.06)" }}>@</div>
