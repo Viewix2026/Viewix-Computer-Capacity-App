@@ -246,52 +246,69 @@ const SCENARIO_META = {
   custom: { label: "Custom",          color: "#0082FA" },
 };
 const fmtPctSigned = g => `${g >= 0 ? "+" : ""}${(g * 100).toFixed(1)}%/mo`;
+// Cumulative revenue milestones drawn as dotted reference lines on the
+// all-time forecast chart (replaces the single annual-target line).
+const MILESTONES = [2_000_000, 3_000_000, 5_000_000, 10_000_000];
+const fmtMs = m => `$${m / 1e6}M`;
 
 function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
   const W = 820, H = 340, P = { t: 20, r: 16, b: 30, l: 64 };
   const cw = W - P.l - P.r, ch = H - P.t - P.b;
-  const { targetYear, horizonYear, monthsRemaining, currentRevenue, target } = fc;
+  const { targetYear, horizonYear, currentRevenue, forwardBaseline } = fc;
   const now = new Date();
   const curMonth = now.getMonth();
-  const totalMonths = (horizonYear - targetYear + 1) * 12;
+
+  // ── Chart spans the business's first deal month → the chosen horizon. ──
+  const keys = Object.keys(monthly);
+  const startYear = keys.length
+    ? Math.min(targetYear, ...keys.map(key => parseInt(key.slice(0, 4), 10)))
+    : targetYear;
+  const totalMonths = (horizonYear - startYear + 1) * 12;
+  const yearOffset = (targetYear - startYear) * 12;   // months from chart start to Jan(targetYear)
   const daysInYear = 365;
   const dayOfYear = Math.floor((now - new Date(targetYear, 0, 0)) / 86400000);
-  const todayX = (dayOfYear / daysInYear) * 12; // fractional month within target year
+  const todayX = yearOffset + (dayOfYear / daysInYear) * 12;
 
-  // Historical cumulative (this year), scaled to end at the headline YTD.
-  // ytdDealSum includes the current partial month (matches currentRevenue's
-  // basis); the plotted line covers COMPLETED months only (x <= todayX) and the
-  // current month is absorbed into the headline-YTD anchor — so the path never
-  // doubles back at the seam.
+  // ── Continuous all-time cumulative history ──
+  // Prior years plot at ACTUAL won revenue; the current year's increments are
+  // scaled by k so the line lands exactly on the headline YTD at today (matches
+  // the dashboard card). The current partial month is absorbed into that anchor.
   let ytdDealSum = 0;
   for (let m = 0; m <= curMonth; m++) ytdDealSum += monthly[`${targetYear}-${String(m + 1).padStart(2, "0")}`]?.revenue || 0;
-  const k = ytdDealSum > 0 ? currentRevenue / ytdDealSum : null;
-  const scaled = k != null && Math.abs(k - 1) > 0.02;
+  const k = ytdDealSum > 0 ? currentRevenue / ytdDealSum : 1;
+  const scaled = ytdDealSum > 0 && Math.abs(k - 1) > 0.02;
+
   const histPts = [{ x: 0, y: 0 }];
-  if (k != null) {
-    let cum = 0;
-    for (let m = 0; m < curMonth; m++) {        // completed months only
-      const actual = monthly[`${targetYear}-${String(m + 1).padStart(2, "0")}`]?.revenue || 0;
-      cum += actual;
-      histPts.push({ x: m + 1, y: cum * k, actualCum: cum, shown: cum * k });
+  let cum = 0;
+  for (let yr = startYear; yr < targetYear; yr++) {     // prior years, raw cumulative
+    for (let m = 0; m < 12; m++) {
+      cum += monthly[`${yr}-${String(m + 1).padStart(2, "0")}`]?.revenue || 0;
+      histPts.push({ x: (yr - startYear) * 12 + m + 1, y: cum });
     }
   }
-  histPts.push({ x: todayX, y: currentRevenue }); // anchor exactly at headline YTD
+  const priorCum = cum;                                  // = prior-years total
+  let yCum = 0;
+  for (let m = 0; m < curMonth; m++) {                   // completed months this year
+    yCum += monthly[`${targetYear}-${String(m + 1).padStart(2, "0")}`]?.revenue || 0;
+    histPts.push({ x: yearOffset + m + 1, y: priorCum + yCum * k, actualCum: priorCum + yCum, shown: priorCum + yCum * k });
+  }
+  histPts.push({ x: todayX, y: forwardBaseline });       // anchor on all-time total at the headline YTD
 
-  // Forward cumulative per active scenario.
+  // ── Forward cumulative per active scenario, continuing from all-time. ──
   const fwdLines = Object.keys(SCENARIO_META).filter(key => active[key] && fc.scenarios[key]).map(key => {
     const sc = fc.scenarios[key];
-    const pts = [{ x: todayX, y: currentRevenue }];
-    let cum = currentRevenue;
-    sc.forwardMonthly.forEach((v, i) => { cum += v; pts.push({ x: curMonth + 1 + i, y: cum }); });
+    const pts = [{ x: todayX, y: forwardBaseline }];
+    let c = forwardBaseline;
+    sc.forwardMonthly.forEach((v, i) => { c += v; pts.push({ x: yearOffset + curMonth + 1 + i, y: c }); });
     return { key, color: SCENARIO_META[key].color, pts };
   });
 
-  const yMax = Math.max(
-    target || 0, currentRevenue,
-    ...fwdLines.flatMap(l => l.pts.map(p => p.y)),
-    ...histPts.map(p => p.y), 1
-  ) * 1.08;
+  // ── Milestones: keep one aspirational line just above the data peak. ──
+  const dataMax = Math.max(forwardBaseline, ...fwdLines.flatMap(l => l.pts.map(p => p.y)), ...histPts.map(p => p.y), 1);
+  const nextMs = MILESTONES.find(m => m > dataMax);
+  const yMax = (nextMs ? Math.max(dataMax, nextMs) : dataMax) * 1.06;
+  const shownMilestones = MILESTONES.filter(m => m <= yMax);
+
   const X = mx => P.l + (mx / totalMonths) * cw;
   const Y = v => P.t + ch - (v / yMax) * ch;
   const path = pts => pts.map((p, i) => `${i ? "L" : "M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
@@ -299,6 +316,7 @@ function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
   // Y gridlines
   const ticks = 4;
   const gridVals = Array.from({ length: ticks + 1 }, (_, i) => (yMax / ticks) * i);
+  const years = Array.from({ length: horizonYear - startYear + 1 }, (_, i) => startYear + i);
 
   return (
     <div>
@@ -311,30 +329,32 @@ function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
             </text>
           </g>
         ))}
-        {/* Month axis labels */}
-        {Array.from({ length: totalMonths }, (_, m) => m).filter(m => m % 2 === 0).map(m => (
-          <text key={m} x={X(m + 0.5)} y={H - 10} textAnchor="middle" fontSize="9" fill="var(--muted)">
-            {MONTH_NAMES[m % 12]}{m >= 12 ? "'" + String(targetYear + Math.floor(m / 12)).slice(2) : ""}
-          </text>
-        ))}
-        {/* Target line (at Dec of target year) */}
-        {target > 0 && (
-          <g>
-            <line x1={P.l} y1={Y(target)} x2={W - P.r} y2={Y(target)} stroke="#EF4444" strokeWidth="1.5" strokeDasharray="5 4" opacity="0.8" />
-            <text x={W - P.r} y={Y(target) - 6} textAnchor="end" fontSize="10" fill="#EF4444" fontWeight="700">
-              {fmtCur(target)} target · Dec {targetYear}
-            </text>
+        {/* Year axis labels + faint year boundaries */}
+        {years.map(yr => {
+          const mx = (yr - startYear) * 12;
+          return (
+            <g key={yr}>
+              {yr > startYear && <line x1={X(mx)} y1={P.t} x2={X(mx)} y2={P.t + ch} stroke="var(--border)" strokeWidth="1" opacity="0.25" />}
+              <text x={X(mx + 6)} y={H - 10} textAnchor="middle" fontSize="10" fill="var(--muted)" fontWeight="600">{yr}</text>
+            </g>
+          );
+        })}
+        {/* Milestone lines (dotted) — faded when above the data peak */}
+        {shownMilestones.map(m => (
+          <g key={m}>
+            <line x1={P.l} y1={Y(m)} x2={W - P.r} y2={Y(m)} stroke="#EF4444" strokeWidth="1.25" strokeDasharray="5 4" opacity={m > dataMax ? 0.4 : 0.7} />
+            <text x={W - P.r} y={Y(m) - 5} textAnchor="end" fontSize="10" fill="#EF4444" fontWeight="700" opacity={m > dataMax ? 0.6 : 0.9}>{fmtMs(m)}</text>
           </g>
-        )}
+        ))}
         {/* Today marker */}
         <line x1={X(todayX)} y1={P.t} x2={X(todayX)} y2={P.t + ch} stroke="#F59E0B" strokeWidth="1" opacity="0.6" />
         <text x={X(todayX)} y={P.t - 6} textAnchor="middle" fontSize="9" fill="#F59E0B" fontWeight="700">today</text>
         {/* Historical line */}
         <path d={path(histPts)} fill="none" stroke="var(--fg)" strokeWidth="2.5" opacity="0.85" />
-        {/* hover dots discloses scaled vs actual */}
+        {/* hover dots disclose scaled vs actual on the current-year segment */}
         {scaled && histPts.filter(p => p.actualCum != null).map((p, i) => (
           <circle key={i} cx={X(p.x)} cy={Y(p.y)} r="6" fill="transparent">
-            <title>{`Actual won cumulative ${fmtCur(p.actualCum)} → shown ${fmtCur(p.shown)} (scaled ×${k.toFixed(2)} to match headline YTD)`}</title>
+            <title>{`Actual won cumulative ${fmtCur(p.actualCum)} → shown ${fmtCur(p.shown)} (current year scaled ×${k.toFixed(2)} to match headline YTD)`}</title>
           </circle>
         ))}
         {/* Forward scenario lines */}
@@ -345,7 +365,7 @@ function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
       </svg>
       {scaled && (
         <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
-          History scaled ×{k.toFixed(2)} to match the headline YTD ({fmtCur(currentRevenue)} vs {fmtCur(ytdDealSum)} of dated won deals). Hover a point for both.
+          Current year scaled ×{k.toFixed(2)} to match the headline YTD ({fmtCur(currentRevenue)} vs {fmtCur(ytdDealSum)} of dated won deals); prior years shown at actual. Hover a point for both.
         </div>
       )}
     </div>
@@ -363,7 +383,17 @@ function ForecastTab({ attioDeals, foundersData }) {
   const projectedFlat = yearProgress > 0 ? currentRevenue / yearProgress : 0;
 
   // Recompute the won-deal series only when the deals change, not on slider drags.
-  const monthly = useMemo(() => buildMonthlyWonSeries(attioDeals?.data || []).byKey, [attioDeals?.data]);
+  const series = useMemo(() => buildMonthlyWonSeries(attioDeals?.data || []), [attioDeals?.data]);
+  const monthly = series.byKey;
+  // Forward lines extend from the ALL-TIME cumulative at "today": prior years'
+  // actual won revenue + the trusted headline YTD for the current year (so the
+  // current partial month isn't double-counted against the forward run-rate).
+  const forwardBaseline = useMemo(() => {
+    let thisYearDated = 0;
+    for (let m = 0; m <= now.getMonth(); m++) thisYearDated += monthly[`${targetYear}-${String(m + 1).padStart(2, "0")}`]?.revenue || 0;
+    const priorTotal = Math.max(0, series.allTimeTotal - thisYearDated);
+    return priorTotal + currentRevenue;
+  }, [monthly, series.allTimeTotal, now, targetYear, currentRevenue]);
 
   const [horizonYear, setHorizonYear] = useState(targetYear);
   const [customGrowthPct, setCustomGrowthPct] = useState(null); // null → seed from trend
@@ -371,9 +401,9 @@ function ForecastTab({ attioDeals, foundersData }) {
   const [active, setActive] = useState({ flat: true, trend: true, custom: true });
 
   const fc = useMemo(() => computeForecast({
-    byKey: monthly, currentRevenue, projectedFlat, target,
+    byKey: monthly, currentRevenue, projectedFlat, target, forwardBaseline,
     now, horizonYear, customGrowthPct: customGrowthPct ?? 0,
-  }), [monthly, currentRevenue, projectedFlat, target, now, horizonYear, customGrowthPct]);
+  }), [monthly, currentRevenue, projectedFlat, target, forwardBaseline, now, horizonYear, customGrowthPct]);
 
   // Seed the custom slider to the detected trend rate until the founder drags it.
   // Re-seeds if a later Attio sync changes the trend (Codex #6: no stale value).
@@ -404,12 +434,17 @@ function ForecastTab({ attioDeals, foundersData }) {
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
           {fmtPctSigned(gOut)}{capped ? ` (raw ${fmtPctSigned(fc.trend.rawG)})` : ""}
         </div>
-        {sc.gapToTarget != null && (
-          <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6, color: sc.gapToTarget >= 0 ? "#10B981" : "#F472B6" }}>
-            {sc.gapToTarget >= 0 ? "+" : ""}{fmtCur(sc.gapToTarget)}
-            <span style={{ color: "var(--muted)", fontWeight: 500 }}> vs target{horizonYear !== targetYear ? ` (Dec ${targetYear})` : ""}</span>
-          </div>
-        )}
+        {(() => {
+          // Milestone progress for the all-time landing at the chosen horizon.
+          const cleared = MILESTONES.filter(m => m <= sc.landing);
+          const next = MILESTONES.find(m => m > sc.landing);
+          return (
+            <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6, color: cleared.length ? "#10B981" : "var(--muted)" }}>
+              {cleared.length ? `Clears ${fmtMs(cleared[cleared.length - 1])}` : `Below ${fmtMs(MILESTONES[0])}`}
+              {next && <span style={{ color: "var(--muted)", fontWeight: 500 }}> · {fmtCur(next - sc.landing)} to {fmtMs(next)}</span>}
+            </div>
+          );
+        })()}
       </NeonCard>
     );
   };
@@ -420,11 +455,11 @@ function ForecastTab({ attioDeals, foundersData }) {
         <div>
           <div style={{ fontSize: 16, fontWeight: 800, color: "var(--fg)" }}>Revenue Forecast</div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-            Where the year lands under different growth assumptions. Flat = current pace; Trend = your actual recent growth continued.
+            All-time revenue trajectory and where it heads under different growth assumptions. Flat = current pace; Trend = your actual recent growth continued. Dotted lines mark cumulative milestones.
           </div>
         </div>
         <div style={{ display: "flex", gap: 4, background: "var(--bg)", borderRadius: 8, padding: 3 }}>
-          {[targetYear, targetYear + 1, targetYear + 2].map(y => (
+          {[targetYear, targetYear + 1, targetYear + 2, targetYear + 3, targetYear + 4, targetYear + 5].map(y => (
             <button key={y} onClick={() => setHorizonYear(y)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: horizonYear === y ? "var(--card)" : "transparent", color: horizonYear === y ? "var(--fg)" : "var(--muted)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
               {y === targetYear ? `End ${y}` : y}
             </button>
