@@ -115,6 +115,12 @@ export function ClientReview({ project, projectId, accountLogo, accountLogoBg })
           .filter(Boolean).join("\n").trim() || "—"),
         ref,
         refUrl: first?.url || null,
+        // Poster fallback for the card. `posterStill` is baked into the proposal
+        // snapshot at generation (a permanent YouTube hqdefault URL or a base64
+        // data URI) so the anonymous public review — which can't read
+        // /thumbCache — still shows a real frame. Authenticated producer views
+        // upgrade to the live cached still via useCachedPoster.
+        poster: f.posterStill || first?.thumbnail || null,
       };
     })
   ), [doc.formats]);

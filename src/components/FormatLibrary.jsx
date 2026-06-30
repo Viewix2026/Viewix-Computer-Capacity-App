@@ -13,21 +13,22 @@
 import { useEffect, useState, memo } from "react";
 import { fbSet, fbUpdate, fbListenSafe } from "../firebase";
 import { ReelPreview, youTubeIdFromUrl } from "./shared/ReelPreview";
+import { useCachedPoster, thumbKeyFromUrl, captureThumbnails } from "../lib/thumbCache";
 
-// Pick the best still for a card preview. Prefer a permanent YouTube frame
-// (i.ytimg.com hqdefault is free and never expires) found anywhere in the
-// examples, then the freshest scraped IG thumbnail (which may already have
-// expired — the poster tile falls back to the gradient if it 404s), else
-// null so the card shows just the branded gradient. hqdefault is the most
-// reliable size (maxresdefault 404s for low-res uploads).
-function pickPoster(examples) {
+// Pick the single example a card's poster should come from. Prefer a permanent
+// YouTube frame (free, never expires), then an IG/TikTok example we can cache a
+// permanent still for, then any example with a (maybe-expired) thumbnail, else
+// the first example with a url. Returns { url, thumbnail } or null. The actual
+// src is resolved by useCachedPoster (YouTube > cached still > fallback).
+function pickPrimaryExample(examples) {
   const list = Array.isArray(examples) ? examples : [];
-  for (const e of list) {
-    const yt = youTubeIdFromUrl(e?.url);
-    if (yt) return `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`;
-  }
-  const withThumb = list.find(e => e && e.thumbnail);
-  return withThumb ? withThumb.thumbnail : null;
+  return (
+    list.find(e => e && youTubeIdFromUrl(e.url)) ||
+    list.find(e => e && thumbKeyFromUrl(e.url)) ||
+    list.find(e => e && e.thumbnail) ||
+    list.find(e => e && e.url) ||
+    null
+  );
 }
 
 // Shared with other preproduction surfaces so the look-and-feel matches.
@@ -280,7 +281,10 @@ export function FormatFilterBar({ search, setSearch, tagFilter, setTagFilter, al
 // re-renders the IG embed iframe, which kills frame rate.
 const FormatCard = memo(function FormatCard({ format, onClick }) {
   const examples = Array.isArray(format.examples) ? format.examples : [];
-  const posterSrc = pickPoster(examples);
+  const primary = pickPrimaryExample(examples);
+  // Resolves to YouTube hqdefault > cached permanent still > the (maybe-expired)
+  // scraped thumbnail > null (gradient).
+  const posterSrc = useCachedPoster(primary?.url, primary?.thumbnail || null);
   const hasExample = examples.some(e => e && (e.url || e.thumbnail));
   const topTag = (format.tags || [])[0] || null;
 
@@ -549,6 +553,7 @@ function FormatDetail({ format, onBack, onSave, onArchiveToggle, onDelete }) {
                 const url = newExampleUrl.trim();
                 const next = [...(Array.isArray(format.examples) ? format.examples : []), { url, addedAt: new Date().toISOString(), sourceAccount: "", sourceClient: "" }];
                 fbSet(`/formatLibrary/${format.id}/examples`, next);
+                captureThumbnails([{ url }]);  // permanent still (Apify refresh for IG; no-op for YouTube)
                 setNewExampleUrl("");
               } }}
               placeholder="Paste an IG / TikTok / YouTube URL and press Enter"
@@ -640,6 +645,7 @@ function AddFormatModal({ existing, formatType = "organic", onClose, onCreated }
         archived: false,
         updatedAt: now,
       });
+      captureThumbnails(examples.map(e => ({ url: e.url })));  // permanent stills for the pasted examples
       onCreated?.(id);
     } catch (e) {
       setError(e.message || String(e));

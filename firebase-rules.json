@@ -20,6 +20,7 @@
     "projects": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "runsheets": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "formatLibrary": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
+    "thumbCache": { ".read": "auth != null && auth.token.role != null", ".write": false },
     "motionGraphicsLibrary": { ".read": "auth != null && auth.token.role != null", ".write": false },
     "motionGraphicsTemplates": { ".read": "auth != null && auth.token.role != null", ".write": false },
     "motionGraphicsTemplateFeedback": { ".read": "auth != null && auth.token.role != null", ".write": false },
