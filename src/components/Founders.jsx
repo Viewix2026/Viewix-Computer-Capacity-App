@@ -17,7 +17,7 @@ import { TimeLogAnalytics } from "./TimeLogAnalytics";
 import { FoundersRequests } from "./FoundersRequests";
 import { computeFoundersMetrics } from "../../api/_attio-metrics";
 import { buildMonthlyWonSeries } from "../lib/revenueSeries";
-import { computeForecast } from "../lib/revenueForecast";
+import { computeForecast, computeTTM } from "../lib/revenueForecast";
 import {
   CATEGORIES, CATEGORY_COLORS, ALL_FIELDS, formatValue,
 } from "./foundersShared";
@@ -218,6 +218,7 @@ function NeonCard({ label, children, tone = "green", style = {} }) {
     blue:   { ring: "rgba(0,130,250,0.40)",    glow: "rgba(0,130,250,0.28)" },
     pink:   { ring: "rgba(244,114,182,0.35)",  glow: "rgba(244,114,182,0.20)" },
     amber:  { ring: "rgba(245,158,11,0.35)",   glow: "rgba(245,158,11,0.18)" },
+    violet: { ring: "rgba(139,92,246,0.38)",   glow: "rgba(139,92,246,0.22)" },
   };
   const t = tones[tone] || tones.green;
   return (
@@ -251,7 +252,8 @@ const fmtPctSigned = g => `${g >= 0 ? "+" : ""}${(g * 100).toFixed(1)}%/mo`;
 const MILESTONES = [2_000_000, 3_000_000, 5_000_000, 10_000_000];
 const fmtMs = m => `$${m / 1e6}M`;
 
-function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
+const TTM_COLOR = "#8B5CF6";
+function ForecastChart({ fc, active, monthly, MONTH_NAMES, ttm, showTTM }) {
   const W = 820, H = 340, P = { t: 20, r: 16, b: 30, l: 64 };
   const cw = W - P.l - P.r, ch = H - P.t - P.b;
   const { targetYear, horizonYear, currentRevenue, forwardBaseline } = fc;
@@ -302,6 +304,11 @@ function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
     sc.forwardMonthly.forEach((v, i) => { c += v; pts.push({ x: yearOffset + curMonth + 1 + i, y: c }); });
     return { key, color: SCENARIO_META[key].color, pts };
   });
+
+  // ── TTM (trailing-12-mo revenue) line — rolling annual run rate. ──
+  const ttmPts = (showTTM && ttm?.points?.length)
+    ? ttm.points.map(p => ({ x: (p.year - startYear) * 12 + p.monthIdx + 1, y: p.value }))
+    : [];
 
   // ── Milestones: keep one aspirational line just above the data peak. ──
   const dataMax = Math.max(forwardBaseline, ...fwdLines.flatMap(l => l.pts.map(p => p.y)), ...histPts.map(p => p.y), 1);
@@ -362,6 +369,17 @@ function ForecastChart({ fc, active, monthly, MONTH_NAMES }) {
           <path key={l.key} d={path(l.pts)} fill="none" stroke={l.color} strokeWidth="2.5"
             strokeDasharray="6 3" style={{ filter: `drop-shadow(0 0 4px ${l.color}88)` }} />
         ))}
+        {/* TTM line — solid violet, rolling 12-mo revenue (an annual run rate,
+            NOT cumulative). Sits low vs the all-time line; read it against the
+            milestone lines: TTM crossing $2M = running at a $2M/yr pace. */}
+        {ttmPts.length >= 2 && (
+          <>
+            <path d={path(ttmPts)} fill="none" stroke={TTM_COLOR} strokeWidth="2.25"
+              style={{ filter: `drop-shadow(0 0 4px ${TTM_COLOR}88)` }} />
+            <text x={X(ttmPts[ttmPts.length - 1].x) - 4} y={Y(ttmPts[ttmPts.length - 1].y) - 6}
+              textAnchor="end" fontSize="9" fill={TTM_COLOR} fontWeight="700">TTM</text>
+          </>
+        )}
       </svg>
       {scaled && (
         <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
@@ -395,10 +413,15 @@ function ForecastTab({ attioDeals, foundersData }) {
     return priorTotal + currentRevenue;
   }, [monthly, series.allTimeTotal, now, targetYear, currentRevenue]);
 
+  // Trailing-12-mo revenue (rolling annual run rate). Independent of the
+  // scenario math; recompute only when the deal series changes.
+  const ttm = useMemo(() => computeTTM(monthly, now), [monthly, now]);
+
   const [horizonYear, setHorizonYear] = useState(targetYear);
   const [customGrowthPct, setCustomGrowthPct] = useState(null); // null → seed from trend
   const [customTouched, setCustomTouched] = useState(false);
   const [active, setActive] = useState({ flat: true, trend: true, custom: true });
+  const [showTTM, setShowTTM] = useState(false); // TTM line is opt-in (the checkbox)
 
   const fc = useMemo(() => computeForecast({
     byKey: monthly, currentRevenue, projectedFlat, target, forwardBaseline,
@@ -468,7 +491,7 @@ function ForecastTab({ attioDeals, foundersData }) {
       </div>
 
       <div style={{ padding: 16, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, marginBottom: 16 }}>
-        <ForecastChart fc={fc} active={active} monthly={monthly} MONTH_NAMES={MONTH_NAMES} />
+        <ForecastChart fc={fc} active={active} monthly={monthly} MONTH_NAMES={MONTH_NAMES} ttm={ttm} showTTM={showTTM} />
         {/* Scenario toggles */}
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
           {Object.keys(SCENARIO_META).map(key => {
@@ -481,6 +504,17 @@ function ForecastTab({ attioDeals, foundersData }) {
               </label>
             );
           })}
+          {(() => {
+            const disabled = !(ttm?.points?.length >= 2);
+            return (
+              <label title={disabled ? "Needs 12+ months of history" : "Rolling 12-month revenue (annual run rate)"}
+                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: disabled ? "var(--muted)" : "var(--fg)", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, marginLeft: 4, paddingLeft: 14, borderLeft: "1px solid var(--border)" }}>
+                <input type="checkbox" checked={showTTM && !disabled} disabled={disabled} onChange={e => setShowTTM(e.target.checked)} />
+                <span style={{ width: 12, height: 3, background: TTM_COLOR, borderRadius: 2, display: "inline-block" }} />
+                Trailing 12-mo (TTM)
+              </label>
+            );
+          })()}
         </div>
       </div>
 
@@ -488,7 +522,16 @@ function ForecastTab({ attioDeals, foundersData }) {
         {Object.keys(SCENARIO_META).map(scenarioCard)}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: ttm.available ? "1fr 1fr 1fr" : "1fr 1fr", gap: 12, marginBottom: 16 }}>
+        {ttm.available && (
+          <NeonCard label="Trailing 12-mo revenue" tone="violet">
+            <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: TTM_COLOR }}>{fmtCur(ttm.current)}</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+              rolling annual run rate{ttm.yoy != null ? ` · ${ttm.yoy >= 0 ? "+" : ""}${(ttm.yoy * 100).toFixed(0)}% YoY` : ""}
+              {ttm.youngHistory ? " · <12mo history, still filling" : ""}
+            </div>
+          </NeonCard>
+        )}
         <NeonCard label="Required / month to hit target" tone="pink">
           <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'JetBrains Mono',monospace", color: "var(--fg)" }}>{fc.requiredMonthly != null ? fmtCur(fc.requiredMonthly) : "—"}</div>
           <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fc.requiredMonthly != null ? `over the remaining ${fc.monthsRemaining} month${fc.monthsRemaining === 1 ? "" : "s"} of ${targetYear}` : "set a revenue target to see this"}</div>
