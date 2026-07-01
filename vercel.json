@@ -9,6 +9,9 @@
     "api/motion-graphics.js": {
       "maxDuration": 180
     },
+    "api/explainer-storyboard.js": {
+      "maxDuration": 180
+    },
     "api/transcript-insights.js": {
       "maxDuration": 60
     },

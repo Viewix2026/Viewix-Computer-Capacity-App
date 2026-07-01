@@ -182,9 +182,32 @@ should settle before we build. Once greenlit, this becomes the Gate-1 "Approved
 plan" and enters the same Codex plan-review → build → code-review loop the
 motion-graphics feature went through.
 
+## Build status
+
+- **Stage 1 — Explainer Storyboard Generator: BUILT** (this branch). The
+  buildable, infra-free slice — "the script that acts as the timeline" — shipped
+  as an Editors subtab that mirrors the Motion Graphics architecture exactly:
+  - `api/explainer-storyboard.js` (route) + `api/_explainerStoryboard.js` (pure,
+    unit-tested logic — the `normalizeStoryboard` trust boundary): `generate` /
+    `save` / `archive`, Sonnet 4.6, atomic daily-cap breaker, server-authoritative
+    cost ledger at `/aiUsage/storyboards/*`, fresh RTDB role/active re-check.
+  - `src/components/ExplainerStoryboard.jsx`: topic/script → editable scene table
+    (locked visual system + per-beat voiceover, midground/foreground assets, and
+    image-gen prompts), refine-in-plain-English, copy-as-Markdown / download-JSON,
+    save to a shared server-only library (`/storyboardLibrary`), reload.
+  - Wired into `EditorDashboard.jsx` (`canMotion` roles), `vercel.json`
+    maxDuration, `firebase-rules.json` (`storyboardLibrary` read-any / write-false),
+    and `api/__tests__/explainer-storyboard.test.mjs` (10 assertions, all green).
+  - This is intentionally the no-new-infra slice: no Remotion runtime, no render
+    host, no external image connector — so it ships now and produces the exact
+    artifact the later stages consume.
+- **Stages 2–5 (scene build, VO sync, render to MP4): NOT built** — they carry the
+  Open decisions above (render host, cutout connector, Remotion adoption). They
+  stay gated on Jeremy's calls.
+
 ## Next step
 
-Jeremy reviews, settles Open decisions 1–5 (especially render host + v1 scope),
-and either promotes this to a Gate-1 plan or trims it. If the answer is "just
-scaffold a starter Remotion template to play with," that's a smaller, separate
-task we can do immediately — say the word and it's a different (much shorter) packet.
+Jeremy reviews the shipped Stage 1, then settles Open decisions 1–5 (especially
+render host + Remotion adoption) to greenlight Stages 2–5. If the immediate want
+is instead "scaffold a starter Remotion template to play with," that's a smaller,
+separate task — say the word.

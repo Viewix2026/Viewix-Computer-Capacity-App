@@ -24,6 +24,7 @@
     "motionGraphicsLibrary": { ".read": "auth != null && auth.token.role != null", ".write": false },
     "motionGraphicsTemplates": { ".read": "auth != null && auth.token.role != null", ".write": false },
     "motionGraphicsTemplateFeedback": { ".read": "auth != null && auth.token.role != null", ".write": false },
+    "storyboardLibrary": { ".read": "auth != null && auth.token.role != null", ".write": false },
     "aiUsage": { ".read": "auth != null && auth.token.role == 'founders'", ".write": false },
     "preproductionTemplates": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },
     "timeLogs": { ".read": "auth != null && auth.token.role != null", ".write": "auth != null && auth.token.role != null && root.child('users').child(auth.uid).child('active').val() === true" },

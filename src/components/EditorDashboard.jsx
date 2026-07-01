@@ -2,6 +2,7 @@ import { useState } from "react";
 import { EditorDashboardViewix } from "./EditorDashboardViewix";
 import { TextGenerator } from "./TextGenerator";
 import { MotionGraphicsGenerator } from "./MotionGraphicsGenerator";
+import { ExplainerStoryboard } from "./ExplainerStoryboard";
 import { Segmented } from "./kit";
 
 export function EditorDashboard({ embedded, projects = [], setProjects = null, editors = [], clients = [], deliveries = [], setDeliveries = null, accounts = {}, viewerRole = null, currentUserEmail = null, currentUserName = null }) {
@@ -9,7 +10,7 @@ export function EditorDashboard({ embedded, projects = [], setProjects = null, e
   // Motion Graphics spends Opus per generation, so it's gated to the same roles
   // the endpoint allows (not trial) — no point showing trials a tab that 403s.
   const canMotion = ["founders", "manager", "lead", "editor"].includes(viewerRole);
-  const subOptions = canMotion ? ["Dashboard", "Text Generator", "Motion Graphics"] : ["Dashboard", "Text Generator"];
+  const subOptions = canMotion ? ["Dashboard", "Text Generator", "Motion Graphics", "Explainer Storyboard"] : ["Dashboard", "Text Generator"];
   // Both subtabs stay mounted and are toggled with display so an in-progress
   // caption draft (or the dashboard's scroll/timers) survives a switch.
   return (
@@ -28,6 +29,11 @@ export function EditorDashboard({ embedded, projects = [], setProjects = null, e
       {canMotion && sub === "Motion Graphics" && (
         <div>
           <MotionGraphicsGenerator clients={clients} />
+        </div>
+      )}
+      {canMotion && sub === "Explainer Storyboard" && (
+        <div>
+          <ExplainerStoryboard />
         </div>
       )}
     </div>
