@@ -126,3 +126,46 @@ export function computeForecast({
     scenarios: { flat, trend: trendScenario, custom },
   };
 }
+
+// ── Trailing-twelve-month revenue (rolling 12-mo won-deal sum) ──────
+// A lumpy-business-honest "annual run rate" / size metric that ignores the
+// calendar-year reset and seasonality. Deal-based (the deal series is the only
+// monthly-resolution source for past years); independent of the headline-YTD
+// anchoring used by the scenarios. Excludes the current partial month so a
+// half-finished month never understates the figure.
+export function computeTTM(byKey = {}, now) {
+  const keys = Object.keys(byKey).filter(k => byKey[k].revenue > 0).sort();
+  if (!keys.length) return { available: false, points: [] };
+  const ord = (y, m) => y * 12 + m;                // absolute month ordinal
+  const ymOf = o => [Math.floor(o / 12), ((o % 12) + 12) % 12];
+  const ttmEndingAt = (o) => {
+    let sum = 0;
+    for (let i = 0; i < 12; i++) { const [y, m] = ymOf(o - i); sum += revAt(byKey, y, m); }
+    return sum;
+  };
+  const [fy, fm] = keys[0].split("-").map(Number);
+  const firstOrd = ord(fy, fm - 1);
+  const lastCompletedOrd = ord(now.getFullYear(), now.getMonth()) - 1; // exclude partial month
+  if (lastCompletedOrd < firstOrd) return { available: false, points: [] };
+
+  // Trajectory points only where a full 12-month window exists.
+  const firstFullOrd = firstOrd + 11;
+  const points = [];
+  for (let o = firstFullOrd; o <= lastCompletedOrd; o++) {
+    const [y, m] = ymOf(o);
+    points.push({ year: y, monthIdx: m, value: ttmEndingAt(o) });
+  }
+  const current = ttmEndingAt(lastCompletedOrd);
+  const yearAgoOrd = lastCompletedOrd - 12;
+  const yearAgo = yearAgoOrd >= firstOrd ? ttmEndingAt(yearAgoOrd) : null;
+  const yoy = yearAgo && yearAgo > 0 ? current / yearAgo - 1 : null;
+  const [lcY, lcM] = ymOf(lastCompletedOrd);
+  return {
+    available: current > 0,
+    current,
+    yoy,
+    points,
+    youngHistory: (lastCompletedOrd - firstOrd + 1) < 12,
+    currentEndLabel: `${lcY}-${String(lcM + 1).padStart(2, "0")}`,
+  };
+}
